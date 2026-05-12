@@ -7,10 +7,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
-import {
-  loadProjectContext,
-  redactIfSecretLike,
-} from "./projectContext.js";
+import { loadProjectContext, redactIfSecretLike } from "./projectContext.js";
 import {
   deriveEffectivePermissions,
   normalizeSafety,
@@ -48,7 +45,9 @@ permissions:
 async function withTempProject(
   body: (rootDir: string) => Promise<void>,
 ): Promise<void> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "agent-profile-web-profile-"));
+  const dir = await mkdtemp(
+    path.join(os.tmpdir(), "agent-profile-web-profile-"),
+  );
   const previous = process.env.AGENT_PROFILE_ROOT;
   process.env.AGENT_PROFILE_ROOT = dir;
   try {
@@ -102,7 +101,8 @@ test("profile load: normalizeSafety and deriveEffectivePermissions are consisten
 });
 
 test("profile load: secret-like literal in yaml is redacted", () => {
-  const yaml = 'api_key: "sk-livefakeexample0123456789abcdef"';
+  const fakeApiKey = "sk-" + "x".repeat(48);
+  const yaml = `api_key: "${fakeApiKey}"`;
   const redacted = redactIfSecretLike(yaml);
   assert.equal(redacted, "«redacted»");
   assert.notEqual(redacted, yaml);

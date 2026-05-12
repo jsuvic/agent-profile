@@ -128,7 +128,8 @@ test("redactIfSecretLike masks values that look like secrets", () => {
   // The core security helper looks for explicit secret-like patterns
   // (api_key/token/secret/password assignments, BEGIN PRIVATE KEY blocks,
   // and a sentinel literal). We use the token-assignment pattern.
-  const looksLikeSecret = 'api_key: "sk-livefakeexample0123456789abcdef"';
+  const fakeApiKey = "sk-" + "x".repeat(48);
+  const looksLikeSecret = `api_key: "${fakeApiKey}"`;
   const out = redactIfSecretLike(looksLikeSecret);
   assert.equal(out, "«redacted»");
 });

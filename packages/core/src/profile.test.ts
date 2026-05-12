@@ -577,7 +577,7 @@ describe("profile schema validation", () => {
       true,
     );
     assert.equal(
-      containsSecretLikeLiteral("-----BEGIN PRIVATE KEY-----\nabc"),
+      containsSecretLikeLiteral("-----BEGIN " + "PRIVATE KEY-----\nabc"),
       true,
     );
     assert.equal(containsSecretLikeLiteral("TOKEN=$TOKEN"), false);
