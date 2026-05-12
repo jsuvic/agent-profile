@@ -1,0 +1,39 @@
+/*
+ * Phase 6 design tokens — derived from
+ * docs/design/phase-06/handoff/wireframes-styles.css.
+ *
+ * Production UI uses the inner-frame palette: dark by default, Inter for UI
+ * prose, JetBrains Mono for code/paths/badges. Caveat (the wireframe-only
+ * handwritten font) is intentionally not loaded in production.
+ */
+
+:root {
+  --accent: oklch(0.72 0.12 240);
+  --accent-dim: oklch(0.45 0.08 240);
+  --accent-bg: oklch(0.28 0.05 240 / 0.18);
+
+  --bg: oklch(0.16 0.005 270);
+  --bg-1: oklch(0.19 0.006 270);
+  --bg-2: oklch(0.22 0.007 270);
+  --bg-3: oklch(0.26 0.008 270);
+  --line: oklch(0.32 0.008 270);
+  --line-soft: oklch(0.26 0.008 270);
+  --ink: oklch(0.94 0.005 270);
+  --ink-2: oklch(0.78 0.006 270);
+  --ink-3: oklch(0.58 0.008 270);
+  --ink-4: oklch(0.42 0.008 270);
+
+  --ok: oklch(0.78 0.12 145);
+  --warn: oklch(0.82 0.12 80);
+  --err: oklch(0.7 0.16 25);
+  --info: oklch(0.78 0.1 220);
+  --unknown: oklch(0.65 0.02 270);
+
+  --radius: 4px;
+  --radius-lg: 8px;
+  --pad: 16px;
+
+  --font-ui: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}

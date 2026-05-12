@@ -1,0 +1,244 @@
+{
+  "version": 1,
+  "profile": {
+    "path": "ai-profile.yaml",
+    "schemaVersion": 1,
+    "sha256": "352c4657f462464b3bb1374e014907591e088c0f7a4ec8d0bdf930ee51740052"
+  },
+  "compiler": {
+    "name": "agent-profile",
+    "version": "0.1.0"
+  },
+  "templates": [
+    {
+      "id": "targets/agents-md@1",
+      "target": "agents-md",
+      "version": "1",
+      "sha256": "c52d14fb8b0885e360bb254002aeb236c48b8d6845125e2c95a967ddeff08d0a"
+    },
+    {
+      "id": "targets/claude-mcp@1",
+      "target": "claude-mcp",
+      "version": "1",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    },
+    {
+      "id": "targets/claude-md@1",
+      "target": "claude-md",
+      "version": "1",
+      "sha256": "96ca6e86dedf2ccc2b797f15d66011ce52d791704daf0d711078f4dc7fc3ac8c"
+    },
+    {
+      "id": "targets/claude-settings@1",
+      "target": "claude-settings",
+      "version": "1",
+      "sha256": "5d4ef8e2885f29959de09a6764e6b28af594d976f3251bfd99371fe0ecdb100d"
+    },
+    {
+      "id": "targets/claude-workflow-skills/final-review@1",
+      "target": "claude-workflow-skills",
+      "version": "1",
+      "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
+    },
+    {
+      "id": "targets/claude-workflow-skills/sdd-change@1",
+      "target": "claude-workflow-skills",
+      "version": "1",
+      "sha256": "467a3b6dc751857690d8a0bad6270b15178139cf6d43de2b3d9c42daf6fcd84f"
+    },
+    {
+      "id": "targets/claude-workflow-skills/tdd-change@1",
+      "target": "claude-workflow-skills",
+      "version": "1",
+      "sha256": "58f8f4a1fa61b5aefbe6d29e9458d9cb5db01c9cd8454b8fc05ceef94302b4ee"
+    },
+    {
+      "id": "targets/codex-config@1",
+      "target": "codex-config",
+      "version": "1",
+      "sha256": "bc56f102dbd5552e5932703e7dd722c70ca8f6435d82302fc9f7139e0168361a"
+    },
+    {
+      "id": "targets/codex-workflow-skills/final-review@1",
+      "target": "codex-workflow-skills",
+      "version": "1",
+      "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
+    },
+    {
+      "id": "targets/codex-workflow-skills/sdd-change@1",
+      "target": "codex-workflow-skills",
+      "version": "1",
+      "sha256": "467a3b6dc751857690d8a0bad6270b15178139cf6d43de2b3d9c42daf6fcd84f"
+    },
+    {
+      "id": "targets/codex-workflow-skills/tdd-change@1",
+      "target": "codex-workflow-skills",
+      "version": "1",
+      "sha256": "58f8f4a1fa61b5aefbe6d29e9458d9cb5db01c9cd8454b8fc05ceef94302b4ee"
+    },
+    {
+      "id": "targets/tabnine-guidelines/00-general-agent-behavior@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "c1c353d9cc60fc9d244ace2d6be9da2862bb2955767c32b75af2b3eba0c362cf"
+    },
+    {
+      "id": "targets/tabnine-guidelines/10-sdd-workflow@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "dba3715255f59b948d91e85c4382e06b377ff5807076f0445fa4af2409462baf"
+    },
+    {
+      "id": "targets/tabnine-guidelines/20-tdd-workflow@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "1fc63d3a983d9b9150bdab1c28f5dc68535b1a9d4d5c268c511cf65020444cfb"
+    },
+    {
+      "id": "targets/tabnine-guidelines/30-stack-typescript-svelte@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "72d705ca2da24199d68eec2039a3111f87fc0a769b995b4ab9ab7625447832bd"
+    },
+    {
+      "id": "targets/tabnine-guidelines/40-stack-java-spring@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "6ff205de98a6ca61deccc0e3cd2e796484b5f41cb2a9804c8b302c7e82942064"
+    },
+    {
+      "id": "targets/tabnine-guidelines/50-testing-playwright-junit@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "a02febd3743b5de3c8ecc3244c07cd41af773cb345751d367bf1fdfba7d450d8"
+    },
+    {
+      "id": "targets/tabnine-guidelines/90-final-review@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "e4e0c30dd9d8c5547aee600157b98ac5a8fa4a396b74990502d008294f543b10"
+    },
+    {
+      "id": "targets/tabnine-mcp-config@1",
+      "target": "tabnine-mcp-config",
+      "version": "1",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    }
+  ],
+  "outputs": [
+    {
+      "path": ".agents/skills/final-review/SKILL.md",
+      "target": "codex-workflow-skills",
+      "templateId": "targets/codex-workflow-skills/final-review@1",
+      "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
+    },
+    {
+      "path": ".agents/skills/sdd-change/SKILL.md",
+      "target": "codex-workflow-skills",
+      "templateId": "targets/codex-workflow-skills/sdd-change@1",
+      "sha256": "467a3b6dc751857690d8a0bad6270b15178139cf6d43de2b3d9c42daf6fcd84f"
+    },
+    {
+      "path": ".agents/skills/tdd-change/SKILL.md",
+      "target": "codex-workflow-skills",
+      "templateId": "targets/codex-workflow-skills/tdd-change@1",
+      "sha256": "58f8f4a1fa61b5aefbe6d29e9458d9cb5db01c9cd8454b8fc05ceef94302b4ee"
+    },
+    {
+      "path": ".claude/settings.json",
+      "target": "claude-settings",
+      "templateId": "targets/claude-settings@1",
+      "sha256": "5d4ef8e2885f29959de09a6764e6b28af594d976f3251bfd99371fe0ecdb100d"
+    },
+    {
+      "path": ".claude/skills/final-review/SKILL.md",
+      "target": "claude-workflow-skills",
+      "templateId": "targets/claude-workflow-skills/final-review@1",
+      "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
+    },
+    {
+      "path": ".claude/skills/sdd-change/SKILL.md",
+      "target": "claude-workflow-skills",
+      "templateId": "targets/claude-workflow-skills/sdd-change@1",
+      "sha256": "467a3b6dc751857690d8a0bad6270b15178139cf6d43de2b3d9c42daf6fcd84f"
+    },
+    {
+      "path": ".claude/skills/tdd-change/SKILL.md",
+      "target": "claude-workflow-skills",
+      "templateId": "targets/claude-workflow-skills/tdd-change@1",
+      "sha256": "58f8f4a1fa61b5aefbe6d29e9458d9cb5db01c9cd8454b8fc05ceef94302b4ee"
+    },
+    {
+      "path": ".codex/config.toml",
+      "target": "codex-config",
+      "templateId": "targets/codex-config@1",
+      "sha256": "bc56f102dbd5552e5932703e7dd722c70ca8f6435d82302fc9f7139e0168361a"
+    },
+    {
+      "path": ".mcp.json",
+      "target": "claude-mcp",
+      "templateId": "targets/claude-mcp@1",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    },
+    {
+      "path": ".tabnine/guidelines/00-general-agent-behavior.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/00-general-agent-behavior@1",
+      "sha256": "c5bce3255ab72b9fe32377629029dd699bd7ecc6a491ae0aeaf12a55a42b5176"
+    },
+    {
+      "path": ".tabnine/guidelines/10-sdd-workflow.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/10-sdd-workflow@1",
+      "sha256": "dba3715255f59b948d91e85c4382e06b377ff5807076f0445fa4af2409462baf"
+    },
+    {
+      "path": ".tabnine/guidelines/20-tdd-workflow.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/20-tdd-workflow@1",
+      "sha256": "1fc63d3a983d9b9150bdab1c28f5dc68535b1a9d4d5c268c511cf65020444cfb"
+    },
+    {
+      "path": ".tabnine/guidelines/30-stack-typescript-svelte.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/30-stack-typescript-svelte@1",
+      "sha256": "72d705ca2da24199d68eec2039a3111f87fc0a769b995b4ab9ab7625447832bd"
+    },
+    {
+      "path": ".tabnine/guidelines/40-stack-java-spring.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/40-stack-java-spring@1",
+      "sha256": "6ff205de98a6ca61deccc0e3cd2e796484b5f41cb2a9804c8b302c7e82942064"
+    },
+    {
+      "path": ".tabnine/guidelines/50-testing-playwright-junit.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/50-testing-playwright-junit@1",
+      "sha256": "a02febd3743b5de3c8ecc3244c07cd41af773cb345751d367bf1fdfba7d450d8"
+    },
+    {
+      "path": ".tabnine/guidelines/90-final-review.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/90-final-review@1",
+      "sha256": "e4e0c30dd9d8c5547aee600157b98ac5a8fa4a396b74990502d008294f543b10"
+    },
+    {
+      "path": ".tabnine/mcp_servers.json",
+      "target": "tabnine-mcp-config",
+      "templateId": "targets/tabnine-mcp-config@1",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    },
+    {
+      "path": "AGENTS.md",
+      "target": "agents-md",
+      "templateId": "targets/agents-md@1",
+      "sha256": "d5288378a6f792613f1be01bbaf6dc0f55ec7df0be54241c252092773e4fbc8f"
+    },
+    {
+      "path": "CLAUDE.md",
+      "target": "claude-md",
+      "templateId": "targets/claude-md@1",
+      "sha256": "96ca6e86dedf2ccc2b797f15d66011ce52d791704daf0d711078f4dc7fc3ac8c"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@agent-profile/compiler": [
+        "../compiler/dist/index.d.ts"
+      ],
+      "@agent-profile/core": [
+        "../core/dist/index.d.ts"
+      ]
+    },
+    "composite": true
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/*.test.ts"
+  ],
+  "references": [
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../compiler"
+    }
+  ]
+}

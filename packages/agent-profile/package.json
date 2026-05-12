@@ -1,0 +1,38 @@
+{
+  "name": "agent-profile",
+  "version": "0.1.4",
+  "description": "Local-first AI Agent Profile Compiler CLI.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "ai",
+    "agents",
+    "codex",
+    "claude",
+    "tabnine",
+    "local-first",
+    "developer-tools"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jsuvic/agent-profile.git",
+    "directory": "packages/agent-profile"
+  },
+  "bugs": {
+    "url": "https://github.com/jsuvic/agent-profile/issues"
+  },
+  "homepage": "https://github.com/jsuvic/agent-profile#readme",
+  "bin": {
+    "agent-profile": "bin/agent-profile.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "dependencies": {
+    "@agent-profile/cli": "0.1.4"
+  },
+  "engines": {
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
+  }
+}

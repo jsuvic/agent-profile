@@ -1,0 +1,24 @@
+version: 1
+profile:
+  name: preset-only
+  description: Profile that relies on guarded safety defaults.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: guarded
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true

@@ -1,0 +1,30 @@
+version: 1
+profile:
+  name: partial-overrides
+  description: Profile that applies partial permission overrides over balanced mode.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: balanced
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+permissions:
+  shell:
+    run: deny
+  network:
+    external: deny

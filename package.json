@@ -1,0 +1,40 @@
+{
+  "name": "agent-profile-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first AI Agent Profile Compiler for Tabnine, Codex, and Claude.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "check": "npm run check --workspaces --if-present && node scripts/verify-package-metadata.mjs",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "doctor": "npm run build --workspace @agent-profile/cli --if-present && node apps/cli/dist/index.js doctor",
+    "build:marketing": "npm run build:marketing --workspace @agent-profile/web",
+    "verify:pack": "node scripts/verify-pack-files.mjs",
+    "version:set": "node scripts/sync-versions.mjs",
+    "version:sync": "node scripts/sync-versions.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.3",
+    "prettier": "^3.8.3",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "svelte": "5.55.5",
+    "vite": "8.0.10",
+    "svelte-check": "4.4.7"
+  },
+  "engines": {
+    "node": ">=24.0.0",
+    "npm": ">=11.0.0"
+  }
+}

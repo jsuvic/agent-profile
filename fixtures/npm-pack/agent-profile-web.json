@@ -1,0 +1,16 @@
+{
+  "workspace": "@agent-profile/web",
+  "required": [
+    "README.md",
+    "build/env.js",
+    "build/handler.js",
+    "build/index.js",
+    "build/server/index.js",
+    "build/server/index.js.map",
+    "build/server/manifest.js",
+    "build/server/manifest.js.map",
+    "build/shims.js",
+    "package.json"
+  ],
+  "allowedPrefixes": ["build/client/", "build/server/chunks/"]
+}

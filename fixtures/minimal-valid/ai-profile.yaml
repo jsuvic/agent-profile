@@ -1,0 +1,44 @@
+version: 1
+profile:
+  name: svelte-java-playwright
+  description: AI-agent setup for a SvelteKit, Java, and Playwright project.
+stack:
+  languages:
+    - typescript
+    - java
+  frameworks:
+    - sveltekit
+    - spring-boot
+  packageManagers:
+    - npm
+  testing:
+    - playwright
+    - junit
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+permissions:
+  filesystem:
+    read: allow
+    write: ask
+  shell:
+    run: ask
+  secrets:
+    access: deny
+  dependencies:
+    install: ask
+  network:
+    external: ask
+  production:
+    access: deny

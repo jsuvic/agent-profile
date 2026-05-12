@@ -1,0 +1,18 @@
+{
+  "workspace": "@agent-profile/scanner",
+  "files": [
+    "dist/import-artifacts.d.ts",
+    "dist/import-artifacts.d.ts.map",
+    "dist/import-artifacts.js",
+    "dist/import-artifacts.js.map",
+    "dist/index.d.ts",
+    "dist/index.d.ts.map",
+    "dist/index.js",
+    "dist/index.js.map",
+    "dist/stack.d.ts",
+    "dist/stack.d.ts.map",
+    "dist/stack.js",
+    "dist/stack.js.map",
+    "package.json"
+  ]
+}

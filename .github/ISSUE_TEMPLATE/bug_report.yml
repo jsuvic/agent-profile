@@ -1,0 +1,64 @@
+name: Bug report
+description: Something is not working as expected.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before submitting, please search existing issues.
+
+        Do not include secrets, tokens, `.env` contents, private source code, or proprietary generated config.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and did not find this bug.
+          required: true
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - label: Makes Agent Profile Compiler unusable for me.
+        - label: Slows me down, but I can continue working.
+        - label: Annoying, but not blocking.
+        - label: Worked in a previous version and is broken now.
+  - type: input
+    id: version
+    attributes:
+      label: Agent Profile Compiler version
+      placeholder: "0.1.3"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 / macOS 15 / Linux"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node and npm versions
+      placeholder: "Node 24, npm 11"
+  - type: textarea
+    id: bug
+    attributes:
+      label: Describe the bug
+      description: What happened, what you expected, and how to reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Link to a public reproduction or paste a sanitized `ai-profile.yaml` snippet.
+  - type: textarea
+    id: output
+    attributes:
+      label: Screenshots or command output
+      description: Add screenshots or sanitized output if useful.

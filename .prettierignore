@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+
+fixtures/invalid/invalid-yaml.yaml
+ai-profile.lock
+**/ai-profile.lock

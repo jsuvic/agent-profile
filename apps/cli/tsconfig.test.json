@@ -1,0 +1,29 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "rootDir": "../..",
+    "paths": {
+      "@agent-profile/compiler": [
+        "../../packages/compiler/src/index.ts"
+      ],
+      "@agent-profile/core": [
+        "../../packages/core/src/index.ts"
+      ],
+      "@agent-profile/doctor": [
+        "../../packages/doctor/src/index.ts"
+      ],
+      "@agent-profile/scanner": [
+        "../../packages/scanner/src/index.ts"
+      ],
+      "@agent-profile/schemas/*": [
+        "../../packages/schemas/*"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": []
+}

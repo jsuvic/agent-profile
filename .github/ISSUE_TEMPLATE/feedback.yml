@@ -1,0 +1,42 @@
+name: Feedback / first experience
+description: Share what felt good, confusing, or missing.
+title: "[Feedback] "
+labels:
+  - feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for first-run feedback that is not clearly a bug or feature request.
+
+        Do not include secrets, tokens, `.env` contents, private source code, or proprietary generated config.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and discussions for similar feedback.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Agent Profile Compiler version
+      placeholder: "0.1.3"
+  - type: textarea
+    id: setup
+    attributes:
+      label: What did you try?
+      description: Describe the project shape, target agents, and commands you ran.
+    validations:
+      required: true
+  - type: textarea
+    id: experience
+    attributes:
+      label: How was the experience?
+      description: What was useful, confusing, slow, missing, or surprising?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: What would make it better?

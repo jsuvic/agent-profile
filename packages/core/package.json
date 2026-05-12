@@ -1,0 +1,29 @@
+{
+  "name": "@agent-profile/core",
+  "version": "0.1.1",
+  "description": "Shared contracts and core domain types for Agent Profile Compiler.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "check": "tsc -b tsconfig.json && tsc -p tsconfig.test.json --noEmit",
+    "test": "node --import tsx --test src/profile.test.ts",
+    "lint": "tsc -b tsconfig.json && tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "@agent-profile/schemas": "0.1.0",
+    "ajv": "^8.20.0",
+    "yaml": "^2.8.4"
+  }
+}

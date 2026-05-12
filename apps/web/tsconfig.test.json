@@ -1,0 +1,33 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "$lib": [
+        "./src/lib"
+      ],
+      "$lib/*": [
+        "./src/lib/*"
+      ],
+      "$app/types": [
+        "./.svelte-kit/types/index.d.ts"
+      ],
+      "@agent-profile/compiler": [
+        "../../packages/compiler/src/index.ts"
+      ],
+      "@agent-profile/core": [
+        "../../packages/core/src/index.ts"
+      ],
+      "@agent-profile/doctor": [
+        "../../packages/doctor/src/index.ts"
+      ],
+      "@agent-profile/schemas/*": [
+        "../../packages/schemas/*"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte"
+  ]
+}

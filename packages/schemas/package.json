@@ -1,0 +1,13 @@
+{
+  "name": "@agent-profile/schemas",
+  "version": "0.1.0",
+  "description": "Published schemas for Agent Profile Compiler.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    "./ai-profile.schema.json": "./ai-profile.schema.json"
+  },
+  "files": [
+    "ai-profile.schema.json"
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@agent-profile/compiler": [
+        "../../packages/compiler/dist/index.d.ts"
+      ],
+      "@agent-profile/core": [
+        "../../packages/core/dist/index.d.ts"
+      ],
+      "@agent-profile/doctor": [
+        "../../packages/doctor/dist/index.d.ts"
+      ],
+      "@agent-profile/scanner": [
+        "../../packages/scanner/dist/index.d.ts"
+      ]
+    },
+    "composite": true
+  },
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "src/**/*.test.ts"
+  ],
+  "references": [
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/compiler"
+    },
+    {
+      "path": "../../packages/scanner"
+    },
+    {
+      "path": "../../packages/doctor"
+    }
+  ]
+}

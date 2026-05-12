@@ -1,0 +1,39 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+.vite/
+.svelte-kit/
+
+# SvelteKit app build artifacts
+apps/web/build/
+apps/web/build-marketing/
+apps/web/.svelte-kit/
+apps/web/.vite/
+
+# Local browser/QA artifacts
+output/
+playwright-report/
+test-results/
+
+.env
+.env.*
+!.env.example
+
+*.log
+*.tsbuildinfo
+Thumbs.db
+.DS_Store
+
+# CCE and local agent runtime files (per-machine, not source)
+.cce/
+.mcp.json
+.claude/settings.local.json
+.claude/settings.json
+.claude/worktrees/
+.codex/config.toml
+.codex/hooks.json
+
+# Local packaged handoff/archive artifacts
+*.zip
+*.tgz

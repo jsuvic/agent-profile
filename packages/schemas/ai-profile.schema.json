@@ -1,0 +1,199 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agent-profile.local/schemas/ai-profile.schema.json",
+  "title": "Agent Profile",
+  "description": "Version 1 canonical profile for Agent Profile Compiler.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "profile", "stack", "clients", "workflow"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["languages", "frameworks", "packageManagers", "testing"],
+      "properties": {
+        "languages": {
+          "$ref": "#/definitions/nonEmptySlugArray"
+        },
+        "frameworks": {
+          "$ref": "#/definitions/slugArray"
+        },
+        "packageManagers": {
+          "$ref": "#/definitions/slugArray"
+        },
+        "testing": {
+          "$ref": "#/definitions/slugArray"
+        }
+      }
+    },
+    "clients": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tabnine", "codex", "claude"],
+      "properties": {
+        "tabnine": {
+          "$ref": "#/definitions/client"
+        },
+        "codex": {
+          "$ref": "#/definitions/client"
+        },
+        "claude": {
+          "$ref": "#/definitions/client"
+        }
+      }
+    },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "$ref": "#/definitions/safetyMode"
+        },
+        "requiresSandbox": {
+          "type": "boolean"
+        }
+      }
+    },
+    "workflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sdd", "tdd", "finalReview"],
+      "properties": {
+        "sdd": {
+          "type": "boolean"
+        },
+        "tdd": {
+          "type": "boolean"
+        },
+        "finalReview": {
+          "type": "boolean"
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "filesystem": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "read": {
+              "$ref": "#/definitions/permissionMode"
+            },
+            "write": {
+              "$ref": "#/definitions/permissionMode"
+            }
+          }
+        },
+        "shell": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "run": {
+              "$ref": "#/definitions/permissionMode"
+            }
+          }
+        },
+        "secrets": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "type": "string",
+              "const": "deny"
+            }
+          }
+        },
+        "dependencies": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "install": {
+              "$ref": "#/definitions/permissionMode"
+            }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "external": {
+              "$ref": "#/definitions/permissionMode"
+            }
+          }
+        },
+        "production": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "access": {
+              "type": "string",
+              "const": "deny"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "permissionMode": {
+      "type": "string",
+      "enum": ["allow", "ask", "deny"]
+    },
+    "safetyMode": {
+      "type": "string",
+      "enum": ["guarded", "balanced", "autonomous", "plan-only"]
+    },
+    "slug": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "slugArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/definitions/slug"
+      }
+    },
+    "nonEmptySlugArray": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/definitions/slug"
+      }
+    }
+  }
+}

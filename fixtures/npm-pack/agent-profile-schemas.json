@@ -1,0 +1,4 @@
+{
+  "workspace": "@agent-profile/schemas",
+  "files": ["ai-profile.schema.json", "package.json"]
+}

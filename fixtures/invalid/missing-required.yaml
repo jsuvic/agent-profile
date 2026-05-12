@@ -1,0 +1,4 @@
+version: 1
+profile:
+  name: missing-stack
+  description: Missing required top-level fields.

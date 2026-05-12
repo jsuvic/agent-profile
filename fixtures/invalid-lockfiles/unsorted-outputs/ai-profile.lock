@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "profile": {
+    "path": "ai-profile.yaml",
+    "schemaVersion": 1,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "compiler": {
+    "name": "agent-profile",
+    "version": "0.1.0"
+  },
+  "templates": [],
+  "outputs": [
+    {
+      "path": "B.md",
+      "target": "agents-md",
+      "templateId": "targets/agents-md@1",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "path": "A.md",
+      "target": "agents-md",
+      "templateId": "targets/agents-md@1",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ]
+}

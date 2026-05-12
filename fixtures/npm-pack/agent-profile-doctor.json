@@ -1,0 +1,18 @@
+{
+  "workspace": "@agent-profile/doctor",
+  "files": [
+    "dist/doctor.d.ts",
+    "dist/doctor.d.ts.map",
+    "dist/doctor.js",
+    "dist/doctor.js.map",
+    "dist/index.d.ts",
+    "dist/index.d.ts.map",
+    "dist/index.js",
+    "dist/index.js.map",
+    "dist/types.d.ts",
+    "dist/types.d.ts.map",
+    "dist/types.js",
+    "dist/types.js.map",
+    "package.json"
+  ]
+}

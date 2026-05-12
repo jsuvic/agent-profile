@@ -1,0 +1,31 @@
+{
+  "name": "@agent-profile/cli",
+  "version": "0.1.4",
+  "description": "Command-line interface for Agent Profile Compiler.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "agent-profile": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b tsconfig.json && node bundle.mjs",
+    "check": "tsc -b tsconfig.json && tsc -p tsconfig.test.json --noEmit",
+    "test": "tsc -b tsconfig.json && node bundle.mjs && tsx --tsconfig tsconfig.test.json --test src/*.test.ts",
+    "lint": "tsc -b tsconfig.json && tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "@agent-profile/compiler": "0.1.1",
+    "@agent-profile/core": "0.1.1",
+    "@agent-profile/doctor": "0.1.1",
+    "@agent-profile/scanner": "0.1.1",
+    "@agent-profile/web": "0.1.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.7"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "@agent-profile/web",
+  "version": "0.1.4",
+  "description": "Local-first SvelteKit UI for Agent Profile Compiler.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./build/index.js",
+  "exports": {
+    "./server": "./build/index.js"
+  },
+  "files": [
+    "build"
+  ],
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "build:marketing": "node scripts/build-marketing.mjs",
+    "preview": "vite preview",
+    "check": "npm run build --workspace @agent-profile/core --if-present && npm run build --workspace @agent-profile/compiler --if-present && npm run build --workspace @agent-profile/doctor --if-present && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --no-tsconfig",
+    "test": "npm run build --workspace @agent-profile/core --if-present && npm run build --workspace @agent-profile/compiler --if-present && npm run build --workspace @agent-profile/doctor --if-present && tsx --tsconfig tsconfig.test.json --test src/lib/server/*.test.ts"
+  },
+  "dependencies": {
+    "@agent-profile/compiler": "0.1.1",
+    "@agent-profile/core": "0.1.1",
+    "@agent-profile/doctor": "0.1.1",
+    "diff": "^9.0.0"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-node": "^5.5.4",
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.59.1",
+    "@sveltejs/vite-plugin-svelte": "7.1.2",
+    "svelte": "5.55.5",
+    "svelte-check": "4.4.8",
+    "vite": "8.0.11"
+  }
+}
