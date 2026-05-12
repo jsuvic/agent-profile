@@ -22,6 +22,7 @@ Define the verification workflow for npm releases of the package graph.
 - signing releases
 - changelog generation
 - GitHub release publishing
+- npm Trusted Publishing setup
 
 ## Pre-Publish Contracts
 
@@ -62,6 +63,8 @@ npm run check
 npm run test
 npm run build
 npm run verify:pack
+npm audit --omit=dev
+AGENT_PROFILE_SITE_URL=https://agent-profile.com npm run build:marketing --workspace @agent-profile/web
 ```
 
 Run `npm pack --json` for every changed package before publish and compare the
@@ -85,6 +88,8 @@ npx --yes --cache <empty-cache> agent-profile init --write
   allowlisted `build/` payload inside `@agent-profile/web`.
 - Never add postinstall scripts without a dedicated security spec.
 - Never publish packages that require source upload or telemetry.
+- Release verification CI must use read-only repository permissions and must
+  not include npm publish credentials.
 
 ## Acceptance Criteria
 
@@ -103,11 +108,13 @@ npx --yes --cache <empty-cache> agent-profile init --write
 - clean-cache `npx` smoke tests
 - CLI test covering generated profile formatting
 - workspace `check`, `test`, and `build`
+- GitHub `Release Verify` workflow for manual release candidates and `v*` tags
 
 ## Documentation Updates
 
 - release process documented in `docs/release.md`
 - package README updated before wrapper publish
+- release verification workflow documented as verification-only CI
 
 ## Final Review Checklist
 

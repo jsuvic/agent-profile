@@ -1,0 +1,51 @@
+name: Release Verify
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-verify-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-verify:
+    runs-on: ubuntu-latest
+    env:
+      AGENT_PROFILE_SITE_URL: https://agent-profile.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Check
+        run: npm run check
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify npm pack output
+        run: npm run verify:pack
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+
+      - name: Verify marketing build
+        run: npm run build:marketing --workspace @agent-profile/web

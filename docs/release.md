@@ -49,7 +49,16 @@ may remain on older published versions when their contents did not change.
    npm run verify:pack
    ```
 
-5. `npm run verify:pack` packs every public package with `npm pack --json
+5. Run the GitHub `Release Verify` workflow manually on the release candidate
+   branch, or confirm it passed for the release tag. This workflow is
+   verification-only: it does not create GitHub releases, publish npm packages,
+   write repository contents, or require npm credentials.
+
+   The workflow repeats the release checks on a clean Ubuntu runner, runs a
+   production dependency audit, and verifies the static marketing build with
+   `AGENT_PROFILE_SITE_URL=https://agent-profile.com`.
+
+6. `npm run verify:pack` packs every public package with `npm pack --json
 --dry-run` and compares the file list against fixtures in
    `fixtures/npm-pack/`.
 
@@ -58,7 +67,7 @@ may remain on older published versions when their contents did not change.
 
    The private root workspace is not packed or published.
 
-6. Confirm tarballs do not include local state such as `.env`, `.mcp.json`,
+7. Confirm tarballs do not include local state such as `.env`, `.mcp.json`,
    `.cce`, `.claude/worktrees`, `.codex`, `.svelte-kit`, `apps/web/build`,
    `coverage`, `node_modules`, `*.tgz`, or absolute user-machine paths.
 
@@ -97,3 +106,13 @@ release notes, or changelog.
 
 Do not automate npm publishing until post-publish clean-cache `npx` smoke tests
 are part of the release workflow.
+
+## GitHub Release Verification
+
+The `.github/workflows/release-verify.yml` workflow is the CI gate for release
+candidate confidence. It runs on manual dispatch and on `v*` tags.
+
+It is intentionally not a publish workflow. It has read-only repository
+permissions and does not use npm tokens. npm Trusted Publishing or provenance
+automation can be added only after clean-cache `npx` post-publish smoke tests
+are automated.

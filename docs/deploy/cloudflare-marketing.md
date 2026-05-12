@@ -32,7 +32,8 @@ build settings:
 | Build output directory | `apps/web/build-marketing`                               |
 | Deploy command         | leave empty                                              |
 
-Set this production environment variable in the Pages project:
+Set this environment variable in the Pages project for both Production and
+Preview deployments:
 
 | Variable                 | Value                       |
 | ------------------------ | --------------------------- |
