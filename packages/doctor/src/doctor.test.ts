@@ -153,7 +153,9 @@ test("doctor reports profile, template, output metadata, and generated file drif
   const pemRoot = await createGeneratedProject();
   await writeFile(
     path.join(pemRoot, "AGENTS.md"),
-    "-----BEGIN PRIVATE KEY-----\nredacted\n-----END PRIVATE KEY-----\n",
+    "-----BEGIN " +
+      "PRIVATE KEY-----\nredacted\n-----END " +
+      "PRIVATE KEY-----\n",
     "utf8",
   );
   assertHasIssue(await runDoctor({ rootDir: pemRoot }), "LINT-SEC-001");

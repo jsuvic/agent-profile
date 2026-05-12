@@ -7,7 +7,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
-import { loadProjectContext, redactIfSecretLike, truncatePreview } from "./projectContext.js";
+import {
+  loadProjectContext,
+  redactIfSecretLike,
+  truncatePreview,
+} from "./projectContext.js";
 import { compileProfile } from "@agent-profile/compiler";
 
 const VALID_PROFILE = `version: 1
@@ -42,7 +46,9 @@ permissions:
 async function withTempProject(
   body: (rootDir: string) => Promise<void>,
 ): Promise<void> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "agent-profile-web-artifacts-"));
+  const dir = await mkdtemp(
+    path.join(os.tmpdir(), "agent-profile-web-artifacts-"),
+  );
   const previous = process.env.AGENT_PROFILE_ROOT;
   process.env.AGENT_PROFILE_ROOT = dir;
   try {
@@ -70,7 +76,9 @@ test("artifacts load: compileProfile produces files for all three targets", asyn
     await writeFile(path.join(dir, "ai-profile.yaml"), VALID_PROFILE);
     const ctx = await loadProjectContext();
     assert.ok(ctx.profileResult?.ok);
-    const result = compileProfile({ profile: (ctx.profileResult as any).profile });
+    const result = compileProfile({
+      profile: (ctx.profileResult as any).profile,
+    });
     assert.ok(result.ok, "compile must succeed for a valid profile");
     assert.ok(result.files.length > 0, "must produce at least one file");
     const targets = new Set(result.files.map((f) => f.target));
@@ -88,7 +96,9 @@ test("artifacts load: drift status is 'drifted' when path is in drifted set", as
     await writeFile(path.join(dir, "ai-profile.yaml"), VALID_PROFILE);
     const ctx = await loadProjectContext();
     assert.ok(ctx.profileResult?.ok);
-    const result = compileProfile({ profile: (ctx.profileResult as any).profile });
+    const result = compileProfile({
+      profile: (ctx.profileResult as any).profile,
+    });
     assert.ok(result.ok);
 
     const firstFile = result.files[0];
@@ -99,14 +109,17 @@ test("artifacts load: drift status is 'drifted' when path is in drifted set", as
 
     const otherFile = result.files.find((f) => f.path !== firstFile.path);
     if (otherFile) {
-      const otherStatus = driftedPaths.has(otherFile.path) ? "drifted" : "generated";
+      const otherStatus = driftedPaths.has(otherFile.path)
+        ? "drifted"
+        : "generated";
       assert.equal(otherStatus, "generated");
     }
   });
 });
 
 test("artifacts load: secret-like content in generated file is redacted", () => {
-  const content = 'token: "ghp_fakesecretvalue0123456789abcdef"';
+  const fakeToken = "ghp_" + "x".repeat(36);
+  const content = `token: "${fakeToken}"`;
   const redacted = redactIfSecretLike(content);
   assert.equal(redacted, "«redacted»");
 });
@@ -123,9 +136,13 @@ test("artifacts load: files are sorted deterministically by path", async () => {
     await writeFile(path.join(dir, "ai-profile.yaml"), VALID_PROFILE);
     const ctx = await loadProjectContext();
     assert.ok(ctx.profileResult?.ok);
-    const result = compileProfile({ profile: (ctx.profileResult as any).profile });
+    const result = compileProfile({
+      profile: (ctx.profileResult as any).profile,
+    });
     assert.ok(result.ok);
-    const sorted = [...result.files].sort((a, b) => a.path.localeCompare(b.path));
+    const sorted = [...result.files].sort((a, b) =>
+      a.path.localeCompare(b.path),
+    );
     const paths = result.files.map((f) => f.path);
     const sortedPaths = sorted.map((f) => f.path);
     assert.deepEqual(paths.sort(), sortedPaths.sort());
