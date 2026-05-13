@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import { lstat, readFile, realpath } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -22,7 +22,13 @@ import {
   type PlannedWrite,
   type WritePlanResult,
 } from "@agent-profile/compiler";
-import { parseProfileYaml, type AiProfile } from "@agent-profile/core";
+import {
+  parseProfileYaml,
+  verifyPresetToken,
+  type PresetPreferences,
+  type PresetTokenError,
+  type PresetTokenPayloadV1,
+} from "@agent-profile/core";
 import {
   analyzeExistingArtifacts,
   detectStack,
@@ -45,6 +51,7 @@ export type CliOptions = {
   cwd?: string;
   io?: Partial<CliIo>;
   launchUi?: UiLaunchFunction;
+  presetNow?: () => number;
 };
 
 export type UiLaunchRequest = {
@@ -89,6 +96,8 @@ type ParsedInitArgs =
       ok: true;
       root: string;
       profile: string;
+      profileProvided: boolean;
+      preset?: string;
       dryRun: boolean;
       write: boolean;
       importExisting: boolean;
@@ -147,7 +156,7 @@ export async function runCli(
     case "doctor":
       return runDoctorCommand(rest, cwd, io);
     case "init":
-      return runInit(rest, cwd, io);
+      return runInit(rest, cwd, io, options.presetNow);
     case "ui":
       return runUi(rest, cwd, io, options.launchUi ?? launchPublishedUi);
     default:
@@ -376,6 +385,7 @@ async function runInit(
   args: string[],
   cwd: string,
   io: CliIo,
+  presetNow?: () => number,
 ): Promise<number> {
   const parsed = parseInitArgs(args);
 
@@ -387,6 +397,21 @@ async function runInit(
   if (parsed.help) {
     io.stdout(formatHelp());
     return 0;
+  }
+
+  let presetPayload: PresetTokenPayloadV1 | undefined;
+  if (parsed.preset !== undefined) {
+    const presetResult = verifyPresetToken(
+      parsed.preset,
+      presetNow === undefined ? undefined : { now: presetNow },
+    );
+
+    if (!presetResult.ok) {
+      io.stderr(formatPresetTokenError(presetResult));
+      return 1;
+    }
+
+    presetPayload = presetResult.payload;
   }
 
   const rootDir = path.resolve(cwd, parsed.root);
@@ -412,11 +437,13 @@ async function runInit(
   const profileText = renderInitialProfile({
     rootDir,
     stack: stackResult.stack,
-    clients: importResult?.clients ?? {
-      tabnine: false,
-      codex: false,
-      claude: false,
-    },
+    preferences: presetPayload?.preferences,
+    clients: presetPayload?.preferences.clients ??
+      importResult?.clients ?? {
+        tabnine: false,
+        codex: false,
+        claude: false,
+      },
   });
   const validation = parseProfileYaml(profileText, {
     sourcePath: safeProfilePath.path,
@@ -440,12 +467,14 @@ async function runInit(
   if (!plan) {
     return 1;
   }
-  const suggestions = await getGitignoreSuggestions(rootDir);
+  const suggestions =
+    presetPayload === undefined ? await getGitignoreSuggestions(rootDir) : [];
 
   io.stdout(
     formatInitText({
       plan,
       wrote: parsed.write,
+      preset: presetPayload,
       stackWarnings: stackResult.warnings,
       importFindings: importResult?.findings ?? [],
       gitignoreSuggestions: suggestions,
@@ -566,6 +595,8 @@ function parseCompileArgs(args: string[]): ParsedCompileArgs {
 function parseInitArgs(args: string[]): ParsedInitArgs {
   let root = ".";
   let profile = "ai-profile.yaml";
+  let profileProvided = false;
+  let preset: string | undefined;
   let dryRun = false;
   let write = false;
   let importExisting = false;
@@ -594,6 +625,21 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
         }
 
         profile = value;
+        profileProvided = true;
+        index += 1;
+        break;
+      }
+      case "--preset": {
+        const value = args[index + 1];
+
+        if (!value || value.startsWith("--")) {
+          return {
+            ok: false,
+            message: "preset_token_missing: --preset requires a token value.",
+          };
+        }
+
+        preset = value;
         index += 1;
         break;
       }
@@ -622,7 +668,32 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
     };
   }
 
-  return { ok: true, root, profile, dryRun, write, importExisting, help };
+  if (preset !== undefined && importExisting) {
+    return {
+      ok: false,
+      message: "--preset cannot be used with --import in Phase 9.",
+    };
+  }
+
+  if (preset !== undefined && profileProvided) {
+    return {
+      ok: false,
+      message:
+        "--preset cannot be used with --profile in Phase 9; preset init writes only ai-profile.yaml.",
+    };
+  }
+
+  return {
+    ok: true,
+    root,
+    profile,
+    profileProvided,
+    preset,
+    dryRun,
+    write,
+    importExisting,
+    help,
+  };
 }
 
 function parseUiArgs(args: string[]): ParsedUiArgs {
@@ -708,8 +779,34 @@ function isLoopbackHost(value: string): value is LoopbackHost {
 function renderInitialProfile(input: {
   rootDir: string;
   stack: DetectedStack;
+  preferences?: PresetPreferences;
   clients: { tabnine: boolean; codex: boolean; claude: boolean };
 }): string {
+  const safety = input.preferences?.safety ?? {
+    mode: "guarded",
+    requiresSandbox: false,
+  };
+  const workflow = input.preferences?.workflow ?? {
+    sdd: true,
+    tdd: true,
+    finalReview: true,
+  };
+  const permissions = input.preferences?.permissions ?? {
+    filesystem: {
+      read: "allow",
+      write: "ask",
+    },
+    shell: {
+      run: "ask",
+    },
+    dependencies: {
+      install: "ask",
+    },
+    network: {
+      external: "ask",
+    },
+  };
+
   return `version: 1
 profile:
   name: ${slugifyProfileName(path.basename(input.rootDir))}
@@ -728,24 +825,24 @@ clients:
   claude:
     enabled: ${String(input.clients.claude)}
 safety:
-  mode: guarded
-  requiresSandbox: false
+  mode: ${safety.mode}
+  requiresSandbox: ${String(safety.requiresSandbox)}
 workflow:
-  sdd: true
-  tdd: true
-  finalReview: true
+  sdd: ${String(workflow.sdd)}
+  tdd: ${String(workflow.tdd)}
+  finalReview: ${String(workflow.finalReview)}
 permissions:
   filesystem:
-    read: allow
-    write: ask
+    read: ${permissions.filesystem.read}
+    write: ${permissions.filesystem.write}
   shell:
-    run: ask
+    run: ${permissions.shell.run}
   secrets:
     access: deny
   dependencies:
-    install: ask
+    install: ${permissions.dependencies.install}
   network:
-    external: ask
+    external: ${permissions.network.external}
   production:
     access: deny
 `;
@@ -898,12 +995,12 @@ async function readOptionalBytes(
   relativePath: string,
 ): Promise<Uint8Array | undefined> {
   const safePath = safeOutputPath(relativePath);
-  const rootRealPath = await realpath(path.resolve(rootDir));
+  const rootRealPath = await fsPromises.realpath(path.resolve(rootDir));
   const absolutePath = path.resolve(rootRealPath, ...safePath.split("/"));
 
   try {
     await assertReadPathContained(rootRealPath, absolutePath);
-    return await readFile(absolutePath);
+    return await fsPromises.readFile(absolutePath);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;
@@ -1061,8 +1158,8 @@ async function assertReadPathContained(
     throw new UnsafePathError("Read path escapes root.");
   }
 
-  await lstat(absolutePath);
-  const targetRealPath = await realpath(absolutePath);
+  await fsPromises.lstat(absolutePath);
+  const targetRealPath = await fsPromises.realpath(absolutePath);
 
   if (!isContainedBy(rootRealPath, targetRealPath)) {
     throw new UnsafePathError("Read path target escapes root.");
@@ -1119,7 +1216,7 @@ function formatHelp(): string {
 Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
   agent-profile doctor [--root <path>] [--json]
-  agent-profile init [--root <path>] [--profile <path>] [--import] [--dry-run|--write]
+  agent-profile init [--root <path>] [--profile <path>] [--import] [--preset <token>] [--dry-run|--write]
   agent-profile ui [--root <path>] [--host <host>] [--port <number>] [--open]
 
 Commands:
@@ -1127,6 +1224,13 @@ Commands:
   doctor    Run local profile, lockfile, and permission checks.
   init      Create a starting ai-profile.yaml.
   ui        Start the local read-only UI.
+
+Init presets:
+  --preset verifies a short-lived hosted preset token offline. Repository
+  analysis happens locally and no source code is uploaded. Dry-run is the
+  default; use --write to create ai-profile.yaml. In Phase 9, --preset cannot
+  be combined with --import or --profile. The hosted preset builder ships in a
+  later phase; this CLI verifies tokens that match its contract.
 `;
 }
 
@@ -1178,13 +1282,20 @@ function formatWritePlan(
 function formatInitText(input: {
   plan: WritePlanResult;
   wrote: boolean;
+  preset?: PresetTokenPayloadV1;
   stackWarnings: StackDetectionWarning[];
   importFindings: ArtifactFinding[];
   gitignoreSuggestions: string[];
 }): string {
-  const lines = [
+  const lines: string[] = [];
+
+  if (input.preset !== undefined) {
+    lines.push(formatPresetSummary(input.preset).trimEnd(), "");
+  }
+
+  lines.push(
     formatWritePlan("Agent Profile Init", input.wrote, input.plan).trimEnd(),
-  ];
+  );
 
   if (input.stackWarnings.length > 0) {
     lines.push("", "Stack detection warnings:");
@@ -1211,6 +1322,29 @@ function formatInitText(input: {
   }
 
   return `${lines.join("\n").replace(/\n*$/u, "")}\n`;
+}
+
+function formatPresetSummary(preset: PresetTokenPayloadV1): string {
+  const preferences = preset.preferences;
+  const enabledClients = (["tabnine", "codex", "claude"] as const).filter(
+    (client) => preferences.clients[client],
+  );
+
+  return `Preset summary:
+- status: valid
+- preset: ${preset.presetId}
+- version: ${String(preset.version)}
+- expires: ${new Date(preset.exp * 1000).toISOString()}
+- clients: ${enabledClients.length > 0 ? enabledClients.join(", ") : "none"}
+- safety: ${preferences.safety.mode}, requiresSandbox=${String(preferences.safety.requiresSandbox)}
+- workflow: sdd=${String(preferences.workflow.sdd)}, tdd=${String(preferences.workflow.tdd)}, finalReview=${String(preferences.workflow.finalReview)}
+- permissions: filesystem.read=${preferences.permissions.filesystem.read}, filesystem.write=${preferences.permissions.filesystem.write}, shell.run=${preferences.permissions.shell.run}, dependencies.install=${preferences.permissions.dependencies.install}, network.external=${preferences.permissions.network.external}
+- stack: detected locally
+`;
+}
+
+function formatPresetTokenError(error: PresetTokenError): string {
+  return `${error.code}: ${error.message}\n`;
 }
 
 function formatValidationIssues(

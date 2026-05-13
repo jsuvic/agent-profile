@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import { lstat, readFile } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 
 export type DetectedStack = {
@@ -111,7 +111,7 @@ async function detectPackageJson(
 
   try {
     value = JSON.parse(
-      await readFile(path.join(rootPath, "package.json"), "utf8"),
+      await fsPromises.readFile(path.join(rootPath, "package.json"), "utf8"),
     );
   } catch {
     warnings.push({
@@ -176,7 +176,10 @@ async function detectJavaMetadata(
   relativePath: string,
   stack: DetectedStack,
 ): Promise<void> {
-  const source = await readFile(path.join(rootPath, relativePath), "utf8");
+  const source = await fsPromises.readFile(
+    path.join(rootPath, relativePath),
+    "utf8",
+  );
 
   if (source.includes("spring-boot-starter")) {
     stack.frameworks.push("spring-boot");
@@ -205,7 +208,7 @@ async function fileExists(
   relativePath: string,
 ): Promise<boolean> {
   try {
-    const stats = await lstat(path.join(rootPath, relativePath));
+    const stats = await fsPromises.lstat(path.join(rootPath, relativePath));
     return stats.isFile();
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {

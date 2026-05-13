@@ -13,20 +13,30 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { parseProfileYaml } from "@agent-profile/core";
+import {
+  parseProfileYaml,
+  type PresetTokenPayloadV1,
+} from "@agent-profile/core";
 
 import { runCli } from "./index.js";
+import {
+  encodeBase64UrlJson,
+  signFixturePresetToken,
+} from "../../../packages/core/test/fixtures/preset/sign-fixture-token.js";
+import { withNetworkSentinel } from "../../../packages/core/test/fixtures/preset/network-sentinel.js";
 
 const fixtureDir = fileURLToPath(
   new URL("../../../fixtures/minimal-valid/", import.meta.url),
 );
 const expectedDir = path.join(fixtureDir, "expected");
+const PRESET_NOW = Date.parse("2026-05-13T12:00:00.000Z") / 1000;
 
 test("doctor command prints pass status for the minimal fixture", async () => {
   const rootDir = await createFixtureRoot();
@@ -509,6 +519,549 @@ test("init import defaults to dry-run", async () => {
   });
 });
 
+test("init preset dry-run prints summary before write plan without network or token echo", async () => {
+  const rootDir = await createTypescriptRoot();
+  const token = signFixturePresetToken(createCliPresetPayload());
+  const output = createOutput();
+  const code = await withNetworkSentinel(() =>
+    runCli(["init", "--root", rootDir, "--preset", token, "--dry-run"], {
+      io: output,
+      presetNow: () => PRESET_NOW,
+    }),
+  );
+  const stdout = output.stdoutText();
+
+  assert.equal(code, 0);
+  assert.match(stdout, /Preset summary:\n- status: valid/u);
+  assert.ok(
+    stdout.indexOf("Preset summary:") < stdout.indexOf("Agent Profile Init"),
+  );
+  assert.match(stdout, /- preset: phase9-cli/u);
+  assert.match(stdout, /- stack: detected locally/u);
+  assert.match(stdout, /\[create\] ai-profile\.yaml/u);
+  assert.equal(stdout.includes(token), false);
+  assert.equal(stdout.includes('"preferences"'), false);
+  await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
+    code: "ENOENT",
+  });
+});
+
+test("init preset defaults to dry-run", async () => {
+  const rootDir = await createTypescriptRoot();
+  const token = signFixturePresetToken(createCliPresetPayload());
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir, "--preset", token], {
+    io: output,
+    presetNow: () => PRESET_NOW,
+  });
+
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /status: dry-run/u);
+  await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
+    code: "ENOENT",
+  });
+});
+
+test("init preset write creates only ai-profile.yaml with preset preferences", async () => {
+  const rootDir = await createTypescriptRoot();
+  const beforeEntries = (await readdir(rootDir)).sort();
+  const token = signFixturePresetToken(createCliPresetPayload());
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--preset", token, "--write"],
+    { io: output, presetNow: () => PRESET_NOW },
+  );
+  const afterEntries = (await readdir(rootDir)).sort();
+  const profileText = await readFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    "utf8",
+  );
+  const validation = parseProfileYaml(profileText);
+
+  assert.equal(code, 0);
+  assert.deepEqual(afterEntries, [...beforeEntries, "ai-profile.yaml"].sort());
+  assert.equal(validation.ok, true);
+  assert.equal(profileText, expectedPresetProfile(rootDir));
+  assert.match(profileText, /tabnine:\n    enabled: true/u);
+  assert.match(profileText, /codex:\n    enabled: false/u);
+  assert.match(profileText, /mode: balanced/u);
+  assert.match(profileText, /requiresSandbox: true/u);
+  assert.match(profileText, /finalReview: false/u);
+  assert.match(profileText, /secrets:\n    access: deny/u);
+  assert.match(profileText, /production:\n    access: deny/u);
+  assert.match(profileText, /languages:\n    - typescript/u);
+  assert.match(output.stdoutText(), /status: written/u);
+});
+
+test("init preset dry-run output is deterministic for the same token and metadata", async () => {
+  const rootDir = await createTypescriptRoot();
+  const token = signFixturePresetToken(createCliPresetPayload());
+  const first = createOutput();
+  const second = createOutput();
+
+  const firstCode = await runCli(
+    ["init", "--root", rootDir, "--preset", token, "--dry-run"],
+    { io: first, presetNow: () => PRESET_NOW },
+  );
+  const secondCode = await runCli(
+    ["init", "--root", rootDir, "--preset", token, "--dry-run"],
+    { io: second, presetNow: () => PRESET_NOW },
+  );
+
+  assert.equal(firstCode, 0);
+  assert.equal(secondCode, 0);
+  assert.equal(second.stdoutText(), first.stdoutText());
+});
+
+test("init preset dry-run reads only stack metadata and the target profile path", async () => {
+  const rootDir = await createTypescriptRoot();
+  await mkdir(path.join(rootDir, "src"), { recursive: true });
+  await writeFile(path.join(rootDir, "src", "index.ts"), "export {};\n");
+  await writeFile(path.join(rootDir, ".env"), "TOKEN=SECRET_TOKEN_VALUE\n");
+  await writeFile(
+    path.join(rootDir, ".env.local"),
+    "TOKEN=SECRET_TOKEN_VALUE\n",
+  );
+  await writeFile(path.join(rootDir, ".gitignore"), ".env\n.env.*\n");
+
+  const token = signFixturePresetToken(createCliPresetPayload());
+  const output = createOutput();
+  const { result: code, reads } = await withFileReadSentinel(rootDir, () =>
+    runCli(["init", "--root", rootDir, "--preset", token, "--dry-run"], {
+      io: output,
+      presetNow: () => PRESET_NOW,
+    }),
+  );
+
+  assert.equal(code, 0);
+
+  const allowedReadFiles = new Set(["ai-profile.yaml", "package.json"]);
+  const allowedStats = new Set([
+    ".",
+    "ai-profile.yaml",
+    "build.gradle",
+    "build.gradle.kts",
+    "package.json",
+    "playwright.config.cjs",
+    "playwright.config.cts",
+    "playwright.config.js",
+    "playwright.config.mjs",
+    "playwright.config.mts",
+    "playwright.config.ts",
+    "pom.xml",
+    "svelte.config.cjs",
+    "svelte.config.js",
+    "svelte.config.mjs",
+    "svelte.config.ts",
+    "tsconfig.json",
+    "vite.config.cjs",
+    "vite.config.cts",
+    "vite.config.js",
+    "vite.config.mjs",
+    "vite.config.mts",
+    "vite.config.ts",
+  ]);
+
+  assert.deepEqual(
+    reads
+      .filter(
+        (read) =>
+          read.operation === "readFile" &&
+          !allowedReadFiles.has(read.relativePath),
+      )
+      .map(formatFsRead),
+    [],
+  );
+  assert.deepEqual(
+    reads
+      .filter(
+        (read) =>
+          read.operation === "lstat" && !allowedStats.has(read.relativePath),
+      )
+      .map(formatFsRead),
+    [],
+  );
+  assert.deepEqual(
+    reads
+      .filter((read) =>
+        [".env", ".env.local", ".gitignore", "src/index.ts"].includes(
+          read.relativePath,
+        ),
+      )
+      .map(formatFsRead),
+    [],
+  );
+});
+
+test("init preset rejects incompatible options and missing token value", async () => {
+  const token = signFixturePresetToken(createCliPresetPayload());
+
+  for (const args of [
+    ["init", "--preset"],
+    ["init", "--preset", token, "--import"],
+    ["init", "--preset", token, "--profile", "other.yaml"],
+  ]) {
+    const output = createOutput();
+    const code = await runCli(args, { io: output });
+
+    assert.equal(code, 2);
+  }
+});
+
+test("init preset maps runtime token failures to exit 1 without echoing tokens", async () => {
+  const rootDir = await createTypescriptRoot();
+  const cases: Array<{ code: string; token: string; forbidden?: string }> = [
+    {
+      code: "preset_token_too_large",
+      token: `apc-preset-v1.${"A".repeat(16 * 1024)}`,
+    },
+    {
+      code: "preset_token_malformed",
+      token: "not-a-preset",
+    },
+    {
+      code: "preset_token_unsupported_version",
+      token: "apc-preset-v2.a.b.c",
+    },
+    {
+      code: "preset_token_unsupported_algorithm",
+      token: signFixturePresetToken(createCliPresetPayload(), {
+        typ: "apc-preset+jws",
+        alg: "RS256",
+        kid: "phase9-fixture-1",
+      }),
+    },
+    {
+      code: "preset_token_untrusted_key",
+      token: signFixturePresetToken(createCliPresetPayload(), {
+        typ: "apc-preset+jws",
+        alg: "EdDSA",
+        kid: "unknown-key",
+      }),
+    },
+    {
+      code: "preset_token_bad_signature",
+      token: createBadSignaturePresetToken(),
+    },
+    {
+      code: "preset_token_expired",
+      token: signFixturePresetToken(
+        createCliPresetPayload({
+          iat: Date.parse("2026-05-13T10:00:00.000Z") / 1000,
+          exp: Date.parse("2026-05-13T11:00:00.000Z") / 1000,
+        }),
+      ),
+    },
+    {
+      code: "preset_token_not_yet_valid",
+      token: signFixturePresetToken(
+        createCliPresetPayload({
+          iat: PRESET_NOW + 600,
+          exp: PRESET_NOW + 3600,
+        }),
+      ),
+    },
+    {
+      code: "preset_token_invalid_payload",
+      token: signFixturePresetToken({
+        ...createCliPresetPayload(),
+        extra: true,
+      }),
+    },
+    {
+      code: "preset_token_secret_like_value",
+      token: signFixturePresetToken(
+        createCliPresetPayload({
+          metadata: { label: "SECRET_TOKEN_VALUE" },
+        }),
+      ),
+      forbidden: "SECRET_TOKEN_VALUE",
+    },
+    {
+      code: "preset_token_forbidden_field",
+      token: signFixturePresetToken({
+        ...createCliPresetPayload(),
+        stack: {},
+      }),
+    },
+  ];
+
+  for (const item of cases) {
+    const output = createOutput();
+    const code = await runCli(
+      ["init", "--root", rootDir, "--preset", item.token],
+      {
+        io: output,
+        presetNow: () => PRESET_NOW,
+      },
+    );
+
+    assert.equal(code, 1, item.code);
+    assert.match(output.stderrText(), new RegExp(item.code, "u"));
+    assert.equal(output.stderrText().includes(item.token), false, item.code);
+    if (item.forbidden !== undefined) {
+      assert.equal(
+        output.stderrText().includes(item.forbidden),
+        false,
+        item.code,
+      );
+    }
+  }
+});
+
+test("compile doctor and ui reject preset as an unknown option", async () => {
+  const token = signFixturePresetToken(createCliPresetPayload());
+
+  for (const args of [
+    ["compile", "--preset", token],
+    ["doctor", "--preset", token],
+    ["ui", "--preset", token],
+  ]) {
+    const output = createOutput();
+    const code = await runCli(args, {
+      io: output,
+      launchUi: async () => 0,
+    });
+
+    assert.equal(code, 2);
+    assert.match(output.stderrText(), /Unknown option: --preset/u);
+  }
+});
+
+test("init preset reports token errors without scanning or writing", async () => {
+  const rootDir = await createTypescriptRoot();
+  const expired = signFixturePresetToken(
+    createCliPresetPayload({
+      iat: Date.parse("2026-05-13T10:00:00.000Z") / 1000,
+      exp: Date.parse("2026-05-13T11:00:00.000Z") / 1000,
+    }),
+  );
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir, "--preset", expired], {
+    io: output,
+    presetNow: () => PRESET_NOW,
+  });
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /preset_token_expired/u);
+  assert.equal(output.stderrText().includes(expired), false);
+  await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
+    code: "ENOENT",
+  });
+});
+
+test("init preset refuses write when no local language metadata is detected", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-preset-empty-"),
+  );
+  const token = signFixturePresetToken(createCliPresetPayload());
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--preset", token, "--write"],
+    { io: output, presetNow: () => PRESET_NOW },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /No supported language metadata/u);
+  await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
+    code: "ENOENT",
+  });
+});
+
+function createCliPresetPayload(
+  overrides: Partial<PresetTokenPayloadV1> = {},
+): PresetTokenPayloadV1 {
+  return {
+    type: "agent-profile.preset",
+    version: 1,
+    presetId: "phase9-cli",
+    iat: Date.parse("2026-05-13T12:00:00.000Z") / 1000,
+    exp: Date.parse("2026-05-13T13:00:00.000Z") / 1000,
+    builder: {
+      name: "agent-profile-hosted-builder",
+      version: "1.0.0",
+    },
+    preferences: {
+      clients: {
+        tabnine: true,
+        codex: false,
+        claude: true,
+      },
+      safety: {
+        mode: "balanced",
+        requiresSandbox: true,
+      },
+      workflow: {
+        sdd: true,
+        tdd: false,
+        finalReview: false,
+      },
+      permissions: {
+        filesystem: {
+          read: "allow",
+          write: "allow",
+        },
+        shell: {
+          run: "deny",
+        },
+        dependencies: {
+          install: "deny",
+        },
+        network: {
+          external: "ask",
+        },
+      },
+    },
+    metadata: {
+      label: "Phase 9 CLI",
+    },
+    ...overrides,
+  };
+}
+
+function expectedPresetProfile(rootDir: string): string {
+  return `version: 1
+profile:
+  name: ${path.basename(rootDir).toLowerCase()}
+  description: Local AI-agent setup.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: false
+  claude:
+    enabled: true
+safety:
+  mode: balanced
+  requiresSandbox: true
+workflow:
+  sdd: true
+  tdd: false
+  finalReview: false
+permissions:
+  filesystem:
+    read: allow
+    write: allow
+  shell:
+    run: deny
+  secrets:
+    access: deny
+  dependencies:
+    install: deny
+  network:
+    external: ask
+  production:
+    access: deny
+`;
+}
+
+function createBadSignaturePresetToken(): string {
+  const valid = signFixturePresetToken(createCliPresetPayload());
+  const [prefixAndProtected, , signatureSegment] = splitPresetToken(valid);
+  const payloadSegment = encodeBase64UrlJson({
+    ...createCliPresetPayload(),
+    presetId: "phase9-tampered",
+  });
+
+  return `${prefixAndProtected}.${payloadSegment}.${signatureSegment}`;
+}
+
+function splitPresetToken(token: string): [string, string, string] {
+  const withoutPrefix = token.slice("apc-preset-v1.".length);
+  const [protectedSegment, payloadSegment, signatureSegment] =
+    withoutPrefix.split(".");
+
+  return [
+    `apc-preset-v1.${protectedSegment}`,
+    payloadSegment ?? "",
+    signatureSegment ?? "",
+  ];
+}
+
+type ObservedFsRead = {
+  operation: "lstat" | "readFile";
+  relativePath: string;
+};
+
+async function withFileReadSentinel<T>(
+  rootDir: string,
+  callback: () => Promise<T>,
+): Promise<{ result: T; reads: ObservedFsRead[] }> {
+  const reads: ObservedFsRead[] = [];
+  const originalReadFile = fsPromises.readFile;
+  const originalLstat = fsPromises.lstat;
+  const patchableFs = fsPromises as unknown as {
+    readFile: (...args: unknown[]) => Promise<unknown>;
+    lstat: (...args: unknown[]) => Promise<unknown>;
+  };
+
+  patchableFs.readFile = async (...args: unknown[]) => {
+    recordFsRead(rootDir, reads, "readFile", args[0]);
+    return (
+      originalReadFile as (...originalArgs: unknown[]) => Promise<unknown>
+    )(...args);
+  };
+  patchableFs.lstat = async (...args: unknown[]) => {
+    recordFsRead(rootDir, reads, "lstat", args[0]);
+    return (originalLstat as (...originalArgs: unknown[]) => Promise<unknown>)(
+      ...args,
+    );
+  };
+
+  try {
+    return { result: await callback(), reads };
+  } finally {
+    patchableFs.readFile = originalReadFile as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+    patchableFs.lstat = originalLstat as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+  }
+}
+
+function recordFsRead(
+  rootDir: string,
+  reads: ObservedFsRead[],
+  operation: ObservedFsRead["operation"],
+  value: unknown,
+): void {
+  if (
+    typeof value !== "string" &&
+    !Buffer.isBuffer(value) &&
+    !(value instanceof URL)
+  ) {
+    return;
+  }
+
+  const absolutePath =
+    value instanceof URL ? fileURLToPath(value) : path.resolve(String(value));
+  const relativePath = normalizeRelativePath(
+    path.relative(rootDir, absolutePath),
+  );
+
+  if (relativePath.startsWith("../") || path.isAbsolute(relativePath)) {
+    return;
+  }
+
+  reads.push({ operation, relativePath });
+}
+
+function normalizeRelativePath(relativePath: string): string {
+  return relativePath === "" ? "." : relativePath.replace(/\\/gu, "/");
+}
+
+function formatFsRead(read: ObservedFsRead): string {
+  return `${read.operation}:${read.relativePath}`;
+}
+
 async function createFixtureRoot(): Promise<string> {
   const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-cli-"));
   await writeFile(
@@ -645,11 +1198,21 @@ test("built binary: doctor runs and prints header without crashing", () => {
   // This smoke test only verifies the bundle loads and executes without a
   // module-not-found crash; the header must appear on stdout.
   const { stdout, stderr } = runBin(["doctor", "--root", fixtureDir]);
-  assert.match(stdout, /Agent Profile Doctor/u, `no header in stdout; stderr: ${stderr}`);
+  assert.match(
+    stdout,
+    /Agent Profile Doctor/u,
+    `no header in stdout; stderr: ${stderr}`,
+  );
 });
 
 test("built binary: ui validates loopback host without module resolution errors", () => {
-  const { stderr, code } = runBin(["ui", "--root", repoRoot, "--host", "0.0.0.0"]);
+  const { stderr, code } = runBin([
+    "ui",
+    "--root",
+    repoRoot,
+    "--host",
+    "0.0.0.0",
+  ]);
   assert.equal(code, 2, `expected exit 2; stderr: ${stderr}`);
   assert.match(stderr, /--host must be 127\.0\.0\.1, localhost, or ::1/u);
 });

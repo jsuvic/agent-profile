@@ -57,3 +57,14 @@ The browser may keep the user's typed value in the local input while they edit,
 but summaries, validation messages, route errors, and logs must not echo a
 matched secret-like literal. Raw YAML previews continue to use redaction before
 shipping preview text to the page.
+
+## Preset Token Handling
+
+Hosted preset tokens are verified locally before init reads repository metadata
+or plans a write. The token schema allows only bounded intent strings:
+`presetId`, `builder.version`, `metadata.label`, and the protected `kid`.
+
+Each allowed string is checked with `containsSecretLikeLiteral`. If a token
+contains a secret-like value, the CLI fails closed with
+`preset_token_secret_like_value` and does not echo the matched value, raw token,
+protected header JSON, payload JSON, or signature bytes.
