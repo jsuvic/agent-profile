@@ -427,7 +427,8 @@ test("init dry-run previews a valid profile without writing", async () => {
 
   assert.equal(code, 0);
   assert.match(output.stdoutText(), /Agent Profile Init/u);
-  assert.match(output.stdoutText(), /\[create\] ai-profile\.yaml/u);
+  assert.match(output.stdoutText(), /would write: ai-profile\.yaml/u);
+  assert.match(output.stdoutText(), /clients enabled: \(none\)/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
@@ -456,7 +457,8 @@ test("init write creates a schema-valid guarded profile and leaves gitignore unc
     await readFile(path.join(rootDir, ".gitignore"), "utf8"),
     beforeGitignore,
   );
-  assert.match(output.stdoutText(), /.gitignore suggestions/u);
+  assert.match(output.stdoutText(), /suggestions:/u);
+  assert.equal(profileText, expectedInitProfile(rootDir, defaultTestClients()));
   assert.match(profileText, /mode: guarded/u);
   assert.match(profileText, /access: deny/u);
   assert.equal(profileText.includes("\n\n"), false);
@@ -472,10 +474,246 @@ test("init refuses to write when no supported language is detected", async () =>
   });
 
   assert.equal(code, 1);
-  assert.match(output.stderrText(), /No supported language metadata/u);
+  assert.match(output.stdoutText(), /Agent Profile Init \(refused\)/u);
+  assert.match(output.stdoutText(), /refused: no language detected/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
+});
+
+test("init client flags write byte-exact profiles", async () => {
+  const cases: Array<{
+    args: string[];
+    clients: TestClients;
+    enabledText: string;
+  }> = [
+    {
+      args: ["--client", "codex"],
+      clients: { tabnine: false, codex: true, claude: false },
+      enabledText: "codex",
+    },
+    {
+      args: ["--client", "claude"],
+      clients: { tabnine: false, codex: false, claude: true },
+      enabledText: "claude",
+    },
+    {
+      args: ["--client", "tabnine"],
+      clients: { tabnine: true, codex: false, claude: false },
+      enabledText: "tabnine",
+    },
+    {
+      args: ["--client", "all"],
+      clients: { tabnine: true, codex: true, claude: true },
+      enabledText: "tabnine, codex, claude",
+    },
+    {
+      args: ["--client", "all", "--no-client", "tabnine"],
+      clients: { tabnine: false, codex: true, claude: true },
+      enabledText: "codex, claude",
+    },
+  ];
+
+  for (const item of cases) {
+    const rootDir = await createTypescriptRoot();
+    const output = createOutput();
+    const code = await runCli(
+      ["init", "--root", rootDir, ...item.args, "--write"],
+      { io: output },
+    );
+    const profileText = await readFile(
+      path.join(rootDir, "ai-profile.yaml"),
+      "utf8",
+    );
+
+    assert.equal(code, 0);
+    assert.equal(profileText, expectedInitProfile(rootDir, item.clients));
+    assert.match(
+      output.stdoutText(),
+      new RegExp(`clients enabled: ${item.enabledText}`, "u"),
+    );
+  }
+});
+
+test("init client flags dry-run without mutating profile", async () => {
+  const rootDir = await createTypescriptRoot();
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir, "--client", "codex"], {
+    io: output,
+  });
+
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /codex: enabled \(--client\)/u);
+  await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
+    code: "ENOENT",
+  });
+});
+
+test("init does not edit an existing profile when client flags are passed", async () => {
+  const rootDir = await createTypescriptRoot();
+  const existing = expectedInitProfile(rootDir, defaultTestClients());
+  await writeFile(path.join(rootDir, "ai-profile.yaml"), existing, "utf8");
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--client", "codex", "--write"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.equal(
+    await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8"),
+    existing,
+  );
+  assert.match(output.stdoutText(), /already exists\. no changes proposed/u);
+  assert.match(output.stdoutText(), /client flags ignored/u);
+});
+
+test("init validates client arguments and reserves interactive mode", async () => {
+  for (const args of [
+    ["init", "--client", "foo"],
+    ["init", "--client", ""],
+    ["init", "--client", "codex,,claude"],
+    ["init", "--client", "Codex"],
+    ["init", "--interactive"],
+  ]) {
+    const output = createOutput();
+    const code = await runCli(args, { io: output });
+
+    assert.equal(code, 2);
+    assert.match(
+      output.stderrText(),
+      /Unknown client|non-empty client list|empty client id|not yet implemented|comma-separated client list/u,
+    );
+  }
+});
+
+test("init json and quiet modes are deterministic", async () => {
+  const rootDir = await createTypescriptRoot();
+  const jsonOutput = createOutput();
+  const jsonCode = await runCli(
+    [
+      "init",
+      "--root",
+      rootDir,
+      "--client",
+      "all",
+      "--no-client",
+      "tabnine",
+      "--json",
+    ],
+    { io: jsonOutput },
+  );
+  const parsed = JSON.parse(jsonOutput.stdoutText()) as {
+    command: string;
+    mode: string;
+    status: string;
+    clientsEnabled: string[];
+    clients: Record<string, { enabled: boolean; source: string }>;
+    wouldWrite: boolean;
+    wrote: boolean;
+  };
+
+  assert.equal(jsonCode, 0);
+  assert.equal(jsonOutput.stdoutText().trim().split(/\r?\n/u).length, 1);
+  assert.equal(parsed.command, "init");
+  assert.equal(parsed.mode, "dry-run");
+  assert.equal(parsed.status, "ok");
+  assert.deepEqual(parsed.clientsEnabled, ["codex", "claude"]);
+  assert.equal(parsed.clients.tabnine?.enabled, false);
+  assert.equal(parsed.clients.tabnine?.source, "--no-client");
+  assert.equal(parsed.wouldWrite, true);
+  assert.equal(parsed.wrote, false);
+
+  const quietOutput = createOutput();
+  const quietCode = await runCli(["init", "--root", rootDir, "--quiet"], {
+    io: quietOutput,
+  });
+
+  assert.equal(quietCode, 0);
+  assert.equal(quietOutput.stdoutText(), "");
+});
+
+test("init reports refused when profile path is a directory", async () => {
+  const rootDir = await createTypescriptRoot();
+  await mkdir(path.join(rootDir, "ai-profile.yaml"));
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir, "--write"], {
+    io: output,
+  });
+
+  assert.equal(code, 1);
+  assert.match(output.stdoutText(), /Agent Profile Init \(refused\)/u);
+  assert.match(output.stdoutText(), /profile path points to a directory/u);
+  assert.equal(output.stdoutText().includes("wrote:"), false);
+});
+
+test("init report is non-empty across state mode and client-selection matrix", async () => {
+  const states = ["fresh", "existing", "no-language"] as const;
+  const modes = ["dry-run", "write"] as const;
+  const selections = [
+    [] as string[],
+    ["--client", "codex"],
+    ["--client", "all"],
+    ["--client", "all", "--no-client", "tabnine"],
+  ];
+
+  for (const state of states) {
+    for (const mode of modes) {
+      for (const selection of selections) {
+        const rootDir =
+          state === "no-language"
+            ? await mkdtemp(path.join(tmpdir(), "agent-profile-init-empty-"))
+            : await createTypescriptRoot();
+        const existingProfile = expectedInitProfile(
+          rootDir,
+          defaultTestClients(),
+        );
+
+        if (state === "existing") {
+          await writeFile(
+            path.join(rootDir, "ai-profile.yaml"),
+            existingProfile,
+            "utf8",
+          );
+        }
+
+        const output = createOutput();
+        const code = await runCli(
+          [
+            "init",
+            "--root",
+            rootDir,
+            ...selection,
+            mode === "write" ? "--write" : "--dry-run",
+          ],
+          { io: output },
+        );
+        const label = `${state} ${mode} ${selection.join(" ")}`;
+
+        assert.notEqual(output.stdoutText(), "", label);
+        assert.equal(code, state === "no-language" ? 1 : 0, label);
+
+        if (state === "fresh" && mode === "write") {
+          assert.equal(
+            await fileExists(path.join(rootDir, "ai-profile.yaml")),
+            true,
+          );
+        } else if (state === "existing") {
+          assert.equal(
+            await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8"),
+            existingProfile,
+            label,
+          );
+        } else {
+          assert.equal(
+            await fileExists(path.join(rootDir, "ai-profile.yaml")),
+            false,
+            label,
+          );
+        }
+      }
+    }
+  }
 });
 
 test("init import enables detected clients without copying artifact text", async () => {
@@ -538,7 +776,7 @@ test("init preset dry-run prints summary before write plan without network or to
   );
   assert.match(stdout, /- preset: phase9-cli/u);
   assert.match(stdout, /- stack: detected locally/u);
-  assert.match(stdout, /\[create\] ai-profile\.yaml/u);
+  assert.match(stdout, /would write: ai-profile\.yaml/u);
   assert.equal(stdout.includes(token), false);
   assert.equal(stdout.includes('"preferences"'), false);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
@@ -556,7 +794,7 @@ test("init preset defaults to dry-run", async () => {
   });
 
   assert.equal(code, 0);
-  assert.match(output.stdoutText(), /status: dry-run/u);
+  assert.match(output.stdoutText(), /Agent Profile Init \(dry-run\)/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
@@ -590,7 +828,7 @@ test("init preset write creates only ai-profile.yaml with preset preferences", a
   assert.match(profileText, /secrets:\n    access: deny/u);
   assert.match(profileText, /production:\n    access: deny/u);
   assert.match(profileText, /languages:\n    - typescript/u);
-  assert.match(output.stdoutText(), /status: written/u);
+  assert.match(output.stdoutText(), /wrote: ai-profile\.yaml/u);
 });
 
 test("init preset dry-run output is deterministic for the same token and metadata", async () => {
@@ -862,7 +1100,7 @@ test("init preset refuses write when no local language metadata is detected", as
   );
 
   assert.equal(code, 1);
-  assert.match(output.stderrText(), /No supported language metadata/u);
+  assert.match(output.stdoutText(), /refused: no language detected/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
@@ -919,10 +1157,77 @@ function createCliPresetPayload(
   };
 }
 
+type TestClients = {
+  tabnine: boolean;
+  codex: boolean;
+  claude: boolean;
+};
+
+function defaultTestClients(): TestClients {
+  return {
+    tabnine: false,
+    codex: false,
+    claude: false,
+  };
+}
+
+function expectedInitProfile(rootDir: string, clients: TestClients): string {
+  return `version: 1
+profile:
+  name: ${slugifyTestProfileName(path.basename(rootDir))}
+  description: Local AI-agent setup.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: ${String(clients.tabnine)}
+  codex:
+    enabled: ${String(clients.codex)}
+  claude:
+    enabled: ${String(clients.claude)}
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+permissions:
+  filesystem:
+    read: allow
+    write: ask
+  shell:
+    run: ask
+  secrets:
+    access: deny
+  dependencies:
+    install: ask
+  network:
+    external: ask
+  production:
+    access: deny
+`;
+}
+
+function slugifyTestProfileName(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/gu, "-")
+    .replace(/^[^a-z0-9]+/u, "")
+    .replace(/-+/gu, "-");
+
+  return slug === "" ? "default-profile" : slug;
+}
+
 function expectedPresetProfile(rootDir: string): string {
   return `version: 1
 profile:
-  name: ${path.basename(rootDir).toLowerCase()}
+  name: ${slugifyTestProfileName(path.basename(rootDir))}
   description: Local AI-agent setup.
 stack:
   languages:

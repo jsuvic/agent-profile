@@ -18,7 +18,7 @@ Deferred:
 ```bash
 agent-profile doctor [--root <path>] [--json]
 agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
-agent-profile init [--root <path>] [--profile <path>] [--import] [--preset <token>] [--dry-run|--write]
+agent-profile init [--root <path>] [--profile <path>] [--import] [--preset <token>] [--client <list>] [--no-client <list>] [--json] [--quiet] [--dry-run|--write]
 agent-profile ui [--root <path>] [--host <host>] [--port <number>] [--open]
 ```
 
@@ -47,6 +47,40 @@ requires a separate approved spec.
 
 All write-capable commands must default to dry-run and use diff-before-write
 before mutating repository files.
+
+## Init Clients
+
+`agent-profile init` preserves the phase 5 default profile bytes unless client
+selection is explicit. With no client flags, `tabnine`, `codex`, and `claude`
+remain disabled in the generated profile.
+
+```bash
+agent-profile init --client codex
+agent-profile init --client codex,claude --write
+agent-profile init --client all --no-client tabnine --write
+```
+
+`--client` and `--no-client` accept `tabnine`, `codex`, `claude`, or `all`.
+Lists are comma-separated and case-sensitive. `--no-client` is applied after
+`--client`, imported client signals, or preset client preferences.
+
+Init reports include a client matrix:
+
+```text
+clients:
+  tabnine: disabled
+  codex: enabled (--client)
+  claude: disabled
+clients enabled: codex
+```
+
+`init --json` emits a single-line JSON summary on stdout instead of the human
+report. `init --quiet` suppresses the human report unless `--json` is also
+present.
+
+If `ai-profile.yaml` already exists, init reports that no changes are proposed.
+It does not edit existing profiles, even when client flags and `--write` are
+present. Use `agent-profile compile --dry-run` to inspect compiled artifacts.
 
 ## Init Presets
 
