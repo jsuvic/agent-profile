@@ -1,6 +1,6 @@
 {
   "name": "@agent-profile/web",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Local-first SvelteKit UI for Agent Profile Compiler.",
   "license": "Apache-2.0",
   "type": "module",
@@ -20,9 +20,9 @@
     "test": "npm run build --workspace @agent-profile/core --if-present && npm run build --workspace @agent-profile/compiler --if-present && npm run build --workspace @agent-profile/doctor --if-present && tsx --tsconfig tsconfig.test.json --test src/lib/server/*.test.ts"
   },
   "dependencies": {
-    "@agent-profile/compiler": "0.1.1",
-    "@agent-profile/core": "0.1.1",
-    "@agent-profile/doctor": "0.1.1",
+    "@agent-profile/compiler": "0.1.2",
+    "@agent-profile/core": "0.1.2",
+    "@agent-profile/doctor": "0.1.2",
     "diff": "^9.0.0"
   },
   "devDependencies": {

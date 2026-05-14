@@ -1,6 +1,6 @@
 {
   "name": "@agent-profile/cli",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Command-line interface for Agent Profile Compiler.",
   "license": "Apache-2.0",
   "type": "module",
@@ -19,11 +19,11 @@
     "lint": "tsc -b tsconfig.json && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
-    "@agent-profile/compiler": "0.1.1",
-    "@agent-profile/core": "0.1.1",
-    "@agent-profile/doctor": "0.1.1",
-    "@agent-profile/scanner": "0.1.1",
-    "@agent-profile/web": "0.1.4"
+    "@agent-profile/compiler": "0.1.2",
+    "@agent-profile/core": "0.1.2",
+    "@agent-profile/doctor": "0.1.2",
+    "@agent-profile/scanner": "0.1.2",
+    "@agent-profile/web": "0.1.5"
   },
   "devDependencies": {
     "esbuild": "^0.28.0"
