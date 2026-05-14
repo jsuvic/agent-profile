@@ -1,6 +1,6 @@
 {
   "name": "@agent-profile/compiler",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Deterministic output compiler for Agent Profile Compiler.",
   "license": "Apache-2.0",
   "type": "module",
@@ -22,6 +22,6 @@
     "lint": "tsc -b tsconfig.json && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
-    "@agent-profile/core": "0.1.1"
+    "@agent-profile/core": "0.1.2"
   }
 }
