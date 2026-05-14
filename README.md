@@ -78,7 +78,7 @@ Requirements: Node.js 24+ and npm 11+.
 From the repository you want to configure:
 
 ```bash
-npx agent-profile init --write
+npx agent-profile init --client codex --write
 npx agent-profile compile --dry-run
 npx agent-profile compile --write
 npx agent-profile doctor
@@ -87,7 +87,9 @@ npx agent-profile ui
 
 The workflow is:
 
-1. `init --write` creates a starting `ai-profile.yaml`.
+1. `init --client codex --write` creates a starting `ai-profile.yaml` with the
+   Codex client enabled. Omit `--client` to keep all clients disabled, or use
+   `--client all --no-client tabnine` to choose a deterministic subset.
 2. `compile --dry-run` previews the files that would be generated.
 3. `compile --write` writes generated files under the project root.
 4. `doctor` checks profile validity, drift, safety posture, and generated files.
@@ -118,6 +120,7 @@ that root after path and symlink containment checks.
 ```bash
 agent-profile init --dry-run
 agent-profile init --write
+agent-profile init --client codex,claude --write
 agent-profile compile --dry-run
 agent-profile compile --write
 agent-profile doctor

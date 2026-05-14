@@ -39,6 +39,19 @@ Preview deployments:
 | ------------------------ | --------------------------- |
 | `AGENT_PROFILE_SITE_URL` | `https://agent-profile.com` |
 
+## Preview Deployments
+
+When this repository is connected through the Cloudflare Pages GitHub
+integration, pull requests from repository branches create real Preview
+deployment builds. These builds do not update the production Pages site or
+custom domain, but they do run the configured build command and therefore need
+the Preview `AGENT_PROFILE_SITE_URL` variable above.
+
+If Preview builds should not run for every PR branch, change the Pages project
+branch controls under Builds & deployments. Set Preview branch control to
+`None` to disable automatic Preview builds, or use custom branch rules to limit
+which branches deploy.
+
 Do not use `npx wrangler deploy` as the Pages deploy command from the monorepo
 root. That command targets Wrangler application detection for Workers-style
 deploys and can fail before it reaches the static Pages output.
@@ -86,3 +99,5 @@ compilation remain local through `npx agent-profile`.
 ## References
 
 - [Cloudflare Pages SvelteKit guide](https://developers.cloudflare.com/pages/framework-guides/deploy-a-svelte-kit-site/)
+- [Cloudflare Pages preview deployments](https://developers.cloudflare.com/pages/configuration/preview-deployments/)
+- [Cloudflare Pages branch deployment controls](https://developers.cloudflare.com/pages/configuration/branch-build-controls/)

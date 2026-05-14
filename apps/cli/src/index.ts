@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import { lstat, readFile, realpath } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -22,7 +22,14 @@ import {
   type PlannedWrite,
   type WritePlanResult,
 } from "@agent-profile/compiler";
-import { parseProfileYaml, type AiProfile } from "@agent-profile/core";
+import {
+  parseProfileYaml,
+  verifyPresetToken,
+  type PresetPreferences,
+  type PresetTokenError,
+  type PresetTokenPayloadV1,
+  type PresetVerificationKey,
+} from "@agent-profile/core";
 import {
   analyzeExistingArtifacts,
   detectStack,
@@ -45,6 +52,8 @@ export type CliOptions = {
   cwd?: string;
   io?: Partial<CliIo>;
   launchUi?: UiLaunchFunction;
+  presetNow?: () => number;
+  presetVerificationKeys?: readonly PresetVerificationKey[];
 };
 
 export type UiLaunchRequest = {
@@ -89,9 +98,15 @@ type ParsedInitArgs =
       ok: true;
       root: string;
       profile: string;
+      profileProvided: boolean;
+      preset?: string;
       dryRun: boolean;
       write: boolean;
       importExisting: boolean;
+      clients: ClientId[];
+      noClients: ClientId[];
+      json: boolean;
+      quiet: boolean;
       help: boolean;
     }
   | {
@@ -121,6 +136,33 @@ const DEFAULT_UI_HOST: LoopbackHost = "127.0.0.1";
 // next to the dev defaults but is rarely claimed.
 const DEFAULT_UI_PORT = 5174;
 const require = createRequire(import.meta.url);
+const CLIENT_IDS = ["tabnine", "codex", "claude"] as const;
+
+type ClientId = (typeof CLIENT_IDS)[number];
+type ClientSettings = Record<ClientId, boolean>;
+type ClientSource =
+  | "default"
+  | "preset"
+  | "import"
+  | "existing"
+  | "--client"
+  | "--no-client";
+type ClientMatrix = Record<
+  ClientId,
+  {
+    enabled: boolean;
+    source: ClientSource;
+  }
+>;
+
+type InitFailureReason =
+  | "root not found"
+  | "unsafe profile path"
+  | "profile path is a directory"
+  | "permission denied"
+  | "write failed"
+  | "verification failed"
+  | "no language detected";
 
 const DEFAULT_IO: CliIo = {
   stdout: (text) => process.stdout.write(text),
@@ -147,7 +189,13 @@ export async function runCli(
     case "doctor":
       return runDoctorCommand(rest, cwd, io);
     case "init":
-      return runInit(rest, cwd, io);
+      return runInit(
+        rest,
+        cwd,
+        io,
+        options.presetNow,
+        options.presetVerificationKeys,
+      );
     case "ui":
       return runUi(rest, cwd, io, options.launchUi ?? launchPublishedUi);
     default:
@@ -376,6 +424,8 @@ async function runInit(
   args: string[],
   cwd: string,
   io: CliIo,
+  presetNow?: () => number,
+  presetVerificationKeys?: readonly PresetVerificationKey[],
 ): Promise<number> {
   const parsed = parseInitArgs(args);
 
@@ -393,18 +443,104 @@ async function runInit(
   const safeProfilePath = toSafeCliPath(parsed.profile);
 
   if (!safeProfilePath.ok) {
-    io.stderr(`${safeProfilePath.message}\n`);
+    emitInitOutput(
+      parsed,
+      io,
+      createInitRefusal({
+        profilePath: "ai-profile.yaml",
+        reason: "unsafe profile path",
+        message: "profile path must be safe and repository-relative.",
+      }),
+    );
     return 1;
+  }
+
+  let presetPayload: PresetTokenPayloadV1 | undefined;
+  if (parsed.preset !== undefined) {
+    const presetResult = verifyPresetToken(parsed.preset, {
+      ...(presetNow === undefined ? {} : { now: presetNow }),
+      ...(presetVerificationKeys === undefined
+        ? {}
+        : { keys: presetVerificationKeys }),
+    });
+
+    if (!presetResult.ok) {
+      io.stderr(formatPresetTokenError(presetResult));
+      return 1;
+    }
+
+    presetPayload = presetResult.payload;
+  }
+
+  let existingProfileBytes: Uint8Array | undefined;
+  try {
+    existingProfileBytes = await readOptionalBytes(
+      rootDir,
+      safeProfilePath.path,
+    );
+  } catch (error) {
+    emitInitOutput(
+      parsed,
+      io,
+      createInitRefusal({
+        profilePath: safeProfilePath.path,
+        reason: classifyInitWriteFailure(error),
+        message: formatInitFailureMessage(classifyInitWriteFailure(error)),
+      }),
+    );
+    return 1;
+  }
+
+  if (existingProfileBytes) {
+    const existingClients = getExistingProfileClients(
+      existingProfileBytes,
+      safeProfilePath.path,
+    );
+    emitInitOutput(parsed, io, {
+      mode: parsed.write ? "write" : "dry-run",
+      status: "ok",
+      profilePath: safeProfilePath.path,
+      action: "existing",
+      wouldWrite: false,
+      wrote: false,
+      clients: existingClients,
+      clientsEnabled: enabledClients(existingClients),
+      detectedStack: [],
+      ignoredClientFlags:
+        parsed.clients.length > 0 || parsed.noClients.length > 0,
+      stackWarnings: [],
+      importFindings: [],
+      gitignoreSuggestions: [],
+    });
+    return 0;
   }
 
   const stackResult = await detectStack(rootDir);
   const importResult = parsed.importExisting
     ? await analyzeExistingArtifacts(rootDir)
     : undefined;
+  const baseClients = getBaseClientSettings(
+    presetPayload,
+    importResult?.clients,
+  );
+  const clients = applyClientSelection(
+    baseClients.settings,
+    baseClients.source,
+    parsed.clients,
+    parsed.noClients,
+  );
 
   if (stackResult.stack.languages.length === 0) {
-    io.stderr(
-      "No supported language metadata was detected. Add stack metadata manually or run init in a project with detectable metadata.\n",
+    emitInitOutput(
+      parsed,
+      io,
+      createInitRefusal({
+        profilePath: safeProfilePath.path,
+        reason: "no language detected",
+        message: "no language detected under --root.",
+        clients,
+        detectedStack: [],
+      }),
     );
     return 1;
   }
@@ -412,11 +548,8 @@ async function runInit(
   const profileText = renderInitialProfile({
     rootDir,
     stack: stackResult.stack,
-    clients: importResult?.clients ?? {
-      tabnine: false,
-      codex: false,
-      claude: false,
-    },
+    preferences: presetPayload?.preferences,
+    clients: toClientSettings(clients),
   });
   const validation = parseProfileYaml(profileText, {
     sourcePath: safeProfilePath.path,
@@ -433,24 +566,82 @@ async function runInit(
       bytes: profileText,
     },
   ];
-  const plan = parsed.write
-    ? await createOrApplyWritePlan(rootDir, writes, true, io)
-    : await createOrApplyWritePlan(rootDir, writes, false, io);
+  let plan: WritePlanResult;
 
-  if (!plan) {
+  try {
+    plan = parsed.write
+      ? await applyWritePlan({ rootDir, writes })
+      : await planWrites({ rootDir, writes });
+  } catch (error) {
+    const reason = classifyInitWriteFailure(error);
+    emitInitOutput(
+      parsed,
+      io,
+      createInitRefusal({
+        profilePath: safeProfilePath.path,
+        reason,
+        message: formatInitFailureMessage(reason),
+        clients,
+        detectedStack: stackResult.stack.languages,
+      }),
+    );
     return 1;
   }
-  const suggestions = await getGitignoreSuggestions(rootDir);
 
-  io.stdout(
-    formatInitText({
-      plan,
-      wrote: parsed.write,
-      stackWarnings: stackResult.warnings,
-      importFindings: importResult?.findings ?? [],
-      gitignoreSuggestions: suggestions,
-    }),
-  );
+  if (parsed.write) {
+    try {
+      const written = await readOptionalBytes(rootDir, safeProfilePath.path);
+      if (
+        !written ||
+        !Buffer.from(written).equals(Buffer.from(profileText, "utf8"))
+      ) {
+        emitInitOutput(
+          parsed,
+          io,
+          createInitRefusal({
+            profilePath: safeProfilePath.path,
+            reason: "verification failed",
+            message: "written profile could not be verified.",
+            clients,
+            detectedStack: stackResult.stack.languages,
+          }),
+        );
+        return 1;
+      }
+    } catch {
+      emitInitOutput(
+        parsed,
+        io,
+        createInitRefusal({
+          profilePath: safeProfilePath.path,
+          reason: "verification failed",
+          message: "written profile could not be verified.",
+          clients,
+          detectedStack: stackResult.stack.languages,
+        }),
+      );
+      return 1;
+    }
+  }
+
+  const suggestions =
+    presetPayload === undefined ? await getGitignoreSuggestions(rootDir) : [];
+
+  emitInitOutput(parsed, io, {
+    mode: parsed.write ? "write" : "dry-run",
+    status: "ok",
+    profilePath: safeProfilePath.path,
+    action: parsed.write ? "write" : "create",
+    wouldWrite: !parsed.write && plan.counts.create + plan.counts.change > 0,
+    wrote: parsed.write && plan.counts.create + plan.counts.change > 0,
+    clients,
+    clientsEnabled: enabledClients(clients),
+    detectedStack: stackResult.stack.languages,
+    preset: presetPayload,
+    stackWarnings: stackResult.warnings,
+    importFindings: importResult?.findings ?? [],
+    gitignoreSuggestions: suggestions,
+  });
   return 0;
 }
 
@@ -566,9 +757,15 @@ function parseCompileArgs(args: string[]): ParsedCompileArgs {
 function parseInitArgs(args: string[]): ParsedInitArgs {
   let root = ".";
   let profile = "ai-profile.yaml";
+  let profileProvided = false;
+  let preset: string | undefined;
   let dryRun = false;
   let write = false;
   let importExisting = false;
+  const clients: ClientId[] = [];
+  const noClients: ClientId[] = [];
+  let json = false;
+  let quiet = false;
   let help = false;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -594,6 +791,21 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
         }
 
         profile = value;
+        profileProvided = true;
+        index += 1;
+        break;
+      }
+      case "--preset": {
+        const value = args[index + 1];
+
+        if (!value || value.startsWith("--")) {
+          return {
+            ok: false,
+            message: "preset_token_missing: --preset requires a token value.",
+          };
+        }
+
+        preset = value;
         index += 1;
         break;
       }
@@ -606,6 +818,55 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
       case "--import":
         importExisting = true;
         break;
+      case "--client": {
+        const value = args[index + 1];
+
+        if (!value || value.startsWith("--")) {
+          return {
+            ok: false,
+            message: "--client requires a comma-separated client list.",
+          };
+        }
+
+        const parsedClients = parseClientList(value, "--client");
+        if (!parsedClients.ok) {
+          return parsedClients;
+        }
+
+        clients.push(...parsedClients.clients);
+        index += 1;
+        break;
+      }
+      case "--no-client": {
+        const value = args[index + 1];
+
+        if (!value || value.startsWith("--")) {
+          return {
+            ok: false,
+            message: "--no-client requires a comma-separated client list.",
+          };
+        }
+
+        const parsedClients = parseClientList(value, "--no-client");
+        if (!parsedClients.ok) {
+          return parsedClients;
+        }
+
+        noClients.push(...parsedClients.clients);
+        index += 1;
+        break;
+      }
+      case "--json":
+        json = true;
+        break;
+      case "--quiet":
+        quiet = true;
+        break;
+      case "--interactive":
+        return {
+          ok: false,
+          message: "interactive mode not yet implemented.",
+        };
       case "--help":
       case "-h":
         help = true;
@@ -622,7 +883,85 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
     };
   }
 
-  return { ok: true, root, profile, dryRun, write, importExisting, help };
+  if (preset !== undefined && importExisting) {
+    return {
+      ok: false,
+      message: "--preset cannot be used with --import in Phase 9.",
+    };
+  }
+
+  if (preset !== undefined && profileProvided) {
+    return {
+      ok: false,
+      message:
+        "--preset cannot be used with --profile in Phase 9; preset init writes only ai-profile.yaml.",
+    };
+  }
+
+  return {
+    ok: true,
+    root,
+    profile,
+    profileProvided,
+    preset,
+    dryRun,
+    write,
+    importExisting,
+    clients: uniqueClients(clients),
+    noClients: uniqueClients(noClients),
+    json,
+    quiet,
+    help,
+  };
+}
+
+function parseClientList(
+  value: string,
+  optionName: "--client" | "--no-client",
+): { ok: true; clients: ClientId[] } | { ok: false; message: string } {
+  if (value.trim() === "") {
+    return {
+      ok: false,
+      message: `${optionName} requires a non-empty client list.`,
+    };
+  }
+
+  const clients: ClientId[] = [];
+
+  for (const rawItem of value.split(",")) {
+    const item = rawItem.trim();
+
+    if (item === "") {
+      return {
+        ok: false,
+        message: `${optionName} contains an empty client id.`,
+      };
+    }
+
+    if (item === "all") {
+      clients.push(...CLIENT_IDS);
+      continue;
+    }
+
+    if (!isClientId(item)) {
+      return {
+        ok: false,
+        message: `Unknown client for ${optionName}: ${item}. Supported clients: ${CLIENT_IDS.join(", ")}, all.`,
+      };
+    }
+
+    clients.push(item);
+  }
+
+  return { ok: true, clients: uniqueClients(clients) };
+}
+
+function isClientId(value: string): value is ClientId {
+  return (CLIENT_IDS as readonly string[]).includes(value);
+}
+
+function uniqueClients(clients: ClientId[]): ClientId[] {
+  return CLIENT_IDS.filter((client) => clients.includes(client));
 }
 
 function parseUiArgs(args: string[]): ParsedUiArgs {
@@ -708,8 +1047,34 @@ function isLoopbackHost(value: string): value is LoopbackHost {
 function renderInitialProfile(input: {
   rootDir: string;
   stack: DetectedStack;
+  preferences?: PresetPreferences;
   clients: { tabnine: boolean; codex: boolean; claude: boolean };
 }): string {
+  const safety = input.preferences?.safety ?? {
+    mode: "guarded",
+    requiresSandbox: false,
+  };
+  const workflow = input.preferences?.workflow ?? {
+    sdd: true,
+    tdd: true,
+    finalReview: true,
+  };
+  const permissions = input.preferences?.permissions ?? {
+    filesystem: {
+      read: "allow",
+      write: "ask",
+    },
+    shell: {
+      run: "ask",
+    },
+    dependencies: {
+      install: "ask",
+    },
+    network: {
+      external: "ask",
+    },
+  };
+
   return `version: 1
 profile:
   name: ${slugifyProfileName(path.basename(input.rootDir))}
@@ -728,27 +1093,251 @@ clients:
   claude:
     enabled: ${String(input.clients.claude)}
 safety:
-  mode: guarded
-  requiresSandbox: false
+  mode: ${safety.mode}
+  requiresSandbox: ${String(safety.requiresSandbox)}
 workflow:
-  sdd: true
-  tdd: true
-  finalReview: true
+  sdd: ${String(workflow.sdd)}
+  tdd: ${String(workflow.tdd)}
+  finalReview: ${String(workflow.finalReview)}
 permissions:
   filesystem:
-    read: allow
-    write: ask
+    read: ${permissions.filesystem.read}
+    write: ${permissions.filesystem.write}
   shell:
-    run: ask
+    run: ${permissions.shell.run}
   secrets:
     access: deny
   dependencies:
-    install: ask
+    install: ${permissions.dependencies.install}
   network:
-    external: ask
+    external: ${permissions.network.external}
   production:
     access: deny
 `;
+}
+
+type InitReport = {
+  mode: "dry-run" | "write" | "refused";
+  status: "ok" | "error";
+  profilePath: string;
+  action?: "create" | "write" | "existing";
+  wouldWrite: boolean;
+  wrote: boolean;
+  clients: ClientMatrix;
+  clientsEnabled: ClientId[];
+  detectedStack: string[];
+  preset?: PresetTokenPayloadV1;
+  stackWarnings: StackDetectionWarning[];
+  importFindings: ArtifactFinding[];
+  gitignoreSuggestions: string[];
+  ignoredClientFlags?: boolean;
+  error?: {
+    code: InitFailureReason;
+    message: string;
+  };
+};
+
+function createInitRefusal(input: {
+  profilePath: string;
+  reason: InitFailureReason;
+  message: string;
+  clients?: ClientMatrix;
+  detectedStack?: string[];
+}): InitReport {
+  const clients =
+    input.clients ?? clientMatrixFromSettings(defaultClients(), "default");
+  return {
+    mode: "refused",
+    status: "error",
+    profilePath: input.profilePath,
+    wouldWrite: false,
+    wrote: false,
+    clients,
+    clientsEnabled: enabledClients(clients),
+    detectedStack: input.detectedStack ?? [],
+    stackWarnings: [],
+    importFindings: [],
+    gitignoreSuggestions: [],
+    error: {
+      code: input.reason,
+      message: input.message,
+    },
+  };
+}
+
+function emitInitOutput(
+  parsed: Extract<ParsedInitArgs, { ok: true }>,
+  io: CliIo,
+  report: InitReport,
+): void {
+  if (parsed.json) {
+    io.stdout(`${JSON.stringify(toInitJson(report))}\n`);
+    return;
+  }
+
+  if (!parsed.quiet) {
+    io.stdout(formatInitText(report));
+  } else if (report.status === "error") {
+    io.stderr(
+      `${report.error?.code ?? "write failed"}: ${
+        report.error?.message ?? "profile could not be written."
+      }\n`,
+    );
+  }
+}
+
+function toInitJson(report: InitReport): Record<string, unknown> {
+  const summary: Record<string, unknown> = {
+    command: "init",
+    mode: report.mode,
+    status: report.status,
+    profilePath: report.profilePath,
+    clientsEnabled: report.clientsEnabled,
+    clients: report.clients,
+    detectedStack: report.detectedStack,
+    wouldWrite: report.wouldWrite,
+    wrote: report.wrote,
+  };
+
+  if (report.error) {
+    summary.error = report.error;
+  }
+
+  return summary;
+}
+
+function defaultClients(): ClientSettings {
+  return {
+    tabnine: false,
+    codex: false,
+    claude: false,
+  };
+}
+
+function getBaseClientSettings(
+  preset: PresetTokenPayloadV1 | undefined,
+  imported: ClientSettings | undefined,
+): { settings: ClientSettings; source: ClientSource } {
+  if (preset !== undefined) {
+    return { settings: preset.preferences.clients, source: "preset" };
+  }
+
+  if (imported !== undefined) {
+    return { settings: imported, source: "import" };
+  }
+
+  return { settings: defaultClients(), source: "default" };
+}
+
+function applyClientSelection(
+  base: ClientSettings,
+  baseSource: ClientSource,
+  clients: ClientId[],
+  noClients: ClientId[],
+): ClientMatrix {
+  const matrix = clientMatrixFromSettings(base, baseSource);
+
+  for (const client of clients) {
+    matrix[client] = {
+      enabled: true,
+      source: "--client",
+    };
+  }
+
+  for (const client of noClients) {
+    matrix[client] = {
+      enabled: false,
+      source: "--no-client",
+    };
+  }
+
+  return matrix;
+}
+
+function clientMatrixFromSettings(
+  settings: ClientSettings,
+  source: ClientSource,
+): ClientMatrix {
+  return {
+    tabnine: { enabled: settings.tabnine, source },
+    codex: { enabled: settings.codex, source },
+    claude: { enabled: settings.claude, source },
+  };
+}
+
+function getExistingProfileClients(
+  bytes: Uint8Array,
+  sourcePath: string,
+): ClientMatrix {
+  const parsed = parseProfileYaml(Buffer.from(bytes).toString("utf8"), {
+    sourcePath,
+  });
+
+  if (!parsed.ok) {
+    return clientMatrixFromSettings(defaultClients(), "default");
+  }
+
+  return clientMatrixFromSettings(
+    {
+      tabnine: parsed.profile.clients.tabnine.enabled,
+      codex: parsed.profile.clients.codex.enabled,
+      claude: parsed.profile.clients.claude.enabled,
+    },
+    "existing",
+  );
+}
+
+function toClientSettings(matrix: ClientMatrix): ClientSettings {
+  return {
+    tabnine: matrix.tabnine.enabled,
+    codex: matrix.codex.enabled,
+    claude: matrix.claude.enabled,
+  };
+}
+
+function enabledClients(matrix: ClientMatrix): ClientId[] {
+  return CLIENT_IDS.filter((client) => matrix[client].enabled);
+}
+
+function classifyInitWriteFailure(error: unknown): InitFailureReason {
+  if (isUnsafePathError(error)) {
+    return "unsafe profile path";
+  }
+
+  if (isNodeError(error)) {
+    switch (error.code) {
+      case "ENOENT":
+        return "root not found";
+      case "EISDIR":
+        return "profile path is a directory";
+      case "EACCES":
+      case "EPERM":
+        return "permission denied";
+      default:
+        return "write failed";
+    }
+  }
+
+  return "write failed";
+}
+
+function formatInitFailureMessage(reason: InitFailureReason): string {
+  switch (reason) {
+    case "root not found":
+      return "root directory could not be found.";
+    case "unsafe profile path":
+      return "profile path must be safe and repository-relative.";
+    case "profile path is a directory":
+      return "profile path points to a directory.";
+    case "permission denied":
+      return "permission denied.";
+    case "verification failed":
+      return "written profile could not be verified.";
+    case "no language detected":
+      return "no language detected under --root.";
+    case "write failed":
+      return "profile could not be written.";
+  }
 }
 
 function renderYamlArrayOrInlineEmpty(values: string[]): string {
@@ -898,12 +1487,12 @@ async function readOptionalBytes(
   relativePath: string,
 ): Promise<Uint8Array | undefined> {
   const safePath = safeOutputPath(relativePath);
-  const rootRealPath = await realpath(path.resolve(rootDir));
+  const rootRealPath = await fsPromises.realpath(path.resolve(rootDir));
   const absolutePath = path.resolve(rootRealPath, ...safePath.split("/"));
 
   try {
     await assertReadPathContained(rootRealPath, absolutePath);
-    return await readFile(absolutePath);
+    return await fsPromises.readFile(absolutePath);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;
@@ -1061,8 +1650,8 @@ async function assertReadPathContained(
     throw new UnsafePathError("Read path escapes root.");
   }
 
-  await lstat(absolutePath);
-  const targetRealPath = await realpath(absolutePath);
+  await fsPromises.lstat(absolutePath);
+  const targetRealPath = await fsPromises.realpath(absolutePath);
 
   if (!isContainedBy(rootRealPath, targetRealPath)) {
     throw new UnsafePathError("Read path target escapes root.");
@@ -1119,7 +1708,7 @@ function formatHelp(): string {
 Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
   agent-profile doctor [--root <path>] [--json]
-  agent-profile init [--root <path>] [--profile <path>] [--import] [--dry-run|--write]
+  agent-profile init [--root <path>] [--profile <path>] [--import] [--preset <token>] [--client <list>] [--no-client <list>] [--json] [--quiet] [--dry-run|--write]
   agent-profile ui [--root <path>] [--host <host>] [--port <number>] [--open]
 
 Commands:
@@ -1127,6 +1716,18 @@ Commands:
   doctor    Run local profile, lockfile, and permission checks.
   init      Create a starting ai-profile.yaml.
   ui        Start the local read-only UI.
+
+Init presets:
+  --preset verifies a short-lived hosted preset token offline. Repository
+  analysis happens locally and no source code is uploaded. Dry-run is the
+  default; use --write to create ai-profile.yaml. In Phase 9, --preset cannot
+  be combined with --import or --profile. The hosted preset builder ships in a
+  later phase; this CLI verifies tokens that match its contract.
+
+Init clients:
+  --client enables one or more profile clients: tabnine, codex, claude, or all.
+  --no-client disables clients after --client/import/preset selection. Init does
+  not edit an existing ai-profile.yaml; use compile --dry-run to inspect outputs.
 `;
 }
 
@@ -1175,16 +1776,45 @@ function formatWritePlan(
   return `${lines.join("\n").replace(/\n*$/u, "")}\n`;
 }
 
-function formatInitText(input: {
-  plan: WritePlanResult;
-  wrote: boolean;
-  stackWarnings: StackDetectionWarning[];
-  importFindings: ArtifactFinding[];
-  gitignoreSuggestions: string[];
-}): string {
-  const lines = [
-    formatWritePlan("Agent Profile Init", input.wrote, input.plan).trimEnd(),
-  ];
+function formatInitText(input: InitReport): string {
+  const lines: string[] = [];
+
+  if (input.preset !== undefined) {
+    lines.push(formatPresetSummary(input.preset).trimEnd(), "");
+  }
+
+  lines.push(`Agent Profile Init (${input.mode})`, "");
+
+  if (input.status === "error") {
+    lines.push(formatInitRefusalFacts(input));
+    return `${lines.join("\n").replace(/\n*$/u, "")}\n`;
+  }
+
+  if (input.action === "existing") {
+    lines.push(
+      `unchanged: ${input.profilePath} already exists. no changes proposed.`,
+    );
+
+    if (input.ignoredClientFlags) {
+      lines.push("client flags ignored: init does not edit existing profiles.");
+    }
+
+    lines.push(
+      "run `agent-profile compile --dry-run` to inspect compiled artifacts.",
+    );
+    return `${lines.join("\n").replace(/\n*$/u, "")}\n`;
+  }
+
+  lines.push(
+    `${input.wrote ? "wrote" : "would write"}: ${input.profilePath}`,
+    "clients:",
+    ...CLIENT_IDS.map(
+      (client) =>
+        `  ${client}: ${input.clients[client].enabled ? "enabled" : "disabled"}${formatClientSource(input.clients[client].source)}`,
+    ),
+    `clients enabled: ${formatEnabledClients(input.clientsEnabled)}`,
+    `stack detected: ${formatDetectedStack(input.detectedStack)}`,
+  );
 
   if (input.stackWarnings.length > 0) {
     lines.push("", "Stack detection warnings:");
@@ -1203,14 +1833,77 @@ function formatInitText(input: {
   }
 
   if (input.gitignoreSuggestions.length > 0) {
-    lines.push("", ".gitignore suggestions:");
+    lines.push("", "suggestions:");
 
     for (const suggestion of input.gitignoreSuggestions) {
-      lines.push(`- ${suggestion}`);
+      lines.push(`  .gitignore: add \`${suggestion}\``);
     }
   }
 
+  lines.push(
+    "",
+    input.wrote
+      ? "run `agent-profile compile --dry-run` to inspect compiled artifacts."
+      : "run `agent-profile init --write` to create the profile.",
+  );
+
   return `${lines.join("\n").replace(/\n*$/u, "")}\n`;
+}
+
+function formatInitRefusalFacts(input: InitReport): string {
+  const reason = input.error?.code ?? "write failed";
+  const message = input.error?.message ?? "profile could not be written.";
+
+  if (reason === "no language detected") {
+    return [
+      `refused: ${message}`,
+      "schema v1 requires at least one stack.languages entry.",
+      "add a language manually or re-run inside a recognized project.",
+    ].join("\n");
+  }
+
+  return [
+    `refused: ${input.profilePath} could not be written.`,
+    `reason: ${message}`,
+    "no successful write was recorded.",
+    "",
+    "fix filesystem permissions or choose a safe repository-relative --profile path.",
+  ].join("\n");
+}
+
+function formatClientSource(source: ClientSource): string {
+  return source === "default" ? "" : ` (${source})`;
+}
+
+function formatEnabledClients(clients: ClientId[]): string {
+  return clients.length === 0 ? "(none)" : clients.join(", ");
+}
+
+function formatDetectedStack(languages: string[]): string {
+  return languages.length === 0 ? "(none)" : languages.join(", ");
+}
+
+function formatPresetSummary(preset: PresetTokenPayloadV1): string {
+  const preferences = preset.preferences;
+  const enabledClients = (["tabnine", "codex", "claude"] as const).filter(
+    (client) => preferences.clients[client],
+  );
+
+  return `Preset summary:
+- status: valid
+- preset: ${preset.presetId}
+- version: ${String(preset.version)}
+- expires: ${new Date(preset.exp * 1000).toISOString()}
+- clients: ${enabledClients.length > 0 ? enabledClients.join(", ") : "none"}
+- safety: ${preferences.safety.mode}, requiresSandbox=${String(preferences.safety.requiresSandbox)}
+- workflow: sdd=${String(preferences.workflow.sdd)}, tdd=${String(preferences.workflow.tdd)}, finalReview=${String(preferences.workflow.finalReview)}
+- permissions: filesystem.read=${preferences.permissions.filesystem.read}, filesystem.write=${preferences.permissions.filesystem.write}, shell.run=${preferences.permissions.shell.run}, dependencies.install=${preferences.permissions.dependencies.install}, network.external=${preferences.permissions.network.external}
+- stack: detected locally
+`;
+}
+
+function formatPresetTokenError(error: PresetTokenError): string {
+  return `${error.code}: ${error.message}\n`;
 }
 
 function formatValidationIssues(

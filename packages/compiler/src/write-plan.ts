@@ -1,16 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import {
-  lstat,
-  mkdir,
-  open,
-  readFile,
-  realpath,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import fsPromises from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 
@@ -49,7 +40,7 @@ type NormalizedWrite = {
 export async function planWrites(
   request: WritePlanRequest,
 ): Promise<WritePlanResult> {
-  const rootRealPath = await realpath(path.resolve(request.rootDir));
+  const rootRealPath = await fsPromises.realpath(path.resolve(request.rootDir));
   return planWritesWithResolvedRoot(rootRealPath, request.writes);
 }
 
@@ -88,7 +79,7 @@ async function planWritesWithResolvedRoot(
 export async function applyWritePlan(
   request: WritePlanRequest,
 ): Promise<WritePlanResult> {
-  const rootRealPath = await realpath(path.resolve(request.rootDir));
+  const rootRealPath = await fsPromises.realpath(path.resolve(request.rootDir));
   const writes = normalizeWrites(request.writes);
   const plan = await planWritesWithResolvedRoot(rootRealPath, writes);
   const writesByPath = new Map(writes.map((write) => [write.path, write]));
@@ -108,8 +99,8 @@ export async function applyWritePlan(
       rootRealPath,
       write.path,
     );
-    await mkdir(path.dirname(absolutePath), { recursive: true });
-    await writeFile(absolutePath, write.bytes);
+    await fsPromises.mkdir(path.dirname(absolutePath), { recursive: true });
+    await fsPromises.writeFile(absolutePath, write.bytes);
   }
 
   return plan;
@@ -152,7 +143,7 @@ async function assertWritePathContained(
   const existingTarget = await lstatOptional(absolutePath);
 
   if (existingTarget) {
-    const targetRealPath = await realpath(absolutePath);
+    const targetRealPath = await fsPromises.realpath(absolutePath);
 
     if (!isContainedBy(rootRealPath, targetRealPath)) {
       throw new Error(`Planned write target escapes root: ${safePath}`);
@@ -160,7 +151,7 @@ async function assertWritePathContained(
   }
 
   const existingParent = await findExistingAncestor(path.dirname(absolutePath));
-  const parentRealPath = await realpath(existingParent);
+  const parentRealPath = await fsPromises.realpath(existingParent);
 
   if (!isContainedBy(rootRealPath, parentRealPath)) {
     throw new Error(`Planned write parent escapes root: ${safePath}`);
@@ -191,7 +182,7 @@ async function readOptionalFile(
   absolutePath: string,
 ): Promise<Uint8Array | undefined> {
   try {
-    return await readFile(absolutePath);
+    return await fsPromises.readFile(absolutePath);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;
@@ -203,7 +194,7 @@ async function readOptionalFile(
 
 async function lstatOptional(absolutePath: string): Promise<true | undefined> {
   try {
-    await lstat(absolutePath);
+    await fsPromises.lstat(absolutePath);
     return true;
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
@@ -274,7 +265,7 @@ export async function writeProfileAtomic(
   candidateBytes: Buffer,
   baseEtag: string,
 ): Promise<WriteProfileAtomicResult> {
-  const rootRealPath = await realpath(path.resolve(rootDir));
+  const rootRealPath = await fsPromises.realpath(path.resolve(rootDir));
   const targetAbsolute = path.join(rootRealPath, PROFILE_FILENAME);
 
   // Containment check: target must live inside root.
@@ -283,9 +274,9 @@ export async function writeProfileAtomic(
   }
 
   // Symlink check: reject if the target itself is a symlink.
-  let targetStat: Awaited<ReturnType<typeof lstat>>;
+  let targetStat: Awaited<ReturnType<typeof fsPromises.lstat>>;
   try {
-    targetStat = await lstat(targetAbsolute);
+    targetStat = await fsPromises.lstat(targetAbsolute);
   } catch (err) {
     if (isNodeError(err) && err.code === "ENOENT") {
       throw new ProfileWriteError(
@@ -304,7 +295,7 @@ export async function writeProfileAtomic(
   }
 
   // Stale-hash check: current on-disk bytes must match baseEtag.
-  const currentBytes = await readFile(targetAbsolute);
+  const currentBytes = await fsPromises.readFile(targetAbsolute);
   const currentEtag = computeFileEtag(currentBytes);
   if (currentEtag !== baseEtag) {
     throw new ProfileWriteError(
@@ -328,18 +319,18 @@ export async function writeProfileAtomic(
   const tempAbsolute = path.join(rootRealPath, tempName);
 
   try {
-    const fd = await open(tempAbsolute, "wx", 0o644);
+    const fd = await fsPromises.open(tempAbsolute, "wx", 0o644);
     try {
       await fd.write(candidateBytes);
       await fd.sync();
     } finally {
       await fd.close();
     }
-    await rename(tempAbsolute, targetAbsolute);
+    await fsPromises.rename(tempAbsolute, targetAbsolute);
     await fsyncParentDirectory(rootRealPath);
   } catch (err) {
     try {
-      await rm(tempAbsolute, { force: true });
+      await fsPromises.rm(tempAbsolute, { force: true });
     } catch {
       // best-effort cleanup
     }
@@ -347,7 +338,7 @@ export async function writeProfileAtomic(
   }
 
   // Verify written bytes.
-  const writtenBytes = await readFile(targetAbsolute);
+  const writtenBytes = await fsPromises.readFile(targetAbsolute);
   const writtenEtag = computeFileEtag(writtenBytes);
   if (writtenEtag !== candidateEtag) {
     throw new ProfileWriteError(
@@ -364,9 +355,9 @@ async function fsyncParentDirectory(directoryPath: string): Promise<void> {
     return;
   }
 
-  let fd: Awaited<ReturnType<typeof open>> | undefined;
+  let fd: Awaited<ReturnType<typeof fsPromises.open>> | undefined;
   try {
-    fd = await open(directoryPath, "r");
+    fd = await fsPromises.open(directoryPath, "r");
     await fd.sync();
   } catch (err) {
     if (!isNodeError(err) || (err.code !== "EINVAL" && err.code !== "EPERM")) {

@@ -91,6 +91,34 @@ Any future hosted feature requires:
 - threat model update
 - tests for local-only defaults
 
+## Hosted Preset Tokens
+
+Phase 9 adds only the local CLI consumer for hosted preset tokens. The hosted
+builder UI and signing endpoint are deferred, but the trust boundary is fixed:
+the builder may collect preset intent only, and the CLI verifies the resulting
+token offline.
+
+Preset token payloads may contain:
+
+- target client choices for Tabnine, Codex, and Claude
+- safety mode and sandbox preference
+- SDD/TDD/final-review workflow booleans
+- filesystem, shell, dependency-install, and external-network permission
+  preferences
+- bounded preset metadata such as a slug-like preset id and optional label
+
+Preset token payloads must not contain source files, generated artifacts,
+repository paths, stack detection results, `.env` keys or values, credentials,
+environment variables, arbitrary instructions, secret permission grants, or
+production permission grants.
+
+`agent-profile init --preset <token>` performs zero network calls. It does not
+fetch token URLs, resolve opaque identifiers, send telemetry, upload repository
+metadata, upload source code, upload generated artifacts, or upload secrets.
+After the token is verified, stack detection still reads only the local
+allowlisted metadata files used by normal init, and the token cannot set
+`stack.*`, `profile.name`, or `profile.description`.
+
 ## MCP Prompt Injection And Tool Poisoning
 
 Third-party MCP servers can introduce prompt-injection or tool-poisoning risk

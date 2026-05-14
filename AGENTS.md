@@ -42,6 +42,16 @@ After implementation:
 4. Review the implementation against the spec.
 5. List any incomplete or risky items.
 
+For final spec reviews:
+
+1. Build a spec-to-test matrix for every MUST, acceptance criterion, and error contract.
+2. For each item, cite either a focused test or explicit static-only evidence.
+3. Treat static-only evidence as weaker than a regression test and call that out.
+4. For local-first, no-upload, no-secret, and no-source-read claims, prefer runtime sentinels over import inspection alone.
+5. For documented error tables, require table-driven CLI or API tests covering code, exit/status, and redaction behavior.
+6. For parsers and token formats, review canonical decoding, malformed encodings, size limits, and validation order.
+7. Document or revert any intentional UX divergence from existing behavior.
+
 ## Safety Rules
 
 Never:

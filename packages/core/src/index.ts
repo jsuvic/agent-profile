@@ -13,6 +13,20 @@ export {
   validateProfileValue,
 } from "./profile.js";
 export { containsSecretLikeLiteral } from "./security.js";
+export { PRESET_VERIFICATION_KEYS } from "./preset/public-keys.js";
+export { verifyPresetToken } from "./preset/token.js";
+export type { PresetVerificationKey } from "./preset/public-keys.js";
+export type {
+  PresetPermissionMode,
+  PresetPreferences,
+  PresetSafetyMode,
+  PresetTokenError,
+  PresetTokenErrorCode,
+  PresetTokenPayloadV1,
+  PresetTokenProtectedHeader,
+  PresetVerificationResult,
+  VerifyPresetTokenOptions,
+} from "./preset/token.js";
 export type {
   AiProfile,
   AiProfileClient,
