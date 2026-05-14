@@ -28,6 +28,7 @@ import {
 import { runCli } from "./index.js";
 import {
   encodeBase64UrlJson,
+  FIXTURE_PRESET_VERIFICATION_KEYS,
   signFixturePresetToken,
 } from "../../../packages/core/test/fixtures/preset/sign-fixture-token.js";
 import { withNetworkSentinel } from "../../../packages/core/test/fixtures/preset/network-sentinel.js";
@@ -37,6 +38,10 @@ const fixtureDir = fileURLToPath(
 );
 const expectedDir = path.join(fixtureDir, "expected");
 const PRESET_NOW = Date.parse("2026-05-13T12:00:00.000Z") / 1000;
+const PRESET_TEST_OPTIONS = {
+  presetNow: () => PRESET_NOW,
+  presetVerificationKeys: FIXTURE_PRESET_VERIFICATION_KEYS,
+} as const;
 
 test("doctor command prints pass status for the minimal fixture", async () => {
   const rootDir = await createFixtureRoot();
@@ -764,7 +769,7 @@ test("init preset dry-run prints summary before write plan without network or to
   const code = await withNetworkSentinel(() =>
     runCli(["init", "--root", rootDir, "--preset", token, "--dry-run"], {
       io: output,
-      presetNow: () => PRESET_NOW,
+      ...PRESET_TEST_OPTIONS,
     }),
   );
   const stdout = output.stdoutText();
@@ -790,11 +795,28 @@ test("init preset defaults to dry-run", async () => {
   const output = createOutput();
   const code = await runCli(["init", "--root", rootDir, "--preset", token], {
     io: output,
-    presetNow: () => PRESET_NOW,
+    ...PRESET_TEST_OPTIONS,
   });
 
   assert.equal(code, 0);
   assert.match(output.stdoutText(), /Agent Profile Init \(dry-run\)/u);
+  await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
+    code: "ENOENT",
+  });
+});
+
+test("init preset does not trust committed fixture keys by default", async () => {
+  const rootDir = await createTypescriptRoot();
+  const token = signFixturePresetToken(createCliPresetPayload());
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir, "--preset", token], {
+    io: output,
+    presetNow: () => PRESET_NOW,
+  });
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /preset_token_untrusted_key/u);
+  assert.equal(output.stderrText().includes(token), false);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
@@ -807,7 +829,7 @@ test("init preset write creates only ai-profile.yaml with preset preferences", a
   const output = createOutput();
   const code = await runCli(
     ["init", "--root", rootDir, "--preset", token, "--write"],
-    { io: output, presetNow: () => PRESET_NOW },
+    { io: output, ...PRESET_TEST_OPTIONS },
   );
   const afterEntries = (await readdir(rootDir)).sort();
   const profileText = await readFile(
@@ -839,11 +861,11 @@ test("init preset dry-run output is deterministic for the same token and metadat
 
   const firstCode = await runCli(
     ["init", "--root", rootDir, "--preset", token, "--dry-run"],
-    { io: first, presetNow: () => PRESET_NOW },
+    { io: first, ...PRESET_TEST_OPTIONS },
   );
   const secondCode = await runCli(
     ["init", "--root", rootDir, "--preset", token, "--dry-run"],
-    { io: second, presetNow: () => PRESET_NOW },
+    { io: second, ...PRESET_TEST_OPTIONS },
   );
 
   assert.equal(firstCode, 0);
@@ -867,7 +889,7 @@ test("init preset dry-run reads only stack metadata and the target profile path"
   const { result: code, reads } = await withFileReadSentinel(rootDir, () =>
     runCli(["init", "--root", rootDir, "--preset", token, "--dry-run"], {
       io: output,
-      presetNow: () => PRESET_NOW,
+      ...PRESET_TEST_OPTIONS,
     }),
   );
 
@@ -1030,7 +1052,7 @@ test("init preset maps runtime token failures to exit 1 without echoing tokens",
       ["init", "--root", rootDir, "--preset", item.token],
       {
         io: output,
-        presetNow: () => PRESET_NOW,
+        ...PRESET_TEST_OPTIONS,
       },
     );
 
@@ -1077,7 +1099,7 @@ test("init preset reports token errors without scanning or writing", async () =>
   const output = createOutput();
   const code = await runCli(["init", "--root", rootDir, "--preset", expired], {
     io: output,
-    presetNow: () => PRESET_NOW,
+    ...PRESET_TEST_OPTIONS,
   });
 
   assert.equal(code, 1);
@@ -1096,7 +1118,7 @@ test("init preset refuses write when no local language metadata is detected", as
   const output = createOutput();
   const code = await runCli(
     ["init", "--root", rootDir, "--preset", token, "--write"],
-    { io: output, presetNow: () => PRESET_NOW },
+    { io: output, ...PRESET_TEST_OPTIONS },
   );
 
   assert.equal(code, 1);

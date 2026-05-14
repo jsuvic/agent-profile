@@ -28,6 +28,7 @@ import {
   type PresetPreferences,
   type PresetTokenError,
   type PresetTokenPayloadV1,
+  type PresetVerificationKey,
 } from "@agent-profile/core";
 import {
   analyzeExistingArtifacts,
@@ -52,6 +53,7 @@ export type CliOptions = {
   io?: Partial<CliIo>;
   launchUi?: UiLaunchFunction;
   presetNow?: () => number;
+  presetVerificationKeys?: readonly PresetVerificationKey[];
 };
 
 export type UiLaunchRequest = {
@@ -187,7 +189,13 @@ export async function runCli(
     case "doctor":
       return runDoctorCommand(rest, cwd, io);
     case "init":
-      return runInit(rest, cwd, io, options.presetNow);
+      return runInit(
+        rest,
+        cwd,
+        io,
+        options.presetNow,
+        options.presetVerificationKeys,
+      );
     case "ui":
       return runUi(rest, cwd, io, options.launchUi ?? launchPublishedUi);
     default:
@@ -417,6 +425,7 @@ async function runInit(
   cwd: string,
   io: CliIo,
   presetNow?: () => number,
+  presetVerificationKeys?: readonly PresetVerificationKey[],
 ): Promise<number> {
   const parsed = parseInitArgs(args);
 
@@ -448,10 +457,12 @@ async function runInit(
 
   let presetPayload: PresetTokenPayloadV1 | undefined;
   if (parsed.preset !== undefined) {
-    const presetResult = verifyPresetToken(
-      parsed.preset,
-      presetNow === undefined ? undefined : { now: presetNow },
-    );
+    const presetResult = verifyPresetToken(parsed.preset, {
+      ...(presetNow === undefined ? {} : { now: presetNow }),
+      ...(presetVerificationKeys === undefined
+        ? {}
+        : { keys: presetVerificationKeys }),
+    });
 
     if (!presetResult.ok) {
       io.stderr(formatPresetTokenError(presetResult));

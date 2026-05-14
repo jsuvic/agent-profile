@@ -565,6 +565,7 @@ scanning.
 - the token schema has no freeform source, instruction, path, or secret fields
 - the CLI verifies tokens offline
 - the public key registry contains no private key material
+- the production key registry does not trust committed fixture signing keys
 - token validation has an injected clock for deterministic tests
 - every token failure mode has a deterministic code and test
 - `--preset` cannot affect `compile`, `doctor`, or `ui`
@@ -599,12 +600,14 @@ here so implementation does not require ad-hoc judgement.
   are a build-time error enforced by a unit test.
 - The registry contains only `publicKeyPem` strings (SPKI PEM). No private
   key material may appear in any file under `packages/core/src/preset/`.
-- For Phase 9 the registry ships with **one active fixture verification key**
-  (`kid: "phase9-fixture-1"`) whose matching private key lives at
-  `packages/core/test/fixtures/preset/phase9-fixture-1.private.pem` and is
-  used only by test fixtures. The fixture private key is gitignored from
-  any production bundle path and the test path name makes its role explicit.
-- A separate production `kid` will be added when the hosted phase ships.
+- The default production registry must not trust any fixture key whose matching
+  private key is committed under `packages/core/test/fixtures/`.
+- For Phase 9 the production registry may be empty. Unit and CLI tests inject
+  `kid: "phase9-fixture-1"` explicitly from the test fixture helper; normal
+  runtime verification must reject that fixture key unless it is injected by a
+  test.
+- A production `kid` will be added when the hosted phase ships and the matching
+  private signing key is kept outside this repository.
 
 ### String Field Caps And Patterns
 

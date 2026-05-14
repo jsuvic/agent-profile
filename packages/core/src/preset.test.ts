@@ -9,10 +9,13 @@ import {
   verifyPresetToken,
   type PresetTokenPayloadV1,
   type PresetVerificationKey,
+  type VerifyPresetTokenOptions,
 } from "./index.js";
 import {
   encodeBase64UrlJson,
   FIXTURE_PRESET_KID,
+  FIXTURE_PRESET_VERIFICATION_KEY,
+  FIXTURE_PRESET_VERIFICATION_KEYS,
   signFixturePresetToken,
 } from "../test/fixtures/preset/sign-fixture-token.js";
 import { withNetworkSentinel } from "../test/fixtures/preset/network-sentinel.js";
@@ -24,7 +27,7 @@ test("verifies a valid fixture token without network access", async () => {
   const token = signFixturePresetToken(payload);
 
   const result = await withNetworkSentinel(() =>
-    verifyPresetToken(token, { now: () => NOW }),
+    verifyFixturePresetToken(token),
   );
 
   assert.equal(result.ok, true);
@@ -44,11 +47,21 @@ test("public verification key registry is sorted, unique, and public only", () =
 
   assert.deepEqual([...kids].sort(compareText), kids);
   assert.equal(new Set(kids).size, kids.length);
+  assert.equal(kids.includes(FIXTURE_PRESET_KID), false);
   assert.equal(
     PRESET_VERIFICATION_KEYS.some((key) =>
       key.publicKeyPem.includes("PRIVATE KEY"),
     ),
     false,
+  );
+});
+
+test("default registry does not trust the committed fixture signing key", () => {
+  assertPresetCode(
+    verifyPresetToken(signFixturePresetToken(createValidPayload()), {
+      now: () => NOW,
+    }),
+    "preset_token_untrusted_key",
   );
 });
 
@@ -94,9 +107,7 @@ test("rejects invalid base64url, UTF-8, and JSON segments", () => {
     signFixturePresetToken(createValidPayload()),
   );
   assertPresetCode(
-    verifyPresetToken(`${prefixAndProtected}.${payloadSegment}.A`, {
-      now: () => NOW,
-    }),
+    verifyFixturePresetToken(`${prefixAndProtected}.${payloadSegment}.A`),
     "preset_token_malformed",
   );
   assertPresetCode(
@@ -212,9 +223,8 @@ test("rejects tampered payload and protected-header bytes", () => {
   });
 
   assertPresetCode(
-    verifyPresetToken(
+    verifyFixturePresetToken(
       `${prefixAndProtected}.${payloadSegment}.${signatureSegment}`,
-      { now: () => NOW },
     ),
     "preset_token_bad_signature",
   );
@@ -227,9 +237,8 @@ test("rejects tampered payload and protected-header bytes", () => {
   });
 
   assertPresetCode(
-    verifyPresetToken(
+    verifyFixturePresetToken(
       `apc-preset-v1.${protectedSegment}.${payload}.${signature}`,
-      { now: () => NOW },
     ),
     "preset_token_bad_signature",
   );
@@ -237,40 +246,36 @@ test("rejects tampered payload and protected-header bytes", () => {
 
 test("rejects expired and not-yet-valid time claims", () => {
   assertPresetCode(
-    verifyPresetToken(
+    verifyFixturePresetToken(
       signFixturePresetToken(
         createValidPayload({ iat: NOW - 7200, exp: NOW - 60 }),
       ),
-      { now: () => NOW },
     ),
     "preset_token_expired",
   );
   assertPresetCode(
-    verifyPresetToken(
+    verifyFixturePresetToken(
       signFixturePresetToken(
         createValidPayload({ nbf: NOW + 600, exp: NOW + 3600 }),
       ),
-      { now: () => NOW },
     ),
     "preset_token_not_yet_valid",
   );
   assertPresetCode(
-    verifyPresetToken(
+    verifyFixturePresetToken(
       signFixturePresetToken(
         createValidPayload({ iat: NOW + 600, exp: NOW + 3600 }),
       ),
-      { now: () => NOW },
     ),
     "preset_token_not_yet_valid",
   );
 });
 
 test("accepts nbf inside the default clock-skew window", () => {
-  const result = verifyPresetToken(
+  const result = verifyFixturePresetToken(
     signFixturePresetToken(
       createValidPayload({ nbf: NOW + 299, exp: NOW + 3600 }),
     ),
-    { now: () => NOW },
   );
 
   assert.equal(result.ok, true);
@@ -420,10 +425,21 @@ function assertPresetCode(
   }
 }
 
+function verifyFixturePresetToken(
+  token: string,
+  options: VerifyPresetTokenOptions = {},
+): ReturnType<typeof verifyPresetToken> {
+  return verifyPresetToken(token, {
+    now: () => NOW,
+    keys: FIXTURE_PRESET_VERIFICATION_KEYS,
+    ...options,
+  });
+}
+
 function fixtureKey(
   overrides: Partial<PresetVerificationKey>,
 ): PresetVerificationKey {
-  return { ...PRESET_VERIFICATION_KEYS[0], ...overrides };
+  return { ...FIXTURE_PRESET_VERIFICATION_KEY, ...overrides };
 }
 
 function splitToken(token: string): [string, string, string] {
