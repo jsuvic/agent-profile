@@ -28,6 +28,7 @@ Thumbs.db
 # CCE and local agent runtime files (per-machine, not source)
 .cce/
 .mcp.json
+!fixtures/**/expected/.mcp.json
 .claude/settings.local.json
 .claude/settings.json
 .claude/worktrees/
