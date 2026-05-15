@@ -1,0 +1,26 @@
+version: 1
+profile:
+  name: react-typescript
+  description: AI-agent setup for a React and TypeScript project.
+stack:
+  languages:
+    - typescript
+  frameworks:
+    - react
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true

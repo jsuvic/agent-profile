@@ -73,6 +73,20 @@ The generated Markdown sections are ordered exactly:
 
 The generated file must use LF line endings and exactly one trailing newline.
 
+### Phase-10 Conditional Sections
+
+The following sections are additive amendments from phase 10. They are
+inserted at the stable positions below only when their gate is open; absence
+of the gate emits nothing, with no warning, and preserves the fixed order of
+the nine sections above.
+
+| Section title                  | Insertion position                                                            | Gate                                  |
+| ------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------- |
+| `## Stack Guidance — React`    | immediately after `## Stack`                                                  | `stack.frameworks` contains `react`   |
+| `## Code Review`               | immediately after `## Development Workflow`                                   | `workflow.codeReview: true`           |
+| `## Refactoring`               | immediately after `## Code Review` if present, else `## Development Workflow` | `workflow.refactoring: true`          |
+| `## Documentation`             | immediately after `## Refactoring`/`## Code Review`/`## Development Workflow` | `workflow.documentation: true`        |
+
 ## Rendering Rules
 
 ### Project

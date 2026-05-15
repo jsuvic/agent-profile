@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft. Phase 10 is cross-target guidance expansion. Not yet approved.
+Approved. Phase 10 is cross-target guidance expansion.
 
 ## Purpose
 
@@ -10,7 +10,8 @@ Phase 10 extends three verified guidance targets with four conditional topic
 blocks: React stack, code review, refactoring, and documentation. The phase
 is intentionally narrow: it adds guidance content already representable by
 `ai-profile.yaml` without modifying the profile schema beyond small additive
-optional booleans, and without changing the lockfile or any unrelated target.
+optional booleans, and without changing the lockfile contract or any
+unrelated target.
 
 The phase exists because teams adopting `agent-profile` need React stack
 coverage and dedicated review, refactor, and documentation guidance that the
@@ -52,7 +53,7 @@ pattern, security constraints, and small additive schema fields.
 
 ## Implementation Gate
 
-Phase 10 implementation must not start until these conditions are true:
+Phase 10 implementation is allowed only when these conditions are true:
 
 - specs `001` through `004` are approved
 - the `phase-02/001` Output Contract is amended additively to list the four
@@ -89,8 +90,10 @@ Phase 10 verification requires:
 - new outputs respect `effectivePermissions` for shell, dependency, network,
   secret, and production access on every affected target
 - `CLAUDE.md` is byte-identical across the phase boundary
-- no schema, lockfile, Codex config, Claude config, or other target output
-  changes beyond the additive optional booleans listed in `002`–`004`
+- no schema, lockfile contract, Codex config, Claude config, or other target
+  output changes beyond the additive optional booleans listed in `002`–`004`
+- closed-gate profiles do not gain phase-10 template descriptors in
+  `ai-profile.lock`
 
 ## Out of Scope
 

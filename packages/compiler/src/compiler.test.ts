@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { readProfileFile } from "@agent-profile/core";
+import { containsSecretLikeLiteral, readProfileFile } from "@agent-profile/core";
 import type { AiProfile } from "@agent-profile/core";
 
 import {
@@ -22,7 +22,11 @@ import {
   validateLockfileText,
   validateLockfileValue,
 } from "./index.js";
-import type { CompilerTargetId, LockfileValidationResult } from "./index.js";
+import type {
+  CompilerTargetId,
+  GeneratedFile,
+  LockfileValidationResult,
+} from "./index.js";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const minimalFixtureDir = new URL(
@@ -622,6 +626,292 @@ test("Tabnine guidelines are conditional on workflow and stack", async () => {
   );
 });
 
+test("phase-10 conditional Tabnine and AGENTS.md outputs gate on profile flags", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const baseProfile: AiProfile = {
+    ...profileResult.profile,
+    stack: {
+      ...profileResult.profile.stack,
+      frameworks: ["react", "sveltekit"],
+    },
+    workflow: {
+      sdd: true,
+      tdd: true,
+      finalReview: true,
+      codeReview: true,
+      refactoring: true,
+      documentation: true,
+    },
+  };
+
+  const enabled = compileProfile({
+    profile: baseProfile,
+    targets: ["tabnine-guidelines", "agents-md"],
+  });
+  assert.equal(enabled.ok, true);
+
+  if (!enabled.ok) {
+    return;
+  }
+
+  const enabledPaths = enabled.files.map((file) => file.path);
+  assert.equal(
+    enabledPaths.includes(".tabnine/guidelines/30-stack-typescript-react.md"),
+    true,
+  );
+  assert.equal(
+    enabledPaths.includes(".tabnine/guidelines/30-stack-typescript-svelte.md"),
+    true,
+  );
+  assert.equal(
+    enabledPaths.includes(".tabnine/guidelines/60-code-review.md"),
+    true,
+  );
+  assert.equal(
+    enabledPaths.includes(".tabnine/guidelines/70-refactoring.md"),
+    true,
+  );
+  assert.equal(
+    enabledPaths.includes(".tabnine/guidelines/80-documentation.md"),
+    true,
+  );
+
+  const agentsMd = enabled.files.find((file) => file.path === "AGENTS.md");
+  assert.ok(agentsMd);
+  const agentsText = Buffer.from(agentsMd.bytes).toString("utf8");
+  assert.equal(agentsText.includes("## Stack Guidance — React"), true);
+  assert.equal(agentsText.includes("## Stack Guidance — Svelte"), false);
+  assert.equal(agentsText.includes("## Code Review"), true);
+  assert.equal(agentsText.includes("## Refactoring"), true);
+  assert.equal(agentsText.includes("## Documentation"), true);
+  // Section order: Stack → Stack Guidance — React → Enabled AI Clients →
+  // Development Workflow → Code Review → Refactoring → Documentation →
+  // Permissions.
+  const orderedHeadings = [
+    "## Stack\n",
+    "## Stack Guidance — React",
+    "## Enabled AI Clients",
+    "## Development Workflow",
+    "## Code Review",
+    "## Refactoring",
+    "## Documentation",
+    "## Permissions",
+  ];
+  let cursor = 0;
+  for (const heading of orderedHeadings) {
+    const index = agentsText.indexOf(heading, cursor);
+    assert.notEqual(index, -1, `missing or out of order: ${heading}`);
+    cursor = index;
+  }
+
+  const phase10TabninePaths = [
+    ".tabnine/guidelines/30-stack-typescript-react.md",
+    ".tabnine/guidelines/60-code-review.md",
+    ".tabnine/guidelines/70-refactoring.md",
+    ".tabnine/guidelines/80-documentation.md",
+  ];
+  for (const path of phase10TabninePaths) {
+    const file: GeneratedFile | undefined = enabled.files.find(
+      (item) => item.path === path,
+    );
+    assert.ok(file, path);
+    const text: string = Buffer.from(file.bytes).toString("utf8");
+    assertGeneratedTopicText(text, path);
+    assert.equal(
+      text.split("\n").length < 500,
+      true,
+      `${path} exceeds 500 lines`,
+    );
+    assert.equal(text.includes("Final implementation review is required"), false);
+    assert.equal(text.includes("Compare the implementation"), false);
+  }
+
+  const phase10AgentsSections = [
+    "## Stack Guidance — React",
+    "## Code Review",
+    "## Refactoring",
+    "## Documentation",
+  ];
+  for (const heading of phase10AgentsSections) {
+    const section = extractMarkdownSection(agentsText, heading);
+    assertGeneratedTopicText(section, heading, {
+      requireSingleTrailingNewline: false,
+    });
+    assert.equal(
+      section.includes("Run golden tests when generated files change."),
+      false,
+      `${heading} duplicates the completion checklist body`,
+    );
+  }
+
+  assert.equal(
+    agentsText.includes("Run golden tests when generated files change."),
+    true,
+  );
+  const checklistOccurrences = agentsText.split(
+    "Run golden tests when generated files change.",
+  ).length - 1;
+  assert.equal(checklistOccurrences, 1);
+
+  const disabled = compileProfile({
+    profile: profileResult.profile,
+    targets: ["tabnine-guidelines", "agents-md"],
+  });
+  assert.equal(disabled.ok, true);
+
+  if (!disabled.ok) {
+    return;
+  }
+
+  const disabledPaths = disabled.files.map((file) => file.path);
+  assert.equal(
+    disabledPaths.includes(".tabnine/guidelines/30-stack-typescript-react.md"),
+    false,
+  );
+  assert.equal(
+    disabledPaths.includes(".tabnine/guidelines/60-code-review.md"),
+    false,
+  );
+  assert.equal(
+    disabledPaths.includes(".tabnine/guidelines/70-refactoring.md"),
+    false,
+  );
+  assert.equal(
+    disabledPaths.includes(".tabnine/guidelines/80-documentation.md"),
+    false,
+  );
+
+  const disabledAgents = disabled.files.find(
+    (file) => file.path === "AGENTS.md",
+  );
+  assert.ok(disabledAgents);
+  const disabledText = Buffer.from(disabledAgents.bytes).toString("utf8");
+  assert.equal(disabledText.includes("## Stack Guidance — React"), false);
+  assert.equal(disabledText.includes("## Code Review"), false);
+  assert.equal(disabledText.includes("## Refactoring"), false);
+  assert.equal(disabledText.includes("## Documentation"), false);
+});
+
+test("phase-10 templates are lockfile-gated with their profile conditions", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const disabled = compileProfile({
+    profile: profileResult.profile,
+    targets: ["agents-md", "tabnine-guidelines"],
+  });
+  assert.equal(disabled.ok, true);
+
+  if (!disabled.ok) {
+    return;
+  }
+
+  const disabledTemplateIds = disabled.templates.map((template) => template.id);
+  for (const templateId of PHASE_10_TEMPLATE_IDS) {
+    assert.equal(
+      disabledTemplateIds.includes(templateId),
+      false,
+      `${templateId} should not appear when its gate is closed`,
+    );
+  }
+
+  const enabled = compileProfile({
+    profile: {
+      ...profileResult.profile,
+      stack: {
+        ...profileResult.profile.stack,
+        frameworks: ["react"],
+      },
+      workflow: {
+        ...profileResult.profile.workflow,
+        codeReview: true,
+        refactoring: true,
+        documentation: true,
+      },
+    },
+    targets: ["agents-md", "tabnine-guidelines"],
+  });
+  assert.equal(enabled.ok, true);
+
+  if (!enabled.ok) {
+    return;
+  }
+
+  const enabledTemplateIds = enabled.templates.map((template) => template.id);
+  for (const templateId of PHASE_10_TEMPLATE_IDS) {
+    assert.equal(
+      enabledTemplateIds.includes(templateId),
+      true,
+      `${templateId} should appear when its gate is open`,
+    );
+  }
+});
+
+test("phase-10 fixtures match generated outputs byte-for-byte", async () => {
+  for (const { name } of PHASE_10_FIXTURES) {
+    const fixtureDir = fileURLToPath(
+      new URL(`../../../fixtures/${name}/`, import.meta.url),
+    );
+    const result = await compareGoldenFixture(fixtureDir);
+    assert.equal(
+      result.ok,
+      true,
+      `${name}: ${result.ok ? "" : JSON.stringify(result.failures, null, 2)}`,
+    );
+  }
+});
+
+test("phase-10 fixture topic outputs contain no secret-like literals", async () => {
+  for (const { name, tabninePath } of PHASE_10_FIXTURES) {
+    const agentsMd = await readFile(
+      new URL(`../../../fixtures/${name}/expected/AGENTS.md`, import.meta.url),
+      "utf8",
+    );
+    const tabnineGuideline = await readFile(
+      new URL(
+        `../../../fixtures/${name}/expected/${tabninePath}`,
+        import.meta.url,
+      ),
+      "utf8",
+    );
+
+    assertNoSecretLikeFixtureText(agentsMd, `${name}/AGENTS.md`);
+    assertNoSecretLikeFixtureText(tabnineGuideline, `${name}/${tabninePath}`);
+  }
+});
+
+test("phase-10 CLAUDE.md is byte-identical to minimal-valid CLAUDE.md across fixtures", async () => {
+  const referencePath = fileURLToPath(
+    new URL("../../../fixtures/minimal-valid/expected/CLAUDE.md", import.meta.url),
+  );
+  const reference = await readFile(referencePath);
+  const fixtures = [
+    "code-review-enabled",
+    "refactoring-enabled",
+    "documentation-enabled",
+  ];
+  for (const name of fixtures) {
+    const claudePath = fileURLToPath(
+      new URL(
+        `../../../fixtures/${name}/expected/CLAUDE.md`,
+        import.meta.url,
+      ),
+    );
+    const actual = await readFile(claudePath);
+    assert.equal(actual.equals(reference), true, `${name} CLAUDE.md differs`);
+  }
+});
+
 test("template hashes change when template source changes", () => {
   const templates = getDefaultTemplates();
   const agentsTemplate = templates.find(
@@ -758,4 +1048,65 @@ function parseFrontmatter(text: string): Record<string, string> {
   });
 
   return Object.fromEntries(entries);
+}
+
+const PHASE_10_TEMPLATE_IDS = [
+  "targets/agents-md/30-stack-typescript-react@1",
+  "targets/agents-md/60-code-review@1",
+  "targets/agents-md/70-refactoring@1",
+  "targets/agents-md/80-documentation@1",
+  "targets/tabnine-guidelines/30-stack-typescript-react@1",
+  "targets/tabnine-guidelines/60-code-review@1",
+  "targets/tabnine-guidelines/70-refactoring@1",
+  "targets/tabnine-guidelines/80-documentation@1",
+];
+
+const PHASE_10_FIXTURES = [
+  {
+    name: "react-typescript",
+    tabninePath: ".tabnine/guidelines/30-stack-typescript-react.md",
+  },
+  {
+    name: "code-review-enabled",
+    tabninePath: ".tabnine/guidelines/60-code-review.md",
+  },
+  {
+    name: "refactoring-enabled",
+    tabninePath: ".tabnine/guidelines/70-refactoring.md",
+  },
+  {
+    name: "documentation-enabled",
+    tabninePath: ".tabnine/guidelines/80-documentation.md",
+  },
+];
+
+function assertGeneratedTopicText(
+  text: string,
+  label: string,
+  options: { requireSingleTrailingNewline?: boolean } = {},
+): void {
+  const requireSingleTrailingNewline =
+    options.requireSingleTrailingNewline ?? true;
+  assert.equal(text.includes("\r"), false, label);
+  assert.equal(text.endsWith("\n"), true, label);
+  if (requireSingleTrailingNewline) {
+    assert.equal(text.endsWith("\n\n"), false, label);
+  }
+  assert.equal(containsSecretLikeLiteral(text), false, label);
+  assert.equal(text.includes("SECRET_TOKEN_VALUE"), false, label);
+  assert.equal(text.includes(fakeEnvSecret), false, label);
+}
+
+function assertNoSecretLikeFixtureText(text: string, label: string): void {
+  assert.equal(containsSecretLikeLiteral(text), false, label);
+  assert.equal(text.includes("SECRET_TOKEN_VALUE"), false, label);
+  assert.equal(text.includes(fakeEnvSecret), false, label);
+}
+
+function extractMarkdownSection(text: string, heading: string): string {
+  const start = text.indexOf(heading);
+  assert.notEqual(start, -1, heading);
+
+  const next = text.indexOf("\n## ", start + heading.length);
+  return next === -1 ? text.slice(start) : text.slice(start, next + 1);
 }

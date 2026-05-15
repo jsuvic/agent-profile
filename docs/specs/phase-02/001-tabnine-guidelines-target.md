@@ -76,6 +76,19 @@ The minimal fixture must emit these files:
 | `.tabnine/guidelines/50-testing-playwright-junit.md` | `targets/tabnine-guidelines/50-testing-playwright-junit@1` |
 | `.tabnine/guidelines/90-final-review.md`             | `targets/tabnine-guidelines/90-final-review@1`             |
 
+### Phase-10 Conditional Outputs
+
+These outputs are additive amendments from phase 10 and are emitted only when
+the corresponding gate is open. Absence of the gate emits nothing and produces
+no warning.
+
+| Output path                                          | Template id                                                | Gate                                  |
+| ---------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------- |
+| `.tabnine/guidelines/30-stack-typescript-react.md`   | `targets/tabnine-guidelines/30-stack-typescript-react@1`   | `stack.frameworks` contains `react`   |
+| `.tabnine/guidelines/60-code-review.md`              | `targets/tabnine-guidelines/60-code-review@1`              | `workflow.codeReview: true`           |
+| `.tabnine/guidelines/70-refactoring.md`              | `targets/tabnine-guidelines/70-refactoring@1`              | `workflow.refactoring: true`          |
+| `.tabnine/guidelines/80-documentation.md`            | `targets/tabnine-guidelines/80-documentation@1`            | `workflow.documentation: true`        |
+
 Generated Markdown must use:
 
 - UTF-8

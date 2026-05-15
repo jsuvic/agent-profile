@@ -99,6 +99,9 @@ export type AiProfile = {
     sdd: boolean;
     tdd: boolean;
     finalReview: boolean;
+    codeReview?: boolean;
+    refactoring?: boolean;
+    documentation?: boolean;
   };
   permissions?: AiProfilePermissions;
 };
@@ -307,11 +310,18 @@ export function renderProfileYaml(profile: AiProfile): string {
     doc["safety"] = safety;
   }
 
-  doc["workflow"] = {
+  const workflow: Record<string, unknown> = {
     sdd: profile.workflow.sdd,
     tdd: profile.workflow.tdd,
     finalReview: profile.workflow.finalReview,
   };
+  if (profile.workflow.codeReview !== undefined)
+    workflow["codeReview"] = profile.workflow.codeReview;
+  if (profile.workflow.refactoring !== undefined)
+    workflow["refactoring"] = profile.workflow.refactoring;
+  if (profile.workflow.documentation !== undefined)
+    workflow["documentation"] = profile.workflow.documentation;
+  doc["workflow"] = workflow;
 
   if (profile.permissions !== undefined) {
     doc["permissions"] = buildPermissionsDoc(profile.permissions);

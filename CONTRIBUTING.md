@@ -25,6 +25,9 @@ npm run build
 Use npm workspaces. Do not introduce another package manager without an approved
 spec.
 
+When golden fixtures need regeneration, build the workspaces first, then run
+`node scripts/regenerate-fixtures.mjs <fixture-name> [...]`.
+
 ## Safety Rules
 
 Never add behavior that uploads source code, uploads secrets, enables telemetry,

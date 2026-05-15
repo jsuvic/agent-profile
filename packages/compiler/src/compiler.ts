@@ -14,6 +14,15 @@ import {
   sha256Hex,
   compareText,
 } from "./shared.js";
+import {
+  CODE_REVIEW_TOPIC,
+  DOCUMENTATION_TOPIC,
+  REACT_STACK_TOPIC,
+  REFACTORING_TOPIC,
+  type GuidanceTopic,
+  renderTopicAsAgentsMdSection,
+  renderTopicAsTabnineGuideline,
+} from "./guidance-content.js";
 import type {
   CompilerTargetId,
   CompileIssue,
@@ -52,6 +61,22 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     version: "1",
     source: renderAgentsMdTemplateSource(),
   },
+  agentsMdTopicTemplateSource(
+    "targets/agents-md/30-stack-typescript-react@1",
+    REACT_STACK_TOPIC,
+  ),
+  agentsMdTopicTemplateSource(
+    "targets/agents-md/60-code-review@1",
+    CODE_REVIEW_TOPIC,
+  ),
+  agentsMdTopicTemplateSource(
+    "targets/agents-md/70-refactoring@1",
+    REFACTORING_TOPIC,
+  ),
+  agentsMdTopicTemplateSource(
+    "targets/agents-md/80-documentation@1",
+    DOCUMENTATION_TOPIC,
+  ),
   {
     id: "targets/lockfile@1",
     target: "lockfile",
@@ -75,12 +100,28 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     renderTypeScriptSvelteGuideline,
   ),
   guidelineTemplateSource(
+    "targets/tabnine-guidelines/30-stack-typescript-react@1",
+    renderTypeScriptReactGuideline,
+  ),
+  guidelineTemplateSource(
     "targets/tabnine-guidelines/40-stack-java-spring@1",
     renderJavaSpringGuideline,
   ),
   guidelineTemplateSource(
     "targets/tabnine-guidelines/50-testing-playwright-junit@1",
     renderPlaywrightJunitGuideline,
+  ),
+  guidelineTemplateSource(
+    "targets/tabnine-guidelines/60-code-review@1",
+    renderCodeReviewGuideline,
+  ),
+  guidelineTemplateSource(
+    "targets/tabnine-guidelines/70-refactoring@1",
+    renderRefactoringGuideline,
+  ),
+  guidelineTemplateSource(
+    "targets/tabnine-guidelines/80-documentation@1",
+    renderDocumentationGuideline,
   ),
   guidelineTemplateSource(
     "targets/tabnine-guidelines/90-final-review@1",
@@ -174,12 +215,13 @@ export function compileProfile(request: CompileRequest): CompileResult {
   const files = targets.flatMap((target) =>
     renderTarget(target, request.profile),
   );
+  const requiredTemplateIds = getRequiredTemplateIdSet(targets, request.profile);
 
   return {
     ok: true,
     files: files.sort(compareGeneratedFiles),
     templates: templates
-      .filter((template) => targets.includes(template.target))
+      .filter((template) => requiredTemplateIds.has(template.id))
       .sort(compareTemplates),
   };
 }
@@ -187,6 +229,21 @@ export function compileProfile(request: CompileRequest): CompileResult {
 export function renderAgentsMd(profile: AiProfile): string {
   const effectivePermissions = deriveEffectivePermissions(profile);
   const enabledClients = renderEnabledClients(profile);
+  const reactSection = profile.stack.frameworks.includes("react")
+    ? `\n${renderTopicAsAgentsMdSection(REACT_STACK_TOPIC)}`
+    : "";
+  const codeReviewSection =
+    profile.workflow.codeReview === true
+      ? `\n${renderTopicAsAgentsMdSection(CODE_REVIEW_TOPIC)}`
+      : "";
+  const refactoringSection =
+    profile.workflow.refactoring === true
+      ? `\n${renderTopicAsAgentsMdSection(REFACTORING_TOPIC)}`
+      : "";
+  const documentationSection =
+    profile.workflow.documentation === true
+      ? `\n${renderTopicAsAgentsMdSection(DOCUMENTATION_TOPIC)}`
+      : "";
 
   return normalizeGeneratedText(`# AGENTS.md
 
@@ -202,7 +259,7 @@ Description: ${escapeMarkdownText(profile.profile.description)}
 - Frameworks: ${renderList(profile.stack.frameworks)}
 - Package managers: ${renderList(profile.stack.packageManagers)}
 - Testing: ${renderList(profile.stack.testing)}
-
+${reactSection}
 ## Enabled AI Clients
 
 ${enabledClients}
@@ -212,7 +269,7 @@ ${enabledClients}
 - SDD: ${renderRequired(profile.workflow.sdd)}
 - TDD: ${renderRequired(profile.workflow.tdd)}
 - Final implementation review: ${renderRequired(profile.workflow.finalReview)}
-
+${codeReviewSection}${refactoringSection}${documentationSection}
 ## Permissions
 
 | Permission         | Mode  |
@@ -404,6 +461,17 @@ function renderTabnineGuidelines(profile: AiProfile): GeneratedFile[] {
     );
   }
 
+  if (hasStack(profile, "frameworks", "react")) {
+    files.push(
+      createGeneratedTextFile(
+        ".tabnine/guidelines/30-stack-typescript-react.md",
+        common.target,
+        "targets/tabnine-guidelines/30-stack-typescript-react@1",
+        renderTypeScriptReactGuideline(),
+      ),
+    );
+  }
+
   if (
     hasStack(profile, "languages", "java") &&
     hasStack(profile, "frameworks", "spring-boot")
@@ -425,6 +493,39 @@ function renderTabnineGuidelines(profile: AiProfile): GeneratedFile[] {
         common.target,
         "targets/tabnine-guidelines/50-testing-playwright-junit@1",
         renderPlaywrightJunitGuideline(),
+      ),
+    );
+  }
+
+  if (profile.workflow.codeReview === true) {
+    files.push(
+      createGeneratedTextFile(
+        ".tabnine/guidelines/60-code-review.md",
+        common.target,
+        "targets/tabnine-guidelines/60-code-review@1",
+        renderCodeReviewGuideline(),
+      ),
+    );
+  }
+
+  if (profile.workflow.refactoring === true) {
+    files.push(
+      createGeneratedTextFile(
+        ".tabnine/guidelines/70-refactoring.md",
+        common.target,
+        "targets/tabnine-guidelines/70-refactoring@1",
+        renderRefactoringGuideline(),
+      ),
+    );
+  }
+
+  if (profile.workflow.documentation === true) {
+    files.push(
+      createGeneratedTextFile(
+        ".tabnine/guidelines/80-documentation.md",
+        common.target,
+        "targets/tabnine-guidelines/80-documentation@1",
+        renderDocumentationGuideline(),
       ),
     );
   }
@@ -605,6 +706,22 @@ Test-driven development is required for this project.
 `;
 }
 
+function renderTypeScriptReactGuideline(): string {
+  return renderTopicAsTabnineGuideline(REACT_STACK_TOPIC);
+}
+
+function renderCodeReviewGuideline(): string {
+  return renderTopicAsTabnineGuideline(CODE_REVIEW_TOPIC);
+}
+
+function renderRefactoringGuideline(): string {
+  return renderTopicAsTabnineGuideline(REFACTORING_TOPIC);
+}
+
+function renderDocumentationGuideline(): string {
+  return renderTopicAsTabnineGuideline(DOCUMENTATION_TOPIC);
+}
+
 function renderTypeScriptSvelteGuideline(): string {
   return `<!-- Generated by Agent Profile Compiler. Do not edit by hand. -->
 
@@ -720,6 +837,18 @@ function guidelineTemplateSource(
   };
 }
 
+function agentsMdTopicTemplateSource(
+  id: string,
+  topic: GuidanceTopic,
+): TemplateSource {
+  return {
+    id,
+    target: "agents-md",
+    version: "1",
+    source: renderTopicAsAgentsMdSection(topic),
+  };
+}
+
 function workflowSkillTemplateSource(
   id: string,
   target: WorkflowSkillTargetId,
@@ -828,7 +957,7 @@ function validateTargets(
       continue;
     }
 
-    for (const templateId of getRequiredTemplateIds(target)) {
+    for (const templateId of getRequiredTemplateIds(target, profile)) {
       if (!templateIds.has(templateId)) {
         issues.push({
           code: "missing_template",
@@ -844,10 +973,113 @@ function validateTargets(
   return issues;
 }
 
-function getRequiredTemplateIds(target: CompilerTargetId): string[] {
-  return TEMPLATE_SOURCES.filter((template) => template.target === target).map(
-    (template) => template.id,
+function getRequiredTemplateIdSet(
+  targets: CompilerTargetId[],
+  profile: AiProfile,
+): Set<string> {
+  return new Set(
+    targets.flatMap((target) => getRequiredTemplateIds(target, profile)),
   );
+}
+
+function getRequiredTemplateIds(
+  target: CompilerTargetId,
+  profile: AiProfile,
+): string[] {
+  switch (target) {
+    case "agents-md":
+      return [
+        "targets/agents-md@1",
+        ...getRequiredAgentsMdTopicTemplateIds(profile),
+      ];
+    case "tabnine-guidelines":
+      return getRequiredTabnineGuidelineTemplateIds(profile);
+    case "codex-workflow-skills":
+      return getRequiredWorkflowSkillTemplateIds(
+        profile,
+        "codex-workflow-skills",
+      );
+    case "claude-workflow-skills":
+      return getRequiredWorkflowSkillTemplateIds(
+        profile,
+        "claude-workflow-skills",
+      );
+    default:
+      return TEMPLATE_SOURCES.filter(
+        (template) => template.target === target,
+      ).map((template) => template.id);
+  }
+}
+
+function getRequiredAgentsMdTopicTemplateIds(profile: AiProfile): string[] {
+  const ids: string[] = [];
+
+  if (hasStack(profile, "frameworks", "react")) {
+    ids.push("targets/agents-md/30-stack-typescript-react@1");
+  }
+  if (profile.workflow.codeReview === true) {
+    ids.push("targets/agents-md/60-code-review@1");
+  }
+  if (profile.workflow.refactoring === true) {
+    ids.push("targets/agents-md/70-refactoring@1");
+  }
+  if (profile.workflow.documentation === true) {
+    ids.push("targets/agents-md/80-documentation@1");
+  }
+
+  return ids;
+}
+
+function getRequiredTabnineGuidelineTemplateIds(profile: AiProfile): string[] {
+  const ids = ["targets/tabnine-guidelines/00-general-agent-behavior@1"];
+
+  if (profile.workflow.sdd) {
+    ids.push("targets/tabnine-guidelines/10-sdd-workflow@1");
+  }
+  if (profile.workflow.tdd) {
+    ids.push("targets/tabnine-guidelines/20-tdd-workflow@1");
+  }
+  if (
+    hasStack(profile, "languages", "typescript") &&
+    hasStack(profile, "frameworks", "sveltekit")
+  ) {
+    ids.push("targets/tabnine-guidelines/30-stack-typescript-svelte@1");
+  }
+  if (hasStack(profile, "frameworks", "react")) {
+    ids.push("targets/tabnine-guidelines/30-stack-typescript-react@1");
+  }
+  if (
+    hasStack(profile, "languages", "java") &&
+    hasStack(profile, "frameworks", "spring-boot")
+  ) {
+    ids.push("targets/tabnine-guidelines/40-stack-java-spring@1");
+  }
+  if (hasAnyStack(profile, "testing", ["playwright", "junit"])) {
+    ids.push("targets/tabnine-guidelines/50-testing-playwright-junit@1");
+  }
+  if (profile.workflow.codeReview === true) {
+    ids.push("targets/tabnine-guidelines/60-code-review@1");
+  }
+  if (profile.workflow.refactoring === true) {
+    ids.push("targets/tabnine-guidelines/70-refactoring@1");
+  }
+  if (profile.workflow.documentation === true) {
+    ids.push("targets/tabnine-guidelines/80-documentation@1");
+  }
+  if (profile.workflow.finalReview) {
+    ids.push("targets/tabnine-guidelines/90-final-review@1");
+  }
+
+  return ids;
+}
+
+function getRequiredWorkflowSkillTemplateIds(
+  profile: AiProfile,
+  target: WorkflowSkillTargetId,
+): string[] {
+  return WORKFLOW_SKILLS.filter(
+    (skill) => profile.workflow[skill.workflowFlag],
+  ).map((skill) => `targets/${target}/${skill.id}@1`);
 }
 
 function uniqueTargets(targets: CompilerTargetId[]): CompilerTargetId[] {

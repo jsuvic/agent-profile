@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft
+Approved
 
 ## Problem
 
@@ -66,9 +66,10 @@ determinism, security, and golden-test contracts of their owning targets.
    - the new `## Stack Guidance — React` section appended to `AGENTS.md`
    - `CLAUDE.md` unchanged
 3. `--write` emits both files in their new shapes.
-4. Profiles with both `react` and `svelte` emit both Tabnine stack files
-   and both `## Stack Guidance` sections in `AGENTS.md`. Profiles with
-   neither emit neither.
+4. Profiles with both `react` and `sveltekit` emit both relevant Tabnine
+   stack files. `AGENTS.md` emits only the new React stack guidance section;
+   the existing `## Stack` section remains the shared list of all declared
+   frameworks. Profiles without `react` emit no React guidance.
 
 ## Inputs
 
@@ -180,8 +181,9 @@ adapted to each target.
 - golden test for the amended `AGENTS.md`
 - absence-of-output test (no `react` in `stack.frameworks` → no new
   Tabnine file and no new `AGENTS.md` section)
-- co-presence test (`react` and `svelte` → both Tabnine files and both
-  `## Stack Guidance` sections emitted)
+- co-presence test (`react` and `sveltekit` both present: both Tabnine files,
+  one `## Stack Guidance — React` section, and no required Svelte AGENTS
+  section)
 - LF and trailing-newline determinism test on both outputs
 - secret-pattern absence test on both outputs
 - duplication regression test: Tabnine file does not contain the
