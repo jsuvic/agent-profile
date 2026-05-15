@@ -5,6 +5,14 @@
   import Badge from "$lib/components/Badge.svelte";
   import { invalidateAll } from "$app/navigation";
   import type { ProfilePageData, ProfileViewModel } from "./+page.server";
+  import {
+    buildWorkflowCandidate,
+    workflowDraftFromProfile,
+    workflowFlagEnabled,
+    workflowHasChanges,
+    WORKFLOW_CONTROLS,
+    type EditableWorkflowKey,
+  } from "$lib/profileEditor";
 
   let { data }: { data: ProfilePageData } = $props();
   let view = $derived(data.view);
@@ -38,15 +46,12 @@
     claudeEnabled: boolean;
     safetyMode: string;
     requiresSandbox: boolean;
-    sdd: boolean;
-    tdd: boolean;
-    finalReview: boolean;
     filesystemRead: string;
     filesystemWrite: string;
     shellRun: string;
     dependenciesInstall: string;
     networkExternal: string;
-  };
+  } & Record<EditableWorkflowKey, boolean>;
 
   type PermissionField =
     | "filesystemRead"
@@ -69,6 +74,7 @@
     tabnineEnabled: true, codexEnabled: false, claudeEnabled: true,
     safetyMode: "guarded", requiresSandbox: false,
     sdd: true, tdd: true, finalReview: false,
+    codeReview: false, refactoring: false, documentation: false,
     filesystemRead: "allow", filesystemWrite: "ask",
     shellRun: "ask", dependenciesInstall: "ask", networkExternal: "ask",
   });
@@ -96,9 +102,7 @@
       claudeEnabled: v.clients.claude.enabled,
       safetyMode: v.safety.mode,
       requiresSandbox: v.safety.requiresSandbox,
-      sdd: v.workflow.sdd,
-      tdd: v.workflow.tdd,
-      finalReview: v.workflow.finalReview,
+      ...workflowDraftFromProfile(v.workflow),
       filesystemRead: v.rawPermissions?.filesystem?.read ?? v.permissions.filesystem.read,
       filesystemWrite: v.rawPermissions?.filesystem?.write ?? v.permissions.filesystem.write,
       shellRun: v.rawPermissions?.shell?.run ?? v.permissions.shell.run,
@@ -180,9 +184,7 @@
       draft.claudeEnabled !== effective.clients.claude.enabled ||
       draft.safetyMode !== effective.safety.mode ||
       draft.requiresSandbox !== effective.safety.requiresSandbox ||
-      draft.sdd !== effective.workflow.sdd ||
-      draft.tdd !== effective.workflow.tdd ||
-      draft.finalReview !== effective.workflow.finalReview ||
+      workflowHasChanges(draft, effective.workflow) ||
       permissionsChangedFrom(effective)
     );
   });
@@ -208,7 +210,7 @@
         codex: { enabled: draft.codexEnabled },
         claude: { enabled: draft.claudeEnabled },
       },
-      workflow: { sdd: draft.sdd, tdd: draft.tdd, finalReview: draft.finalReview },
+      workflow: buildWorkflowCandidate(draft, effective?.workflow),
     };
 
     // Safety: only include if originally present
@@ -291,6 +293,12 @@
     if (path === "/permissions/shell/run") return "shellRun";
     if (path === "/permissions/dependencies/install") return "dependenciesInstall";
     if (path === "/permissions/network/external") return "networkExternal";
+    if (path.startsWith("/workflow/")) {
+      const key = path.slice("/workflow/".length);
+      return WORKFLOW_CONTROLS.some((control) => control.key === key)
+        ? key
+        : null;
+    }
     return null;
   }
 
@@ -395,7 +403,9 @@
   }
 
   function workflowCount(profile: ProfileViewModel): number {
-    return [profile.workflow.sdd, profile.workflow.tdd, profile.workflow.finalReview].filter(Boolean).length;
+    return WORKFLOW_CONTROLS.filter(({ key }) =>
+      workflowFlagEnabled(profile.workflow, key),
+    ).length;
   }
 
   const PERM_OPTIONS = ["allow", "ask", "deny"] as const;
@@ -607,21 +617,22 @@
         </FormSection>
 
         <!-- Workflow -->
-        <FormSection title="Workflow skills" aside={editing ? "" : `${workflowCount(effective)} enabled`}>
-          {#each (["sdd", "tdd", "finalReview"] as const) as skill}
+        <FormSection title="Workflow" aside={editing ? "" : `${workflowCount(effective)} enabled`}>
+          {#each WORKFLOW_CONTROLS as control}
             <div class="field">
-              <span class="lbl">{skill}</span>
+              <span class="lbl">{control.label}</span>
               {#if editing}
-                <div class="val">
+                <div class="val col" style="gap:4px;">
                   <label class="toggle-label">
-                    <input type="checkbox" bind:checked={draft[skill]} />
-                    <span>{draft[skill] ? "enabled" : "disabled"}</span>
+                    <input type="checkbox" bind:checked={draft[control.key]} />
+                    <span>{draft[control.key] ? "enabled" : "disabled"}</span>
                   </label>
+                  {#if validationErrors[control.key]}<span class="field-err">{validationErrors[control.key]}</span>{/if}
                 </div>
               {:else}
                 <div class="val chip-row">
-                  <span class="chip" class:del={!effective.workflow[skill]}>
-                    {effective.workflow[skill] ? "enabled" : "disabled"}
+                  <span class="chip" class:del={!workflowFlagEnabled(effective.workflow, control.key)}>
+                    {workflowFlagEnabled(effective.workflow, control.key) ? "enabled" : "disabled"}
                   </span>
                 </div>
               {/if}

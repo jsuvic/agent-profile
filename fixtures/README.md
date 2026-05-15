@@ -45,6 +45,18 @@ preset-only/
   ai-profile.yaml
 partial-overrides/
   ai-profile.yaml
+react-typescript/
+  ai-profile.yaml
+  expected/  (phase-10 React stack guidance fixture)
+code-review-enabled/
+  ai-profile.yaml
+  expected/  (phase-10 workflow.codeReview fixture)
+refactoring-enabled/
+  ai-profile.yaml
+  expected/  (phase-10 workflow.refactoring fixture)
+documentation-enabled/
+  ai-profile.yaml
+  expected/  (phase-10 workflow.documentation fixture)
 ```
 
 Planned first compiler fixture:

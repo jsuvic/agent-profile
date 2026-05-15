@@ -87,6 +87,15 @@
         },
         "finalReview": {
           "type": "boolean"
+        },
+        "codeReview": {
+          "type": "boolean"
+        },
+        "refactoring": {
+          "type": "boolean"
+        },
+        "documentation": {
+          "type": "boolean"
         }
       }
     },
