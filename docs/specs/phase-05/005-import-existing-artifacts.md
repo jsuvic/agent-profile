@@ -133,6 +133,18 @@ manual-review signals from this spec) + (guarded defaults from ADR 0002)`.
 - `.claude/settings.json` with `defaultMode: "bypassPermissions"` produces an
   import warning
 
+## Forward Reference: Subagent Imports
+
+`docs/specs/phase-11/` (Draft, not approved) introduces three new generated
+artifact roots: `.claude/agents/`, `.codex/agents/`, and
+`.tabnine/agent/agents/`. Existing third-party or manually authored files
+under those roots must remain manual-review imports under this spec. Import
+must not adopt them into `capabilities.delegation.subagents.agents` until a
+later spec defines safe adoption with explicit user confirmation. Doctor
+orphan handling for subagents is owned by
+`docs/specs/phase-11/005-doctor-subagent-checks.md`
+(`LINT-SUBAGENT-006`).
+
 ## Documentation Updates
 
 - `README.md`

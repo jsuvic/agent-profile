@@ -9,7 +9,7 @@ same policy across separate tool configs.
 
 ## Preview Status
 
-This package is in preview / early access. `agent-profile@0.1.3` is usable for
+This package is in preview / early access. `agent-profile@0.1.6` is usable for
 experimentation, but the schema, generated files, and command details may change
 before `1.0`.
 
@@ -54,7 +54,13 @@ npx agent-profile init --write
 ```
 
 `init` detects supported stack metadata such as languages, frameworks, package
-managers, and test tools. It does not read `.env` files or upload source code.
+managers, and test tools from a small allowlist of root metadata files
+(`package.json`, `tsconfig.json`, `svelte.config.*`, `vite.config.*`,
+`playwright.config.*`, `pom.xml`, `build.gradle`, `build.gradle.kts`, and
+`pubspec.yaml` for Flutter/Dart). It does not read `.env` files or upload
+source code. If no supported language metadata exists yet, `init` refuses to
+write because schema v1 requires `stack.languages`; create `ai-profile.yaml`
+manually for documentation-only or currently unsupported project stacks.
 
 ### `compile`
 

@@ -7,6 +7,10 @@ Verified
 Approved for Phase 5 implementation on 2026-05-02. Implemented on
 2026-05-03. Verified on 2026-05-03 with workspace checks, tests, and build.
 
+Extended by `docs/specs/phase-later/018-flutter-dart-stack-detection.md`
+(implemented as phase 12 on 2026-05-17), which adds `pubspec.yaml` detection
+for Dart and Flutter projects.
+
 ## Problem
 
 Init can provide a better starting profile if it detects obvious project stack

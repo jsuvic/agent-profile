@@ -166,6 +166,12 @@ Hooks, subagents, plugins, global memory writes, and dedicated knowledge
 MCP/tool generation are later-only. Advanced capabilities require
 target-specific specs before implementation.
 
+Forward reference (subagents): `docs/specs/phase-11/001-subagents-schema.md`
+defines the live, client-neutral shape that must replace the reserved
+single-field `capabilities.delegation.subagents.enabled` block above when
+Phase 11 is approved. Until then, the reserved block is the canonical shape
+and `subagents.enabled: true` is rejected by the runtime schema.
+
 ### `profile`
 
 | Field         | Type   | Required | Contract                                                |

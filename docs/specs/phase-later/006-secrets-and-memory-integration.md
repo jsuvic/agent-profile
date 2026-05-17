@@ -128,6 +128,11 @@ artifacts where supported, listing only `name`, `provider`, and `lookup` /
 - `docs/targets/*.md` — document reference-block support per target
 - `docs/security/secret-handling.md` — add this spec to the threat model
 - target capability matrix
+- cross-reference `phase-later/016-auto-memory-taxonomy.md`; the two memory
+  specs coexist with distinct fields. This spec owns *references to*
+  external memory backends; `016` owns *locally generated typed memory
+  files*. A doctor validation rule in `016` rejects a profile that declares
+  the same memory name in both blocks.
 
 ## Final Review Checklist
 
@@ -136,3 +141,5 @@ artifacts where supported, listing only `name`, `provider`, and `lookup` /
 - references are deterministic and lockfile-recorded
 - network-backed memory providers require explicit opt-in
 - profile schema additions are fully optional and backward compatible
+- `memory` field here remains distinct from `memory.taxonomy` in
+  `phase-later/016`; doctor enforces non-collision

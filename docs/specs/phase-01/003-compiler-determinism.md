@@ -56,6 +56,11 @@ type CompilerTargetId =
   | "codex-config"
   | "claude-settings"
   | "claude-mcp";
+// Forward reference (subagents): docs/specs/phase-11/ adds
+// "claude-subagents", "codex-subagents", and "tabnine-subagents" to this
+// union when Phase 11 is approved. The Codex subagents target also amends
+// the existing "codex-config" template's deterministic expansion to append
+// an additive [agents] block; the target id does not change.
 
 type TemplateDescriptor = {
   id: string;

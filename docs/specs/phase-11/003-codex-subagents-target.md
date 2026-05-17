@@ -1,0 +1,301 @@
+# Spec: Codex Subagents Target
+
+## Status
+
+Draft. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16. Not
+approved. Depends on `001-subagents-schema.md`. Coordinates with
+`phase-03/001-codex-config-target.md`.
+
+## Problem
+
+Codex documents project custom agents under `.codex/agents/*.toml` plus a
+global `[agents]` block in `.codex/config.toml`. Without a target-specific
+spec, Agent Profile Compiler could emit Codex subagents with looser sandbox
+policy than `effectivePermissions`, shadow built-in names, or rewrite the
+existing minimal `.codex/config.toml` golden output owned by
+`phase-03/001-codex-config-target.md`.
+
+## Goal
+
+Define the byte-level project-local generation contract for Codex subagents:
+output path, TOML shape, mapping from the client-neutral schema in `001`, the
+additive `[agents]` block in `.codex/config.toml`, and the safety subset Phase
+11 will support in its first implementation.
+
+## Non-Goals
+
+- implementing the target (separate code change)
+- generating user-level (`~/.codex/agents/`), managed, admin, or plugin
+  subagents
+- generating Codex CSV fan-out workflows
+- generating `sandbox_mode = "danger-full-access"`,
+  `approval_policy = "never"`, `skills.config`, absolute user skill paths, or
+  inline MCP credentials
+- modifying `[mcp_servers.<id>]` tables outside `phase-later/008`
+- changing existing minimal-fixture bytes owned by
+  `phase-03/001-codex-config-target.md` (this spec is additive only)
+- defining doctor checks (owned by `005-doctor-subagent-checks.md`)
+- changing workflow-skill output (owned by `phase-03/004`)
+
+## User Flow
+
+1. The user enables `capabilities.delegation.subagents` per
+   `001-subagents-schema.md` with `clients.codex.enabled: true`.
+2. The compiler produces one `.codex/agents/<name>.toml` per agent intent.
+3. The compiler amends `.codex/config.toml` with an additive `[agents]`
+   block derived from `defaults.maxConcurrent` and `defaults.maxDepth`.
+4. The user starts Codex normally. The compiler never starts Codex and never
+   invokes the subagent.
+5. `agent-profile doctor` reports drift, unsafe broadening, and schema
+   problems per `005-doctor-subagent-checks.md`.
+
+## Inputs
+
+- validated `AiProfile` with subagent intents per `001-subagents-schema.md`
+- derived `effectivePermissions`
+- compiler determinism contract from `phase-01/003-compiler-determinism.md`
+- existing `codex-config` output owned by `phase-03/001-codex-config-target.md`
+- current official Codex docs verified before implementation:
+  `https://developers.openai.com/codex/subagents`,
+  `https://developers.openai.com/codex/config-reference`
+
+## Outputs
+
+This spec adds one new target and one additive amendment to the existing
+`codex-config` target.
+
+| Field         | Value                                                              |
+| ------------- | ------------------------------------------------------------------ |
+| target id     | `codex-subagents`                                                  |
+| template id   | `targets/codex-subagents/<name>@1`                                 |
+| output path   | `.codex/agents/<name>.toml` per agent intent                       |
+| fixture input | `fixtures/subagents-enabled/ai-profile.yaml`                       |
+| fixture gold  | `fixtures/subagents-enabled/expected/.codex/agents/<name>.toml`    |
+
+Additive Codex config amendment (owned by `codex-config`, contract defined
+here):
+
+| Field            | Value                                                            |
+| ---------------- | ---------------------------------------------------------------- |
+| owning target id | `codex-config`                                                   |
+| amendment        | append a deterministic `[agents]` block to `.codex/config.toml`  |
+| fixture gold     | `fixtures/subagents-enabled/expected/.codex/config.toml`         |
+
+## Verified Target Surface
+
+Verification date: 2026-05-15. Re-verify against current official Codex docs
+before implementation begins.
+
+- project path: `.codex/agents/`
+- user path exists but is out of scope
+- one standalone TOML file per custom agent
+- required fields: `name`, `description`, `developer_instructions`
+- optional fields include `nickname_candidates`, `model`,
+  `model_reasoning_effort`, `sandbox_mode`, `mcp_servers`, `skills.config`
+- subagents inherit the current sandbox policy
+- runtime overrides such as `/approvals` changes or `--yolo` are reapplied to
+  child agents
+- global settings live under `[agents]` in `.codex/config.toml`
+- documented global settings: `agents.max_threads`, `agents.max_depth`,
+  `agents.job_max_runtime_seconds`
+- a custom name matching a built-in (`default`, `worker`, `explorer`) takes
+  precedence
+
+## Generated Artifact Shape
+
+### Per-Agent File
+
+For an intent named `code-reviewer` with `toolScope: read-only`,
+`modelPreference: inherit`, and the prompt body shown in the
+`subagents-enabled` fixture, exact golden output is:
+
+```toml
+# Generated by Agent Profile Compiler. Do not edit by hand.
+
+name = "code-reviewer"
+description = "Use for focused code review before handoff."
+sandbox_mode = "read-only"
+developer_instructions = """
+Review changed code. Report only actionable findings with severity,
+affected file or symbol, and the smallest safe remediation.
+"""
+```
+
+### Additive `[agents]` Block
+
+For `defaults.maxConcurrent: 3` and `defaults.maxDepth: 1` (the conservative
+compiler defaults from `001-subagents-schema.md`), the amendment appends:
+
+```toml
+[agents]
+max_threads = 3
+max_depth = 1
+```
+
+The amendment is appended after existing top-level scalar assignments and
+existing tables in `.codex/config.toml`. The Codex config target reading this
+spec must preserve table order: existing tables first, then `[agents]`. No
+other existing bytes change.
+
+The amendment is omitted entirely when `capabilities.delegation.subagents` is
+absent or `enabled: false`.
+
+## Mapping
+
+| Profile data                 | Codex output                                                                            |
+| ---------------------------- | --------------------------------------------------------------------------------------- |
+| `name`                       | `name` and filename `<name>.toml`                                                       |
+| `description`                | `description`                                                                           |
+| `prompt`                     | `developer_instructions` (TOML triple-quoted string, single LF after opening delimiter) |
+| `toolScope: read-only`       | `sandbox_mode = "read-only"`                                                            |
+| `toolScope: workspace-write` | `sandbox_mode = "workspace-write"` only when allowed by `effectivePermissions`          |
+| `modelPreference: inherit`   | omit `model` and `model_reasoning_effort`                                               |
+| `modelPreference: fast`      | omit `model` for MVP; future spec may map to a documented effort tier                   |
+| `modelPreference: balanced`  | same as above                                                                           |
+| `modelPreference: capable`   | same as above                                                                           |
+| `defaults.maxConcurrent`     | `[agents].max_threads` in `.codex/config.toml`                                          |
+| `defaults.maxDepth`          | `[agents].max_depth` in `.codex/config.toml`                                            |
+| `mcpServers`                 | `[mcp_servers.<id>]` references only after `phase-later/008` is approved                |
+
+The first implementation must not emit `sandbox_mode = "danger-full-access"`,
+`approval_policy = "never"`, `skills.config`, absolute user skill paths, CSV
+fan-out jobs, or inline MCP credentials.
+
+## Output Contract
+
+All generated artifacts must use:
+
+- UTF-8
+- LF line endings
+- exactly one trailing newline
+- no trailing whitespace
+- exactly one space before and after `=` for scalar assignments
+- stable key order in per-agent files: `name`, `description`, `sandbox_mode`
+  (when emitted), `model` (when emitted), `model_reasoning_effort` (when
+  emitted), `developer_instructions`
+- the generated-file comment header as line 1, followed by one blank line
+- `.codex/config.toml` amendment preserves all existing top-level and table
+  bytes from the minimal-fixture golden output owned by `phase-03/001`
+
+## Ownership Boundary with `codex-config`
+
+`phase-03/001-codex-config-target.md` continues to own `.codex/config.toml`.
+This phase amends that target's mapping additively:
+
+- For profiles where `capabilities.delegation.subagents.enabled` is true, the
+  `codex-config` generator must append the deterministic `[agents]` block
+  defined here after its existing output.
+- For profiles where the block is absent or disabled, the existing minimal
+  golden output remains byte-identical.
+- The lockfile continues to map `.codex/config.toml` to target id
+  `codex-config` and template id `targets/codex-config@1`. The amendment does
+  not change the template id; it changes the template's deterministic
+  expansion when subagents are enabled.
+
+This split keeps `[agents]` ownership in the file's owning target while
+keeping the subagent intent contract in this spec.
+
+## Contracts
+
+- Generated subagents must narrow or preserve `effectivePermissions`; they
+  must never broaden them.
+- `toolScope: workspace-write` is allowed only when `effectivePermissions`
+  permits workspace writes.
+- Existing user-authored `.codex/agents/<name>.toml` files must not be
+  overwritten unless lockfile ownership proves they were generated by Agent
+  Profile Compiler.
+- `sandbox_mode = "danger-full-access"` must never be generated.
+- `approval_policy = "never"` must never be generated.
+- Custom names that shadow Codex built-ins (`default`, `worker`, `explorer`)
+  must be at least warned per `005-doctor-subagent-checks.md` and rejected
+  hard by schema when identical pre-normalization.
+- Generated output is deterministic byte-for-byte for the same profile.
+- The lockfile maps each per-agent output to `codex-subagents` and
+  `targets/codex-subagents/<name>@1`.
+- The `[agents]` amendment must merge deterministically through the existing
+  `codex-config` owner; this spec does not add a new lockfile entry for
+  `.codex/config.toml`.
+
+## Security Rules
+
+- Do not generate `sandbox_mode = "danger-full-access"`.
+- Do not generate `approval_policy = "never"`.
+- Do not generate `skills.config` or absolute user skill paths.
+- Do not generate CSV fan-out jobs.
+- Do not embed secrets, environment variable values, tokens, bearer headers,
+  or production endpoints.
+- Do not auto-install third-party MCP servers, plugins, or skills.
+- Do not emit user, managed, admin, or plugin subagent files.
+- Do not emit source-upload instructions or production access.
+
+## Acceptance Criteria
+
+- Output path is exactly `.codex/agents/<name>.toml` for each enabled intent.
+- Required Codex fields (`name`, `description`, `developer_instructions`) are
+  emitted in the listed order.
+- `read-only` intents emit `sandbox_mode = "read-only"`.
+- `workspace-write` intents do not exceed `effectivePermissions`.
+- `danger-full-access` and `approval_policy = "never"` are impossible to
+  emit.
+- The `[agents]` amendment applies only when subagents are enabled and uses
+  the conservative defaults from `001-subagents-schema.md`.
+- The minimal-fixture `.codex/config.toml` golden output owned by
+  `phase-03/001` is unchanged when subagents are disabled.
+- Golden output for the `subagents-enabled` fixture matches exact bytes.
+- Lockfile maps each per-agent output to `codex-subagents`.
+
+## Tests
+
+- golden test asserts exact bytes for
+  `fixtures/subagents-enabled/expected/.codex/agents/code-reviewer.toml`
+- golden test asserts exact bytes for
+  `fixtures/subagents-enabled/expected/.codex/config.toml` including the
+  appended `[agents]` block
+- golden test asserts the minimal-fixture `.codex/config.toml` is unchanged
+  by this phase
+- generated TOML parses with a strict TOML parser
+- `read-only` mapping emits `sandbox_mode = "read-only"`
+- `workspace-write` mapping respects `effectivePermissions`
+- absence-of-output test when `clients.codex.enabled: false`
+- absence-of-output test when subagents are disabled
+- negative test asserts generated output never emits `danger-full-access`
+- negative test asserts generated output never emits
+  `approval_policy = "never"`
+- negative test asserts generated output never emits `skills.config` or
+  absolute paths
+- negative test asserts no secret-like values
+- deterministic test asserts same profile produces byte-identical output on
+  repeated compile
+- collision test asserts a name colliding with Codex built-ins
+  (`default`, `worker`, `explorer`) is at least warned per
+  `005-doctor-subagent-checks.md`
+
+## Documentation Updates
+
+- amend `docs/specs/phase-03/001-codex-config-target.md` to reference this
+  spec's `[agents]` block amendment
+- future `docs/targets/codex.md`
+- `fixtures/README.md` once the `subagents-enabled` fixture lands
+
+## Fixture Paths
+
+- input: `fixtures/subagents-enabled/ai-profile.yaml`
+- expected per-agent output:
+  `fixtures/subagents-enabled/expected/.codex/agents/code-reviewer.toml`
+- expected config amendment:
+  `fixtures/subagents-enabled/expected/.codex/config.toml`
+- target id assertion: `codex-subagents`
+- template id assertion: `targets/codex-subagents/code-reviewer@1`
+
+## Final Review Checklist
+
+- current official Codex subagent and config docs were re-checked before
+  implementation
+- output path, target id, and template id are concrete
+- generated artifact shape is concrete enough for golden tests
+- `danger-full-access`, `approval_policy = "never"`, `skills.config`,
+  absolute paths, and CSV fan-out are impossible to emit
+- ownership boundary with `phase-03/001` is explicit and additive only
+- conservative `[agents]` defaults match `001-subagents-schema.md`
+- minimal-fixture bytes are unchanged when subagents are disabled
+- no user, managed, admin, or plugin output is produced

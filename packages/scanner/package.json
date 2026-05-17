@@ -1,6 +1,6 @@
 {
   "name": "@agent-profile/scanner",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Repository scanner for Agent Profile Compiler.",
   "license": "Apache-2.0",
   "type": "module",
@@ -22,6 +22,7 @@
     "lint": "tsc -b tsconfig.json && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
-    "@agent-profile/core": "0.1.2"
+    "@agent-profile/core": "0.1.2",
+    "yaml": "^2.9.0"
   }
 }

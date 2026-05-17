@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
-import {
+import fsPromises, {
   mkdir,
   mkdtemp,
   readFile,
@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   analyzeExistingArtifacts,
@@ -231,3 +232,260 @@ test("import analysis rejects symlinked artifact directories outside the root", 
     await rm(outsideDir, { recursive: true, force: true });
   }
 });
+
+const FULL_FLUTTER_PUBSPEC = `name: flutter_app
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.0
+  go_router: ^14.0.0
+  drift: ^2.18.0
+  drift_flutter: ^0.1.0
+  cloud_firestore: ^4.17.0
+  cloud_functions: ^4.7.0
+  firebase_core: ^2.30.0
+  rive: ^0.13.0
+  lottie: ^3.1.0
+  dotlottie_loader: ^0.1.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  drift_dev: ^2.18.0
+`;
+
+test("detects the full Flutter pubspec stack", async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-flutter-"));
+  await writeFile(path.join(rootDir, "pubspec.yaml"), FULL_FLUTTER_PUBSPEC);
+
+  const result = await detectStack(rootDir);
+
+  assert.deepEqual(result.stack, {
+    languages: ["dart"],
+    frameworks: [
+      "dotlottie",
+      "drift",
+      "firebase",
+      "flutter",
+      "go-router",
+      "lottie",
+      "rive",
+      "riverpod",
+    ],
+    packageManagers: ["pub"],
+    testing: ["flutter-test"],
+  });
+  assert.deepEqual(result.warnings, []);
+});
+
+test("normalizes Riverpod, Drift, Firebase, and dotLottie package variants to one slug", async () => {
+  const cases: Array<{
+    label: string;
+    pubspec: string;
+    expectedFrameworks: string[];
+  }> = [
+    {
+      label: "riverpod variants",
+      pubspec: `name: app
+dependencies:
+  riverpod: ^2.5.0
+  flutter_riverpod: ^2.5.0
+  hooks_riverpod: ^0.20.0
+dev_dependencies:
+  riverpod_annotation: ^2.3.0
+  riverpod_generator: ^2.4.0
+`,
+      expectedFrameworks: ["riverpod"],
+    },
+    {
+      label: "drift variants",
+      pubspec: `name: app
+dependencies:
+  drift: ^2.18.0
+  drift_flutter: ^0.1.0
+dev_dependencies:
+  drift_dev: ^2.18.0
+`,
+      expectedFrameworks: ["drift"],
+    },
+    {
+      label: "firebase variants",
+      pubspec: `name: app
+dependencies:
+  firebase_core: ^2.30.0
+  firebase_auth: ^4.18.0
+  cloud_firestore: ^4.17.0
+  cloud_functions: ^4.7.0
+`,
+      expectedFrameworks: ["firebase"],
+    },
+    {
+      label: "dotlottie variants",
+      pubspec: `name: app
+dependencies:
+  dotlottie_loader: ^0.1.0
+  dotlottie_flutter: ^0.1.0
+`,
+      expectedFrameworks: ["dotlottie"],
+    },
+  ];
+
+  for (const item of cases) {
+    const rootDir = await mkdtemp(
+      path.join(tmpdir(), `agent-profile-flutter-${item.label.replace(/\s+/gu, "-")}-`),
+    );
+    await writeFile(path.join(rootDir, "pubspec.yaml"), item.pubspec);
+
+    const result = await detectStack(rootDir);
+
+    assert.deepEqual(
+      result.stack.frameworks,
+      item.expectedFrameworks,
+      `frameworks for ${item.label}`,
+    );
+    assert.deepEqual(result.warnings, [], `warnings for ${item.label}`);
+  }
+});
+
+test("malformed pubspec.yaml reports a sanitized parse error without leaking content", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-flutter-bad-"),
+  );
+  await writeFile(
+    path.join(rootDir, "pubspec.yaml"),
+    "name: app\n  bad-indent: SECRET_TOKEN_VALUE\n   : : :\n",
+  );
+
+  const result = await detectStack(rootDir);
+
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0]?.code, "metadata_parse_error");
+  assert.equal(result.warnings[0]?.path, "pubspec.yaml");
+  assert.equal(
+    JSON.stringify(result.warnings).includes("SECRET_TOKEN_VALUE"),
+    false,
+  );
+});
+
+test("pubspec detection does not open pubspec.lock, .dart_tool, .env, source, asset, or firebase config files", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-flutter-sentinels-"),
+  );
+  await writeFile(path.join(rootDir, "pubspec.yaml"), FULL_FLUTTER_PUBSPEC);
+  await mkdir(path.join(rootDir, ".dart_tool"), { recursive: true });
+  await mkdir(path.join(rootDir, "lib"), { recursive: true });
+  await mkdir(path.join(rootDir, "assets"), { recursive: true });
+
+  const forbiddenRelativePaths = [
+    "pubspec.lock",
+    ".dart_tool/package_config.json",
+    ".env",
+    "lib/main.dart",
+    "assets/hero.png",
+    "firebase.json",
+    "firebase_options.dart",
+  ];
+  const forbiddenBodies = forbiddenRelativePaths.map(
+    (rel, index) => `SECRET_TOKEN_${index}_${rel.replace(/[^a-z]/giu, "_")}\n`,
+  );
+
+  for (let index = 0; index < forbiddenRelativePaths.length; index += 1) {
+    await writeFile(
+      path.join(rootDir, forbiddenRelativePaths[index] ?? ""),
+      forbiddenBodies[index] ?? "",
+    );
+  }
+
+  const { result, reads } = await withFileReadSentinel(rootDir, () =>
+    detectStack(rootDir),
+  );
+
+  for (const forbidden of forbiddenRelativePaths) {
+    assert.equal(
+      reads.some((read) => read.relativePath === forbidden),
+      false,
+      `${forbidden} must not be opened during stack detection`,
+    );
+  }
+  assert.equal(
+    reads.some(
+      (read) =>
+        read.operation === "readFile" && read.relativePath === "pubspec.yaml",
+    ),
+    true,
+    "pubspec.yaml should be opened to detect the Flutter stack",
+  );
+  assert.equal(result.stack.languages.includes("dart"), true);
+});
+
+type ObservedFsRead = {
+  operation: "readFile" | "lstat";
+  relativePath: string;
+};
+
+async function withFileReadSentinel<T>(
+  rootDir: string,
+  callback: () => Promise<T>,
+): Promise<{ result: T; reads: ObservedFsRead[] }> {
+  const reads: ObservedFsRead[] = [];
+  const originalReadFile = fsPromises.readFile;
+  const originalLstat = fsPromises.lstat;
+  const patchableFs = fsPromises as unknown as {
+    readFile: (...args: unknown[]) => Promise<unknown>;
+    lstat: (...args: unknown[]) => Promise<unknown>;
+  };
+
+  patchableFs.readFile = async (...args: unknown[]) => {
+    recordFsRead(rootDir, reads, "readFile", args[0]);
+    return (
+      originalReadFile as (...originalArgs: unknown[]) => Promise<unknown>
+    )(...args);
+  };
+  patchableFs.lstat = async (...args: unknown[]) => {
+    recordFsRead(rootDir, reads, "lstat", args[0]);
+    return (originalLstat as (...originalArgs: unknown[]) => Promise<unknown>)(
+      ...args,
+    );
+  };
+
+  try {
+    return { result: await callback(), reads };
+  } finally {
+    patchableFs.readFile = originalReadFile as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+    patchableFs.lstat = originalLstat as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+  }
+}
+
+function recordFsRead(
+  rootDir: string,
+  reads: ObservedFsRead[],
+  operation: ObservedFsRead["operation"],
+  value: unknown,
+): void {
+  if (
+    typeof value !== "string" &&
+    !Buffer.isBuffer(value) &&
+    !(value instanceof URL)
+  ) {
+    return;
+  }
+
+  const absolutePath =
+    value instanceof URL ? fileURLToPath(value) : path.resolve(String(value));
+  const relative = path
+    .relative(rootDir, absolutePath)
+    .split(path.sep)
+    .join("/");
+
+  if (relative.startsWith("../") || path.isAbsolute(relative)) {
+    return;
+  }
+
+  reads.push({ operation, relativePath: relative });
+}

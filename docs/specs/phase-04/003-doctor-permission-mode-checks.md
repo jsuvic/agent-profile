@@ -356,6 +356,16 @@ publishes a stable machine-readable rule engine.
 - future doctor command documentation
 - target docs for Tabnine, Codex, and Claude permission mappings
 
+## Forward Reference: Subagent Permission Checks
+
+`docs/specs/phase-11/005-doctor-subagent-checks.md` (Draft, not approved)
+reuses the `effectivePermissions` evaluator defined here for subagent files
+under `.claude/agents/`, `.codex/agents/`, and `.tabnine/agent/agents/`.
+Subagent permission findings use `LINT-SUBAGENT-001`, `LINT-SUBAGENT-003`,
+and `LINT-SUBAGENT-004` rather than the `LINT-PERM-*` codes here so users can
+distinguish drift sources. The evaluator, severity policy, and
+no-overclaim-enforcement contract in this spec are unchanged.
+
 ## Final Review Checklist
 
 - profile intent, generated config, and runtime client state are clearly

@@ -82,6 +82,17 @@ If `ai-profile.yaml` already exists, init reports that no changes are proposed.
 It does not edit existing profiles, even when client flags and `--write` are
 present. Use `agent-profile compile --dry-run` to inspect compiled artifacts.
 
+Stack detection is conservative and metadata-only. It does not parse
+`README.md` prose or source files. If no supported language metadata exists,
+`init` refuses to write; create `ai-profile.yaml` manually, then use
+`agent-profile compile --dry-run` to inspect generated artifacts.
+
+Supported root metadata files: `package.json`, `tsconfig.json`,
+`svelte.config.*`, `vite.config.*`, `playwright.config.*`, `pom.xml`,
+`build.gradle`, `build.gradle.kts`, and `pubspec.yaml`. Flutter/Dart projects
+are detected from `pubspec.yaml` (project metadata and dependency key names
+only — never lockfiles, `.dart_tool`, source, assets, or Firebase config).
+
 ## Init Presets
 
 `agent-profile init --preset <token>` verifies a short-lived hosted preset token

@@ -16,7 +16,7 @@ and hand-editing separate config files for every tool.
 ## Preview Status
 
 This repository is in preview / early access. The CLI is published as
-`agent-profile@0.1.3`, but the schema, generated files, and command details may
+`agent-profile@0.1.6`, but the schema, generated files, and command details may
 change before `1.0`.
 
 Feedback is especially useful on:
@@ -99,6 +99,15 @@ The workflow is:
 
 Write-capable commands require an explicit `--write`. Dry-run is the default
 review path.
+
+`init` is intentionally conservative. It only detects supported local metadata
+files and does not infer stack choices from prose in `README.md` or from source
+contents. Supported metadata files include `package.json`, `tsconfig.json`,
+`svelte.config.*`, `vite.config.*`, `playwright.config.*`, `pom.xml`,
+`build.gradle`, `build.gradle.kts`, and `pubspec.yaml` (Flutter/Dart). If the
+repository is a documentation-only scaffold or uses an unsupported stack
+detector, create `ai-profile.yaml` manually and then run
+`agent-profile compile --dry-run`.
 
 ## Local-First Contract
 
