@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft. Belongs to Phase 10.5. Not approved.
+Verified. Belongs to Phase 10.5. Implemented on 2026-05-17 after explicit
+implementation approval.
 
 ## Problem
 
