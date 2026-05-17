@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft. Belongs to Phase 13. Not approved. Depends on
+Approved and implemented. Belongs to Phase 13. Depends on
 `001-subagent-template-reference-schema.md`.
 
 ## Problem

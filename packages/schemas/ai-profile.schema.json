@@ -96,6 +96,9 @@
         },
         "documentation": {
           "type": "boolean"
+        },
+        "subagentDrivenDevelopment": {
+          "type": "boolean"
         }
       }
     },
@@ -270,6 +273,23 @@
       }
     },
     "subagent": {
+      "oneOf": [
+        { "$ref": "#/definitions/subagentTemplateRef" },
+        { "$ref": "#/definitions/subagentInline" }
+      ]
+    },
+    "subagentTemplateRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["useTemplate"],
+      "properties": {
+        "useTemplate": {
+          "type": "string",
+          "enum": ["implementer", "spec-reviewer", "code-quality-reviewer"]
+        }
+      }
+    },
+    "subagentInline": {
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "description", "purpose", "prompt", "toolScope"],
