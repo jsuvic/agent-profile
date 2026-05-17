@@ -86,6 +86,44 @@ export type AiProfileEffectivePermissions = {
   };
 };
 
+export type SubagentToolScope = "read-only" | "workspace-write";
+export type SubagentModelPreference = "inherit" | "fast" | "balanced" | "capable";
+
+export type AiProfileSubagent = {
+  name: string;
+  description: string;
+  purpose: string;
+  prompt: string;
+  toolScope: SubagentToolScope;
+  modelPreference?: SubagentModelPreference;
+  maxTurns?: number;
+  timeoutMinutes?: number;
+  mcpServers?: string[];
+};
+
+export type AiProfileSubagents = {
+  enabled: boolean;
+  defaults?: {
+    maxConcurrent?: number;
+    maxDepth?: number;
+  };
+  agents?: AiProfileSubagent[];
+};
+
+export type AiProfileCapabilities = {
+  delegation?: {
+    subagents?: AiProfileSubagents;
+  };
+};
+
+export type NormalizedSubagentDefaults = {
+  maxConcurrent: number;
+  maxDepth: number;
+};
+
+export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 3;
+export const DEFAULT_SUBAGENT_MAX_DEPTH = 1;
+
 export type AiProfile = {
   version: 1;
   profile: {
@@ -103,8 +141,55 @@ export type AiProfile = {
     refactoring?: boolean;
     documentation?: boolean;
   };
+  capabilities?: AiProfileCapabilities;
   permissions?: AiProfilePermissions;
 };
+
+export function normalizeSubagentName(name: string): string {
+  return name.toLowerCase().replace(/_/gu, "-");
+}
+
+export function getSubagentDefaults(
+  profile: Pick<AiProfile, "capabilities">,
+): NormalizedSubagentDefaults {
+  const defaults = profile.capabilities?.delegation?.subagents?.defaults;
+
+  return {
+    maxConcurrent: defaults?.maxConcurrent ?? DEFAULT_SUBAGENT_MAX_CONCURRENT,
+    maxDepth: defaults?.maxDepth ?? DEFAULT_SUBAGENT_MAX_DEPTH,
+  };
+}
+
+export function getEnabledSubagents(
+  profile: Pick<AiProfile, "capabilities">,
+): AiProfileSubagent[] {
+  const block = profile.capabilities?.delegation?.subagents;
+
+  if (!block || block.enabled !== true) {
+    return [];
+  }
+
+  return [...(block.agents ?? [])].sort((left, right) =>
+    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
+  );
+}
+
+const SUBAGENT_BUILTIN_NAMES_NORMALIZED = new Set<string>([
+  "default",
+  "worker",
+  "explorer",
+  "explore",
+  "plan",
+  "general-purpose",
+  "codebase-investigator",
+  "remote-codebase-investigator",
+  "generalist",
+  "browser-agent",
+]);
+
+export function isSubagentBuiltinNameCollision(name: string): boolean {
+  return SUBAGENT_BUILTIN_NAMES_NORMALIZED.has(normalizeSubagentName(name));
+}
 
 export type ProfileValidationIssueCode =
   | "file_not_found"
@@ -248,6 +333,14 @@ export function validateProfileValue(value: unknown): ProfileValidationResult {
 
   if (validate(value)) {
     const profile = value as AiProfile;
+    const subagentIssues = validateSubagentSemantics(profile);
+
+    if (subagentIssues.length > 0) {
+      return {
+        ok: false,
+        issues: subagentIssues.sort((left, right) => compareIssues(left, right)),
+      };
+    }
 
     return {
       ok: true,
@@ -261,6 +354,53 @@ export function validateProfileValue(value: unknown): ProfileValidationResult {
     ok: false,
     issues: toValidationIssues(validate.errors ?? [], value),
   };
+}
+
+function validateSubagentSemantics(profile: AiProfile): ProfileValidationIssue[] {
+  const subagents = profile.capabilities?.delegation?.subagents;
+
+  if (!subagents || subagents.enabled !== true) {
+    return [];
+  }
+
+  const agents = subagents.agents ?? [];
+  const issues: ProfileValidationIssue[] = [];
+  const seenRaw = new Map<string, number>();
+  const seenNormalized = new Map<string, number>();
+
+  agents.forEach((agent, index) => {
+    const rawIndex = seenRaw.get(agent.name);
+    if (rawIndex !== undefined) {
+      issues.push({
+        code: "schema_validation_error",
+        path: `/capabilities/delegation/subagents/agents/${index}/name`,
+        expected: "unique subagent name",
+        actual: "duplicate",
+        message: `/capabilities/delegation/subagents/agents/${index}/name duplicates the name used at index ${rawIndex}.`,
+      });
+    } else {
+      seenRaw.set(agent.name, index);
+    }
+
+    const normalized = normalizeSubagentName(agent.name);
+    const normalizedIndex = seenNormalized.get(normalized);
+    if (normalizedIndex !== undefined && normalizedIndex !== index) {
+      const isPureDuplicate = rawIndex !== undefined;
+      if (!isPureDuplicate) {
+        issues.push({
+          code: "schema_validation_error",
+          path: `/capabilities/delegation/subagents/agents/${index}/name`,
+          expected: "unique normalized subagent id",
+          actual: "duplicate after hyphen/underscore folding",
+          message: `/capabilities/delegation/subagents/agents/${index}/name collides with the name used at index ${normalizedIndex} after normalization.`,
+        });
+      }
+    } else if (normalizedIndex === undefined) {
+      seenNormalized.set(normalized, index);
+    }
+  });
+
+  return issues;
 }
 
 export function normalizeSafety(
@@ -323,6 +463,10 @@ export function renderProfileYaml(profile: AiProfile): string {
     workflow["documentation"] = profile.workflow.documentation;
   doc["workflow"] = workflow;
 
+  if (profile.capabilities !== undefined) {
+    doc["capabilities"] = buildCapabilitiesDoc(profile.capabilities);
+  }
+
   if (profile.permissions !== undefined) {
     doc["permissions"] = buildPermissionsDoc(profile.permissions);
   }
@@ -333,6 +477,65 @@ export function renderProfileYaml(profile: AiProfile): string {
     sortMapEntries: false,
   });
   return text.replace(/\n+$/, "") + "\n";
+}
+
+function buildCapabilitiesDoc(
+  capabilities: AiProfileCapabilities,
+): Record<string, unknown> {
+  const doc: Record<string, unknown> = {};
+
+  if (capabilities.delegation !== undefined) {
+    const delegation: Record<string, unknown> = {};
+    const subagents = capabilities.delegation.subagents;
+
+    if (subagents !== undefined) {
+      const block: Record<string, unknown> = { enabled: subagents.enabled };
+
+      if (subagents.defaults !== undefined) {
+        const defaults: Record<string, unknown> = {};
+        if (subagents.defaults.maxConcurrent !== undefined) {
+          defaults["maxConcurrent"] = subagents.defaults.maxConcurrent;
+        }
+        if (subagents.defaults.maxDepth !== undefined) {
+          defaults["maxDepth"] = subagents.defaults.maxDepth;
+        }
+        if (Object.keys(defaults).length > 0) {
+          block["defaults"] = defaults;
+        }
+      }
+
+      if (subagents.agents !== undefined) {
+        block["agents"] = subagents.agents.map((agent) =>
+          buildSubagentDoc(agent),
+        );
+      }
+
+      delegation["subagents"] = block;
+    }
+
+    if (Object.keys(delegation).length > 0) {
+      doc["delegation"] = delegation;
+    }
+  }
+
+  return doc;
+}
+
+function buildSubagentDoc(agent: AiProfileSubagent): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    name: agent.name,
+    description: agent.description,
+    purpose: agent.purpose,
+    prompt: agent.prompt,
+    toolScope: agent.toolScope,
+  };
+  if (agent.modelPreference !== undefined)
+    out["modelPreference"] = agent.modelPreference;
+  if (agent.maxTurns !== undefined) out["maxTurns"] = agent.maxTurns;
+  if (agent.timeoutMinutes !== undefined)
+    out["timeoutMinutes"] = agent.timeoutMinutes;
+  if (agent.mcpServers !== undefined) out["mcpServers"] = agent.mcpServers;
+  return out;
 }
 
 function buildPermissionsDoc(p: AiProfilePermissions): Record<string, unknown> {

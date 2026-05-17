@@ -16,12 +16,15 @@ export function getDefaultTargetIds(): CompilerTargetId[] {
     "lockfile",
     "tabnine-guidelines",
     "tabnine-mcp-config",
+    "tabnine-subagents",
     "codex-config",
     "codex-workflow-skills",
+    "codex-subagents",
     "claude-settings",
     "claude-mcp",
     "claude-md",
     "claude-workflow-skills",
+    "claude-subagents",
   ];
 }
 

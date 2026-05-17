@@ -8,12 +8,15 @@ export type CompilerTargetId =
   | "lockfile"
   | "tabnine-guidelines"
   | "tabnine-mcp-config"
+  | "tabnine-subagents"
   | "codex-config"
   | "codex-workflow-skills"
+  | "codex-subagents"
   | "claude-settings"
   | "claude-mcp"
   | "claude-md"
-  | "claude-workflow-skills";
+  | "claude-workflow-skills"
+  | "claude-subagents";
 
 export type CompilerInfo = {
   name: "agent-profile";
@@ -47,7 +50,8 @@ export type CompileIssueCode =
   | "missing_template"
   | "invalid_output_path"
   | "nondeterministic_output"
-  | "unsafe_generated_content";
+  | "unsafe_generated_content"
+  | "subagents_not_enabled";
 
 export type CompileIssue = {
   code: CompileIssueCode;

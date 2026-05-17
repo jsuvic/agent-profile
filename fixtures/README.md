@@ -57,6 +57,13 @@ refactoring-enabled/
 documentation-enabled/
   ai-profile.yaml
   expected/  (phase-10 workflow.documentation fixture)
+subagents-enabled/
+  ai-profile.yaml
+  expected/  (phase-11 subagent generation fixture)
+    .claude/agents/code-reviewer.md
+    .codex/agents/code-reviewer.toml
+    .codex/config.toml  (includes appended [agents] block)
+    .tabnine/agent/agents/code-reviewer.md
 ```
 
 Planned first compiler fixture:

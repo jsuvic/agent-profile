@@ -1,0 +1,44 @@
+version: 1
+profile:
+  name: subagents-enabled
+  description: Fixture exercising Phase 11 subagent generation for Claude, Codex, and Tabnine.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+capabilities:
+  delegation:
+    subagents:
+      enabled: true
+      defaults:
+        maxConcurrent: 3
+        maxDepth: 1
+      agents:
+        - name: code-reviewer
+          description: Use for focused code review before handoff.
+          purpose: Review changed code for correctness, security, tests, and spec compliance.
+          prompt: |
+            Review changed code. Report only actionable findings with severity,
+            affected file or symbol, and the smallest safe remediation.
+          toolScope: read-only
+          modelPreference: inherit
+          maxTurns: 10
+          timeoutMinutes: 5
+          mcpServers: []

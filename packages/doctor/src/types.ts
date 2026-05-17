@@ -29,7 +29,15 @@ export type DoctorIssueCode =
   | "LINT-SKILL-002"
   | "LINT-SKILL-003"
   | "LINT-SEM-001"
-  | "LINT-SEM-002";
+  | "LINT-SEM-002"
+  | "LINT-SUBAGENT-001"
+  | "LINT-SUBAGENT-002"
+  | "LINT-SUBAGENT-003"
+  | "LINT-SUBAGENT-004"
+  | "LINT-SUBAGENT-005"
+  | "LINT-SUBAGENT-006"
+  | "LINT-SUBAGENT-007"
+  | "LINT-SUBAGENT-008";
 
 export type DoctorIssue = {
   code: DoctorIssueCode;

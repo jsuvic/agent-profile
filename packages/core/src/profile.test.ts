@@ -584,6 +584,155 @@ describe("profile schema validation", () => {
   });
 });
 
+describe("subagents schema", () => {
+  function validSubagent(): Record<string, unknown> {
+    return {
+      name: "code-reviewer",
+      description: "Use for focused code review.",
+      purpose: "Reviews code.",
+      prompt: "Review changed code.",
+      toolScope: "read-only",
+    };
+  }
+
+  function profileWithSubagents(
+    block: Record<string, unknown> | undefined,
+  ): Record<string, unknown> {
+    const base = profileWith({});
+    if (block === undefined) {
+      delete (base as Record<string, unknown>).capabilities;
+    } else {
+      (base as Record<string, unknown>).capabilities = {
+        delegation: { subagents: block },
+      };
+    }
+    return base as Record<string, unknown>;
+  }
+
+  it("accepts a minimal subagents-enabled profile", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [validSubagent()],
+      }),
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it("rejects enabled: true with empty agents", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({ enabled: true, agents: [] }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects enabled: true without agents", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({ enabled: true }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects invalid name patterns", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [{ ...validSubagent(), name: "Code_Reviewer" }],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects names that match documented built-ins", () => {
+    for (const name of [
+      "default",
+      "worker",
+      "explorer",
+      "explore",
+      "plan",
+      "general-purpose",
+    ]) {
+      const result = validateProfileValue(
+        profileWithSubagents({
+          enabled: true,
+          agents: [{ ...validSubagent(), name }],
+        }),
+      );
+      assert.equal(result.ok, false, name);
+    }
+  });
+
+  it("rejects duplicate names pre-normalization", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [
+          { ...validSubagent(), name: "alpha" },
+          { ...validSubagent(), name: "alpha" },
+        ],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects target-specific raw fields like permissionMode", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [
+          { ...validSubagent(), permissionMode: "plan" },
+        ],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects vendor model identifiers in modelPreference", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [
+          { ...validSubagent(), modelPreference: "claude-3-5-sonnet" },
+        ],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects non-empty mcpServers until phase-later/008", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [
+          { ...validSubagent(), mcpServers: ["context-engine"] },
+        ],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("accepts empty mcpServers", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [{ ...validSubagent(), mcpServers: [] }],
+      }),
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it("rejects unknown keys under subagents", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [validSubagent()],
+        unknown: true,
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+});
+
 function profileWith(
   overrides: {
     profile?: Partial<{
