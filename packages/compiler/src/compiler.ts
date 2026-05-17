@@ -967,8 +967,8 @@ function renderClaudeSubagent(
   agent: AiProfileSubagent,
   effective: AiProfileEffectivePermissions,
 ): string {
-  const lines: string[] = ["---", `name: ${agent.name}`];
-  lines.push(`description: ${agent.description}`);
+  const lines: string[] = ["---", `name: ${yamlScalarSafe(agent.name)}`];
+  lines.push(`description: ${yamlScalarSafe(agent.description)}`);
 
   if (agent.toolScope === "read-only") {
     lines.push("tools: Read, Glob, Grep");
@@ -1019,13 +1019,19 @@ function renderCodexSubagent(
     `description = "${escapeTomlString(agent.description)}"`,
   ];
 
-  if (agent.toolScope === "read-only") {
-    lines.push(`sandbox_mode = "read-only"`);
-  } else if (
+  if (
     agent.toolScope === "workspace-write" &&
     effective.filesystem.write !== "deny"
   ) {
     lines.push(`sandbox_mode = "workspace-write"`);
+  } else {
+    lines.push(`sandbox_mode = "read-only"`);
+  }
+
+  if (agent.prompt.includes(`"""`)) {
+    throw new Error(
+      `Codex subagent ${agent.name} prompt contains a TOML triple-quote sequence; compile validation should have rejected this.`,
+    );
   }
 
   lines.push("developer_instructions = \"\"\"");
@@ -1039,8 +1045,8 @@ function renderCodexSubagent(
 }
 
 function renderTabnineSubagent(agent: AiProfileSubagent): string {
-  const lines: string[] = ["---", `name: ${agent.name}`];
-  lines.push(`description: ${agent.description}`);
+  const lines: string[] = ["---", `name: ${yamlScalarSafe(agent.name)}`];
+  lines.push(`description: ${yamlScalarSafe(agent.description)}`);
   lines.push("kind: local");
   lines.push("tools:");
   for (const tool of ["grep_search", "read_file"].sort()) {
@@ -1068,6 +1074,24 @@ function renderTabnineSubagent(agent: AiProfileSubagent): string {
 
 function escapeTomlString(value: string): string {
   return value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"');
+}
+
+function yamlScalarSafe(value: string): string {
+  if (yamlScalarNeedsQuoting(value)) {
+    return JSON.stringify(value);
+  }
+  return value;
+}
+
+function yamlScalarNeedsQuoting(value: string): boolean {
+  if (value.length === 0) return true;
+  if (/[\r\n\t]/u.test(value)) return true;
+  if (/^\s|\s$/u.test(value)) return true;
+  if (/^[\-?:,\[\]{}#&*!|>'"%@`]/u.test(value)) return true;
+  if (value.includes(": ") || value.includes(" #")) return true;
+  if (/^(?:true|false|null|yes|no|on|off|~)$/iu.test(value)) return true;
+  if (/^[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?$/u.test(value)) return true;
+  return false;
 }
 
 function renderAgentsMdTemplateSource(): string {
@@ -1232,6 +1256,51 @@ function validateTargets(
         actual: "workspace-write Tabnine subagent",
         message: `tabnine-subagents cannot emit workspace-write agent ${agent.name} while Tabnine subagents are experimental/no-confirmation.`,
       });
+    }
+  }
+
+  if (targets.includes("codex-subagents")) {
+    const effective = deriveEffectivePermissions(profile);
+    for (const agent of getEnabledSubagents(profile)) {
+      if (
+        agent.toolScope === "workspace-write" &&
+        effective.filesystem.write === "deny"
+      ) {
+        issues.push({
+          code: "unsafe_generated_content",
+          path: `.codex/agents/${agent.name}.toml`,
+          expected: "narrower than effectivePermissions",
+          actual: "workspace-write subagent under filesystem.write=deny",
+          message: `codex-subagents cannot emit workspace-write agent ${agent.name} because effectivePermissions.filesystem.write is deny.`,
+        });
+      }
+      if (agent.prompt.includes(`"""`)) {
+        issues.push({
+          code: "unsafe_generated_content",
+          path: `.codex/agents/${agent.name}.toml`,
+          expected: "prompt without TOML triple-quote sequence",
+          actual: "prompt contains \"\"\" delimiter",
+          message: `codex-subagents prompt for ${agent.name} contains a TOML triple-quote sequence that would break developer_instructions.`,
+        });
+      }
+    }
+  }
+
+  if (targets.includes("claude-subagents")) {
+    const effective = deriveEffectivePermissions(profile);
+    for (const agent of getEnabledSubagents(profile)) {
+      if (
+        agent.toolScope === "workspace-write" &&
+        effective.filesystem.write === "deny"
+      ) {
+        issues.push({
+          code: "unsafe_generated_content",
+          path: `.claude/agents/${agent.name}.md`,
+          expected: "narrower than effectivePermissions",
+          actual: "workspace-write subagent under filesystem.write=deny",
+          message: `claude-subagents cannot emit workspace-write agent ${agent.name} because effectivePermissions.filesystem.write is deny.`,
+        });
+      }
     }
   }
 

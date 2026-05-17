@@ -295,11 +295,13 @@
         },
         "description": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^[^\\r\\n]+$"
         },
         "purpose": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^[^\\r\\n]+$"
         },
         "prompt": {
           "type": "string",
