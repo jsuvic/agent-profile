@@ -127,11 +127,17 @@ user called out ("not just short description"). Recommended baseline set:
 `code-reviewer`, `bug-hunter`, `security-auditor`, `doc-reviewer`,
 `test-writer`, `spec-drafter`, `research-explorer`, `incident-responder`.
 
+A narrower implementation-review bundle is also missing: a workspace-write
+implementation worker, a read-only spec-compliance reviewer, a read-only
+code-quality reviewer, explicit status values, fresh-context prompting, and a
+two-stage review order where spec compliance passes before code-quality review
+starts.
+
 Routing. `phase-later/002-subagents-targets.md` covers the schema and target
-generation. The template library belongs to a follow-on spec that the `002`
-spec already hints at in its Phase Placement Recommendation. New spec —
-`phase-later/017-subagent-template-library.md` — described later in this
-document.
+generation and has now been lifted into `phase-11`. The broad template library
+belongs to `phase-later/017-subagent-template-library.md`. The exact
+implementation-review bundle belongs to `docs/specs/phase-13/` after Phase 11
+is implemented.
 
 ### 2. Skills — triggers, structure, progressive disclosure
 
@@ -156,6 +162,10 @@ slash-injected shell, user/admin/system scope.
 
 Gap.
 
+- **TDD hardening** is missing from the existing `tdd-change` skill. The skill
+  should require an explicit RED command and expected failure reason, a GREEN
+  command and passing result, and a short anti-pattern gate for mock-heavy
+  tests and test-only production APIs.
 - **Skill bundled resources** (`scripts/`, `references/`, `assets/`) have no
   later spec, so users cannot ship deterministic helpers or hierarchical
   references via the compiler.
@@ -174,6 +184,9 @@ Gap.
 
 Routing.
 
+- New spec - `phase-10.5/001-tdd-skill-red-green-hardening.md`. Ships the
+  early RED/GREEN and testing anti-pattern hardening in existing workflow
+  skills before Phase 11.
 - New spec — `phase-later/012-review-perspectives-and-code-quality.md`. Ships
   perspective-split review skills plus a code-quality skill encoding the five
   principles.
@@ -386,6 +399,20 @@ separately. The template library is where well-described subagents like
 allowlist) actually land as packaged content. New spec —
 `phase-later/017-subagent-template-library.md`.
 
+### Implementation-review subagent workflow
+
+The exact implementation delegation workflow is split out from the broad
+template library so it can land immediately after the Phase 11 foundation. New
+spec map - `phase-13/`:
+
+- `001-subagent-template-reference-schema.md`
+- `002-implementation-review-subagent-templates.md`
+- `003-subagent-driven-change-skill.md`
+
+This phase adds the `implementer`, `spec-reviewer`, and
+`code-quality-reviewer` templates plus the parent `subagent-driven-change`
+skill.
+
 ## Five Code-Quality Principles, Routed
 
 User principles → where they land in the system:
@@ -405,26 +432,34 @@ expanded `phase-later/001-hooks-targets.md`.
 
 In priority order, after the current MVP is verified:
 
-1. `phase-later/002-subagents-targets.md` — biggest leverage, schema already
-   detailed enough to lift into a numbered phase.
-2. `phase-later/011-skill-bundled-resources.md` — unlocks every other
+1. `phase-10.5/001-tdd-skill-red-green-hardening.md` - small, low-risk
+   improvement to existing workflow skills; no schema change.
+2. `phase-11/` - subagent foundation: schema, generated files, lockfile,
+   permissions, and doctor checks.
+3. `phase-13/` - implementation-review subagent workflow: template
+   references, three role templates, status reporting, fresh-context prompting,
+   and two-stage review.
+4. `phase-later/011-skill-bundled-resources.md` - unlocks every other
    resource-heavy skill (code-quality stencils, review checklists).
-3. `phase-later/012-review-perspectives-and-code-quality.md` — biggest user
+5. `phase-later/012-review-perspectives-and-code-quality.md` - biggest user
    value once 011 exists.
-4. Expanded `phase-later/001-hooks-targets.md` — needed to wire formatters
+6. Expanded `phase-later/001-hooks-targets.md` - needed to wire formatters
    and lint gates.
-5. `phase-later/016-auto-memory-taxonomy.md` — needed so the agents are
+7. `phase-later/016-auto-memory-taxonomy.md` - needed so the agents are
    coherent across sessions.
-6. `phase-later/017-subagent-template-library.md` — curated baseline
-   subagents once `002` and `011` land.
-7. `phase-later/013-slash-commands-targets.md` — quick win once skills are
+8. `phase-later/017-subagent-template-library.md` - broader curated baseline
+   subagents once Phase 11, Phase 13, and `011` land.
+9. `phase-later/013-slash-commands-targets.md` - quick win once skills are
    richer.
-8. Expanded `phase-later/003-plugin-packaging-targets.md` — packaging once
-   there is enough content to package.
-9. `phase-later/014-status-line-and-output-style.md` — polish, after the
-   substance lands.
-10. `phase-later/015-extended-ecosystem-targets.md` — ecosystem expansion
+10. Expanded `phase-later/003-plugin-packaging-targets.md` - packaging once
+    there is enough content to package.
+11. `phase-later/014-status-line-and-output-style.md` - polish, after the
+    substance lands.
+12. `phase-later/015-extended-ecosystem-targets.md` - ecosystem expansion
     after Claude / Codex / Tabnine targets are mature.
+
+Numbering note: the Flutter/Dart stack detection spec is already verified as
+Phase 12, so the implementation-review subagent workflow uses Phase 13.
 
 ## Open Questions
 
