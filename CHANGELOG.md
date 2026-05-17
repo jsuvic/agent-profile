@@ -4,6 +4,14 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Add conservative Flutter/Dart stack detection from root `pubspec.yaml`
+  (Phase 12, implementing
+  `docs/specs/phase-later/018-flutter-dart-stack-detection.md`). Detects
+  Dart, Flutter, Riverpod, go_router, Drift, Firebase (metadata-only), Rive,
+  Lottie, dotLottie, `flutter_test`, and `pub`. Reads only dependency key
+  names from the existing root metadata allowlist plus `pubspec.yaml`; never
+  reads `pubspec.lock`, `.dart_tool`, `.env`, source files, assets, or
+  Firebase config.
 - Bootstrap local-first SDD repository, schema validation, deterministic
   compiler foundation, target outputs, lockfile generation, golden tests, and
   doctor/CLI checks.

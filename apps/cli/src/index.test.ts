@@ -487,6 +487,49 @@ test("init refuses to write when no supported language is detected", async () =>
   });
 });
 
+test("init dry-run reports Flutter stack from pubspec.yaml without writing", async () => {
+  const rootDir = await createFlutterRoot();
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--client", "codex", "--dry-run"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /Agent Profile Init \(dry-run\)/u);
+  assert.match(output.stdoutText(), /would write: ai-profile\.yaml/u);
+  assert.match(output.stdoutText(), /stack detected: dart/u);
+  assert.match(output.stdoutText(), /codex: enabled \(--client\)/u);
+  await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
+    code: "ENOENT",
+  });
+});
+
+test("init write produces a byte-exact Flutter profile from pubspec.yaml", async () => {
+  const rootDir = await createFlutterRoot();
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--client", "codex", "--write"],
+    { io: output },
+  );
+  const profileText = await readFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    "utf8",
+  );
+  const validation = parseProfileYaml(profileText);
+
+  assert.equal(code, 0);
+  assert.equal(validation.ok, true);
+  assert.equal(
+    profileText,
+    expectedFlutterInitProfile(rootDir, {
+      tabnine: false,
+      codex: true,
+      claude: false,
+    }),
+  );
+});
+
 test("init client flags write byte-exact profiles", async () => {
   const cases: Array<{
     args: string[];
@@ -910,6 +953,7 @@ test("init preset dry-run reads only stack metadata and the target profile path"
     "playwright.config.mts",
     "playwright.config.ts",
     "pom.xml",
+    "pubspec.yaml",
     "svelte.config.cjs",
     "svelte.config.js",
     "svelte.config.mjs",
@@ -1428,6 +1472,91 @@ async function createTypescriptRoot(): Promise<string> {
   );
   await writeFile(path.join(rootDir, "tsconfig.json"), "{}\n", "utf8");
   return rootDir;
+}
+
+async function createFlutterRoot(): Promise<string> {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-init-flutter-"),
+  );
+  await writeFile(
+    path.join(rootDir, "pubspec.yaml"),
+    `name: flutter_app
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+  flutter: ">=3.10.0"
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.0
+  go_router: ^14.0.0
+  drift: ^2.18.0
+  cloud_firestore: ^4.17.0
+  firebase_core: ^2.30.0
+  rive: ^0.13.0
+  lottie: ^3.1.0
+  dotlottie_loader: ^0.1.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+`,
+    "utf8",
+  );
+  return rootDir;
+}
+
+function expectedFlutterInitProfile(
+  rootDir: string,
+  clients: TestClients,
+): string {
+  return `version: 1
+profile:
+  name: ${slugifyTestProfileName(path.basename(rootDir))}
+  description: Local AI-agent setup.
+stack:
+  languages:
+    - dart
+  frameworks:
+    - dotlottie
+    - drift
+    - firebase
+    - flutter
+    - go-router
+    - lottie
+    - rive
+    - riverpod
+  packageManagers:
+    - pub
+  testing:
+    - flutter-test
+clients:
+  tabnine:
+    enabled: ${String(clients.tabnine)}
+  codex:
+    enabled: ${String(clients.codex)}
+  claude:
+    enabled: ${String(clients.claude)}
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+permissions:
+  filesystem:
+    read: allow
+    write: ask
+  shell:
+    run: ask
+  secrets:
+    access: deny
+  dependencies:
+    install: ask
+  network:
+    external: ask
+  production:
+    access: deny
+`;
 }
 
 async function copyExpectedFiles(

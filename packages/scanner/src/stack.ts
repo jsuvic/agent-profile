@@ -4,6 +4,8 @@
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 
+import { parse as parseYaml } from "yaml";
+
 export type DetectedStack = {
   languages: string[];
   frameworks: string[];
@@ -96,6 +98,10 @@ export async function detectStack(
     stack.testing.push("playwright");
   }
 
+  if (await fileExists(rootPath, "pubspec.yaml")) {
+    await detectPubspecYaml(rootPath, stack, warnings);
+  }
+
   return {
     stack: sortStack(stack),
     warnings: warnings.sort(compareWarnings),
@@ -169,6 +175,147 @@ async function detectPackageJson(
       stack.packageManagers.push("yarn");
     }
   }
+}
+
+const RIVERPOD_PACKAGES = new Set([
+  "riverpod",
+  "flutter_riverpod",
+  "hooks_riverpod",
+  "riverpod_annotation",
+  "riverpod_generator",
+]);
+
+const DRIFT_PACKAGES = new Set(["drift", "drift_flutter", "drift_dev"]);
+
+const DOTLOTTIE_PACKAGES = new Set([
+  "dotlottie_loader",
+  "dotlottie_flutter",
+]);
+
+const FIREBASE_PACKAGES = new Set([
+  "cloud_firestore",
+  "cloud_functions",
+  "firebase_ai",
+  "firebase_analytics",
+  "firebase_app_check",
+  "firebase_app_installations",
+  "firebase_auth",
+  "firebase_core",
+  "firebase_crashlytics",
+  "firebase_data_connect",
+  "firebase_database",
+  "firebase_dynamic_links",
+  "firebase_in_app_messaging",
+  "firebase_messaging",
+  "firebase_ml_model_downloader",
+  "firebase_performance",
+  "firebase_remote_config",
+  "firebase_storage",
+  "firebase_vertexai",
+]);
+
+async function detectPubspecYaml(
+  rootPath: string,
+  stack: DetectedStack,
+  warnings: StackDetectionWarning[],
+): Promise<void> {
+  let value: unknown;
+
+  try {
+    value = parseYaml(
+      await fsPromises.readFile(path.join(rootPath, "pubspec.yaml"), "utf8"),
+    );
+  } catch {
+    warnings.push({
+      code: "metadata_parse_error",
+      path: "pubspec.yaml",
+      expected: "valid YAML metadata",
+      actual: "parse error",
+      message: "pubspec.yaml could not be parsed for stack detection.",
+    });
+    return;
+  }
+
+  const record = getRecord(value);
+
+  if (!record) {
+    warnings.push({
+      code: "metadata_parse_error",
+      path: "pubspec.yaml",
+      expected: "object metadata",
+      actual: describeValue(value),
+      message: "pubspec.yaml does not contain object metadata.",
+    });
+    return;
+  }
+
+  stack.packageManagers.push("pub");
+
+  const environment = getRecord(record.environment);
+  if (environment && environment.sdk !== undefined) {
+    stack.languages.push("dart");
+  }
+
+  const dependencyKeys = new Set<string>();
+
+  for (const key of ["dependencies", "dev_dependencies", "dependency_overrides"] as const) {
+    const map = getRecord(record[key]);
+
+    if (!map) {
+      continue;
+    }
+
+    for (const dependencyKey of Object.keys(map)) {
+      dependencyKeys.add(dependencyKey);
+    }
+  }
+
+  if (dependencyKeys.has("flutter")) {
+    stack.languages.push("dart");
+    stack.frameworks.push("flutter");
+  }
+
+  if (dependencyKeys.has("flutter_test")) {
+    stack.testing.push("flutter-test");
+  }
+
+  if (hasAny(dependencyKeys, RIVERPOD_PACKAGES)) {
+    stack.frameworks.push("riverpod");
+  }
+
+  if (dependencyKeys.has("go_router")) {
+    stack.frameworks.push("go-router");
+  }
+
+  if (hasAny(dependencyKeys, DRIFT_PACKAGES)) {
+    stack.frameworks.push("drift");
+  }
+
+  if (hasAny(dependencyKeys, FIREBASE_PACKAGES)) {
+    stack.frameworks.push("firebase");
+  }
+
+  if (dependencyKeys.has("rive")) {
+    stack.frameworks.push("rive");
+  }
+
+  if (dependencyKeys.has("lottie")) {
+    stack.frameworks.push("lottie");
+  }
+
+  if (hasAny(dependencyKeys, DOTLOTTIE_PACKAGES)) {
+    stack.frameworks.push("dotlottie");
+  }
+}
+
+function hasAny(keys: Set<string>, allowlist: Set<string>): boolean {
+  for (const allowed of allowlist) {
+    if (keys.has(allowed)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function detectJavaMetadata(

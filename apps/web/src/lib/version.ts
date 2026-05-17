@@ -6,4 +6,4 @@
 // Run `npm run version:set -- <X.Y.Z>` (or `npm run version:sync`) to refresh
 // every consumer at once. `npm run check` will fail if this constant drifts
 // from the wrapper's version.
-export const VERSION = "0.1.5";
+export const VERSION = "0.1.6";

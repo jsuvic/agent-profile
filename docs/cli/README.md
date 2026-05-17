@@ -87,6 +87,12 @@ Stack detection is conservative and metadata-only. It does not parse
 `init` refuses to write; create `ai-profile.yaml` manually, then use
 `agent-profile compile --dry-run` to inspect generated artifacts.
 
+Supported root metadata files: `package.json`, `tsconfig.json`,
+`svelte.config.*`, `vite.config.*`, `playwright.config.*`, `pom.xml`,
+`build.gradle`, `build.gradle.kts`, and `pubspec.yaml`. Flutter/Dart projects
+are detected from `pubspec.yaml` (project metadata and dependency key names
+only — never lockfiles, `.dart_tool`, source, assets, or Firebase config).
+
 ## Init Presets
 
 `agent-profile init --preset <token>` verifies a short-lived hosted preset token
