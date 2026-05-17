@@ -1,6 +1,6 @@
 {
   "name": "@agent-profile/doctor",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Drift and safety checks for Agent Profile Compiler.",
   "license": "Apache-2.0",
   "type": "module",
@@ -22,7 +22,7 @@
     "lint": "tsc -b tsconfig.json && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
-    "@agent-profile/compiler": "0.1.2",
-    "@agent-profile/core": "0.1.2"
+    "@agent-profile/compiler": "0.2.0",
+    "@agent-profile/core": "0.2.0"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@agent-profile/core",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Shared contracts and core domain types for Agent Profile Compiler.",
   "license": "Apache-2.0",
   "type": "module",
