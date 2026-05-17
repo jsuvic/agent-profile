@@ -53,14 +53,20 @@ type CompilerTargetId =
   | "lockfile"
   | "tabnine-guidelines"
   | "tabnine-mcp-config"
+  | "tabnine-subagents"
   | "codex-config"
+  | "codex-workflow-skills"
+  | "codex-subagents"
   | "claude-settings"
-  | "claude-mcp";
-// Forward reference (subagents): docs/specs/phase-11/ adds
-// "claude-subagents", "codex-subagents", and "tabnine-subagents" to this
-// union when Phase 11 is approved. The Codex subagents target also amends
-// the existing "codex-config" template's deterministic expansion to append
-// an additive [agents] block; the target id does not change.
+  | "claude-mcp"
+  | "claude-md"
+  | "claude-workflow-skills"
+  | "claude-subagents";
+// Phase-11 lift (subagents): "claude-subagents", "codex-subagents", and
+// "tabnine-subagents" are live targets implemented under docs/specs/phase-11/.
+// The Codex subagents target also amends the existing "codex-config"
+// template's deterministic expansion to append an additive [agents] block
+// when subagents are enabled; the target id does not change.
 
 type TemplateDescriptor = {
   id: string;

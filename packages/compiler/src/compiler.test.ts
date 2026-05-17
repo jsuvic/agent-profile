@@ -1186,3 +1186,174 @@ function extractMarkdownSection(text: string, heading: string): string {
   const next = text.indexOf("\n## ", start + heading.length);
   return next === -1 ? text.slice(start) : text.slice(start, next + 1);
 }
+
+const subagentsFixtureDir = new URL(
+  "../../../fixtures/subagents-enabled/",
+  import.meta.url,
+);
+const subagentsFixtureDirPath = fileURLToPath(subagentsFixtureDir);
+const subagentsProfilePath = fileURLToPath(
+  new URL("ai-profile.yaml", subagentsFixtureDir),
+);
+
+test("phase-11 subagents fixture matches generated outputs and lockfile", async () => {
+  const result = await compareGoldenFixture(subagentsFixtureDirPath);
+
+  assert.deepEqual(result, {
+    ok: true,
+    files: result.ok ? result.files : [],
+  });
+});
+
+test("phase-11 subagents emit deterministic per-target files", async () => {
+  const profileResult = await readProfileFile(subagentsProfilePath);
+  assert.equal(profileResult.ok, true);
+
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const result = compileProfile({ profile: profileResult.profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const subagentFiles = result.files
+    .filter((file) =>
+      file.path.startsWith(".claude/agents/") ||
+      file.path.startsWith(".codex/agents/") ||
+      file.path.startsWith(".tabnine/agent/agents/"),
+    )
+    .map((file) => ({
+      path: file.path,
+      target: file.target,
+      templateId: file.templateId,
+    }));
+
+  assert.deepEqual(subagentFiles, [
+    {
+      path: ".claude/agents/code-reviewer.md",
+      target: "claude-subagents",
+      templateId: "targets/claude-subagents/code-reviewer@1",
+    },
+    {
+      path: ".codex/agents/code-reviewer.toml",
+      target: "codex-subagents",
+      templateId: "targets/codex-subagents/code-reviewer@1",
+    },
+    {
+      path: ".tabnine/agent/agents/code-reviewer.md",
+      target: "tabnine-subagents",
+      templateId: "targets/tabnine-subagents/code-reviewer@1",
+    },
+  ]);
+
+  for (const file of result.files) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+    assert.equal(text.includes("bypassPermissions"), false, file.path);
+    assert.equal(text.includes("danger-full-access"), false, file.path);
+    assert.equal(text.includes("approval_policy = \"never\""), false, file.path);
+  }
+});
+
+test("phase-11 codex-config appends [agents] block when subagents enabled", async () => {
+  const profileResult = await readProfileFile(subagentsProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-config"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const codexConfig = result.files.find(
+    (file) => file.path === ".codex/config.toml",
+  );
+  assert.ok(codexConfig);
+  const text = Buffer.from(codexConfig.bytes).toString("utf8");
+  assert.equal(text.includes("[agents]"), true);
+  assert.equal(text.includes("max_threads = 3"), true);
+  assert.equal(text.includes("max_depth = 1"), true);
+});
+
+test("phase-11 codex-config minimal fixture has no [agents] block", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-config"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const codexConfig = result.files.find(
+    (file) => file.path === ".codex/config.toml",
+  );
+  assert.ok(codexConfig);
+  const text = Buffer.from(codexConfig.bytes).toString("utf8");
+  assert.equal(text.includes("[agents]"), false);
+});
+
+test("phase-11 tabnine workspace-write subagent emits unsafe_generated_content", async () => {
+  const profileResult = await readProfileFile(subagentsProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const writeProfile: AiProfile = {
+    ...profileResult.profile,
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            {
+              name: "writer",
+              description: "Writes files",
+              purpose: "Writes files in the workspace.",
+              prompt: "Edit files as instructed.",
+              toolScope: "workspace-write",
+            },
+          ],
+        },
+      },
+    },
+  };
+
+  const result = compileProfile({
+    profile: writeProfile,
+    targets: ["tabnine-subagents"],
+  });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(
+    result.issues.some((issue) => issue.code === "unsafe_generated_content"),
+    true,
+  );
+});
+
+test("phase-11 subagent targets are disabled when subagents are off", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  for (const target of [
+    "claude-subagents",
+    "codex-subagents",
+    "tabnine-subagents",
+  ] as const) {
+    const result = compileProfile({
+      profile: profileResult.profile,
+      targets: [target],
+    });
+    assert.equal(result.ok, false, target);
+    if (result.ok) continue;
+    assert.equal(
+      result.issues.some((issue) => issue.code === "disabled_target"),
+      true,
+      target,
+    );
+  }
+});

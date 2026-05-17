@@ -99,6 +99,21 @@
         }
       }
     },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "delegation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "subagents": {
+              "$ref": "#/definitions/subagents"
+            }
+          }
+        }
+      }
+    },
     "permissions": {
       "type": "object",
       "additionalProperties": false,
@@ -202,6 +217,117 @@
       "uniqueItems": true,
       "items": {
         "$ref": "#/definitions/slug"
+      }
+    },
+    "subagents": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "defaults": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxConcurrent": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxDepth": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/subagent"
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": true
+          }
+        },
+        "required": ["enabled"]
+      },
+      "then": {
+        "required": ["agents"],
+        "properties": {
+          "agents": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/definitions/subagent"
+            }
+          }
+        }
+      }
+    },
+    "subagent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description", "purpose", "prompt", "toolScope"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "not": {
+            "enum": [
+              "default",
+              "worker",
+              "explorer",
+              "explore",
+              "plan",
+              "general-purpose",
+              "codebase_investigator",
+              "remote-codebase-investigator",
+              "generalist",
+              "browser_agent"
+            ]
+          }
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "toolScope": {
+          "type": "string",
+          "enum": ["read-only", "workspace-write"]
+        },
+        "modelPreference": {
+          "type": "string",
+          "enum": ["inherit", "fast", "balanced", "capable"]
+        },
+        "maxTurns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeoutMinutes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 0
+        }
       }
     }
   }

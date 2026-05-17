@@ -2,8 +2,14 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import {
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  DEFAULT_SUBAGENT_MAX_DEPTH,
   deriveEffectivePermissions,
+  getEnabledSubagents,
+  getSubagentDefaults,
   type AiProfile,
+  type AiProfileEffectivePermissions,
+  type AiProfileSubagent,
   type PermissionMode,
 } from "@agent-profile/core";
 
@@ -202,7 +208,9 @@ export function compileProfile(request: CompileRequest): CompileResult {
   const targets = uniqueTargets(
     request.targets ?? getEnabledTargetIds(request.profile),
   );
-  const templates = request.templates ?? getDefaultTemplates();
+  const templates =
+    request.templates ??
+    mergeTemplates(getDefaultTemplates(), getSubagentTemplates(request.profile));
   const issues = validateTargets(request.profile, targets, templates);
 
   if (issues.length > 0) {
@@ -224,6 +232,76 @@ export function compileProfile(request: CompileRequest): CompileResult {
       .filter((template) => requiredTemplateIds.has(template.id))
       .sort(compareTemplates),
   };
+}
+
+function mergeTemplates(
+  base: TemplateDescriptor[],
+  extra: TemplateDescriptor[],
+): TemplateDescriptor[] {
+  const seen = new Set(base.map((template) => template.id));
+  const result = [...base];
+
+  for (const template of extra) {
+    if (!seen.has(template.id)) {
+      seen.add(template.id);
+      result.push(template);
+    }
+  }
+
+  return result.sort(compareTemplates);
+}
+
+export function getSubagentTemplates(profile: AiProfile): TemplateDescriptor[] {
+  const agents = getEnabledSubagents(profile);
+
+  if (agents.length === 0) {
+    return [];
+  }
+
+  const effective = deriveEffectivePermissions(profile);
+  const templates: TemplateDescriptor[] = [];
+
+  if (profile.clients.claude.enabled) {
+    for (const agent of agents) {
+      templates.push({
+        id: `targets/claude-subagents/${agent.name}@1`,
+        target: "claude-subagents",
+        version: "1",
+        sha256: sha256Hex(
+          normalizeGeneratedText(renderClaudeSubagent(agent, effective)),
+        ),
+      });
+    }
+  }
+
+  if (profile.clients.codex.enabled) {
+    for (const agent of agents) {
+      templates.push({
+        id: `targets/codex-subagents/${agent.name}@1`,
+        target: "codex-subagents",
+        version: "1",
+        sha256: sha256Hex(
+          normalizeGeneratedText(renderCodexSubagent(agent, effective)),
+        ),
+      });
+    }
+  }
+
+  if (profile.clients.tabnine.enabled) {
+    for (const agent of agents) {
+      if (agent.toolScope !== "read-only") {
+        continue;
+      }
+      templates.push({
+        id: `targets/tabnine-subagents/${agent.name}@1`,
+        target: "tabnine-subagents",
+        version: "1",
+        sha256: sha256Hex(normalizeGeneratedText(renderTabnineSubagent(agent))),
+      });
+    }
+  }
+
+  return templates;
 }
 
 export function renderAgentsMd(profile: AiProfile): string {
@@ -366,9 +444,15 @@ function renderTarget(
           ".codex/config.toml",
           "codex-config",
           "targets/codex-config@1",
-          renderCodexConfigToml(),
+          renderCodexConfigToml(profile),
         ),
       ];
+    case "codex-subagents":
+      return renderCodexSubagentFiles(profile);
+    case "claude-subagents":
+      return renderClaudeSubagentFiles(profile);
+    case "tabnine-subagents":
+      return renderTabnineSubagentFiles(profile);
     case "codex-workflow-skills":
       return renderWorkflowSkillFiles(
         profile,
@@ -806,14 +890,184 @@ Final implementation review is required for this project.
 `;
 }
 
-function renderCodexConfigToml(): string {
-  return `approval_policy = "on-request"
+function renderCodexConfigToml(profile?: AiProfile): string {
+  const base = `approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 allow_login_shell = false
 
 [sandbox_workspace_write]
 network_access = false
 `;
+
+  if (!profile || getEnabledSubagents(profile).length === 0) {
+    return base;
+  }
+
+  const defaults = getSubagentDefaults(profile);
+
+  return `${base}
+[agents]
+max_threads = ${defaults.maxConcurrent}
+max_depth = ${defaults.maxDepth}
+`;
+}
+
+function renderClaudeSubagentFiles(profile: AiProfile): GeneratedFile[] {
+  const agents = getEnabledSubagents(profile);
+  const effective = deriveEffectivePermissions(profile);
+
+  return agents.map((agent) =>
+    createGeneratedTextFile(
+      `.claude/agents/${agent.name}.md`,
+      "claude-subagents",
+      `targets/claude-subagents/${agent.name}@1`,
+      renderClaudeSubagent(agent, effective),
+    ),
+  );
+}
+
+function renderCodexSubagentFiles(profile: AiProfile): GeneratedFile[] {
+  const agents = getEnabledSubagents(profile);
+  const effective = deriveEffectivePermissions(profile);
+
+  return agents.map((agent) =>
+    createGeneratedTextFile(
+      `.codex/agents/${agent.name}.toml`,
+      "codex-subagents",
+      `targets/codex-subagents/${agent.name}@1`,
+      renderCodexSubagent(agent, effective),
+    ),
+  );
+}
+
+function renderTabnineSubagentFiles(profile: AiProfile): GeneratedFile[] {
+  const agents = getEnabledSubagents(profile).filter(
+    (agent) => agent.toolScope === "read-only",
+  );
+
+  return agents.map((agent) =>
+    createGeneratedTextFile(
+      `.tabnine/agent/agents/${agent.name}.md`,
+      "tabnine-subagents",
+      `targets/tabnine-subagents/${agent.name}@1`,
+      renderTabnineSubagent(agent),
+    ),
+  );
+}
+
+function titleCaseFromKebab(name: string): string {
+  return name
+    .split("-")
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function renderClaudeSubagent(
+  agent: AiProfileSubagent,
+  effective: AiProfileEffectivePermissions,
+): string {
+  const lines: string[] = ["---", `name: ${agent.name}`];
+  lines.push(`description: ${agent.description}`);
+
+  if (agent.toolScope === "read-only") {
+    lines.push("tools: Read, Glob, Grep");
+  } else {
+    const tools = ["Read", "Glob", "Grep"];
+    if (effective.filesystem.write === "allow") {
+      tools.push("Edit", "Write");
+    }
+    if (effective.shell.run === "allow") {
+      tools.push("Bash");
+    }
+    if (effective.network.external === "allow") {
+      tools.push("WebFetch");
+    }
+    lines.push(`tools: ${tools.join(", ")}`);
+  }
+
+  const model = agent.modelPreference ?? "inherit";
+  lines.push(`model: ${model === "inherit" ? "inherit" : "inherit"}`);
+
+  if (agent.toolScope === "read-only") {
+    lines.push("permissionMode: plan");
+  }
+
+  if (agent.maxTurns !== undefined) {
+    lines.push(`maxTurns: ${agent.maxTurns}`);
+  }
+
+  lines.push("---", "");
+  lines.push("<!-- Generated by Agent Profile Compiler. Do not edit by hand. -->");
+  lines.push("");
+  lines.push(`# ${titleCaseFromKebab(agent.name)}`);
+  lines.push("");
+  lines.push(agent.prompt.trim());
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+function renderCodexSubagent(
+  agent: AiProfileSubagent,
+  effective: AiProfileEffectivePermissions,
+): string {
+  const lines: string[] = [
+    "# Generated by Agent Profile Compiler. Do not edit by hand.",
+    "",
+    `name = "${escapeTomlString(agent.name)}"`,
+    `description = "${escapeTomlString(agent.description)}"`,
+  ];
+
+  if (agent.toolScope === "read-only") {
+    lines.push(`sandbox_mode = "read-only"`);
+  } else if (
+    agent.toolScope === "workspace-write" &&
+    effective.filesystem.write !== "deny"
+  ) {
+    lines.push(`sandbox_mode = "workspace-write"`);
+  }
+
+  lines.push("developer_instructions = \"\"\"");
+  for (const promptLine of agent.prompt.trim().split(/\r?\n/u)) {
+    lines.push(promptLine);
+  }
+  lines.push('"""');
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+function renderTabnineSubagent(agent: AiProfileSubagent): string {
+  const lines: string[] = ["---", `name: ${agent.name}`];
+  lines.push(`description: ${agent.description}`);
+  lines.push("kind: local");
+  lines.push("tools:");
+  for (const tool of ["grep_search", "read_file"].sort()) {
+    lines.push(`  - ${tool}`);
+  }
+
+  if (agent.maxTurns !== undefined) {
+    lines.push(`max_turns: ${agent.maxTurns}`);
+  }
+
+  if (agent.timeoutMinutes !== undefined) {
+    lines.push(`timeout_mins: ${agent.timeoutMinutes}`);
+  }
+
+  lines.push("---", "");
+  lines.push("<!-- Generated by Agent Profile Compiler. Do not edit by hand. -->");
+  lines.push("");
+  lines.push(`# ${titleCaseFromKebab(agent.name)}`);
+  lines.push("");
+  lines.push(agent.prompt.trim());
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+function escapeTomlString(value: string): string {
+  return value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"');
 }
 
 function renderAgentsMdTemplateSource(): string {
@@ -925,13 +1179,20 @@ function renderClaudeSettingsJson(): string {
 
 function getEnabledTargetIds(profile: AiProfile): CompilerTargetId[] {
   const targets: CompilerTargetId[] = ["agents-md"];
+  const subagentsEnabled = getEnabledSubagents(profile).length > 0;
 
   if (profile.clients.tabnine.enabled) {
     targets.push("tabnine-guidelines", "tabnine-mcp-config");
+    if (subagentsEnabled) {
+      targets.push("tabnine-subagents");
+    }
   }
 
   if (profile.clients.codex.enabled) {
     targets.push("codex-config", "codex-workflow-skills");
+    if (subagentsEnabled) {
+      targets.push("codex-subagents");
+    }
   }
 
   if (profile.clients.claude.enabled) {
@@ -941,6 +1202,9 @@ function getEnabledTargetIds(profile: AiProfile): CompilerTargetId[] {
       "claude-md",
       "claude-workflow-skills",
     );
+    if (subagentsEnabled) {
+      targets.push("claude-subagents");
+    }
   }
 
   return targets;
@@ -955,6 +1219,21 @@ function validateTargets(
   const templateIds = new Set(templates.map((template) => template.id));
   const enabledTargets = new Set(getEnabledTargetIds(profile));
   const issues: CompileIssue[] = [];
+
+  if (targets.includes("tabnine-subagents")) {
+    const writeAgents = getEnabledSubagents(profile).filter(
+      (agent) => agent.toolScope === "workspace-write",
+    );
+    for (const agent of writeAgents) {
+      issues.push({
+        code: "unsafe_generated_content",
+        path: `.tabnine/agent/agents/${agent.name}.md`,
+        expected: "read-only Tabnine subagent",
+        actual: "workspace-write Tabnine subagent",
+        message: `tabnine-subagents cannot emit workspace-write agent ${agent.name} while Tabnine subagents are experimental/no-confirmation.`,
+      });
+    }
+  }
 
   for (const target of targets) {
     if (!supportedTargets.has(target)) {
@@ -1026,6 +1305,18 @@ function getRequiredTemplateIds(
         profile,
         "claude-workflow-skills",
       );
+    case "claude-subagents":
+      return getEnabledSubagents(profile).map(
+        (agent) => `targets/claude-subagents/${agent.name}@1`,
+      );
+    case "codex-subagents":
+      return getEnabledSubagents(profile).map(
+        (agent) => `targets/codex-subagents/${agent.name}@1`,
+      );
+    case "tabnine-subagents":
+      return getEnabledSubagents(profile)
+        .filter((agent) => agent.toolScope === "read-only")
+        .map((agent) => `targets/tabnine-subagents/${agent.name}@1`);
     default:
       return TEMPLATE_SOURCES.filter(
         (template) => template.target === target,
