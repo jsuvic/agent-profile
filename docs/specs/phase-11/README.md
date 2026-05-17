@@ -94,3 +94,11 @@ landed on `master` until every spec in this phase is Approved.
 7. Update target documentation in `docs/targets/`.
 
 Each step must be reviewed against the relevant spec before merge.
+
+## Follow-On Phase
+
+Phase 13 builds on this phase after the subagent foundation is verified. It
+adds template references, the implementation-review subagent templates, and
+the parent `subagent-driven-change` orchestration skill. Phase 11 should stay
+focused on the subagent platform layer and should not absorb those workflow
+templates.

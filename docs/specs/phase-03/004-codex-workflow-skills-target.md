@@ -85,6 +85,16 @@ For the minimal fixture, the target must emit:
 | `.agents/skills/tdd-change/SKILL.md`   | `targets/codex-workflow-skills/tdd-change@1`   |
 | `.agents/skills/final-review/SKILL.md` | `targets/codex-workflow-skills/final-review@1` |
 
+## Phase 10.5 Amendment
+
+This verified Phase 3 contract owns the original MVP workflow skill outputs.
+`docs/specs/phase-10.5/001-tdd-skill-red-green-hardening.md` defines a narrow
+future amendment for `tdd-change` only. When that amendment is approved and
+implemented, the `tdd-change` template id must advance to
+`targets/codex-workflow-skills/tdd-change@2`, while `sdd-change` and
+`final-review` remain on their existing template ids unless a later approved
+spec changes them.
+
 Generated Markdown must use:
 
 - UTF-8

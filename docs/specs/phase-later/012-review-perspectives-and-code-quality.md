@@ -50,9 +50,24 @@ generates:
 - shipping a generic "monitor PR" workflow (out of scope until a separate
   spec defines CI integration)
 - generating subagent definitions for the same review lenses — that lands in
-  `phase-later/017-subagent-template-library.md` and reuses these skill bodies
+  `phase-later/017-subagent-template-library.md`; the exact implementation
+  worker plus two-stage review bundle is owned by `phase-13`
 - generating Tabnine review skills until Tabnine documents an equivalent
   trigger surface
+
+## Boundary With Phase 10.5 and Phase 13
+
+`docs/specs/phase-10.5/001-tdd-skill-red-green-hardening.md` owns the early
+TDD skill hardening work: RED verification, GREEN verification, and testing
+anti-pattern guidance in the existing `tdd-change` workflow skill.
+
+This spec keeps ownership of the broader opt-in review-perspective and
+code-quality skill bundle.
+
+`docs/specs/phase-13/` owns the delegated implementation workflow: template
+references, `implementer`, `spec-reviewer`, `code-quality-reviewer`, explicit
+status values, fresh-context prompting, and the parent
+`subagent-driven-change` orchestration skill.
 
 ## User Flow
 

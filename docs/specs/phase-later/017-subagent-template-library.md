@@ -8,6 +8,10 @@ Routed from `docs/research/007-agent-best-practices-review.md`
 (Cross-Cutting Surfaces Still Missing — Subagent template library).
 Depends on `phase-later/002-subagents-targets.md`.
 
+The exact implementation-review workflow templates are split into
+`docs/specs/phase-13/` so they can be implemented after the Phase 11 subagent
+foundation without waiting for the full baseline template library.
+
 ## Problem
 
 `phase-later/002-subagents-targets.md` defines the schema and the
@@ -22,6 +26,10 @@ perspectives (`phase-later/012`): each perspective skill can have a
 companion subagent ready to use, so a user can either invoke the lens
 inline (skill) or delegate it (subagent).
 
+Phase 13 is the narrower first slice for implementation delegation:
+`implementer`, `spec-reviewer`, `code-quality-reviewer`, status reporting,
+fresh-context prompting, and two-stage review ordering.
+
 ## Goal
 
 Ship a curated set of subagent template definitions under
@@ -29,6 +37,14 @@ Ship a curated set of subagent template definitions under
 profile opts in. Each template carries a multi-paragraph description, a
 deliberate model choice, a tight tool allowlist, and a substantial
 system prompt body that encodes the role.
+
+## Boundary With Phase 13
+
+This later-phase spec remains the broad baseline library for reusable
+specialist agents. Phase 13 owns the exact implementation-review bundle and
+must be treated as the first implementation slice of template-driven
+subagents. A later revision of this spec may absorb Phase 13's templates into
+the larger library once both contracts are verified.
 
 ## Non-Goals
 
