@@ -100,6 +100,12 @@ The workflow is:
 Write-capable commands require an explicit `--write`. Dry-run is the default
 review path.
 
+`init` is intentionally conservative. It only detects supported local metadata
+files and does not infer stack choices from prose in `README.md` or from source
+contents. If the repository is a documentation-only scaffold or uses an
+unsupported stack detector, create `ai-profile.yaml` manually and then run
+`agent-profile compile --dry-run`.
+
 ## Local-First Contract
 
 The MVP contract is intentionally narrow:

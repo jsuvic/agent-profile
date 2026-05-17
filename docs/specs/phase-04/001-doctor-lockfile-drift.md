@@ -106,6 +106,15 @@ current profile, compiler templates, and generated project files.
 - issue ordering is deterministic
 - issue messages do not include file contents
 
+## Forward Reference: Subagent Orphans
+
+`docs/specs/phase-11/005-doctor-subagent-checks.md` (Draft, not approved)
+extends orphan detection for subagent artifacts under `.claude/agents/`,
+`.codex/agents/`, and `.tabnine/agent/agents/`. Subagent orphan findings use
+`LINT-SUBAGENT-006`, not the lockfile codes here, so users can distinguish
+drift sources. The lockfile contract in this spec is unchanged; Phase 11
+reuses it.
+
 ## Documentation Updates
 
 - `README.md`

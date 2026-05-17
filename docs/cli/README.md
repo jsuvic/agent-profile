@@ -82,6 +82,11 @@ If `ai-profile.yaml` already exists, init reports that no changes are proposed.
 It does not edit existing profiles, even when client flags and `--write` are
 present. Use `agent-profile compile --dry-run` to inspect compiled artifacts.
 
+Stack detection is conservative and metadata-only. It does not parse
+`README.md` prose or source files. If no supported language metadata exists,
+`init` refuses to write; create `ai-profile.yaml` manually, then use
+`agent-profile compile --dry-run` to inspect generated artifacts.
+
 ## Init Presets
 
 `agent-profile init --preset <token>` verifies a short-lived hosted preset token

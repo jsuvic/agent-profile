@@ -481,6 +481,7 @@ test("init refuses to write when no supported language is detected", async () =>
   assert.equal(code, 1);
   assert.match(output.stdoutText(), /Agent Profile Init \(refused\)/u);
   assert.match(output.stdoutText(), /refused: no language detected/u);
+  assert.match(output.stdoutText(), /create ai-profile\.yaml manually/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });

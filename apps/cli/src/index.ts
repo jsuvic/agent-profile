@@ -1858,7 +1858,7 @@ function formatInitRefusalFacts(input: InitReport): string {
     return [
       `refused: ${message}`,
       "schema v1 requires at least one stack.languages entry.",
-      "add a language manually or re-run inside a recognized project.",
+      "create ai-profile.yaml manually or add supported stack metadata and re-run init.",
     ].join("\n");
   }
 

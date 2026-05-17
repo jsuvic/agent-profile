@@ -55,6 +55,9 @@ npx agent-profile init --write
 
 `init` detects supported stack metadata such as languages, frameworks, package
 managers, and test tools. It does not read `.env` files or upload source code.
+If no supported language metadata exists yet, `init` refuses to write because
+schema v1 requires `stack.languages`; create `ai-profile.yaml` manually for
+documentation-only or currently unsupported project stacks.
 
 ### `compile`
 

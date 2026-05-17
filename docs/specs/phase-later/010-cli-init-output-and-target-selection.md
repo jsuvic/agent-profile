@@ -115,7 +115,7 @@ Agent Profile Init (refused)
 
 refused: no language detected under --root.
 schema v1 requires at least one stack.languages entry.
-add a language manually or re-run inside a recognized project.
+create ai-profile.yaml manually or add supported stack metadata and re-run init.
 ```
 
 Write failure:

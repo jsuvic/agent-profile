@@ -73,6 +73,16 @@ ignore hygiene.
 - JSON env entry with literal token produces `LINT-SEC-003`
 - issue messages do not include secret literals
 
+## Forward Reference: Subagent Security Checks
+
+`docs/specs/phase-11/005-doctor-subagent-checks.md` (Draft, not approved)
+extends the secret-pattern, source-upload, and unsafe-instruction checks here
+to cover generated subagent artifacts under `.claude/agents/`,
+`.codex/agents/`, and `.tabnine/agent/agents/`. Subagent security findings
+use `LINT-SUBAGENT-002` rather than `LINT-SEC-*` codes so users can
+distinguish drift sources. The redaction and only-scan-generated-artifacts
+contracts in this spec are unchanged.
+
 ## Documentation Updates
 
 - `docs/security/secret-handling.md`

@@ -77,6 +77,15 @@ Add local doctor checks for skill size and minimal trigger/use-case guidance.
 - Codex skill placed under `.agents/skills/` is scanned
 - legacy `.codex/skills/` path is not scanned
 
+## Forward Reference: Subagent Checks Are Separate
+
+`docs/specs/phase-11/005-doctor-subagent-checks.md` (Draft, not approved)
+defines a parallel doctor check family for subagent artifacts under
+`.claude/agents/`, `.codex/agents/`, and `.tabnine/agent/agents/`. Subagent
+files are explicitly out of scope for this skill-check spec. Skill roots
+remain `.agents/skills` (Codex) and `.claude/skills` (Claude); subagent roots
+are owned by Phase 11 using `LINT-SUBAGENT-*` codes.
+
 ## Documentation Updates
 
 - `README.md`

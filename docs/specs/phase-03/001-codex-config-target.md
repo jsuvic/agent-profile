@@ -270,6 +270,17 @@ project defaults.
 - target id assertion: `codex-config`
 - template id assertion: `targets/codex-config@1`
 
+## Forward Reference: Subagents `[agents]` Amendment
+
+`docs/specs/phase-11/003-codex-subagents-target.md` (Draft, not approved)
+defines an additive `[agents]` block to be appended to this file's generated
+output when `capabilities.delegation.subagents.enabled: true` lands. The
+amendment is byte-additive only: when subagents are disabled or absent, the
+minimal-fixture golden output here remains byte-identical. The target id
+remains `codex-config` and the template id remains `targets/codex-config@1`;
+Phase 11 changes the template's deterministic expansion conditioned on
+subagent intent, not the file's ownership.
+
 ## Final Review Checklist
 
 - required sections are present: problem, goal, non-goals, inputs, outputs,
