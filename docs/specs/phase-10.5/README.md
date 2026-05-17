@@ -2,9 +2,9 @@
 
 ## Status
 
-Draft. Phase 10.5 is a narrow workflow-skill hardening pass that should land
-after verified Phase 10 guidance expansion and before Phase 11 subagent
-generation.
+Verified. Phase 10.5 is a narrow workflow-skill hardening pass implemented on
+2026-05-17 after verified Phase 10 guidance expansion and before Phase 11
+subagent generation.
 
 ## Purpose
 
@@ -34,16 +34,16 @@ unchanged.
 
 ## Implementation Gate
 
-Phase 10.5 implementation is allowed only when:
+Phase 10.5 implementation was allowed only when:
 
-- `001-tdd-skill-red-green-hardening.md` is approved
-- `phase-03/004-codex-workflow-skills-target.md` is amended to reference the
+- `001-tdd-skill-red-green-hardening.md` was approved for implementation
+- `phase-03/004-codex-workflow-skills-target.md` was amended to reference the
   `tdd-change@2` template
-- `phase-03/005-claude-workflow-skills-target.md` is amended to reference the
+- `phase-03/005-claude-workflow-skills-target.md` was amended to reference the
   `tdd-change@2` template
-- golden fixtures are updated only for the two `tdd-change` skill files and
+- golden fixtures were updated only for the two `tdd-change` skill files and
   their lockfile descriptors
-- existing disabled-workflow tests continue to prove no `tdd-change` file is
+- existing disabled-workflow tests continued to prove no `tdd-change` file is
   emitted when `workflow.tdd: false`
 
 ## Verification Gate

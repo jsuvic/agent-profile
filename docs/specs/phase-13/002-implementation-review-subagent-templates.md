@@ -187,9 +187,11 @@ prompt: |
 - `implementer` requires `workspace-write` and is generated only when
   `effectivePermissions` permits workspace writes for the target.
 - `spec-reviewer` and `code-quality-reviewer` are read-only.
-- The templates do not instruct commits, branch creation, pushes, dependency
-  installation, source upload, secret access, production access, or runtime
-  client configuration changes.
+- The templates do not instruct agents to perform or auto-approve commits,
+  branch creation, pushes, dependency installation, source upload, secret
+  access, production access, or runtime client configuration changes.
+- Prohibitive safety guardrails that mention those actions are required and do
+  not violate this contract.
 - Template names are reserved by this phase and cannot be overridden by another
   bundled template.
 
@@ -212,9 +214,11 @@ prompt: |
 - generated outputs include the status contracts exactly
 - generated outputs include fresh-context instructions
 - generated outputs contain no secret-like literals or environment values
-- generated outputs contain no commit, push, branch creation, dependency
-  install, production access, source upload, or unsafe auto-approval
-  instructions
+- generated outputs contain no permissive or auto-approval instructions to
+  commit, push, create branches, install dependencies, access production
+  systems, upload source, access secrets, or bypass approval
+- generated outputs may and should contain prohibitive safety wording for those
+  actions
 
 ## Tests
 
@@ -223,9 +227,11 @@ prompt: |
 - golden tests for Claude outputs for all three templates
 - permission test proving `implementer` is not generated as workspace-write
   when `effectivePermissions` denies workspace writes
-- negative content tests for secrets, environment values, commits, pushes,
-  dependency installation, production access, source upload, and unsafe
-  auto-approval
+- negative content tests for secret-like literals and environment values
+- negative content tests that distinguish prohibitive guardrails from
+  permissive wording, rejecting instructions to perform or auto-approve
+  commits, pushes, branch creation, dependency installation, production access,
+  source upload, secret access, or unsafe auto-approval
 - deterministic test for byte-identical output across repeated compile
 - disabled-client tests for Codex and Claude
 

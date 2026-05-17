@@ -493,7 +493,7 @@ test("workflow skill targets emit approved project-local skills", async () => {
       {
         path: ".agents/skills/tdd-change/SKILL.md",
         target: "codex-workflow-skills",
-        templateId: "targets/codex-workflow-skills/tdd-change@1",
+        templateId: "targets/codex-workflow-skills/tdd-change@2",
       },
       {
         path: ".claude/skills/final-review/SKILL.md",
@@ -508,7 +508,7 @@ test("workflow skill targets emit approved project-local skills", async () => {
       {
         path: ".claude/skills/tdd-change/SKILL.md",
         target: "claude-workflow-skills",
-        templateId: "targets/claude-workflow-skills/tdd-change@1",
+        templateId: "targets/claude-workflow-skills/tdd-change@2",
       },
     ],
   );
@@ -530,6 +530,82 @@ test("workflow skill targets emit approved project-local skills", async () => {
     assert.equal(text.includes("!`"), false, file.path);
     assert.equal(text.includes("```!"), false, file.path);
     assert.equal(text.split("\n").length < 300, true, file.path);
+  }
+});
+
+test("phase-10.5 hardens tdd-change workflow skills", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+
+  if (!result.ok) {
+    return;
+  }
+
+  const tddFiles = result.files.filter((file) =>
+    file.path.endsWith("/tdd-change/SKILL.md"),
+  );
+  assert.equal(tddFiles.length, 2);
+  assert.deepEqual(
+    tddFiles.map((file) => file.templateId),
+    [
+      "targets/codex-workflow-skills/tdd-change@2",
+      "targets/claude-workflow-skills/tdd-change@2",
+    ],
+  );
+
+  for (const file of tddFiles) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+
+    assert.equal(
+      text.includes(
+        "must prove RED before implementation and GREEN after the minimal fix",
+      ),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("confirm RED: the test fails for the expected reason"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("confirm GREEN: the test passes without new warnings"),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("## Testing Anti-Patterns"), true, file.path);
+    assert.equal(
+      text.includes("Do not assert on mock elements or mock call counts"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Do not add production methods, flags, or exports"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Report the RED command and expected failure"),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("allowed-tools"), false, file.path);
+    assert.equal(text.includes("agents/openai.yaml"), false, file.path);
+    assert.equal(text.includes("references/"), false, file.path);
+    assert.equal(text.includes("scripts/"), false, file.path);
+    assert.equal(text.includes("source upload"), false, file.path);
+    assert.equal(text.includes("production access"), false, file.path);
+    assert.equal(text.includes("unsafe auto-approval"), false, file.path);
   }
 });
 
