@@ -51,7 +51,8 @@ export type CompileIssueCode =
   | "invalid_output_path"
   | "nondeterministic_output"
   | "unsafe_generated_content"
-  | "subagents_not_enabled";
+  | "subagents_not_enabled"
+  | "missing_required_template_reference";
 
 export type CompileIssue = {
   code: CompileIssueCode;

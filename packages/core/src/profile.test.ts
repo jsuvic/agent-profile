@@ -731,6 +731,86 @@ describe("subagents schema", () => {
     );
     assert.equal(result.ok, false);
   });
+
+  it("accepts useTemplate references for the three bundled templates", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [
+          { useTemplate: "implementer" },
+          { useTemplate: "spec-reviewer" },
+          { useTemplate: "code-quality-reviewer" },
+        ],
+      }),
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it("rejects unknown useTemplate values", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [{ useTemplate: "security-auditor" }],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects useTemplate mixed with inline fields", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [
+          {
+            useTemplate: "implementer",
+            description: "override the bundled body",
+          },
+        ],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects duplicate names after template expansion", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [
+          { useTemplate: "implementer" },
+          { ...validSubagent(), name: "implementer" },
+        ],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+});
+
+describe("subagentDrivenDevelopment workflow gate", () => {
+  function profileWithWorkflowGate(value: unknown): Record<string, unknown> {
+    const base = profileWith({}) as Record<string, unknown>;
+    (base["workflow"] as Record<string, unknown>)[
+      "subagentDrivenDevelopment"
+    ] = value;
+    return base;
+  }
+
+  it("accepts subagentDrivenDevelopment as a boolean", () => {
+    assert.equal(
+      validateProfileValue(profileWithWorkflowGate(true)).ok,
+      true,
+    );
+    assert.equal(
+      validateProfileValue(profileWithWorkflowGate(false)).ok,
+      true,
+    );
+  });
+
+  it("rejects non-boolean subagentDrivenDevelopment", () => {
+    assert.equal(
+      validateProfileValue(profileWithWorkflowGate("yes")).ok,
+      false,
+    );
+  });
 });
 
 function profileWith(

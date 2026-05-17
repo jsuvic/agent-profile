@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft. Belongs to Phase 13. Not approved. Depends on Phase 11.
+Approved and implemented. Belongs to Phase 13. Depends on Phase 11.
 
 ## Problem
 
