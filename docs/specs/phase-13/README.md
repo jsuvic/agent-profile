@@ -2,9 +2,9 @@
 
 ## Status
 
-Draft. Phase 13 is the subagent workflow layer that should land after Phase 11
-subagent generation and after the already verified Phase 12 Flutter/Dart stack
-detection work.
+Approved and implemented. Phase 13 is the subagent workflow layer that lands
+after Phase 11 subagent generation and after the already verified Phase 12
+Flutter/Dart stack detection work.
 
 ## Purpose
 

@@ -89,6 +89,17 @@ export type AiProfileEffectivePermissions = {
 export type SubagentToolScope = "read-only" | "workspace-write";
 export type SubagentModelPreference = "inherit" | "fast" | "balanced" | "capable";
 
+export type SubagentTemplateName =
+  | "implementer"
+  | "spec-reviewer"
+  | "code-quality-reviewer";
+
+export const SUBAGENT_TEMPLATE_NAMES: SubagentTemplateName[] = [
+  "implementer",
+  "spec-reviewer",
+  "code-quality-reviewer",
+];
+
 export type AiProfileSubagent = {
   name: string;
   description: string;
@@ -101,14 +112,211 @@ export type AiProfileSubagent = {
   mcpServers?: string[];
 };
 
+export type AiProfileSubagentTemplateRef = {
+  useTemplate: SubagentTemplateName;
+};
+
+export type AiProfileSubagentEntry =
+  | AiProfileSubagent
+  | AiProfileSubagentTemplateRef;
+
 export type AiProfileSubagents = {
   enabled: boolean;
   defaults?: {
     maxConcurrent?: number;
     maxDepth?: number;
   };
-  agents?: AiProfileSubagent[];
+  agents?: AiProfileSubagentEntry[];
 };
+
+export function isSubagentTemplateRef(
+  entry: AiProfileSubagentEntry,
+): entry is AiProfileSubagentTemplateRef {
+  return (
+    typeof (entry as AiProfileSubagentTemplateRef).useTemplate === "string"
+  );
+}
+
+function freezeTemplate(template: AiProfileSubagent): AiProfileSubagent {
+  if (template.mcpServers !== undefined) {
+    Object.freeze(template.mcpServers);
+  }
+  return Object.freeze(template);
+}
+
+function cloneTemplate(template: AiProfileSubagent): AiProfileSubagent {
+  const clone: AiProfileSubagent = {
+    name: template.name,
+    description: template.description,
+    purpose: template.purpose,
+    prompt: template.prompt,
+    toolScope: template.toolScope,
+  };
+  if (template.modelPreference !== undefined)
+    clone.modelPreference = template.modelPreference;
+  if (template.maxTurns !== undefined) clone.maxTurns = template.maxTurns;
+  if (template.timeoutMinutes !== undefined)
+    clone.timeoutMinutes = template.timeoutMinutes;
+  if (template.mcpServers !== undefined)
+    clone.mcpServers = [...template.mcpServers];
+  return clone;
+}
+
+const SUBAGENT_TEMPLATES_RAW: Record<SubagentTemplateName, AiProfileSubagent> = {
+  implementer: {
+    name: "implementer",
+    description:
+      "Use for a bounded implementation task after the parent agent has provided the full task text, relevant spec excerpts, file ownership, constraints, and expected tests. Returns an explicit status and does not commit or push unless the parent request includes that requirement.",
+    purpose:
+      "Implement one scoped task with tests, self-review, and honest escalation when requirements or architecture are unclear.",
+    prompt: `You are implementing one bounded task.
+
+Work only from the task text, spec excerpts, file ownership, constraints,
+and allowed commands provided in the prompt. Do not assume hidden chat
+history. If essential context is missing, report NEEDS_CONTEXT instead of
+guessing.
+
+Before editing, restate the goal, non-goals, acceptance criteria, and files
+you expect to touch. If the task is ambiguous, architectural, or broader than
+the prompt says, stop and report BLOCKED or NEEDS_CONTEXT.
+
+Implement exactly what the task specifies. Follow the repository's SDD/TDD
+workflow. Add or update focused tests where practical, verify RED before
+behavior changes when the task changes behavior, implement the smallest
+passing change, then verify GREEN. Preserve existing patterns and avoid
+unrelated refactors.
+
+Do not commit, push, create branches, install dependencies, access secrets,
+contact production systems, or upload source unless the parent prompt
+explicitly authorizes that action.
+
+Before reporting back, self-review for completeness, quality, scope control,
+and test validity. Fix issues you find if they are inside the assigned scope.
+
+Report exactly:
+- Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT
+- What changed
+- Tests run and results
+- Files changed
+- Self-review findings
+- Concerns, missing context, or follow-up work`,
+    toolScope: "workspace-write",
+    modelPreference: "balanced",
+    maxTurns: 18,
+    timeoutMinutes: 20,
+    mcpServers: [],
+  },
+  "spec-reviewer": {
+    name: "spec-reviewer",
+    description:
+      "Use after an implementation worker reports DONE or DONE_WITH_CONCERNS to verify the actual changed files against the task text, approved spec, acceptance criteria, and claimed result. Reads code and docs only; does not edit.",
+    purpose:
+      "Catch missing requirements, extra scope, and misunderstandings before code-quality review.",
+    prompt: `You are reviewing whether an implementation matches its specification.
+
+Work only from the full task text, approved spec excerpts, acceptance
+criteria, changed-file list, and implementer report provided in the prompt.
+Do not assume hidden chat history and do not trust the implementer report
+without checking the actual files.
+
+Read the changed code and documentation. Compare actual behavior against the
+requested behavior line by line. Look for missing requirements, extra
+unrequested work, changed contracts, wrong interpretation, and fixture or
+documentation drift.
+
+Do not edit files, run broad commands, install dependencies, read secrets,
+contact production systems, or upload source. If the prompt lacks enough
+context to review, report NEEDS_CONTEXT.
+
+Report exactly:
+- Status: COMPLIANT | ISSUES_FOUND | NEEDS_CONTEXT
+- Requirements checked
+- Findings with severity, path, and line or symbol when available
+- Extra or out-of-scope work, if any
+- Missing tests or docs tied to acceptance criteria
+- Recommendation: proceed to code-quality review, fix first, or request context`,
+    toolScope: "read-only",
+    modelPreference: "capable",
+    maxTurns: 10,
+    timeoutMinutes: 8,
+    mcpServers: [],
+  },
+  "code-quality-reviewer": {
+    name: "code-quality-reviewer",
+    description:
+      "Use only after spec review passes to assess maintainability, decomposition, tests, naming, risky mocks, and local code quality in the changed files. Reads code and docs only; does not edit.",
+    purpose:
+      "Catch maintainability and test-quality risks after the implementation is known to match the spec.",
+    prompt: `You are reviewing code quality after spec compliance has passed.
+
+Work only from the full task text, approved spec excerpts, changed-file list,
+spec-review result, test results, and implementer report provided in the
+prompt. Do not assume hidden chat history.
+
+Review only the change's contribution. Do not flag pre-existing file size or
+architecture unless the change makes it materially worse. Check whether each
+touched file has a clear responsibility, whether names describe intent,
+whether complex predicates should be named, whether tests verify behavior
+rather than mocks, whether mocks preserve required real side effects, and
+whether new APIs exist only for tests.
+
+Do not edit files, run broad commands, install dependencies, read secrets,
+contact production systems, or upload source. If the prompt lacks enough
+context to review, report NEEDS_CONTEXT.
+
+Report exactly:
+- Status: ACCEPTABLE | ISSUES_FOUND | NEEDS_CONTEXT
+- Strengths
+- Issues grouped as Critical, Important, or Minor
+- Test-quality concerns
+- Maintainability concerns
+- Assessment: ready, fix first, or request context`,
+    toolScope: "read-only",
+    modelPreference: "capable",
+    maxTurns: 10,
+    timeoutMinutes: 8,
+    mcpServers: [],
+  },
+};
+
+const SUBAGENT_TEMPLATES: Record<SubagentTemplateName, AiProfileSubagent> = {
+  implementer: freezeTemplate(SUBAGENT_TEMPLATES_RAW.implementer),
+  "spec-reviewer": freezeTemplate(SUBAGENT_TEMPLATES_RAW["spec-reviewer"]),
+  "code-quality-reviewer": freezeTemplate(
+    SUBAGENT_TEMPLATES_RAW["code-quality-reviewer"],
+  ),
+};
+
+export function getSubagentTemplate(
+  name: SubagentTemplateName,
+): AiProfileSubagent {
+  return cloneTemplate(SUBAGENT_TEMPLATES[name]);
+}
+
+export function expandSubagentEntry(
+  entry: AiProfileSubagentEntry,
+): AiProfileSubagent {
+  if (isSubagentTemplateRef(entry)) {
+    return cloneTemplate(SUBAGENT_TEMPLATES[entry.useTemplate]);
+  }
+  return entry;
+}
+
+export function getSubagentTemplateRefs(
+  profile: Pick<AiProfile, "capabilities">,
+): SubagentTemplateName[] {
+  const block = profile.capabilities?.delegation?.subagents;
+  if (!block || block.enabled !== true) {
+    return [];
+  }
+  const refs: SubagentTemplateName[] = [];
+  for (const entry of block.agents ?? []) {
+    if (isSubagentTemplateRef(entry)) {
+      refs.push(entry.useTemplate);
+    }
+  }
+  return refs;
+}
 
 export type AiProfileCapabilities = {
   delegation?: {
@@ -140,6 +348,7 @@ export type AiProfile = {
     codeReview?: boolean;
     refactoring?: boolean;
     documentation?: boolean;
+    subagentDrivenDevelopment?: boolean;
   };
   capabilities?: AiProfileCapabilities;
   permissions?: AiProfilePermissions;
@@ -169,9 +378,7 @@ export function getEnabledSubagents(
     return [];
   }
 
-  return [...(block.agents ?? [])].sort((left, right) =>
-    left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
-  );
+  return (block.agents ?? []).map((entry) => expandSubagentEntry(entry));
 }
 
 const SUBAGENT_BUILTIN_NAMES_NORMALIZED = new Set<string>([
@@ -363,13 +570,16 @@ function validateSubagentSemantics(profile: AiProfile): ProfileValidationIssue[]
     return [];
   }
 
-  const agents = subagents.agents ?? [];
+  const entries = subagents.agents ?? [];
   const issues: ProfileValidationIssue[] = [];
   const seenRaw = new Map<string, number>();
   const seenNormalized = new Map<string, number>();
 
-  agents.forEach((agent, index) => {
-    const rawIndex = seenRaw.get(agent.name);
+  entries.forEach((entry, index) => {
+    const expanded = expandSubagentEntry(entry);
+    const name = expanded.name;
+
+    const rawIndex = seenRaw.get(name);
     if (rawIndex !== undefined) {
       issues.push({
         code: "schema_validation_error",
@@ -379,10 +589,10 @@ function validateSubagentSemantics(profile: AiProfile): ProfileValidationIssue[]
         message: `/capabilities/delegation/subagents/agents/${index}/name duplicates the name used at index ${rawIndex}.`,
       });
     } else {
-      seenRaw.set(agent.name, index);
+      seenRaw.set(name, index);
     }
 
-    const normalized = normalizeSubagentName(agent.name);
+    const normalized = normalizeSubagentName(name);
     const normalizedIndex = seenNormalized.get(normalized);
     if (normalizedIndex !== undefined && normalizedIndex !== index) {
       const isPureDuplicate = rawIndex !== undefined;
@@ -461,6 +671,9 @@ export function renderProfileYaml(profile: AiProfile): string {
     workflow["refactoring"] = profile.workflow.refactoring;
   if (profile.workflow.documentation !== undefined)
     workflow["documentation"] = profile.workflow.documentation;
+  if (profile.workflow.subagentDrivenDevelopment !== undefined)
+    workflow["subagentDrivenDevelopment"] =
+      profile.workflow.subagentDrivenDevelopment;
   doc["workflow"] = workflow;
 
   if (profile.capabilities !== undefined) {
@@ -505,8 +718,10 @@ function buildCapabilitiesDoc(
       }
 
       if (subagents.agents !== undefined) {
-        block["agents"] = subagents.agents.map((agent) =>
-          buildSubagentDoc(agent),
+        block["agents"] = subagents.agents.map((entry) =>
+          isSubagentTemplateRef(entry)
+            ? { useTemplate: entry.useTemplate }
+            : buildSubagentDoc(entry),
         );
       }
 

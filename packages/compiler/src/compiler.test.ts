@@ -6,7 +6,11 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-import { containsSecretLikeLiteral, readProfileFile } from "@agent-profile/core";
+import {
+  containsSecretLikeLiteral,
+  getEnabledSubagents,
+  readProfileFile,
+} from "@agent-profile/core";
 import type { AiProfile } from "@agent-profile/core";
 
 import {
@@ -1354,6 +1358,456 @@ test("phase-11 subagent targets are disabled when subagents are off", async () =
       result.issues.some((issue) => issue.code === "disabled_target"),
       true,
       target,
+    );
+  }
+});
+
+const phase13FixtureDir = new URL(
+  "../../../fixtures/subagent-driven-development/",
+  import.meta.url,
+);
+const phase13FixtureDirPath = fileURLToPath(phase13FixtureDir);
+const phase13ProfilePath = fileURLToPath(
+  new URL("ai-profile.yaml", phase13FixtureDir),
+);
+
+test("phase-13 subagent-driven-development fixture matches generated outputs and lockfile", async () => {
+  const result = await compareGoldenFixture(phase13FixtureDirPath);
+
+  assert.deepEqual(result, {
+    ok: true,
+    files: result.ok ? result.files : [],
+  });
+});
+
+test("phase-13 expands useTemplate references preserving profile order", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const expanded = getEnabledSubagents(profileResult.profile);
+  assert.deepEqual(
+    expanded.map((agent) => agent.name),
+    ["implementer", "spec-reviewer", "code-quality-reviewer"],
+  );
+
+  const reordered: AiProfile = {
+    ...profileResult.profile,
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          defaults:
+            profileResult.profile.capabilities?.delegation?.subagents
+              ?.defaults,
+          agents: [
+            { useTemplate: "code-quality-reviewer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "implementer" },
+          ],
+        },
+      },
+    },
+  };
+  assert.deepEqual(
+    getEnabledSubagents(reordered).map((agent) => agent.name),
+    ["code-quality-reviewer", "spec-reviewer", "implementer"],
+  );
+});
+
+test("phase-13 expanded template contents match the spec verbatim", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const byName = new Map(
+    getEnabledSubagents(profileResult.profile).map((agent) => [
+      agent.name,
+      agent,
+    ]),
+  );
+
+  const implementer = byName.get("implementer");
+  assert.ok(implementer);
+  assert.equal(implementer.toolScope, "workspace-write");
+  assert.equal(implementer.modelPreference, "balanced");
+  assert.equal(implementer.maxTurns, 18);
+  assert.equal(implementer.timeoutMinutes, 20);
+  assert.deepEqual(implementer.mcpServers, []);
+  assert.equal(
+    implementer.prompt.startsWith("You are implementing one bounded task."),
+    true,
+  );
+  assert.equal(
+    implementer.prompt.includes(
+      "Status: DONE | DONE_WITH_CONCERNS | BLOCKED | NEEDS_CONTEXT",
+    ),
+    true,
+  );
+
+  const specReviewer = byName.get("spec-reviewer");
+  assert.ok(specReviewer);
+  assert.equal(specReviewer.toolScope, "read-only");
+  assert.equal(specReviewer.modelPreference, "capable");
+  assert.equal(specReviewer.maxTurns, 10);
+  assert.equal(specReviewer.timeoutMinutes, 8);
+  assert.equal(
+    specReviewer.prompt.includes(
+      "Status: COMPLIANT | ISSUES_FOUND | NEEDS_CONTEXT",
+    ),
+    true,
+  );
+
+  const codeQuality = byName.get("code-quality-reviewer");
+  assert.ok(codeQuality);
+  assert.equal(codeQuality.toolScope, "read-only");
+  assert.equal(codeQuality.modelPreference, "capable");
+  assert.equal(
+    codeQuality.prompt.includes(
+      "Status: ACCEPTABLE | ISSUES_FOUND | NEEDS_CONTEXT",
+    ),
+    true,
+  );
+});
+
+test("phase-13 expanded template objects are independent copies", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const first = getEnabledSubagents(profileResult.profile);
+  const second = getEnabledSubagents(profileResult.profile);
+
+  assert.notEqual(first[0], second[0]);
+  assert.deepEqual(first[0], second[0]);
+
+  // Mutating one expansion must not change later expansions.
+  first[0].prompt = "mutated";
+  const third = getEnabledSubagents(profileResult.profile);
+  assert.notEqual(third[0].prompt, "mutated");
+});
+
+test("phase-13 emits subagent-driven-change workflow skill for Codex and Claude", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const skillPaths = result.files
+    .filter((file) => file.path.endsWith("/subagent-driven-change/SKILL.md"))
+    .map((file) => file.path);
+
+  assert.deepEqual(skillPaths, [
+    ".agents/skills/subagent-driven-change/SKILL.md",
+    ".claude/skills/subagent-driven-change/SKILL.md",
+  ]);
+
+  for (const file of result.files.filter((f) =>
+    f.path.endsWith("/subagent-driven-change/SKILL.md"),
+  )) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+    assert.equal(text.includes("## Fresh Context"), true, file.path);
+
+    const flowSection = extractMarkdownSection(text, "## Flow");
+    const specReviewerIdx = flowSection.indexOf("spec-reviewer");
+    const codeQualityIdx = flowSection.indexOf("code-quality-reviewer");
+    assert.notEqual(specReviewerIdx, -1, `${file.path}: spec-reviewer in Flow`);
+    assert.notEqual(
+      codeQualityIdx,
+      -1,
+      `${file.path}: code-quality-reviewer in Flow`,
+    );
+    assert.equal(
+      specReviewerIdx < codeQualityIdx,
+      true,
+      `${file.path}: spec-reviewer must precede code-quality-reviewer in Flow`,
+    );
+
+    assert.equal(
+      text.includes(
+        "`DONE`, `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`",
+      ),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("`COMPLIANT`, `ISSUES_FOUND`, `NEEDS_CONTEXT`"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("`ACCEPTABLE`, `ISSUES_FOUND`, `NEEDS_CONTEXT`"),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("allowed-tools"), false, file.path);
+    assert.equal(text.includes("scripts/"), false, file.path);
+    assert.equal(text.includes("references/"), false, file.path);
+    assert.equal(text.includes("```!"), false, file.path);
+    assert.equal(text.includes("!`"), false, file.path);
+    assert.equal(text.split("\n").length < 300, true, file.path);
+  }
+});
+
+test("phase-13 workflow gate without required templates yields deterministic issue", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const profile: AiProfile = {
+    ...profileResult.profile,
+    workflow: {
+      ...profileResult.profile.workflow,
+      subagentDrivenDevelopment: true,
+    },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+
+  const issue = result.issues.find(
+    (i) => i.code === "missing_required_template_reference",
+  );
+  assert.ok(issue, JSON.stringify(result.issues, null, 2));
+  assert.equal(issue.path, "/workflow/subagentDrivenDevelopment");
+  assert.equal(
+    issue.actual.includes("implementer") &&
+      issue.actual.includes("spec-reviewer") &&
+      issue.actual.includes("code-quality-reviewer"),
+    true,
+  );
+});
+
+test("phase-13 workflow gate omitted does not emit subagent-driven-change skill", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const file of result.files) {
+    assert.equal(
+      file.path.endsWith("/subagent-driven-change/SKILL.md"),
+      false,
+      file.path,
+    );
+  }
+});
+
+test("phase-13 reviewers render read-only across all clients", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({ profile: profileResult.profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const file of result.files.filter(
+    (f) =>
+      f.path.startsWith(".claude/agents/spec-reviewer") ||
+      f.path.startsWith(".claude/agents/code-quality-reviewer"),
+  )) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+    assert.equal(text.includes("permissionMode: plan"), true, file.path);
+    assert.equal(text.includes("tools: Read, Glob, Grep"), true, file.path);
+    assert.equal(text.includes("Edit"), false, file.path);
+    assert.equal(text.includes("Write"), false, file.path);
+    assert.equal(text.includes("Bash"), false, file.path);
+  }
+
+  for (const file of result.files.filter(
+    (f) =>
+      f.path.startsWith(".codex/agents/spec-reviewer") ||
+      f.path.startsWith(".codex/agents/code-quality-reviewer"),
+  )) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+    assert.equal(text.includes('sandbox_mode = "read-only"'), true, file.path);
+  }
+});
+
+test("phase-13 generated templates contain no secret-like or unsafe content", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({ profile: profileResult.profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const templateFiles = result.files.filter(
+    (file) =>
+      file.path.startsWith(".claude/agents/") ||
+      file.path.startsWith(".codex/agents/") ||
+      file.path.endsWith("/subagent-driven-change/SKILL.md"),
+  );
+
+  const permissiveInstructions = [
+    "auto-approve",
+    "automatically commit",
+    "auto commit",
+    "auto-commit",
+    "bypassPermissions",
+    "danger-full-access",
+    'approval_policy = "never"',
+    "skip approval",
+    "skip review",
+    "ignore approval",
+    "upload the source",
+    "upload source code",
+    "exfiltrate",
+    "use production credentials",
+    "install dependencies automatically",
+  ];
+
+  for (const file of templateFiles) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+    const lower = text.toLowerCase();
+
+    assert.equal(containsSecretLikeLiteral(text), false, file.path);
+    assert.equal(text.includes("\r"), false, file.path);
+    assert.equal(text.endsWith("\n"), true, file.path);
+    assert.equal(text.endsWith("\n\n"), false, file.path);
+
+    for (const phrase of permissiveInstructions) {
+      assert.equal(
+        lower.includes(phrase.toLowerCase()),
+        false,
+        `${file.path}: unexpected permissive instruction "${phrase}"`,
+      );
+    }
+
+    // Source-upload / production / dependency-install / commit references are
+    // allowed *only* when they appear in a prohibitive sentence beginning with
+    // "Do not". Detect any other usage by stripping every `Do not …` sentence
+    // (sentences end at a period) and asserting the remainder is clean.
+    const withoutProhibitions = text.replace(/Do not[^.]*\./giu, "");
+    for (const term of [
+      "upload source",
+      "production system",
+      "production credential",
+      "commit, push",
+      "install dependencies",
+      "read secrets",
+    ]) {
+      assert.equal(
+        withoutProhibitions.toLowerCase().includes(term),
+        false,
+        `${file.path}: "${term}" appears outside a prohibitive sentence`,
+      );
+    }
+  }
+});
+
+test("phase-13 explicit subagentDrivenDevelopment:false omits the skill", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const off: AiProfile = {
+    ...profileResult.profile,
+    workflow: {
+      ...profileResult.profile.workflow,
+      subagentDrivenDevelopment: false,
+    },
+  };
+  const result = compileProfile({ profile: off });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const file of result.files) {
+    assert.equal(
+      file.path.endsWith("/subagent-driven-change/SKILL.md"),
+      false,
+      file.path,
+    );
+  }
+  for (const template of result.templates) {
+    assert.equal(
+      template.id.endsWith("/subagent-driven-change@1"),
+      false,
+      template.id,
+    );
+  }
+});
+
+test("phase-13 implementer downgrades when filesystem.write is deny", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const denyProfile: AiProfile = {
+    ...profileResult.profile,
+    safety: { mode: "plan-only" },
+    permissions: undefined,
+  };
+  const result = compileProfile({ profile: denyProfile });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+
+  assert.equal(
+    result.issues.some(
+      (issue) =>
+        issue.code === "unsafe_generated_content" &&
+        issue.path.endsWith("/implementer.md"),
+    ),
+    true,
+    JSON.stringify(result.issues, null, 2),
+  );
+});
+
+test("phase-13 disabling Codex or Claude omits that client's subagent-driven-change skill", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const codexOff: AiProfile = {
+    ...profileResult.profile,
+    clients: {
+      ...profileResult.profile.clients,
+      codex: { enabled: false },
+    },
+  };
+  const codexResult = compileProfile({ profile: codexOff });
+  assert.equal(codexResult.ok, true);
+  if (!codexResult.ok) return;
+
+  for (const file of codexResult.files) {
+    assert.equal(
+      file.path.startsWith(".agents/skills/") ||
+        file.path.startsWith(".codex/"),
+      false,
+      file.path,
+    );
+  }
+
+  const claudeOff: AiProfile = {
+    ...profileResult.profile,
+    clients: {
+      ...profileResult.profile.clients,
+      claude: { enabled: false },
+    },
+  };
+  const claudeResult = compileProfile({ profile: claudeOff });
+  assert.equal(claudeResult.ok, true);
+  if (!claudeResult.ok) return;
+
+  for (const file of claudeResult.files) {
+    assert.equal(
+      file.path.startsWith(".claude/"),
+      false,
+      file.path,
     );
   }
 });
