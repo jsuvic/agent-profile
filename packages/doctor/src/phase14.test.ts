@@ -323,6 +323,49 @@ test("phase-14 doctor reports LINT-SKILL-009 as warning across different runtime
   assert.ok(errors.length >= 0);
 });
 
+test("phase-14 doctor reports missing local-runtime lockfile entries as warnings, not errors", async () => {
+  const { rootDir } = await createMixedProject();
+  // Inject a generated-owned entry for a local-runtime path that isn't on
+  // disk, simulating a fresh checkout where .mcp.json has not yet been
+  // produced by compile --write.
+  const lockfileText = await readFile(
+    path.join(rootDir, "ai-profile.lock"),
+    "utf8",
+  );
+  const lockfile = JSON.parse(lockfileText) as {
+    outputs: Array<Record<string, unknown>>;
+  };
+  // Ensure a .mcp.json entry exists and remove the file.
+  const hasMcp = lockfile.outputs.some(
+    (output) => output.path === ".mcp.json",
+  );
+  if (!hasMcp) {
+    lockfile.outputs.push({
+      path: ".mcp.json",
+      target: "claude-mcp",
+      templateId: "targets/claude-mcp@1",
+      ownership: "generated-owned",
+      sha256:
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    });
+    lockfile.outputs.sort((a, b) =>
+      String(a.path).localeCompare(String(b.path)),
+    );
+    await writeFile(
+      path.join(rootDir, "ai-profile.lock"),
+      `${JSON.stringify(lockfile, null, 2)}\n`,
+    );
+  }
+  await rm(path.join(rootDir, ".mcp.json"), { force: true });
+
+  const result = await runDoctor({ rootDir });
+  const missing = result.issues.find(
+    (item) => item.code === "LINT-LOCK-006" && item.path === ".mcp.json",
+  );
+  assert.ok(missing);
+  assert.equal(missing!.severity, "warning");
+});
+
 test("phase-14 doctor includes precedence text expectation for mixed files", () => {
   // Quick sanity check on the exported constant: it must be a single
   // standalone sentence the spec requires inside the generated region.

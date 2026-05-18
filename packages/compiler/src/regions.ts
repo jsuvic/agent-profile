@@ -255,29 +255,32 @@ function computeByteOffsetAtLineStart(
 
 /**
  * Quick predicate: do any of the four region markers appear in the file?
- * Used to detect partial markers and choose ownership.
+ * Used to detect partial markers and choose ownership. Marker lines inside
+ * fenced code blocks (``` ... ``` / ~~~ ... ~~~) are not counted.
  */
 export function hasAnyRegionMarker(bytes: Buffer): boolean {
-  const text = bytes.toString("utf8");
-  return (
-    text.split(/\r?\n/u).some(
-      (line) =>
-        GENERATED_START_RE.test(line) ||
+  const lines = bytes.toString("utf8").split(/\r?\n/u);
+  const fence = computeCodeFenceMask(lines);
+  return lines.some(
+    (line, index) =>
+      !fence[index] &&
+      (GENERATED_START_RE.test(line) ||
         GENERATED_END_RE.test(line) ||
         MANUAL_START_RE.test(line) ||
-        MANUAL_END_RE.test(line),
-    )
+        MANUAL_END_RE.test(line)),
   );
 }
 
 export function hasAllRegionMarkers(bytes: Buffer): boolean {
-  const text = bytes.toString("utf8");
-  const lines = text.split(/\r?\n/u);
+  const lines = bytes.toString("utf8").split(/\r?\n/u);
+  const fence = computeCodeFenceMask(lines);
+  const present = (re: RegExp): boolean =>
+    lines.some((line, index) => !fence[index] && re.test(line));
   return (
-    lines.some((line) => GENERATED_START_RE.test(line)) &&
-    lines.some((line) => GENERATED_END_RE.test(line)) &&
-    lines.some((line) => MANUAL_START_RE.test(line)) &&
-    lines.some((line) => MANUAL_END_RE.test(line))
+    present(GENERATED_START_RE) &&
+    present(GENERATED_END_RE) &&
+    present(MANUAL_START_RE) &&
+    present(MANUAL_END_RE)
   );
 }
 
@@ -332,32 +335,48 @@ export function replaceGeneratedRegion(
   const parsed = parseMixedFile(existing);
   if (!parsed.ok) return undefined;
 
+  // Walk the file line-by-line tracking exact byte offsets and each line's
+  // actual ending (LF or CRLF). Using `GENERATED_START_MARKER + "\n"` to
+  // compute the inner-start offset would drop a byte on CRLF-marker files
+  // and corrupt the result, so we use the on-disk line ending instead.
   const text = existing.toString("utf8");
-  const lines = text.split("\n");
-  // Find marker line offsets in raw text.
   let cursor = 0;
-  let generatedStartLineStart = -1;
-  let generatedEndLineStart = -1;
-  for (const line of lines) {
-    const cleaned = line.endsWith("\r") ? line.slice(0, -1) : line;
-    if (cleaned === GENERATED_START_MARKER && generatedStartLineStart === -1) {
-      generatedStartLineStart = cursor;
+  let position = 0;
+  let generatedStartInnerByte = -1;
+  let generatedEndLineStartByte = -1;
+
+  while (position < text.length) {
+    const newlineIndex = text.indexOf("\n", position);
+    const hasNewline = newlineIndex !== -1;
+    let lineEnd = hasNewline ? newlineIndex : text.length;
+    let endingLength = 0;
+    if (hasNewline) {
+      endingLength = 1;
+      if (lineEnd > position && text[lineEnd - 1] === "\r") {
+        lineEnd -= 1;
+        endingLength = 2;
+      }
     }
-    if (cleaned === GENERATED_END_MARKER && generatedEndLineStart === -1) {
-      generatedEndLineStart = cursor;
+    const line = text.slice(position, lineEnd);
+    const lineBytes = Buffer.byteLength(line, "utf8");
+
+    if (line === GENERATED_START_MARKER && generatedStartInnerByte === -1) {
+      generatedStartInnerByte = cursor + lineBytes + endingLength;
     }
-    cursor += Buffer.byteLength(line, "utf8") + 1;
+    if (line === GENERATED_END_MARKER && generatedEndLineStartByte === -1) {
+      generatedEndLineStartByte = cursor;
+    }
+
+    cursor += lineBytes + endingLength;
+    position = hasNewline ? newlineIndex + 1 : text.length;
   }
 
-  if (generatedStartLineStart === -1 || generatedEndLineStart === -1) {
+  if (generatedStartInnerByte === -1 || generatedEndLineStartByte === -1) {
     return undefined;
   }
 
-  const startInnerByte = generatedStartLineStart +
-    Buffer.byteLength(`${GENERATED_START_MARKER}\n`, "utf8");
-
-  const before = existing.subarray(0, startInnerByte);
-  const after = existing.subarray(generatedEndLineStart);
+  const before = existing.subarray(0, generatedStartInnerByte);
+  const after = existing.subarray(generatedEndLineStartByte);
 
   return Buffer.concat([before, newGeneratedInner, after]);
 }

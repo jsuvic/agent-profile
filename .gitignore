@@ -26,11 +26,14 @@ Thumbs.db
 .DS_Store
 
 # CCE and local agent runtime files (per-machine, not source)
+# Phase 14 spec: .claude/settings.json and .claude/skills/ are tracked
+# generated outputs. .claude/settings.local.json, .mcp.json,
+# .codex/config.toml, and .codex/hooks.json are local runtime / per-machine.
 .cce/
 .mcp.json
 !fixtures/**/expected/.mcp.json
 .claude/settings.local.json
-.claude/settings.json
+.claude/scheduled_tasks.lock
 .claude/worktrees/
 .codex/config.toml
 .codex/hooks.json

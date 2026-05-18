@@ -1443,6 +1443,12 @@ function emitInitOutput(
   report: InitReport,
 ): void {
   if (parsed.json) {
+    // Phase 14: when --import is used, the JSON contract is the ImportReport
+    // itself (top-level). Non-import init keeps the existing init summary.
+    if (parsed.importExisting && report.import) {
+      io.stdout(`${JSON.stringify(report.import)}\n`);
+      return;
+    }
     io.stdout(`${JSON.stringify(toInitJson(report))}\n`);
     return;
   }
@@ -2079,6 +2085,42 @@ function formatWritePlan(
   return `${lines.join("\n").replace(/\n*$/u, "")}\n`;
 }
 
+function formatPhase14ImportReportLines(report: Phase14ImportReport): string[] {
+  const lines: string[] = ["", "Phase 14 import report:"];
+  lines.push(`  command: ${report.command}`);
+  lines.push(`  strategy: ${report.strategy}`);
+  lines.push(`  mode: ${report.mode}`);
+  lines.push(`  root: ${report.root}`);
+  lines.push(`  profile: ${report.profilePath}`);
+  lines.push(
+    `  stack: languages=[${report.stack.languages.join(", ")}] frameworks=[${report.stack.frameworks.join(", ")}] packageManagers=[${report.stack.packageManagers.join(", ")}] testing=[${report.stack.testing.join(", ")}]`,
+  );
+  if (report.files.length > 0) {
+    lines.push("  files:");
+    for (const finding of report.files) {
+      const tags = finding.tags.length > 0 ? ` [${finding.tags.join(", ")}]` : "";
+      lines.push(
+        `    - ${finding.path} (${finding.kind}, ${finding.ownership}, action=${finding.action})${tags}`,
+      );
+      for (const note of finding.notes) {
+        lines.push(`        note: ${note}`);
+      }
+    }
+  }
+  if (report.gitignore.length > 0) {
+    lines.push("  gitignore:");
+    for (const finding of report.gitignore) {
+      lines.push(
+        `    - ${finding.line}: ${finding.action} (${finding.reason})`,
+      );
+    }
+  }
+  lines.push(
+    `  summary: wouldCreateProfile=${report.summary.wouldCreateProfile} wouldUpdateRegions=${report.summary.wouldUpdateRegions} preservedManualFiles=${report.summary.preservedManualFiles} conflicts=${report.summary.conflicts}`,
+  );
+  return lines;
+}
+
 function formatInitText(input: InitReport): string {
   const lines: string[] = [];
 
@@ -2100,6 +2142,10 @@ function formatInitText(input: InitReport): string {
 
     if (input.ignoredClientFlags) {
       lines.push("client flags ignored: init does not edit existing profiles.");
+    }
+
+    if (input.import) {
+      lines.push(...formatPhase14ImportReportLines(input.import));
     }
 
     lines.push(
@@ -2144,37 +2190,7 @@ function formatInitText(input: InitReport): string {
   }
 
   if (input.import) {
-    lines.push("", "Phase 14 import report:");
-    lines.push(`  strategy: ${input.import.strategy}`);
-    lines.push(`  mode: ${input.import.mode}`);
-    lines.push(`  root: ${input.import.root}`);
-    lines.push(`  profile: ${input.import.profilePath}`);
-    lines.push(
-      `  stack: languages=[${input.import.stack.languages.join(", ")}] frameworks=[${input.import.stack.frameworks.join(", ")}] packageManagers=[${input.import.stack.packageManagers.join(", ")}] testing=[${input.import.stack.testing.join(", ")}]`,
-    );
-    if (input.import.files.length > 0) {
-      lines.push("  files:");
-      for (const finding of input.import.files) {
-        const tags = finding.tags.length > 0 ? ` [${finding.tags.join(", ")}]` : "";
-        lines.push(
-          `    - ${finding.path} (${finding.kind}, ${finding.ownership}, action=${finding.action})${tags}`,
-        );
-        for (const note of finding.notes) {
-          lines.push(`        note: ${note}`);
-        }
-      }
-    }
-    if (input.import.gitignore.length > 0) {
-      lines.push("  gitignore:");
-      for (const finding of input.import.gitignore) {
-        lines.push(
-          `    - ${finding.line}: ${finding.action} (${finding.reason})`,
-        );
-      }
-    }
-    lines.push(
-      `  summary: wouldCreateProfile=${input.import.summary.wouldCreateProfile} wouldUpdateRegions=${input.import.summary.wouldUpdateRegions} preservedManualFiles=${input.import.summary.preservedManualFiles} conflicts=${input.import.summary.conflicts}`,
-    );
+    lines.push(...formatPhase14ImportReportLines(input.import));
   }
 
   lines.push(
@@ -2445,17 +2461,64 @@ type Phase14ImportInput = {
   stack: DetectedStack;
 };
 
-const PHASE_14_SUPPORTED_PATHS: Array<{
+type Phase14SupportedPath = {
   path: string;
   kind: Phase14ImportFileFinding["kind"];
+  isLocalRuntime: boolean;
+};
+
+const PHASE_14_SUPPORTED_PATHS: Phase14SupportedPath[] = [
+  { path: "AGENTS.md", kind: "root-instructions", isLocalRuntime: false },
+  { path: "CLAUDE.md", kind: "root-instructions", isLocalRuntime: false },
+  // .claude/settings.json is generated client config per the Phase 14 spec
+  // and must be classified separately from .claude/settings.local.json.
+  { path: ".claude/settings.json", kind: "client-config", isLocalRuntime: false },
+  {
+    path: ".claude/settings.local.json",
+    kind: "client-config",
+    isLocalRuntime: true,
+  },
+  { path: ".codex/config.toml", kind: "client-config", isLocalRuntime: true },
+  { path: ".codex/hooks.json", kind: "client-config", isLocalRuntime: true },
+  { path: ".mcp.json", kind: "mcp-config", isLocalRuntime: true },
+];
+
+const PHASE_14_SCAN_DIRS: Array<{
+  root: string;
+  kind: Phase14ImportFileFinding["kind"];
+  fileFilter: (relativePath: string) => boolean;
+  recursive: boolean;
 }> = [
-  { path: "AGENTS.md", kind: "root-instructions" },
-  { path: "CLAUDE.md", kind: "root-instructions" },
-  { path: ".claude/settings.json", kind: "client-config" },
-  { path: ".claude/settings.local.json", kind: "client-config" },
-  { path: ".codex/config.toml", kind: "client-config" },
-  { path: ".codex/hooks.json", kind: "client-config" },
-  { path: ".mcp.json", kind: "mcp-config" },
+  {
+    root: ".agents/skills",
+    kind: "workflow-skill",
+    fileFilter: (rel) => rel.endsWith("/SKILL.md"),
+    recursive: true,
+  },
+  {
+    root: ".claude/skills",
+    kind: "workflow-skill",
+    fileFilter: (rel) => rel.endsWith("/SKILL.md"),
+    recursive: true,
+  },
+  {
+    root: ".claude/agents",
+    kind: "subagent",
+    fileFilter: (rel) => rel.endsWith(".md"),
+    recursive: false,
+  },
+  {
+    root: ".codex/agents",
+    kind: "subagent",
+    fileFilter: (rel) => rel.endsWith(".toml"),
+    recursive: false,
+  },
+  {
+    root: ".tabnine/agent/agents",
+    kind: "subagent",
+    fileFilter: (rel) => rel.endsWith(".md"),
+    recursive: false,
+  },
 ];
 
 async function buildPhase14ImportReport(
@@ -2500,11 +2563,30 @@ async function buildPhase14ImportReport(
 
     const bytes = Buffer.from(existing);
     const tags: Phase14ImportFileFinding["tags"] = [];
-    if (entry.kind === "client-config" || entry.kind === "mcp-config") {
+    if (entry.isLocalRuntime) {
       tags.push("local-runtime");
     }
     if (containsAbsolutePathLiteral(bytes)) {
       tags.push("contains-absolute-path");
+    }
+
+    if (entry.kind === "client-config" && !entry.isLocalRuntime) {
+      // .claude/settings.json is generated client config. We do not adopt or
+      // mutate it from init, but we report it as preserved rather than
+      // local-runtime so callers can compile/refresh it without confusion.
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "generated-owned",
+        tags,
+        action: "preserve",
+        notes: [
+          "generated client config; refresh via `agent-profile compile --write`",
+        ],
+      });
+      preservedManualFiles += 1;
+      continue;
     }
 
     if (entry.kind !== "root-instructions") {
@@ -2601,6 +2683,47 @@ async function buildPhase14ImportReport(
     }
   }
 
+  for (const scan of PHASE_14_SCAN_DIRS) {
+    const discovered = await listFilesUnder(
+      input.rootDir,
+      scan.root,
+      scan.recursive,
+    );
+    for (const relativePath of discovered) {
+      if (!scan.fileFilter(relativePath)) continue;
+      const read = await readRegionAwareFile(input.rootDir, relativePath);
+      const tags: Phase14ImportFileFinding["tags"] = [];
+      if (read.refused) {
+        files.push({
+          path: relativePath,
+          exists: true,
+          kind: scan.kind,
+          ownership: "unknown",
+          tags,
+          action: "refuse-conflict",
+          notes: ["symlinked; Phase 14 refuses to follow file symlinks"],
+        });
+        conflicts += 1;
+        continue;
+      }
+      if (!read.bytes) continue;
+      files.push({
+        path: relativePath,
+        exists: true,
+        kind: scan.kind,
+        ownership: "manual-owned",
+        tags,
+        action: "preserve",
+        notes: [
+          scan.kind === "workflow-skill"
+            ? "existing workflow skill; not adopted as generated output"
+            : "existing subagent file; not adopted as generated output",
+        ],
+      });
+      preservedManualFiles += 1;
+    }
+  }
+
   const gitignoreFindings = await getLocalRuntimeGitignoreFindings(
     input.rootDir,
   );
@@ -2641,6 +2764,43 @@ async function buildPhase14ImportReport(
       conflicts,
     },
   };
+}
+
+async function listFilesUnder(
+  rootDir: string,
+  relativeRoot: string,
+  recursive: boolean,
+): Promise<string[]> {
+  const results: string[] = [];
+  await walk(rootDir, relativeRoot, recursive, results);
+  return results.sort();
+}
+
+async function walk(
+  rootDir: string,
+  relativeRoot: string,
+  recursive: boolean,
+  out: string[],
+): Promise<void> {
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fsPromises.readdir(path.join(rootDir, relativeRoot), {
+      withFileTypes: true,
+    });
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return;
+    throw error;
+  }
+  for (const entry of entries) {
+    const child = `${relativeRoot}/${entry.name}`;
+    if (entry.isDirectory() && recursive) {
+      await walk(rootDir, child, recursive, out);
+      continue;
+    }
+    if (entry.isFile()) {
+      out.push(child);
+    }
+  }
 }
 
 function containsAbsolutePathLiteral(bytes: Buffer): boolean {

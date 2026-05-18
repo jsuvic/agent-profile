@@ -267,6 +267,52 @@ test("phase-14 region parser refuses missing trailing newline", () => {
   assert.equal(result.issues[0]?.code, "missing-trailing-newline");
 });
 
+test("phase-14 ownership helpers ignore markers inside fenced code blocks", () => {
+  const text =
+    "# Manual file documenting markers\n" +
+    "```\n" +
+    `${GENERATED_START_MARKER}\n` +
+    `${GENERATED_END_MARKER}\n` +
+    `${MANUAL_START_MARKER}\n` +
+    `${MANUAL_END_MARKER}\n` +
+    "```\n";
+  const bytes = Buffer.from(text, "utf8");
+  // Fenced markers must not be counted as ownership markers.
+  assert.equal(hasAnyRegionMarker(bytes), false);
+  assert.equal(hasAllRegionMarkers(bytes), false);
+});
+
+test("phase-14 replaceGeneratedRegion preserves CRLF marker line endings", () => {
+  const manual = "# Manual\r\n\r\nManual rules.\r\n";
+  // Construct a mixed file using CRLF line endings on every line, including
+  // markers. parseMixedFile accepts these; replaceGeneratedRegion must too.
+  const crlfMixed = Buffer.from(
+    `${GENERATED_START_MARKER}\r\n` +
+      `stale generated\r\n` +
+      `${GENERATED_END_MARKER}\r\n` +
+      `\r\n` +
+      `${MANUAL_START_MARKER}\r\n` +
+      `${manual}` +
+      `${MANUAL_END_MARKER}\r\n`,
+    "utf8",
+  );
+  const parsedBefore = parseMixedFile(crlfMixed);
+  assert.equal(parsedBefore.ok, true);
+
+  const updated = replaceGeneratedRegion(
+    crlfMixed,
+    Buffer.from("updated generated\n", "utf8"),
+  );
+  assert.ok(updated);
+
+  // The post-update file must still parse cleanly and the manual region
+  // bytes must be preserved exactly.
+  const parsedAfter = parseMixedFile(updated);
+  assert.equal(parsedAfter.ok, true);
+  if (!parsedAfter.ok) return;
+  assert.equal(parsedAfter.manualInner.toString("utf8"), manual);
+});
+
 test("phase-14 region parser ignores marker lines inside fenced code blocks", () => {
   const text = `${GENERATED_START_MARKER}\n` +
     "Example:\n" +

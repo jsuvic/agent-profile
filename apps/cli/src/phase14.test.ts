@@ -320,7 +320,7 @@ test("phase-14 init --import --strategy regions refuses partial markers", async 
   assert.match(output.stderrText(), /partial-markers|Refusing to adopt/u);
 });
 
-test("phase-14 init --import emits Phase 14 ImportReport JSON shape", async () => {
+test("phase-14 init --import emits ImportReport JSON shape at the top level", async () => {
   const rootDir = await createRoot();
   await writeFile(
     path.join(rootDir, "AGENTS.md"),
@@ -335,18 +335,79 @@ test("phase-14 init --import emits Phase 14 ImportReport JSON shape", async () =
 
   assert.notEqual(code, 2);
   const parsed = JSON.parse(output.stdoutText()) as Record<string, unknown>;
-  const importReport = parsed.import as Record<string, unknown> | undefined;
-  assert.ok(importReport, "import report present in JSON output");
-  assert.equal(importReport!.command, "init");
-  assert.equal(importReport!.strategy, "regions");
-  assert.equal(typeof importReport!.profilePath, "string");
-  assert.ok(Array.isArray(importReport!.files));
-  assert.ok(Array.isArray(importReport!.gitignore));
-  const summary = importReport!.summary as Record<string, unknown>;
+  // Phase 14 spec: JSON mode uses ImportReport as the top-level shape.
+  assert.equal(parsed.command, "init");
+  assert.equal(parsed.strategy, "regions");
+  assert.equal(typeof parsed.profilePath, "string");
+  assert.ok(typeof parsed.root === "string");
+  assert.ok(parsed.stack && typeof parsed.stack === "object");
+  assert.ok(Array.isArray(parsed.files));
+  assert.ok(Array.isArray(parsed.gitignore));
+  const summary = parsed.summary as Record<string, unknown>;
   assert.equal(typeof summary.wouldCreateProfile, "boolean");
   assert.equal(typeof summary.wouldUpdateRegions, "number");
   assert.equal(typeof summary.preservedManualFiles, "number");
   assert.equal(typeof summary.conflicts, "number");
+});
+
+test("phase-14 ImportReport scans skill/subagent dirs and classifies .claude/settings.json as generated", async () => {
+  const rootDir = await createRoot();
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(path.join(rootDir, ".claude/skills/custom"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, ".claude/skills/custom/SKILL.md"),
+    "---\nname: custom-skill\ndescription: User skill.\n---\nbody\n",
+  );
+  await mkdir(path.join(rootDir, ".claude"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, ".claude/settings.json"),
+    "{}\n",
+  );
+  await mkdir(path.join(rootDir, ".tabnine/agent/agents"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, ".tabnine/agent/agents/foo.md"),
+    "---\nname: foo\ndescription: x\n---\nbody\n",
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--import", "--json"],
+    output,
+  );
+
+  assert.notEqual(code, 2);
+  const parsed = JSON.parse(output.stdoutText()) as {
+    files: Array<{
+      path: string;
+      kind: string;
+      ownership: string;
+      tags: string[];
+      action: string;
+    }>;
+  };
+  const skill = parsed.files.find(
+    (f) => f.path === ".claude/skills/custom/SKILL.md",
+  );
+  assert.ok(skill, "workflow skill is reported");
+  assert.equal(skill!.kind, "workflow-skill");
+
+  const tabnineSub = parsed.files.find(
+    (f) => f.path === ".tabnine/agent/agents/foo.md",
+  );
+  assert.ok(tabnineSub, "tabnine subagent is reported");
+  assert.equal(tabnineSub!.kind, "subagent");
+
+  const claudeSettings = parsed.files.find(
+    (f) => f.path === ".claude/settings.json",
+  );
+  assert.ok(claudeSettings, ".claude/settings.json is reported");
+  // The Phase 14 spec mandates this is NOT classified as local-runtime.
+  assert.equal(
+    claudeSettings!.tags.includes("local-runtime"),
+    false,
+    "claude/settings.json must not carry the local-runtime tag",
+  );
+  assert.equal(claudeSettings!.ownership, "generated-owned");
 });
 
 test("phase-14 compile preserves CRLF manual bytes verbatim and stores LF region hash", async () => {
