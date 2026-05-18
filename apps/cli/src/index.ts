@@ -25,6 +25,7 @@ import {
   GENERATED_START_MARKER,
   hasAllRegionMarkers,
   hasAnyRegionMarker,
+  hasLegacyGeneratedMarker,
   type CompilerTargetId,
   type GeneratedFile,
   type LockOutputV2,
@@ -553,11 +554,18 @@ async function runInit(
         { sourcePath: safeProfilePath.path },
       );
       if (parsedProfile.ok) {
-        const adoptions = await planRegionAdoptions(rootDir, parsedProfile.profile);
-        if (adoptions.length > 0) {
+        const result = await planRegionAdoptions(
+          rootDir,
+          parsedProfile.profile,
+        );
+        if (result.refusals.length > 0) {
+          io.stderr(formatRegionAdoptionRefusals(result.refusals));
+          return 3;
+        }
+        if (result.adoptions.length > 0) {
           await applyWritePlan({
             rootDir,
-            writes: adoptions.map((adoption) => ({
+            writes: result.adoptions.map((adoption) => ({
               path: adoption.path,
               bytes: adoption.bytes,
             })),
@@ -580,6 +588,24 @@ async function runInit(
       }
     }
 
+    let importReport: Phase14ImportReport | undefined;
+    if (parsed.importExisting) {
+      const parsedProfile = parseProfileYaml(
+        Buffer.from(existingProfileBytes).toString("utf8"),
+        { sourcePath: safeProfilePath.path },
+      );
+      const existingStack = await detectStack(rootDir);
+      importReport = await buildPhase14ImportReport({
+        rootDir,
+        mode: parsed.write ? "write" : "dry-run",
+        strategy: parsed.strategy,
+        profilePath: safeProfilePath.path,
+        profile: parsedProfile.ok ? parsedProfile.profile : undefined,
+        wouldCreateProfile: false,
+        stack: existingStack.stack,
+      });
+    }
+
     emitInitOutput(parsed, io, {
       mode: parsed.write ? "write" : "dry-run",
       status: "ok",
@@ -595,6 +621,7 @@ async function runInit(
       stackWarnings: [],
       importFindings: [],
       gitignoreSuggestions: [],
+      ...(importReport ? { import: importReport } : {}),
     });
     return 0;
   }
@@ -653,8 +680,9 @@ async function runInit(
 
   let regionAdoptions: RegionAdoption[] = [];
   if (parsed.importExisting && parsed.strategy === "regions") {
+    let result: RegionAdoptionResult;
     try {
-      regionAdoptions = await planRegionAdoptions(rootDir, validation.profile);
+      result = await planRegionAdoptions(rootDir, validation.profile);
     } catch (error) {
       const reason = classifyInitWriteFailure(error);
       emitInitOutput(
@@ -671,6 +699,12 @@ async function runInit(
       return 1;
     }
 
+    if (result.refusals.length > 0) {
+      io.stderr(formatRegionAdoptionRefusals(result.refusals));
+      return 3;
+    }
+
+    regionAdoptions = result.adoptions;
     for (const adoption of regionAdoptions) {
       writes.push({ path: adoption.path, bytes: adoption.bytes });
     }
@@ -755,6 +789,19 @@ async function runInit(
     }
   }
 
+  let importReport: Phase14ImportReport | undefined;
+  if (parsed.importExisting) {
+    importReport = await buildPhase14ImportReport({
+      rootDir,
+      mode: parsed.write ? "write" : "dry-run",
+      strategy: parsed.strategy,
+      profilePath: safeProfilePath.path,
+      profile: validation.profile,
+      wouldCreateProfile: !parsed.write,
+      stack: stackResult.stack,
+    });
+  }
+
   emitInitOutput(parsed, io, {
     mode: parsed.write ? "write" : "dry-run",
     status: "ok",
@@ -769,6 +816,7 @@ async function runInit(
     stackWarnings: stackResult.warnings,
     importFindings: importResult?.findings ?? [],
     gitignoreSuggestions: suggestions,
+    ...(importReport ? { import: importReport } : {}),
   });
   return 0;
 }
@@ -1303,10 +1351,62 @@ type InitReport = {
   importFindings: ArtifactFinding[];
   gitignoreSuggestions: string[];
   ignoredClientFlags?: boolean;
+  import?: Phase14ImportReport;
   error?: {
     code: InitFailureReason;
     message: string;
   };
+};
+
+type Phase14ImportReport = {
+  command: "init";
+  mode: "dry-run" | "write";
+  strategy: ImportStrategy;
+  root: string;
+  profilePath: string;
+  stack: {
+    languages: string[];
+    frameworks: string[];
+    packageManagers: string[];
+    testing: string[];
+  };
+  files: Phase14ImportFileFinding[];
+  gitignore: Phase14GitignoreFinding[];
+  summary: {
+    wouldCreateProfile: boolean;
+    wouldUpdateRegions: number;
+    preservedManualFiles: number;
+    conflicts: number;
+  };
+};
+
+type Phase14ImportFileFinding = {
+  path: string;
+  exists: boolean;
+  kind:
+    | "root-instructions"
+    | "workflow-skill"
+    | "subagent"
+    | "client-config"
+    | "mcp-config"
+    | "unknown";
+  ownership: "generated-owned" | "mixed" | "manual-owned" | "unknown";
+  tags: Array<"generated-looking" | "contains-absolute-path" | "local-runtime">;
+  action:
+    | "create"
+    | "preserve"
+    | "insert-regions"
+    | "update-generated-region"
+    | "refuse-conflict"
+    | "ignore-local-runtime";
+  notes: string[];
+};
+
+type Phase14GitignoreFinding = {
+  path: ".gitignore";
+  line: string;
+  action: "already-present" | "suggest-add" | "would-add";
+  reason: string;
 };
 
 function createInitRefusal(input: {
@@ -1373,6 +1473,10 @@ function toInitJson(report: InitReport): Record<string, unknown> {
 
   if (report.error) {
     summary.error = report.error;
+  }
+
+  if (report.import) {
+    summary.import = report.import;
   }
 
   return summary;
@@ -2039,6 +2143,40 @@ function formatInitText(input: InitReport): string {
     }
   }
 
+  if (input.import) {
+    lines.push("", "Phase 14 import report:");
+    lines.push(`  strategy: ${input.import.strategy}`);
+    lines.push(`  mode: ${input.import.mode}`);
+    lines.push(`  root: ${input.import.root}`);
+    lines.push(`  profile: ${input.import.profilePath}`);
+    lines.push(
+      `  stack: languages=[${input.import.stack.languages.join(", ")}] frameworks=[${input.import.stack.frameworks.join(", ")}] packageManagers=[${input.import.stack.packageManagers.join(", ")}] testing=[${input.import.stack.testing.join(", ")}]`,
+    );
+    if (input.import.files.length > 0) {
+      lines.push("  files:");
+      for (const finding of input.import.files) {
+        const tags = finding.tags.length > 0 ? ` [${finding.tags.join(", ")}]` : "";
+        lines.push(
+          `    - ${finding.path} (${finding.kind}, ${finding.ownership}, action=${finding.action})${tags}`,
+        );
+        for (const note of finding.notes) {
+          lines.push(`        note: ${note}`);
+        }
+      }
+    }
+    if (input.import.gitignore.length > 0) {
+      lines.push("  gitignore:");
+      for (const finding of input.import.gitignore) {
+        lines.push(
+          `    - ${finding.line}: ${finding.action} (${finding.reason})`,
+        );
+      }
+    }
+    lines.push(
+      `  summary: wouldCreateProfile=${input.import.summary.wouldCreateProfile} wouldUpdateRegions=${input.import.summary.wouldUpdateRegions} preservedManualFiles=${input.import.summary.preservedManualFiles} conflicts=${input.import.summary.conflicts}`,
+    );
+  }
+
   lines.push(
     "",
     input.wrote
@@ -2185,19 +2323,36 @@ type GitignoreFinding = {
   reason: string;
 };
 
+type RegionAdoptionRefusal = {
+  path: string;
+  reason: "partial-markers" | "duplicate-markers" | "symlink";
+};
+
+type RegionAdoptionResult = {
+  adoptions: RegionAdoption[];
+  refusals: RegionAdoptionRefusal[];
+};
+
 async function planRegionAdoptions(
   rootDir: string,
   profile: AiProfile,
-): Promise<RegionAdoption[]> {
+): Promise<RegionAdoptionResult> {
   const compileResult = compileProfile({ profile });
-  if (!compileResult.ok) return [];
+  if (!compileResult.ok) return { adoptions: [], refusals: [] };
 
   const adoptions: RegionAdoption[] = [];
+  const refusals: RegionAdoptionRefusal[] = [];
 
   for (const file of compileResult.files) {
     if (file.path !== "AGENTS.md" && file.path !== "CLAUDE.md") continue;
 
-    const existing = await readOptionalBytes(rootDir, file.path);
+    const read = await readRegionAwareFile(rootDir, file.path);
+    if (read.refused) {
+      refusals.push({ path: file.path, reason: "symlink" });
+      continue;
+    }
+
+    const existing = read.bytes;
     if (!existing) continue;
 
     const existingBuffer = Buffer.from(existing);
@@ -2208,12 +2363,14 @@ async function planRegionAdoptions(
       );
       if (updated) {
         adoptions.push({ path: file.path, bytes: updated });
+      } else {
+        refusals.push({ path: file.path, reason: "duplicate-markers" });
       }
       continue;
     }
 
     if (hasAnyRegionMarker(existingBuffer)) {
-      // Partial markers: refuse to repair automatically.
+      refusals.push({ path: file.path, reason: "partial-markers" });
       continue;
     }
 
@@ -2224,7 +2381,7 @@ async function planRegionAdoptions(
     adoptions.push({ path: file.path, bytes: mixed });
   }
 
-  return adoptions;
+  return { adoptions, refusals };
 }
 
 async function getLocalRuntimeGitignoreFindings(
@@ -2271,8 +2428,265 @@ async function appendMissingGitignoreLines(
 
 type RegionAwareRefusal = {
   path: string;
-  reason: "partial-markers" | "duplicate-markers" | "unknown-ownership";
+  reason:
+    | "partial-markers"
+    | "duplicate-markers"
+    | "unknown-ownership"
+    | "symlink";
 };
+
+type Phase14ImportInput = {
+  rootDir: string;
+  mode: "dry-run" | "write";
+  strategy: ImportStrategy;
+  profilePath: string;
+  profile: AiProfile | undefined;
+  wouldCreateProfile: boolean;
+  stack: DetectedStack;
+};
+
+const PHASE_14_SUPPORTED_PATHS: Array<{
+  path: string;
+  kind: Phase14ImportFileFinding["kind"];
+}> = [
+  { path: "AGENTS.md", kind: "root-instructions" },
+  { path: "CLAUDE.md", kind: "root-instructions" },
+  { path: ".claude/settings.json", kind: "client-config" },
+  { path: ".claude/settings.local.json", kind: "client-config" },
+  { path: ".codex/config.toml", kind: "client-config" },
+  { path: ".codex/hooks.json", kind: "client-config" },
+  { path: ".mcp.json", kind: "mcp-config" },
+];
+
+async function buildPhase14ImportReport(
+  input: Phase14ImportInput,
+): Promise<Phase14ImportReport> {
+  const files: Phase14ImportFileFinding[] = [];
+  let wouldUpdateRegions = 0;
+  let preservedManualFiles = 0;
+  let conflicts = 0;
+
+  for (const entry of PHASE_14_SUPPORTED_PATHS) {
+    const read = await readRegionAwareFile(input.rootDir, entry.path);
+    if (read.refused) {
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "unknown",
+        tags: [],
+        action: "refuse-conflict",
+        notes: ["symlinked; Phase 14 refuses to follow file symlinks"],
+      });
+      conflicts += 1;
+      continue;
+    }
+
+    const existing = read.bytes;
+    if (!existing) {
+      if (entry.kind === "root-instructions") {
+        files.push({
+          path: entry.path,
+          exists: false,
+          kind: entry.kind,
+          ownership: "unknown",
+          tags: [],
+          action: "create",
+          notes: [],
+        });
+      }
+      continue;
+    }
+
+    const bytes = Buffer.from(existing);
+    const tags: Phase14ImportFileFinding["tags"] = [];
+    if (entry.kind === "client-config" || entry.kind === "mcp-config") {
+      tags.push("local-runtime");
+    }
+    if (containsAbsolutePathLiteral(bytes)) {
+      tags.push("contains-absolute-path");
+    }
+
+    if (entry.kind !== "root-instructions") {
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "manual-owned",
+        tags,
+        action: "ignore-local-runtime",
+        notes:
+          entry.kind === "mcp-config"
+            ? [
+                "contains MCP entries; not imported into ai-profile.yaml in Phase 14",
+              ]
+            : ["local runtime config; not adopted by Phase 14"],
+      });
+      preservedManualFiles += 1;
+      continue;
+    }
+
+    if (hasAllRegionMarkers(bytes)) {
+      const parsed = parseMixedFile(bytes);
+      if (!parsed.ok) {
+        files.push({
+          path: entry.path,
+          exists: true,
+          kind: entry.kind,
+          ownership: "unknown",
+          tags,
+          action: "refuse-conflict",
+          notes: parsed.issues.map((item) => item.message),
+        });
+        conflicts += 1;
+        continue;
+      }
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "mixed",
+        tags,
+        action: "update-generated-region",
+        notes: [],
+      });
+      if (input.strategy === "regions") {
+        wouldUpdateRegions += 1;
+      }
+      continue;
+    }
+
+    if (hasAnyRegionMarker(bytes)) {
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "unknown",
+        tags,
+        action: "refuse-conflict",
+        notes: ["partial region markers; manual repair required"],
+      });
+      conflicts += 1;
+      continue;
+    }
+
+    if (hasLegacyGeneratedMarker(bytes)) {
+      tags.push("generated-looking");
+    }
+
+    if (input.strategy === "regions") {
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "unknown",
+        tags,
+        action: "insert-regions",
+        notes: ["existing content will be preserved in manual region"],
+      });
+      wouldUpdateRegions += 1;
+    } else {
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "unknown",
+        tags,
+        action: "preserve",
+        notes: [
+          "Run init --import --strategy regions --write to adopt into mixed ownership",
+        ],
+      });
+      preservedManualFiles += 1;
+    }
+  }
+
+  const gitignoreFindings = await getLocalRuntimeGitignoreFindings(
+    input.rootDir,
+  );
+  const gitignore: Phase14GitignoreFinding[] = gitignoreFindings.map(
+    (finding) => ({
+      path: ".gitignore",
+      line: finding.line,
+      action:
+        finding.action === "already-present"
+          ? "already-present"
+          : input.mode === "write"
+            ? "would-add"
+            : "suggest-add",
+      reason: finding.reason,
+    }),
+  );
+
+  return {
+    command: "init",
+    mode: input.mode,
+    strategy: input.strategy,
+    root: ".",
+    profilePath: input.profilePath,
+    stack: {
+      languages: [...input.stack.languages].sort(),
+      frameworks: [...input.stack.frameworks].sort(),
+      packageManagers: [...input.stack.packageManagers].sort(),
+      testing: [...input.stack.testing].sort(),
+    },
+    files: files.sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+    ),
+    gitignore,
+    summary: {
+      wouldCreateProfile: input.wouldCreateProfile,
+      wouldUpdateRegions,
+      preservedManualFiles,
+      conflicts,
+    },
+  };
+}
+
+function containsAbsolutePathLiteral(bytes: Buffer): boolean {
+  const text = bytes.toString("utf8");
+  return /[A-Z]:\\\\|"\/[A-Za-z]/u.test(text);
+}
+
+function formatRegionAdoptionRefusals(
+  refusals: RegionAdoptionRefusal[],
+): string {
+  const lines = [
+    "Refusing to adopt region-aware instruction files:",
+    ...refusals.map((item) => `- ${item.path} (${item.reason})`),
+    "Repair the listed files (move, rename, or remove the symlink / partial markers) and re-run init --import --strategy regions --write.",
+    "",
+  ];
+  return lines.join("\n");
+}
+
+async function readRegionAwareFile(
+  rootDir: string,
+  relativePath: string,
+): Promise<{ refused: boolean; bytes?: Uint8Array }> {
+  const safePath = safeOutputPath(relativePath);
+  const absolutePath = path.resolve(rootDir, ...safePath.split("/"));
+
+  let stat: Awaited<ReturnType<typeof fsPromises.lstat>>;
+  try {
+    stat = await fsPromises.lstat(absolutePath);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return { refused: false, bytes: undefined };
+    }
+    throw error;
+  }
+
+  if (stat.isSymbolicLink()) {
+    return { refused: true };
+  }
+
+  if (!stat.isFile()) {
+    return { refused: false, bytes: undefined };
+  }
+
+  return { refused: false, bytes: await fsPromises.readFile(absolutePath) };
+}
 
 type RegionAwareWritePlan = {
   writes: PlannedWrite[];
@@ -2297,7 +2711,14 @@ async function planRegionAwareWrites(
       continue;
     }
 
-    const existing = await readOptionalBytes(rootDir, file.path);
+    const existingRead = await readRegionAwareFile(rootDir, file.path);
+
+    if (existingRead.refused) {
+      refusals.push({ path: file.path, reason: "symlink" });
+      continue;
+    }
+
+    const existing = existingRead.bytes;
     const lockOutput = lockfile?.outputs.find(
       (output) => output.path === file.path,
     );

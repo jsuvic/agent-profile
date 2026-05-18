@@ -24,7 +24,10 @@ export type RegionParseIssueCode =
   | "missing-markers"
   | "duplicate-markers"
   | "out-of-order"
-  | "extra-bytes";
+  | "extra-bytes"
+  | "preamble"
+  | "missing-blank-line"
+  | "missing-trailing-newline";
 
 export type RegionParseIssue = {
   code: RegionParseIssueCode;
@@ -52,6 +55,12 @@ const MANUAL_END_RE = /^<!-- agent-profile:manual:end -->$/u;
  * Parse a mixed-ownership instruction file (AGENTS.md or CLAUDE.md) into its
  * generated and manual regions. Raw bytes are preserved; no normalization is
  * applied so that hashes match the on-disk content exactly.
+ *
+ * The Phase 14 spec defines a strict file shape: the file begins with the
+ * generated start marker, the two regions are separated by exactly one blank
+ * line, and the file ends with the manual end marker plus a single trailing
+ * newline. Markers that appear inside fenced code blocks (``` ... ```) are
+ * not counted as region markers.
  */
 export function parseMixedFile(bytes: Buffer): ParsedRegions {
   const text = bytes.toString("utf8");
@@ -81,6 +90,7 @@ export function parseMixedFile(bytes: Buffer): ParsedRegions {
     position = newlineIndex + 1;
   }
 
+  const inFence = computeCodeFenceMask(lines);
   const matches = {
     generatedStart: [] as number[],
     generatedEnd: [] as number[],
@@ -89,6 +99,7 @@ export function parseMixedFile(bytes: Buffer): ParsedRegions {
   };
 
   lines.forEach((line, index) => {
+    if (inFence[index]) return;
     if (GENERATED_START_RE.test(line)) matches.generatedStart.push(index);
     if (GENERATED_END_RE.test(line)) matches.generatedEnd.push(index);
     if (MANUAL_START_RE.test(line)) matches.manualStart.push(index);
@@ -139,6 +150,41 @@ export function parseMixedFile(bytes: Buffer): ParsedRegions {
     return { ok: false, issues };
   }
 
+  if (gs !== 0) {
+    issues.push({
+      code: "preamble",
+      message:
+        "Mixed instruction file must begin with the generated start marker; no preamble bytes are allowed.",
+    });
+    return { ok: false, issues };
+  }
+
+  // Exactly one blank line between the generated end marker and the manual
+  // start marker.
+  if (ms !== ge + 2 || (lines[ge + 1] ?? "") !== "") {
+    issues.push({
+      code: "missing-blank-line",
+      message:
+        "Mixed instruction file must have exactly one blank line between the generated and manual regions.",
+    });
+    return { ok: false, issues };
+  }
+
+  // Exactly one trailing newline after the manual end marker. The line
+  // splitter emits one entry per line, with the marker as the final line and
+  // its lineEnding "\n" (or "\r\n") representing the trailing newline.
+  const trailingOk =
+    lines.length === me + 1 && (lineEndings[me] ?? "").length > 0;
+
+  if (!trailingOk) {
+    issues.push({
+      code: "missing-trailing-newline",
+      message:
+        "Mixed instruction file must end with the manual end marker followed by exactly one trailing newline.",
+    });
+    return { ok: false, issues };
+  }
+
   const generatedInnerBytes = computeRangeBytes(bytes, lines, lineEndings, gs, ge);
   const manualInnerBytes = computeRangeBytes(bytes, lines, lineEndings, ms, me);
 
@@ -148,6 +194,22 @@ export function parseMixedFile(bytes: Buffer): ParsedRegions {
     manualInner: manualInnerBytes,
     generatedInnerHash: sha256Hex(generatedInnerBytes),
   };
+}
+
+function computeCodeFenceMask(lines: string[]): boolean[] {
+  const mask = new Array<boolean>(lines.length).fill(false);
+  let open = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (/^\s{0,3}(?:```|~~~)/u.test(line)) {
+      // The opening or closing fence line is itself inside the fence.
+      mask[index] = open || true;
+      open = !open;
+      continue;
+    }
+    mask[index] = open;
+  }
+  return mask;
 }
 
 function computeRangeBytes(

@@ -109,7 +109,7 @@ export type LockMixedOutputV2 = {
   target: string;
   templateId: string;
   ownership: "mixed";
-  regions: LockRegionV2[];
+  regions: [LockRegionV2];
 };
 
 export type LockManualOwnedOutputV2 = {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
 
@@ -1998,10 +1998,25 @@ async function readKnownFile(
     return { ok: false };
   }
 
+  const absolutePath = path.join(rootDir, safePath);
+
+  try {
+    // Phase 14: refuse to follow file symlinks for files doctor reads.
+    const stat = await lstat(absolutePath);
+    if (stat.isSymbolicLink()) {
+      return { ok: false };
+    }
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return { ok: false };
+    }
+    throw error;
+  }
+
   try {
     return {
       ok: true,
-      bytes: await readFile(path.join(rootDir, safePath)),
+      bytes: await readFile(absolutePath),
     };
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
@@ -2469,8 +2484,27 @@ async function checkForeignSkillAndSubagentCollisions(
   const ownedPaths = new Set(
     (lockfile?.outputs ?? []).map((output) => output.path),
   );
-  const generatedSkillByName = new Map<string, string>();
-  const generatedSubagentByName = new Map<string, string>();
+  const generatedSkillByName = new Map<
+    string,
+    Array<{ path: string; runtime: SkillSubagentRuntime | undefined }>
+  >();
+  const generatedSubagentByName = new Map<
+    string,
+    Array<{ path: string; runtime: SkillSubagentRuntime | undefined }>
+  >();
+
+  const pushByName = (
+    map: Map<
+      string,
+      Array<{ path: string; runtime: SkillSubagentRuntime | undefined }>
+    >,
+    name: string,
+    entry: { path: string; runtime: SkillSubagentRuntime | undefined },
+  ): void => {
+    const list = map.get(name) ?? [];
+    list.push(entry);
+    map.set(name, list);
+  };
 
   for (const file of generatedFiles) {
     const name = parseSkillOrSubagentName(decodeUtf8(file.bytes));
@@ -2479,14 +2513,20 @@ async function checkForeignSkillAndSubagentCollisions(
       file.target === "codex-workflow-skills" ||
       file.target === "claude-workflow-skills"
     ) {
-      generatedSkillByName.set(name, file.path);
+      pushByName(generatedSkillByName, name, {
+        path: file.path,
+        runtime: pathRuntime(file.path),
+      });
     }
     if (
       file.target === "claude-subagents" ||
       file.target === "codex-subagents" ||
       file.target === "tabnine-subagents"
     ) {
-      generatedSubagentByName.set(name, file.path);
+      pushByName(generatedSubagentByName, name, {
+        path: file.path,
+        runtime: pathRuntime(file.path),
+      });
     }
   }
 
@@ -2518,17 +2558,28 @@ async function checkForeignSkillAndSubagentCollisions(
     }
 
     if (name && generatedSkillByName.has(name)) {
-      const generatedSkillPath = generatedSkillByName.get(name)!;
-      if (generatedSkillPath !== skillPath) {
+      const entries = generatedSkillByName.get(name)!;
+      const others = entries.filter((entry) => entry.path !== skillPath);
+      if (others.length > 0) {
+        const foreignRuntime = pathRuntime(skillPath);
+        const matching = others.find(
+          (entry) =>
+            entry.runtime !== undefined &&
+            entry.runtime === foreignRuntime,
+        );
+        const referencePath = (matching ?? others[0]!).path;
+        const severity = matching ? "error" : "warning";
         issues.push(
           issue(
             "LINT-SKILL-009",
-            "warning",
+            severity,
             skillPath,
             "skill name distinct from generated skills",
-            `name collides with generated ${generatedSkillPath}`,
-            `${skillPath} declares skill name ${name}, which collides with generated ${generatedSkillPath}.`,
-            "Rename the foreign skill or move it to a different name to avoid runtime collision.",
+            `name collides with generated ${referencePath}`,
+            `${skillPath} declares skill name ${name}, which collides with generated ${referencePath}${matching ? ` for the ${matching.runtime} runtime` : ""}.`,
+            matching
+              ? `Rename the foreign skill; both files target the ${matching.runtime} runtime and would load the same name.`
+              : "Rename the foreign skill or move it to a different name to avoid runtime collision.",
           ),
         );
       }
@@ -2567,22 +2618,54 @@ async function checkForeignSkillAndSubagentCollisions(
     }
 
     if (name && generatedSubagentByName.has(name)) {
-      const generatedSubagentPath = generatedSubagentByName.get(name)!;
-      if (generatedSubagentPath !== subagentPath) {
+      const entries = generatedSubagentByName.get(name)!;
+      const others = entries.filter((entry) => entry.path !== subagentPath);
+      if (others.length > 0) {
+        const foreignRuntime = pathRuntime(subagentPath);
+        const matching = others.find(
+          (entry) =>
+            entry.runtime !== undefined &&
+            entry.runtime === foreignRuntime,
+        );
+        const referencePath = (matching ?? others[0]!).path;
+        const severity = matching ? "error" : "warning";
         issues.push(
           issue(
             "LINT-SUBAGENT-009",
-            "warning",
+            severity,
             subagentPath,
             "subagent name distinct from generated subagents",
-            `name collides with generated ${generatedSubagentPath}`,
-            `${subagentPath} declares subagent name ${name}, which collides with generated ${generatedSubagentPath}.`,
-            "Rename the foreign subagent to avoid runtime collision.",
+            `name collides with generated ${referencePath}`,
+            `${subagentPath} declares subagent name ${name}, which collides with generated ${referencePath}${matching ? ` for the ${matching.runtime} runtime` : ""}.`,
+            matching
+              ? `Rename the foreign subagent; both files target the ${matching.runtime} runtime and would load the same name.`
+              : "Rename the foreign subagent to avoid runtime collision.",
           ),
         );
       }
     }
   }
+}
+
+type SkillSubagentRuntime = "codex" | "claude" | "tabnine";
+
+function pathRuntime(filePath: string): SkillSubagentRuntime | undefined {
+  if (
+    filePath.startsWith(".agents/skills/") ||
+    filePath.startsWith(".codex/agents/")
+  ) {
+    return "codex";
+  }
+  if (
+    filePath.startsWith(".claude/skills/") ||
+    filePath.startsWith(".claude/agents/")
+  ) {
+    return "claude";
+  }
+  if (filePath.startsWith(".tabnine/agent/agents/")) {
+    return "tabnine";
+  }
+  return undefined;
 }
 
 function parseSkillOrSubagentName(text: string): string | undefined {

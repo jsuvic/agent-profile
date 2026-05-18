@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -262,6 +262,91 @@ test("phase-14 init --strategy without --import rejects deterministically", asyn
 
   assert.equal(code, 2);
   assert.match(output.stderrText(), /only valid with --import/u);
+});
+
+test("phase-14 compile refuses to follow a symlinked AGENTS.md", async () => {
+  const rootDir = await createRoot();
+  await writeFile(path.join(rootDir, ".env"), "SECRET=do-not-read\n");
+  try {
+    await symlink(
+      path.join(rootDir, ".env"),
+      path.join(rootDir, "AGENTS.md"),
+    );
+  } catch {
+    // Symlinks may require elevated privileges on Windows; skip gracefully.
+    return;
+  }
+
+  const output = createOutput();
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+    output,
+  );
+
+  assert.equal(code, 3);
+  assert.match(
+    output.stderrText(),
+    /symlink|init --import --strategy regions/u,
+  );
+  // The .env content must never appear in stderr/stdout.
+  assert.equal(
+    output.stderrText().includes("SECRET=do-not-read"),
+    false,
+  );
+});
+
+test("phase-14 init --import --strategy regions refuses partial markers", async () => {
+  const rootDir = await createRoot();
+  await writeFile(
+    path.join(rootDir, "AGENTS.md"),
+    `${GENERATED_START_MARKER}\nstale\n`,
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "init",
+      "--root",
+      rootDir,
+      "--import",
+      "--strategy",
+      "regions",
+      "--write",
+    ],
+    output,
+  );
+
+  assert.equal(code, 3);
+  assert.match(output.stderrText(), /partial-markers|Refusing to adopt/u);
+});
+
+test("phase-14 init --import emits Phase 14 ImportReport JSON shape", async () => {
+  const rootDir = await createRoot();
+  await writeFile(
+    path.join(rootDir, "AGENTS.md"),
+    "# AGENTS.md\n\nManual rules.\n",
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--import", "--strategy", "regions", "--json"],
+    output,
+  );
+
+  assert.notEqual(code, 2);
+  const parsed = JSON.parse(output.stdoutText()) as Record<string, unknown>;
+  const importReport = parsed.import as Record<string, unknown> | undefined;
+  assert.ok(importReport, "import report present in JSON output");
+  assert.equal(importReport!.command, "init");
+  assert.equal(importReport!.strategy, "regions");
+  assert.equal(typeof importReport!.profilePath, "string");
+  assert.ok(Array.isArray(importReport!.files));
+  assert.ok(Array.isArray(importReport!.gitignore));
+  const summary = importReport!.summary as Record<string, unknown>;
+  assert.equal(typeof summary.wouldCreateProfile, "boolean");
+  assert.equal(typeof summary.wouldUpdateRegions, "number");
+  assert.equal(typeof summary.preservedManualFiles, "number");
+  assert.equal(typeof summary.conflicts, "number");
 });
 
 test("phase-14 compile preserves CRLF manual bytes verbatim and stores LF region hash", async () => {

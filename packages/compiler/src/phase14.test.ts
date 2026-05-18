@@ -216,6 +216,77 @@ test("phase-14 region hash is computed over raw bytes with no normalization", ()
   assert.equal(parsed.generatedInnerHash, sha256Hex(generatedInner));
 });
 
+test("phase-14 region parser refuses preamble bytes before the generated start marker", () => {
+  const malformed = Buffer.from(
+    `# title\n` +
+      `${GENERATED_START_MARKER}\n` +
+      `g\n` +
+      `${GENERATED_END_MARKER}\n` +
+      `\n` +
+      `${MANUAL_START_MARKER}\n` +
+      `m\n` +
+      `${MANUAL_END_MARKER}\n`,
+    "utf8",
+  );
+  const result = parseMixedFile(malformed);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.issues[0]?.code, "preamble");
+});
+
+test("phase-14 region parser refuses files without the required blank line", () => {
+  const malformed = Buffer.from(
+    `${GENERATED_START_MARKER}\n` +
+      `g\n` +
+      `${GENERATED_END_MARKER}\n` +
+      `${MANUAL_START_MARKER}\n` +
+      `m\n` +
+      `${MANUAL_END_MARKER}\n`,
+    "utf8",
+  );
+  const result = parseMixedFile(malformed);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.issues[0]?.code, "missing-blank-line");
+});
+
+test("phase-14 region parser refuses missing trailing newline", () => {
+  const malformed = Buffer.from(
+    `${GENERATED_START_MARKER}\n` +
+      `g\n` +
+      `${GENERATED_END_MARKER}\n` +
+      `\n` +
+      `${MANUAL_START_MARKER}\n` +
+      `m\n` +
+      `${MANUAL_END_MARKER}`,
+    "utf8",
+  );
+  const result = parseMixedFile(malformed);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.issues[0]?.code, "missing-trailing-newline");
+});
+
+test("phase-14 region parser ignores marker lines inside fenced code blocks", () => {
+  const text = `${GENERATED_START_MARKER}\n` +
+    "Example:\n" +
+    "```\n" +
+    `${GENERATED_END_MARKER}\n` +
+    "```\n" +
+    "real generated body\n" +
+    `${GENERATED_END_MARKER}\n` +
+    `\n` +
+    `${MANUAL_START_MARKER}\n` +
+    "m\n" +
+    `${MANUAL_END_MARKER}\n`;
+  const result = parseMixedFile(Buffer.from(text, "utf8"));
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  // The fenced example is preserved inside the generated region body.
+  assert.match(result.generatedInner.toString("utf8"), /```\n/u);
+  assert.match(result.generatedInner.toString("utf8"), /real generated body/u);
+});
+
 test("phase-14 lockfile mixed output records region hash only", () => {
   const lockfile = buildLockfile({
     profileBytes: "version: 1\n",
