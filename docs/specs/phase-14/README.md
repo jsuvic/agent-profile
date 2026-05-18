@@ -2,8 +2,14 @@
 
 ## Status
 
-Draft. Phase 14 is the safe import, ownership, and region-aware merge layer for
-repositories that already have agent instruction files or skills.
+Approved. Phase 14 is the safe import, ownership, and region-aware merge layer
+for repositories that already have agent instruction files or skills.
+
+Implementation landed in commits 196b2ac, cf25c09, bfe25f9, and 6317757 on the
+`codex/phase-14-safe-import-ownership` branch. The Implementation Gate items
+below were satisfied before merge; the Verification Gate items are exercised
+by tests in `packages/compiler/src/phase14.test.ts`,
+`packages/doctor/src/phase14.test.ts`, and `apps/cli/src/phase14.test.ts`.
 
 ## Purpose
 

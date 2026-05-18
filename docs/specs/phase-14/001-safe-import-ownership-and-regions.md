@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft. Belongs to Phase 14. Not approved.
+Approved. Belongs to Phase 14. Implemented on the
+`codex/phase-14-safe-import-ownership` branch.
 
 ## Problem
 

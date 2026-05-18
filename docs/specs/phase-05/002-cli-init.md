@@ -7,6 +7,13 @@ Verified
 Approved for Phase 5 implementation on 2026-05-02. Implemented on
 2026-05-03. Verified on 2026-05-03 with workspace checks, tests, and build.
 
+Phase 14 extends `init` with `--strategy preserve|regions` and
+`--update-gitignore` for safe import of existing AGENTS.md/CLAUDE.md and
+local-runtime ignore hygiene. See
+[`docs/specs/phase-14/001-safe-import-ownership-and-regions.md`](../phase-14/001-safe-import-ownership-and-regions.md).
+The Phase 5 acceptance criteria below are unchanged; Phase 14 only adds new
+flags and the Phase 14 `ImportReport` JSON contract.
+
 ## Problem
 
 Users need a safe way to create a starting `ai-profile.yaml` without guessing

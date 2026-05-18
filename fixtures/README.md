@@ -74,3 +74,27 @@ svelte-java-playwright/
   expected/
     AGENTS.md
 ```
+
+## Phase 14 changes
+
+After Phase 14 landed, all `expected/` directories were regenerated so each
+fixture reflects the current contract:
+
+- `expected/AGENTS.md` and `expected/CLAUDE.md` include the required
+  `## Instruction Precedence` paragraph used by the Phase 14 mixed-region
+  flow. Doctor verifies this via `LINT-REGION-003`.
+- `expected/ai-profile.lock` is version `2` with explicit `ownership`
+  labels on every output (`generated-owned` for all fixtures, since the
+  fixtures do not exercise the mixed flow). Output ordering is sorted by
+  path then target; the migration from v1 is deterministic.
+- `fixtures/invalid-lockfiles/bad-version/ai-profile.lock` uses version
+  `99` to keep the "unsupported version" semantics meaningful — `2` is now
+  a valid lockfile version.
+
+Regen scripts (run from the repo root after rebuilding packages) live under
+`scripts/`:
+
+```text
+node scripts/regen-lockfile-fixtures.mjs    # lockfiles only
+node scripts/regen-golden-fixtures.mjs      # all expected/ outputs + lockfile
+```
