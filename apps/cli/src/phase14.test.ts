@@ -410,6 +410,99 @@ test("phase-14 ImportReport scans skill/subagent dirs and classifies .claude/set
   assert.equal(claudeSettings!.ownership, "generated-owned");
 });
 
+test("phase-14 init --import refuses a symlinked .agents/skills scan root", async () => {
+  const rootDir = await createRoot();
+  const { mkdir, mkdtemp } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  // Stage a foreign skill outside the repo, then symlink .agents/skills to
+  // that directory. With the fix in place, the import scanner must refuse
+  // the symlinked root and surface a refusal entry, NOT list the foreign
+  // file as if it were a manual workflow skill inside the repo.
+  const outsideDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-foreign-skills-"),
+  );
+  await mkdir(path.join(outsideDir, "foreign-skill"), { recursive: true });
+  await writeFile(
+    path.join(outsideDir, "foreign-skill", "SKILL.md"),
+    "---\nname: foreign-skill\ndescription: From outside the repo.\n---\nbody\n",
+  );
+
+  try {
+    await symlink(outsideDir, path.join(rootDir, ".agents/skills"));
+  } catch {
+    // Symlink creation may require elevated privileges on Windows.
+    return;
+  }
+
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--import", "--json"],
+    output,
+  );
+  assert.notEqual(code, 2);
+
+  const parsed = JSON.parse(output.stdoutText()) as {
+    files: Array<{ path: string; action: string; notes: string[] }>;
+  };
+  const refusal = parsed.files.find(
+    (item) => item.path === ".agents/skills",
+  );
+  assert.ok(refusal, "scan root refusal is reported");
+  assert.equal(refusal!.action, "refuse-conflict");
+  // The foreign file must not be reported as if it lived inside the repo.
+  assert.equal(
+    parsed.files.some((item) =>
+      item.path.startsWith(".agents/skills/foreign-skill"),
+    ),
+    false,
+  );
+});
+
+test("phase-14 ImportReport honors lockfile-owned ownership for scanned skills", async () => {
+  const rootDir = await createRoot();
+  const { mkdir } = await import("node:fs/promises");
+
+  // First write the profile, then compile to produce a lockfile that
+  // includes generated skills under .agents/skills and .claude/skills.
+  let code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    createOutput(),
+  );
+  assert.equal(code, 0);
+
+  const output = createOutput();
+  code = await runCli(
+    ["init", "--root", rootDir, "--import", "--json"],
+    output,
+  );
+  assert.notEqual(code, 2);
+
+  const parsed = JSON.parse(output.stdoutText()) as {
+    files: Array<{ path: string; ownership: string }>;
+  };
+  const generatedSkill = parsed.files.find(
+    (item) => item.path === ".agents/skills/sdd-change/SKILL.md",
+  );
+  assert.ok(
+    generatedSkill,
+    "lockfile-owned workflow skill is reported in the import scan",
+  );
+  // Phase 14 ownership proof order: lockfile v2 wins. The earlier code
+  // hard-coded manual-owned for every scanned skill; with the fix in
+  // place this must report generated-owned.
+  assert.equal(generatedSkill!.ownership, "generated-owned");
+
+  // Sanity: prevent the regression by also asserting on a known Claude path.
+  const claudeSkill = parsed.files.find(
+    (item) => item.path === ".claude/skills/tdd-change/SKILL.md",
+  );
+  assert.ok(claudeSkill);
+  assert.equal(claudeSkill!.ownership, "generated-owned");
+
+  // Suppress unused-import warning by referencing mkdir.
+  await mkdir(path.join(rootDir, "unused"), { recursive: true });
+});
+
 test("phase-14 compile preserves CRLF manual bytes verbatim and stores LF region hash", async () => {
   const rootDir = await createRoot();
   const manualWithCrlf = "# AGENTS.md\r\n\r\nManual rules.\r\n";

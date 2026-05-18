@@ -2529,6 +2529,20 @@ async function buildPhase14ImportReport(
   let preservedManualFiles = 0;
   let conflicts = 0;
 
+  // Lockfile v2 ownership wins per the spec's ownership proof order. Loading
+  // it here lets us classify already-adopted skills/subagents correctly
+  // instead of always reporting them as manual-owned.
+  const lockfile = await readLockfileForRegions(input.rootDir);
+  const ownershipByPath = new Map<
+    string,
+    "generated-owned" | "mixed" | "manual-owned"
+  >();
+  if (lockfile) {
+    for (const output of lockfile.outputs) {
+      ownershipByPath.set(output.path, output.ownership);
+    }
+  }
+
   for (const entry of PHASE_14_SUPPORTED_PATHS) {
     const read = await readRegionAwareFile(input.rootDir, entry.path);
     if (read.refused) {
@@ -2574,11 +2588,13 @@ async function buildPhase14ImportReport(
       // .claude/settings.json is generated client config. We do not adopt or
       // mutate it from init, but we report it as preserved rather than
       // local-runtime so callers can compile/refresh it without confusion.
+      // If the lockfile already claims ownership we honor that label.
+      const ownership = ownershipByPath.get(entry.path) ?? "generated-owned";
       files.push({
         path: entry.path,
         exists: true,
         kind: entry.kind,
-        ownership: "generated-owned",
+        ownership,
         tags,
         action: "preserve",
         notes: [
@@ -2684,11 +2700,23 @@ async function buildPhase14ImportReport(
   }
 
   for (const scan of PHASE_14_SCAN_DIRS) {
-    const discovered = await listFilesUnder(
+    const { files: discovered, refusals: scanRefusals } = await listFilesUnder(
       input.rootDir,
       scan.root,
       scan.recursive,
     );
+    for (const refusedPath of scanRefusals) {
+      files.push({
+        path: refusedPath,
+        exists: true,
+        kind: scan.kind,
+        ownership: "unknown",
+        tags: [],
+        action: "refuse-conflict",
+        notes: ["symlinked; Phase 14 refuses to follow file symlinks"],
+      });
+      conflicts += 1;
+    }
     for (const relativePath of discovered) {
       if (!scan.fileFilter(relativePath)) continue;
       const read = await readRegionAwareFile(input.rootDir, relativePath);
@@ -2707,6 +2735,39 @@ async function buildPhase14ImportReport(
         continue;
       }
       if (!read.bytes) continue;
+      const lockOwnership = ownershipByPath.get(relativePath);
+      if (lockOwnership === "generated-owned") {
+        files.push({
+          path: relativePath,
+          exists: true,
+          kind: scan.kind,
+          ownership: "generated-owned",
+          tags,
+          action: "preserve",
+          notes: [
+            "lockfile-owned generated output; refresh via `agent-profile compile --write`",
+          ],
+        });
+        preservedManualFiles += 1;
+        continue;
+      }
+      if (lockOwnership === "mixed") {
+        files.push({
+          path: relativePath,
+          exists: true,
+          kind: scan.kind,
+          ownership: "mixed",
+          tags,
+          action: "update-generated-region",
+          notes: [
+            "lockfile-owned mixed file; generated region is updated on compile --write",
+          ],
+        });
+        if (input.strategy === "regions") {
+          wouldUpdateRegions += 1;
+        }
+        continue;
+      }
       files.push({
         path: relativePath,
         exists: true,
@@ -2766,14 +2827,35 @@ async function buildPhase14ImportReport(
   };
 }
 
+type ListFilesResult = {
+  files: string[];
+  refusals: string[]; // paths that were symlinks and therefore skipped
+};
+
 async function listFilesUnder(
   rootDir: string,
   relativeRoot: string,
   recursive: boolean,
-): Promise<string[]> {
-  const results: string[] = [];
-  await walk(rootDir, relativeRoot, recursive, results);
-  return results.sort();
+): Promise<ListFilesResult> {
+  const files: string[] = [];
+  const refusals: string[] = [];
+  // Phase 14 rule: do not follow symlinks for any path the import flow
+  // reads. lstat the scan root first; if it is a symlink, refuse the whole
+  // subtree rather than descending through it.
+  const rootStat = await lstatOptionalCli(
+    path.join(rootDir, relativeRoot),
+  );
+  if (!rootStat) {
+    return { files: [], refusals: [] };
+  }
+  if (rootStat.isSymbolicLink()) {
+    return { files: [], refusals: [relativeRoot] };
+  }
+  if (!rootStat.isDirectory()) {
+    return { files: [], refusals: [] };
+  }
+  await walk(rootDir, relativeRoot, recursive, files, refusals);
+  return { files: files.sort(), refusals: refusals.sort() };
 }
 
 async function walk(
@@ -2781,6 +2863,7 @@ async function walk(
   relativeRoot: string,
   recursive: boolean,
   out: string[],
+  refusals: string[],
 ): Promise<void> {
   let entries: import("node:fs").Dirent[];
   try {
@@ -2793,13 +2876,31 @@ async function walk(
   }
   for (const entry of entries) {
     const child = `${relativeRoot}/${entry.name}`;
+    // Phase 14: never descend through symlinked directories or read
+    // symlinked files. We record the path as a refusal so the caller can
+    // surface it in the import report.
+    if (entry.isSymbolicLink()) {
+      refusals.push(child);
+      continue;
+    }
     if (entry.isDirectory() && recursive) {
-      await walk(rootDir, child, recursive, out);
+      await walk(rootDir, child, recursive, out, refusals);
       continue;
     }
     if (entry.isFile()) {
       out.push(child);
     }
+  }
+}
+
+async function lstatOptionalCli(
+  absolutePath: string,
+): Promise<Awaited<ReturnType<typeof fsPromises.lstat>> | undefined> {
+  try {
+    return await fsPromises.lstat(absolutePath);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return undefined;
+    throw error;
   }
 }
 
