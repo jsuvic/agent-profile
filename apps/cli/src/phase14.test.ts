@@ -503,6 +503,83 @@ test("phase-14 ImportReport honors lockfile-owned ownership for scanned skills",
   await mkdir(path.join(rootDir, "unused"), { recursive: true });
 });
 
+test("phase-14 compile refuses generated-owned region file with hash mismatch unless --force", async () => {
+  const rootDir = await createRoot();
+  // Materialize generated AGENTS.md and the lockfile.
+  let code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    createOutput(),
+  );
+  assert.equal(code, 0);
+
+  // User edits the lockfile-owned generated file directly.
+  await writeFile(
+    path.join(rootDir, "AGENTS.md"),
+    "# AGENTS.md\n\nUser edit that diverges from the lockfile hash.\n",
+  );
+
+  const output = createOutput();
+  code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+    output,
+  );
+
+  assert.equal(code, 3);
+  assert.match(output.stderrText(), /hash-mismatch/u);
+  // The user's edit must not have been silently overwritten.
+  const onDisk = await readFile(path.join(rootDir, "AGENTS.md"), "utf8");
+  assert.match(onDisk, /User edit that diverges/u);
+
+  // --force restores generated content as expected.
+  code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force", "--target", "agents-md"],
+    createOutput(),
+  );
+  assert.equal(code, 0);
+  const overwritten = await readFile(path.join(rootDir, "AGENTS.md"), "utf8");
+  assert.equal(
+    overwritten.includes("User edit that diverges"),
+    false,
+  );
+});
+
+test("phase-14 init --import --strategy regions adopts a file with no trailing newline cleanly", async () => {
+  const rootDir = await createRoot();
+  // Original AGENTS.md ends without a newline. The earlier serializer
+  // bug concatenated the manual end marker onto the last line and broke
+  // every subsequent compile/doctor.
+  await writeFile(
+    path.join(rootDir, "AGENTS.md"),
+    "# AGENTS.md\n\nManual rules without trailing newline",
+    "utf8",
+  );
+
+  let code = await runCli(
+    ["init", "--root", rootDir, "--import", "--strategy", "regions", "--write"],
+    createOutput(),
+  );
+  assert.notEqual(code, 2);
+  assert.notEqual(code, 3);
+
+  // Subsequent compile must succeed on the freshly adopted mixed file.
+  code = await runCli(
+    ["compile", "--root", rootDir, "--write"],
+    createOutput(),
+  );
+  assert.equal(code, 0);
+
+  const bytes = await readFile(path.join(rootDir, "AGENTS.md"));
+  const parsed = parseMixedFile(bytes);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  // The original bytes plus a single inserted newline are preserved in
+  // the manual region; nothing concatenated onto the marker line.
+  assert.match(
+    parsed.manualInner.toString("utf8"),
+    /Manual rules without trailing newline\n$/u,
+  );
+});
+
 test("phase-14 compile preserves CRLF manual bytes verbatim and stores LF region hash", async () => {
   const rootDir = await createRoot();
   const manualWithCrlf = "# AGENTS.md\r\n\r\nManual rules.\r\n";

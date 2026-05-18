@@ -267,6 +267,44 @@ test("phase-14 region parser refuses missing trailing newline", () => {
   assert.equal(result.issues[0]?.code, "missing-trailing-newline");
 });
 
+test("phase-14 serializeMixedFile inserts a newline before the manual end marker when the body has none", () => {
+  // Reproduces the bug where adoption of an AGENTS.md whose final byte was
+  // not a newline concatenated the manual:end marker onto the body's last
+  // line and produced an unparseable file.
+  const generatedInner = Buffer.from("g\n", "utf8");
+  const manualInner = Buffer.from("rules without trailing newline", "utf8");
+  const result = serializeMixedFile({ generatedInner, manualInner });
+
+  const text = result.toString("utf8");
+  // The manual end marker must be on its own line.
+  assert.match(text, /\nrules without trailing newline\n<!-- agent-profile:manual:end -->\n$/u);
+
+  // The result must round-trip through parseMixedFile cleanly.
+  const parsed = parseMixedFile(result);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  // The original bytes plus the inserted newline are preserved as the
+  // manual region content.
+  assert.equal(
+    parsed.manualInner.toString("utf8"),
+    "rules without trailing newline\n",
+  );
+});
+
+test("phase-14 serializeMixedFile preserves existing trailing newlines verbatim", () => {
+  const manualInner = Buffer.from("rules\nwith trailing\n", "utf8");
+  const result = serializeMixedFile({
+    generatedInner: Buffer.from("g\n", "utf8"),
+    manualInner,
+  });
+  const parsed = parseMixedFile(result);
+  assert.equal(parsed.ok, true);
+  if (!parsed.ok) return;
+  // No extra newline was inserted; manual region bytes round-trip byte-
+  // for-byte.
+  assert.equal(parsed.manualInner.equals(manualInner), true);
+});
+
 test("phase-14 ownership helpers ignore markers inside fenced code blocks", () => {
   const text =
     "# Manual file documenting markers\n" +

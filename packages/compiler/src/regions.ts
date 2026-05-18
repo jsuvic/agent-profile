@@ -307,17 +307,32 @@ export function serializeMixedFile(input: {
   generatedInner: Buffer;
   manualInner: Buffer;
 }): Buffer {
+  // The closing manual marker must appear on its own line. If the manual
+  // body does not already end with a newline (LF or CRLF), insert a single
+  // LF so the marker is not concatenated onto the body's last line. This
+  // adds one byte to the manual region in the no-trailing-newline case but
+  // is the only way to keep the file parseable; on subsequent reads that
+  // byte is preserved verbatim alongside the rest of the manual region.
+  const manualInner = endsWithNewline(input.manualInner)
+    ? input.manualInner
+    : Buffer.concat([input.manualInner, Buffer.from("\n", "utf8")]);
+
   const parts: Buffer[] = [
     Buffer.from(`${GENERATED_START_MARKER}\n`, "utf8"),
     input.generatedInner,
     Buffer.from(`${GENERATED_END_MARKER}\n`, "utf8"),
     Buffer.from("\n", "utf8"),
     Buffer.from(`${MANUAL_START_MARKER}\n`, "utf8"),
-    input.manualInner,
+    manualInner,
     Buffer.from(`${MANUAL_END_MARKER}\n`, "utf8"),
   ];
 
   return Buffer.concat(parts);
+}
+
+function endsWithNewline(bytes: Buffer): boolean {
+  if (bytes.length === 0) return false;
+  return bytes[bytes.length - 1] === 0x0a; // LF; CRLF ends in LF too
 }
 
 /**

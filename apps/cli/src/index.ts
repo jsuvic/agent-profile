@@ -390,7 +390,9 @@ async function runCompile(
 
   let regionPlan: RegionAwareWritePlan;
   try {
-    regionPlan = await planRegionAwareWrites(rootDir, compileResult.files);
+    regionPlan = await planRegionAwareWrites(rootDir, compileResult.files, {
+      force: parsed.force,
+    });
   } catch {
     io.stderr(
       formatSimpleError(
@@ -404,13 +406,32 @@ async function runCompile(
   }
 
   if (regionPlan.refusals.length > 0) {
-    io.stderr(
-      `Refusing to overwrite region-aware instruction files without explicit adoption:\n${regionPlan.refusals
-        .map((item) => `- ${item.path} (${item.reason})`)
-        .join(
-          "\n",
-        )}\nRun \`agent-profile init --import --strategy regions --write\` to adopt existing files into mixed ownership.\n`,
+    const hashMismatches = regionPlan.refusals.filter(
+      (item) => item.reason === "hash-mismatch",
     );
+    const adoptionRefusals = regionPlan.refusals.filter(
+      (item) => item.reason !== "hash-mismatch",
+    );
+    const lines: string[] = [];
+    if (adoptionRefusals.length > 0) {
+      lines.push(
+        "Refusing to overwrite region-aware instruction files without explicit adoption:",
+        ...adoptionRefusals.map(
+          (item) => `- ${item.path} (${item.reason})`,
+        ),
+        "Run `agent-profile init --import --strategy regions --write` to adopt existing files into mixed ownership.",
+      );
+    }
+    if (hashMismatches.length > 0) {
+      lines.push(
+        "Refusing to overwrite lockfile-owned generated region files that differ from ai-profile.lock:",
+        ...hashMismatches.map(
+          (item) => `- ${item.path} (${item.reason})`,
+        ),
+        "Re-run with --force after reviewing the diff, or regenerate ai-profile.lock to record the new bytes.",
+      );
+    }
+    io.stderr(`${lines.join("\n")}\n`);
     return 3;
   }
 
@@ -2448,7 +2469,8 @@ type RegionAwareRefusal = {
     | "partial-markers"
     | "duplicate-markers"
     | "unknown-ownership"
-    | "symlink";
+    | "symlink"
+    | "hash-mismatch";
 };
 
 type Phase14ImportInput = {
@@ -2960,6 +2982,7 @@ const REGION_AWARE_PATHS = new Set(["AGENTS.md", "CLAUDE.md"]);
 async function planRegionAwareWrites(
   rootDir: string,
   files: GeneratedFile[],
+  options: { force: boolean } = { force: false },
 ): Promise<RegionAwareWritePlan> {
   const lockfile = await readLockfileForRegions(rootDir);
   const writes: PlannedWrite[] = [];
@@ -2990,6 +3013,15 @@ async function planRegionAwareWrites(
     }
 
     if (lockOutput?.ownership === "generated-owned") {
+      // Phase 14: region-aware paths bypass getProtectedGeneratedPaths, so
+      // verify the on-disk file still matches the lockfile hash here.
+      // Mismatches indicate user edits to a lockfile-owned generated file
+      // and must require --force, mirroring the behavior for every other
+      // generated output.
+      if (!options.force && sha256Hex(existing) !== lockOutput.sha256) {
+        refusals.push({ path: file.path, reason: "hash-mismatch" });
+        continue;
+      }
       writes.push({ path: file.path, bytes: file.bytes });
       continue;
     }
