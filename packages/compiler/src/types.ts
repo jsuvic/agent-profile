@@ -87,6 +87,43 @@ export type LockOutput = {
   sha256: string;
 };
 
+export type LockOutputOwnership = "generated-owned" | "mixed" | "manual-owned";
+
+export type LockRegionV2 = {
+  id: "agent-profile:generated";
+  target: string;
+  templateId: string;
+  sha256: string;
+};
+
+export type LockGeneratedOwnedOutputV2 = {
+  path: string;
+  target: string;
+  templateId: string;
+  ownership: "generated-owned";
+  sha256: string;
+};
+
+export type LockMixedOutputV2 = {
+  path: string;
+  target: string;
+  templateId: string;
+  ownership: "mixed";
+  regions: LockRegionV2[];
+};
+
+export type LockManualOwnedOutputV2 = {
+  path: string;
+  target: "manual";
+  templateId: "manual";
+  ownership: "manual-owned";
+};
+
+export type LockOutputV2 =
+  | LockGeneratedOwnedOutputV2
+  | LockMixedOutputV2
+  | LockManualOwnedOutputV2;
+
 export type LockfileIssueCode =
   | "lockfile_missing"
   | "lockfile_parse_error"
@@ -94,7 +131,8 @@ export type LockfileIssueCode =
   | "lockfile_path_error"
   | "lockfile_hash_error"
   | "lockfile_order_error"
-  | "lockfile_drift";
+  | "lockfile_drift"
+  | "lockfile_unsupported_version";
 
 export type LockfileIssue = {
   code: LockfileIssueCode;
@@ -107,7 +145,8 @@ export type LockfileIssue = {
 export type LockfileValidationResult =
   | {
       ok: true;
-      lockfile: AiProfileLockV1;
+      lockfile: AiProfileLockV1 | AiProfileLockV2;
+      version: 1 | 2;
     }
   | {
       ok: false;
@@ -125,6 +164,20 @@ export type AiProfileLockV1 = {
   templates: LockTemplate[];
   outputs: LockOutput[];
 };
+
+export type AiProfileLockV2 = {
+  version: 2;
+  profile: {
+    path: string;
+    schemaVersion: 1;
+    sha256: string;
+  };
+  compiler: CompilerInfo;
+  templates: LockTemplate[];
+  outputs: LockOutputV2[];
+};
+
+export type AnyAiProfileLock = AiProfileLockV1 | AiProfileLockV2;
 
 export type GoldenFailure = {
   code:

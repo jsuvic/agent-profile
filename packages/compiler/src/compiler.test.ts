@@ -228,7 +228,7 @@ test("lockfile validator rejects invalid schema, hashes, paths, and ordering", a
         "utf8",
       ),
     ),
-    "lockfile_schema_error",
+    "lockfile_unsupported_version",
     "/version",
   );
   assertLockfileIssue(
@@ -252,10 +252,10 @@ test("lockfile validator rejects invalid schema, hashes, paths, and ordering", a
   );
 
   const invalidVersion = cloneJson(base);
-  invalidVersion.version = 2;
+  invalidVersion.version = 99;
   assertLockfileIssue(
     validateLockfileValue(invalidVersion),
-    "lockfile_schema_error",
+    "lockfile_unsupported_version",
     "/version",
   );
 

@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Instruction Precedence
+
+If generated and manual instructions conflict, follow the manual project instructions unless they would weaken safety, privacy, or permission limits. Safety, privacy, and explicit deny rules always win.
+
 ## Project
 
 Name: react-typescript

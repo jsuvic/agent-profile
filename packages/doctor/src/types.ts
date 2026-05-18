@@ -37,7 +37,16 @@ export type DoctorIssueCode =
   | "LINT-SUBAGENT-005"
   | "LINT-SUBAGENT-006"
   | "LINT-SUBAGENT-007"
-  | "LINT-SUBAGENT-008";
+  | "LINT-SUBAGENT-008"
+  | "LINT-SUBAGENT-009"
+  | "LINT-SKILL-009"
+  | "LINT-REGION-001"
+  | "LINT-REGION-002"
+  | "LINT-REGION-003"
+  | "LINT-REGION-004"
+  | "LINT-OWN-001"
+  | "LINT-OWN-002"
+  | "LINT-GITIGNORE-002";
 
 export type DoctorIssue = {
   code: DoctorIssueCode;

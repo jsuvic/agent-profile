@@ -13,15 +13,26 @@ import {
   applyWritePlan,
   compileProfile,
   createLockfileFile,
+  parseMixedFile,
   planWrites,
+  replaceGeneratedRegion,
   safeOutputPath,
+  serializeMixedFile,
   sha256Hex,
+  toLockfileV2View,
   validateLockfileText,
+  GENERATED_END_MARKER,
+  GENERATED_START_MARKER,
+  hasAllRegionMarkers,
+  hasAnyRegionMarker,
   type CompilerTargetId,
   type GeneratedFile,
+  type LockOutputV2,
+  type MixedOutputDescriptor,
   type PlannedWrite,
   type WritePlanResult,
 } from "@agent-profile/compiler";
+import type { AiProfile } from "@agent-profile/core";
 import {
   parseProfileYaml,
   verifyPresetToken,
@@ -93,6 +104,8 @@ type ParsedCompileArgs =
       message: string;
     };
 
+type ImportStrategy = "preserve" | "regions";
+
 type ParsedInitArgs =
   | {
       ok: true;
@@ -103,6 +116,8 @@ type ParsedInitArgs =
       dryRun: boolean;
       write: boolean;
       importExisting: boolean;
+      strategy: ImportStrategy;
+      updateGitignore: boolean;
       clients: ClientId[];
       noClients: ClientId[];
       json: boolean;
@@ -372,13 +387,40 @@ async function runCompile(
     return 1;
   }
 
+  let regionPlan: RegionAwareWritePlan;
+  try {
+    regionPlan = await planRegionAwareWrites(rootDir, compileResult.files);
+  } catch {
+    io.stderr(
+      formatSimpleError(
+        "generated outputs",
+        "safe repository-local readable paths",
+        "unsafe path",
+        "Existing generated output paths could not be safely read under --root.",
+      ),
+    );
+    return 1;
+  }
+
+  if (regionPlan.refusals.length > 0) {
+    io.stderr(
+      `Refusing to overwrite region-aware instruction files without explicit adoption:\n${regionPlan.refusals
+        .map((item) => `- ${item.path} (${item.reason})`)
+        .join(
+          "\n",
+        )}\nRun \`agent-profile init --import --strategy regions --write\` to adopt existing files into mixed ownership.\n`,
+    );
+    return 3;
+  }
+
   const lockfile = createLockfileFile({
     profilePath: safeProfilePath.path,
     profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
+    mixedOutputs: regionPlan.mixedOutputs,
   });
-  const writes = toPlannedWrites([...compileResult.files, lockfile]);
+  const writes = [...regionPlan.writes, { path: lockfile.path, bytes: lockfile.bytes }];
 
   if (parsed.write && !parsed.force) {
     let protectedPaths: ProtectedGeneratedPath[];
@@ -496,6 +538,48 @@ async function runInit(
       existingProfileBytes,
       safeProfilePath.path,
     );
+
+    // Phase 14: when init is invoked with --import --strategy regions --write
+    // against an existing profile, we still adopt root instruction files into
+    // mixed ownership and optionally append recommended gitignore lines. The
+    // profile itself is not edited.
+    if (
+      parsed.importExisting &&
+      parsed.strategy === "regions" &&
+      parsed.write
+    ) {
+      const parsedProfile = parseProfileYaml(
+        Buffer.from(existingProfileBytes).toString("utf8"),
+        { sourcePath: safeProfilePath.path },
+      );
+      if (parsedProfile.ok) {
+        const adoptions = await planRegionAdoptions(rootDir, parsedProfile.profile);
+        if (adoptions.length > 0) {
+          await applyWritePlan({
+            rootDir,
+            writes: adoptions.map((adoption) => ({
+              path: adoption.path,
+              bytes: adoption.bytes,
+            })),
+          });
+        }
+      }
+    }
+
+    if (parsed.updateGitignore && parsed.write) {
+      const findings = await getLocalRuntimeGitignoreFindings(rootDir);
+      try {
+        await appendMissingGitignoreLines(
+          rootDir,
+          findings
+            .filter((finding) => finding.action === "would-add")
+            .map((finding) => finding.line),
+        );
+      } catch {
+        // best-effort
+      }
+    }
+
     emitInitOutput(parsed, io, {
       mode: parsed.write ? "write" : "dry-run",
       status: "ok",
@@ -566,6 +650,32 @@ async function runInit(
       bytes: profileText,
     },
   ];
+
+  let regionAdoptions: RegionAdoption[] = [];
+  if (parsed.importExisting && parsed.strategy === "regions") {
+    try {
+      regionAdoptions = await planRegionAdoptions(rootDir, validation.profile);
+    } catch (error) {
+      const reason = classifyInitWriteFailure(error);
+      emitInitOutput(
+        parsed,
+        io,
+        createInitRefusal({
+          profilePath: safeProfilePath.path,
+          reason,
+          message: formatInitFailureMessage(reason),
+          clients,
+          detectedStack: stackResult.stack.languages,
+        }),
+      );
+      return 1;
+    }
+
+    for (const adoption of regionAdoptions) {
+      writes.push({ path: adoption.path, bytes: adoption.bytes });
+    }
+  }
+
   let plan: WritePlanResult;
 
   try {
@@ -626,6 +736,24 @@ async function runInit(
 
   const suggestions =
     presetPayload === undefined ? await getGitignoreSuggestions(rootDir) : [];
+
+  const gitignoreFindings =
+    presetPayload === undefined
+      ? await getLocalRuntimeGitignoreFindings(rootDir)
+      : [];
+
+  if (parsed.updateGitignore && parsed.write) {
+    try {
+      await appendMissingGitignoreLines(
+        rootDir,
+        gitignoreFindings
+          .filter((finding) => finding.action === "would-add")
+          .map((finding) => finding.line),
+      );
+    } catch {
+      // Non-fatal: surface in the report instead of erroring out.
+    }
+  }
 
   emitInitOutput(parsed, io, {
     mode: parsed.write ? "write" : "dry-run",
@@ -762,6 +890,9 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
   let dryRun = false;
   let write = false;
   let importExisting = false;
+  let strategy: ImportStrategy = "preserve";
+  let strategyProvided = false;
+  let updateGitignore = false;
   const clients: ClientId[] = [];
   const noClients: ClientId[] = [];
   let json = false;
@@ -817,6 +948,31 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
         break;
       case "--import":
         importExisting = true;
+        break;
+      case "--strategy": {
+        const value = args[index + 1];
+
+        if (!value || value.startsWith("--")) {
+          return {
+            ok: false,
+            message: "--strategy requires preserve or regions.",
+          };
+        }
+
+        if (value !== "preserve" && value !== "regions") {
+          return {
+            ok: false,
+            message: `--strategy must be preserve or regions. Got: ${value}.`,
+          };
+        }
+
+        strategy = value;
+        strategyProvided = true;
+        index += 1;
+        break;
+      }
+      case "--update-gitignore":
+        updateGitignore = true;
         break;
       case "--client": {
         const value = args[index + 1];
@@ -898,6 +1054,20 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
     };
   }
 
+  if (strategyProvided && !importExisting) {
+    return {
+      ok: false,
+      message: "--strategy is only valid with --import.",
+    };
+  }
+
+  if (updateGitignore && !write) {
+    return {
+      ok: false,
+      message: "--update-gitignore requires --write.",
+    };
+  }
+
   return {
     ok: true,
     root,
@@ -907,6 +1077,8 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
     dryRun,
     write,
     importExisting,
+    strategy,
+    updateGitignore,
     clients: uniqueClients(clients),
     noClients: uniqueClients(noClients),
     json,
@@ -1378,6 +1550,9 @@ async function getProtectedGeneratedPaths(
   const existingFiles: Array<{ file: GeneratedFile; bytes: Uint8Array }> = [];
 
   for (const file of files) {
+    // Region-aware instruction files are handled by planRegionAwareWrites;
+    // skip them here so we do not double-refuse when no lockfile exists yet.
+    if (REGION_AWARE_PATHS.has(file.path)) continue;
     const current = await readOptionalBytes(rootDir, file.path);
 
     if (current) {
@@ -1413,8 +1588,9 @@ async function getProtectedGeneratedPaths(
       .sort(compareProtectedPaths);
   }
 
-  const outputsByPath = new Map(
-    lockfileResult.lockfile.outputs.map((output) => [output.path, output]),
+  const lockfileV2 = toLockfileV2View(lockfileResult.lockfile);
+  const outputsByPath = new Map<string, LockOutputV2>(
+    lockfileV2.outputs.map((output) => [output.path, output]),
   );
   const protectedPaths: ProtectedGeneratedPath[] = [];
 
@@ -1426,7 +1602,30 @@ async function getProtectedGeneratedPaths(
         path: item.file.path,
         reason: "missing lockfile entry",
       });
-    } else if (sha256Hex(item.bytes) !== lockOutput.sha256) {
+      continue;
+    }
+
+    if (lockOutput.ownership === "manual-owned") {
+      continue;
+    }
+
+    if (lockOutput.ownership === "mixed") {
+      const parsed = parseMixedFile(Buffer.from(item.bytes));
+      const expectedHash = lockOutput.regions[0]?.sha256;
+      if (
+        !parsed.ok ||
+        !expectedHash ||
+        parsed.generatedInnerHash !== expectedHash
+      ) {
+        protectedPaths.push({
+          path: item.file.path,
+          reason: "hash mismatch",
+        });
+      }
+      continue;
+    }
+
+    if (sha256Hex(item.bytes) !== lockOutput.sha256) {
       protectedPaths.push({
         path: item.file.path,
         reason: "hash mismatch",
@@ -1964,6 +2163,222 @@ function compareText(left: string, right: string): number {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+type RegionAdoption = {
+  path: string;
+  bytes: Buffer;
+};
+
+const RECOMMENDED_IGNORE_LINES = [
+  ".cce/",
+  ".mcp.json",
+  ".claude/settings.local.json",
+  ".claude/worktrees/",
+  ".codex/config.toml",
+  ".codex/hooks.json",
+] as const;
+
+type GitignoreFinding = {
+  line: string;
+  action: "already-present" | "would-add";
+  reason: string;
+};
+
+async function planRegionAdoptions(
+  rootDir: string,
+  profile: AiProfile,
+): Promise<RegionAdoption[]> {
+  const compileResult = compileProfile({ profile });
+  if (!compileResult.ok) return [];
+
+  const adoptions: RegionAdoption[] = [];
+
+  for (const file of compileResult.files) {
+    if (file.path !== "AGENTS.md" && file.path !== "CLAUDE.md") continue;
+
+    const existing = await readOptionalBytes(rootDir, file.path);
+    if (!existing) continue;
+
+    const existingBuffer = Buffer.from(existing);
+    if (hasAllRegionMarkers(existingBuffer)) {
+      const updated = replaceGeneratedRegion(
+        existingBuffer,
+        Buffer.from(file.bytes),
+      );
+      if (updated) {
+        adoptions.push({ path: file.path, bytes: updated });
+      }
+      continue;
+    }
+
+    if (hasAnyRegionMarker(existingBuffer)) {
+      // Partial markers: refuse to repair automatically.
+      continue;
+    }
+
+    const mixed = serializeMixedFile({
+      generatedInner: Buffer.from(file.bytes),
+      manualInner: existingBuffer,
+    });
+    adoptions.push({ path: file.path, bytes: mixed });
+  }
+
+  return adoptions;
+}
+
+async function getLocalRuntimeGitignoreFindings(
+  rootDir: string,
+): Promise<GitignoreFinding[]> {
+  const gitignore = await readOptionalText(rootDir, ".gitignore").catch(
+    () => undefined,
+  );
+  const lines = (gitignore ?? "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"));
+
+  const findings: GitignoreFinding[] = [];
+  for (const recommended of RECOMMENDED_IGNORE_LINES) {
+    const present = lines.some((line) => {
+      const a = line.replace(/^\//u, "").replace(/\/$/u, "");
+      const b = recommended.replace(/\/$/u, "");
+      return a === b;
+    });
+    findings.push({
+      line: recommended,
+      action: present ? "already-present" : "would-add",
+      reason: "local runtime or machine-specific path",
+    });
+  }
+  return findings;
+}
+
+async function appendMissingGitignoreLines(
+  rootDir: string,
+  lines: string[],
+): Promise<void> {
+  if (lines.length === 0) return;
+  const existing = (await readOptionalText(rootDir, ".gitignore")) ?? "";
+  const trailing = existing.endsWith("\n") || existing === "" ? "" : "\n";
+  const addition = `${lines.join("\n")}\n`;
+  const next = `${existing}${trailing}${addition}`;
+  await applyWritePlan({
+    rootDir,
+    writes: [{ path: ".gitignore", bytes: next }],
+  });
+}
+
+type RegionAwareRefusal = {
+  path: string;
+  reason: "partial-markers" | "duplicate-markers" | "unknown-ownership";
+};
+
+type RegionAwareWritePlan = {
+  writes: PlannedWrite[];
+  mixedOutputs: MixedOutputDescriptor[];
+  refusals: RegionAwareRefusal[];
+};
+
+const REGION_AWARE_PATHS = new Set(["AGENTS.md", "CLAUDE.md"]);
+
+async function planRegionAwareWrites(
+  rootDir: string,
+  files: GeneratedFile[],
+): Promise<RegionAwareWritePlan> {
+  const lockfile = await readLockfileForRegions(rootDir);
+  const writes: PlannedWrite[] = [];
+  const mixedOutputs: MixedOutputDescriptor[] = [];
+  const refusals: RegionAwareRefusal[] = [];
+
+  for (const file of files) {
+    if (!REGION_AWARE_PATHS.has(file.path)) {
+      writes.push({ path: file.path, bytes: file.bytes });
+      continue;
+    }
+
+    const existing = await readOptionalBytes(rootDir, file.path);
+    const lockOutput = lockfile?.outputs.find(
+      (output) => output.path === file.path,
+    );
+
+    if (!existing) {
+      writes.push({ path: file.path, bytes: file.bytes });
+      continue;
+    }
+
+    if (lockOutput?.ownership === "generated-owned") {
+      writes.push({ path: file.path, bytes: file.bytes });
+      continue;
+    }
+
+    if (lockOutput?.ownership === "mixed") {
+      const buffer = Buffer.from(existing);
+      if (!hasAllRegionMarkers(buffer)) {
+        refusals.push({ path: file.path, reason: "partial-markers" });
+        continue;
+      }
+      const generatedInner = generatedInnerBytesFor(file);
+      const updated = replaceGeneratedRegion(buffer, generatedInner);
+      if (!updated) {
+        refusals.push({ path: file.path, reason: "duplicate-markers" });
+        continue;
+      }
+      writes.push({ path: file.path, bytes: updated });
+      mixedOutputs.push({
+        path: file.path,
+        target: file.target,
+        templateId: file.templateId,
+        regionHash: sha256Hex(generatedInner),
+      });
+      continue;
+    }
+
+    const existingBuffer = Buffer.from(existing);
+
+    if (hasAllRegionMarkers(existingBuffer)) {
+      // Mixed file with no lockfile evidence yet — adopt without overwriting
+      // the manual region byte-for-byte. This is the post-init regions flow.
+      const generatedInner = generatedInnerBytesFor(file);
+      const updated = replaceGeneratedRegion(existingBuffer, generatedInner);
+      if (!updated) {
+        refusals.push({ path: file.path, reason: "duplicate-markers" });
+        continue;
+      }
+      writes.push({ path: file.path, bytes: updated });
+      mixedOutputs.push({
+        path: file.path,
+        target: file.target,
+        templateId: file.templateId,
+        regionHash: sha256Hex(generatedInner),
+      });
+      continue;
+    }
+
+    if (hasAnyRegionMarker(existingBuffer)) {
+      refusals.push({ path: file.path, reason: "partial-markers" });
+      continue;
+    }
+
+    refusals.push({ path: file.path, reason: "unknown-ownership" });
+  }
+
+  return { writes, mixedOutputs, refusals };
+}
+
+async function readLockfileForRegions(rootDir: string) {
+  const bytes = await readOptionalBytes(rootDir, "ai-profile.lock");
+  if (!bytes) return undefined;
+  const result = validateLockfileText(Buffer.from(bytes).toString("utf8"));
+  if (!result.ok) return undefined;
+  return toLockfileV2View(result.lockfile);
+}
+
+function generatedInnerBytesFor(file: GeneratedFile): Buffer {
+  // The whole rendered file becomes the generated inner body. Manual region
+  // bytes are preserved by the caller; serializeMixedFile is not used here
+  // because we only update the generated region in-place.
+  return Buffer.from(file.bytes);
 }
 
 async function main(): Promise<void> {

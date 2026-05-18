@@ -8,12 +8,19 @@ import path from "node:path";
 import {
   compileProfile,
   createLockfileFile,
+  parseMixedFile,
   safeOutputPath,
   sha256Hex,
+  toLockfileV2View,
   validateLockfileText,
-  type AiProfileLockV1,
+  hasAnyRegionMarker,
+  hasAllRegionMarkers,
+  hasLegacyGeneratedMarker,
+  REGION_PRECEDENCE_TEXT,
+  type AiProfileLockV2,
+  type AnyAiProfileLock,
   type GeneratedFile,
-  type LockOutput,
+  type LockOutputV2,
   type LockTemplate,
   type TemplateDescriptor,
 } from "@agent-profile/compiler";
@@ -124,14 +131,17 @@ export async function runDoctor(
   await checkGitignoreSecretHygiene(rootDir, issues);
 
   const lockfile = await readAndValidateLockfile(rootDir, issues);
+  const lockfileV2 = lockfile ? toLockfileV2View(lockfile) : undefined;
 
-  if (lockfile) {
+  await checkRegionFiles(rootDir, compileResult.files, lockfileV2, issues);
+
+  if (lockfileV2) {
     await checkLockfileDrift({
       rootDir,
       profileBytes: profileBytes.bytes,
       templates: compileResult.templates,
       files: compileResult.files,
-      lockfile,
+      lockfile: lockfileV2,
       issues,
     });
   }
@@ -142,9 +152,16 @@ export async function runDoctor(
     profile: profileResult.profile,
     effective: deriveEffectivePermissions(profileResult.profile),
     generatedFiles: compileResult.files,
-    lockfile,
+    lockfile: lockfileV2,
     issues,
   });
+  await checkLocalRuntimeGitignore(rootDir, issues);
+  await checkForeignSkillAndSubagentCollisions(
+    rootDir,
+    compileResult.files,
+    lockfileV2,
+    issues,
+  );
 
   return toResult(issues);
 }
@@ -154,7 +171,7 @@ type DriftInput = {
   profileBytes: Uint8Array;
   templates: TemplateDescriptor[];
   files: GeneratedFile[];
-  lockfile: AiProfileLockV1;
+  lockfile: AiProfileLockV2;
   issues: DoctorIssue[];
 };
 
@@ -394,7 +411,7 @@ async function checkSemanticWarnings(
 async function readAndValidateLockfile(
   rootDir: string,
   issues: DoctorIssue[],
-): Promise<AiProfileLockV1 | undefined> {
+): Promise<AnyAiProfileLock | undefined> {
   const lockfileBytes = await readKnownFile(rootDir, LOCKFILE_PATH);
 
   if (!lockfileBytes.ok) {
@@ -441,10 +458,11 @@ async function checkLockfileDrift(input: DriftInput): Promise<void> {
     profileBytes: input.profileBytes,
     templates: input.templates,
     files: input.files,
+    mixedOutputs: collectMixedOutputDescriptorsFromLockfile(input.lockfile),
   });
   const expectedLockfile = JSON.parse(
     Buffer.from(expectedLockfileText.bytes).toString("utf8"),
-  ) as AiProfileLockV1;
+  ) as AiProfileLockV2;
   const currentProfileHash = sha256Hex(input.profileBytes);
 
   if (input.lockfile.profile.sha256 !== currentProfileHash) {
@@ -477,8 +495,11 @@ async function checkLockfileDrift(input: DriftInput): Promise<void> {
   );
 
   for (const output of expectedLockfile.outputs) {
+    if (output.ownership === "manual-owned") {
+      continue;
+    }
+
     const lockOutput = lockOutputsByKey.get(outputKey(output));
-    const expectedHash = lockOutput?.sha256 ?? output.sha256;
     const current = await readKnownFile(input.rootDir, output.path);
 
     if (!current.ok) {
@@ -496,6 +517,39 @@ async function checkLockfileDrift(input: DriftInput): Promise<void> {
       continue;
     }
 
+    if (output.ownership === "mixed") {
+      const lockRegion =
+        lockOutput && lockOutput.ownership === "mixed"
+          ? lockOutput.regions[0]
+          : output.regions[0];
+      const expectedHash = lockRegion?.sha256 ?? output.regions[0]?.sha256 ?? "";
+      const parsed = parseMixedFile(Buffer.from(current.bytes));
+
+      if (!parsed.ok) {
+        // Region marker issues are reported by checkRegionFiles; skip here.
+        continue;
+      }
+
+      if (parsed.generatedInnerHash !== expectedHash) {
+        input.issues.push(
+          issue(
+            "LINT-REGION-004",
+            "error",
+            output.path,
+            expectedHash,
+            parsed.generatedInnerHash,
+            `${output.path} generated region hash differs from ai-profile.lock.`,
+            "Run the compiler after reviewing the generated region diff.",
+          ),
+        );
+      }
+      continue;
+    }
+
+    const expectedHash =
+      lockOutput && lockOutput.ownership === "generated-owned"
+        ? lockOutput.sha256
+        : output.sha256;
     const currentHash = sha256Hex(current.bytes);
 
     if (currentHash !== expectedHash) {
@@ -512,6 +566,31 @@ async function checkLockfileDrift(input: DriftInput): Promise<void> {
       );
     }
   }
+}
+
+function collectMixedOutputDescriptorsFromLockfile(
+  lockfile: AiProfileLockV2,
+): Array<{ path: string; target: string; templateId: string; regionHash: string }> {
+  const result: Array<{
+    path: string;
+    target: string;
+    templateId: string;
+    regionHash: string;
+  }> = [];
+
+  for (const output of lockfile.outputs) {
+    if (output.ownership !== "mixed") continue;
+    const region = output.regions[0];
+    if (!region) continue;
+    result.push({
+      path: output.path,
+      target: region.target,
+      templateId: region.templateId,
+      regionHash: region.sha256,
+    });
+  }
+
+  return result;
 }
 
 function compareTemplates(
@@ -580,8 +659,8 @@ function compareTemplates(
 }
 
 function compareOutputs(
-  actual: LockOutput[],
-  expected: LockOutput[],
+  actual: LockOutputV2[],
+  expected: LockOutputV2[],
   issues: DoctorIssue[],
 ): void {
   const actualMap = new Map(
@@ -609,17 +688,17 @@ function compareOutputs(
       continue;
     }
 
-    if (
-      actualOutput.templateId !== expectedOutput.templateId ||
-      actualOutput.sha256 !== expectedOutput.sha256
-    ) {
+    const expectedSig = describeOutputSignature(expectedOutput);
+    const actualSig = describeOutputSignature(actualOutput);
+
+    if (expectedSig !== actualSig) {
       issues.push(
         issue(
           "LINT-LOCK-005",
           "error",
           expectedOutput.path,
-          `${expectedOutput.templateId}/${expectedOutput.sha256}`,
-          `${actualOutput.templateId}/${actualOutput.sha256}`,
+          expectedSig,
+          actualSig,
           `${expectedOutput.path} lockfile output metadata differs from current compiler output.`,
           "Regenerate generated outputs and ai-profile.lock after reviewing changes.",
         ),
@@ -642,6 +721,17 @@ function compareOutputs(
       );
     }
   }
+}
+
+function describeOutputSignature(output: LockOutputV2): string {
+  if (output.ownership === "mixed") {
+    const region = output.regions[0];
+    return `mixed/${output.templateId}/${region?.sha256 ?? ""}`;
+  }
+  if (output.ownership === "manual-owned") {
+    return "manual-owned/manual/-";
+  }
+  return `generated/${output.templateId}/${output.sha256}`;
 }
 
 async function checkPermissionPosture(
@@ -1466,7 +1556,7 @@ type SubagentCheckInput = {
   profile: AiProfile;
   effective: AiProfileEffectivePermissions;
   generatedFiles: GeneratedFile[];
-  lockfile: import("@agent-profile/compiler").AiProfileLockV1 | undefined;
+  lockfile: AiProfileLockV2 | undefined;
   issues: DoctorIssue[];
 };
 
@@ -1926,7 +2016,7 @@ function templateKey(template: Pick<LockTemplate, "id" | "target">): string {
   return `${template.id}\u0000${template.target}`;
 }
 
-function outputKey(output: Pick<LockOutput, "path" | "target">): string {
+function outputKey(output: { path: string; target: string }): string {
   return `${output.path}\u0000${output.target}`;
 }
 
@@ -2159,4 +2249,346 @@ function decodeUtf8(bytes: Uint8Array): string {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+const REGION_FILE_PATHS = ["AGENTS.md", "CLAUDE.md"] as const;
+const LOCAL_RUNTIME_IGNORE_PATHS = [
+  ".cce/",
+  ".mcp.json",
+  ".claude/settings.local.json",
+  ".claude/worktrees/",
+  ".codex/config.toml",
+  ".codex/hooks.json",
+] as const;
+
+async function checkRegionFiles(
+  rootDir: string,
+  generatedFiles: GeneratedFile[],
+  lockfile: AiProfileLockV2 | undefined,
+  issues: DoctorIssue[],
+): Promise<void> {
+  const ownershipByPath = new Map(
+    (lockfile?.outputs ?? []).map((output) => [output.path, output.ownership]),
+  );
+
+  for (const relativePath of REGION_FILE_PATHS) {
+    const current = await readKnownFile(rootDir, relativePath);
+    if (!current.ok) continue;
+
+    const bytes = Buffer.from(current.bytes);
+    const ownership = ownershipByPath.get(relativePath);
+    const allMarkers = hasAllRegionMarkers(bytes);
+    const anyMarkers = hasAnyRegionMarker(bytes);
+    const generatedFile = generatedFiles.find(
+      (file) => file.path === relativePath,
+    );
+
+    if (ownership === "mixed") {
+      const parsed = parseMixedFile(bytes);
+
+      if (!parsed.ok) {
+        const code = parsed.issues.some(
+          (item) => item.code === "duplicate-markers",
+        )
+          ? "LINT-REGION-002"
+          : "LINT-REGION-001";
+        issues.push(
+          issue(
+            code,
+            "error",
+            relativePath,
+            "valid generated/manual region markers",
+            "invalid region markers",
+            `${relativePath} region markers are not valid for a mixed-ownership file.`,
+            "Move or remove the file and re-run init --import --strategy regions --write.",
+          ),
+        );
+        continue;
+      }
+
+      if (!parsed.generatedInner.toString("utf8").includes(REGION_PRECEDENCE_TEXT)) {
+        issues.push(
+          issue(
+            "LINT-REGION-003",
+            "warning",
+            relativePath,
+            "required instruction precedence text in generated region",
+            "missing precedence text",
+            `${relativePath} generated region is missing the required precedence sentence.`,
+            "Re-run compile --write to refresh the generated region.",
+          ),
+        );
+      }
+      continue;
+    }
+
+    if (anyMarkers && !allMarkers) {
+      issues.push(
+        issue(
+          "LINT-REGION-001",
+          "error",
+          relativePath,
+          "valid generated/manual region markers",
+          "partial region markers",
+          `${relativePath} contains partial region markers.`,
+          "Move or remove the file and re-run init --import --strategy regions --write; the compiler will not auto-repair markers.",
+        ),
+      );
+      continue;
+    }
+
+    if (allMarkers) {
+      // File has full region shape but lockfile does not mark it mixed.
+      const parsed = parseMixedFile(bytes);
+      if (!parsed.ok) {
+        const code = parsed.issues.some(
+          (item) => item.code === "duplicate-markers",
+        )
+          ? "LINT-REGION-002"
+          : "LINT-REGION-001";
+        issues.push(
+          issue(
+            code,
+            "error",
+            relativePath,
+            "valid generated/manual region markers",
+            "invalid region markers",
+            `${relativePath} region markers are not valid.`,
+            "Move or remove the file and re-run init --import --strategy regions --write.",
+          ),
+        );
+      }
+      continue;
+    }
+
+    if (
+      generatedFile &&
+      ownership !== "generated-owned" &&
+      !allMarkers &&
+      hasLegacyGeneratedMarker(bytes)
+    ) {
+      issues.push(
+        issue(
+          "LINT-OWN-002",
+          "warning",
+          relativePath,
+          "lockfile-owned generated file",
+          "generated-looking file without lockfile ownership",
+          `${relativePath} contains the legacy generated marker but is not lockfile-owned.`,
+          "Run init --import --strategy regions --write to adopt the file into mixed ownership, or remove and re-run compile --write.",
+        ),
+      );
+      continue;
+    }
+
+    if (generatedFile && ownership !== "generated-owned" && !allMarkers) {
+      issues.push(
+        issue(
+          "LINT-OWN-001",
+          "error",
+          relativePath,
+          "lockfile-owned or mixed ownership",
+          "unknown ownership conflicts with generated output",
+          `${relativePath} exists but ownership cannot be proven; the compiler will refuse to write it.`,
+          "Run init --import --strategy regions --write to adopt the file into mixed ownership.",
+        ),
+      );
+    }
+  }
+}
+
+async function checkLocalRuntimeGitignore(
+  rootDir: string,
+  issues: DoctorIssue[],
+): Promise<void> {
+  const gitignore = await readKnownFile(rootDir, ".gitignore");
+  const lines = gitignore.ok
+    ? decodeUtf8(gitignore.bytes)
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter((line) => line !== "" && !line.startsWith("#"))
+    : [];
+
+  for (const recommended of LOCAL_RUNTIME_IGNORE_PATHS) {
+    const targetPath = recommended.replace(/\/$/u, "");
+    const exists = await pathExists(rootDir, targetPath);
+    if (!exists) continue;
+
+    if (!isIgnoreLinePresent(lines, recommended)) {
+      issues.push(
+        issue(
+          "LINT-GITIGNORE-002",
+          "warning",
+          ".gitignore",
+          `ignore line for ${recommended}`,
+          "missing",
+          `${recommended} exists locally but is not listed in .gitignore.`,
+          "Run agent-profile init --update-gitignore --write to add recommended ignore lines.",
+        ),
+      );
+    }
+  }
+}
+
+async function pathExists(
+  rootDir: string,
+  relativePath: string,
+): Promise<boolean> {
+  try {
+    safeOutputPath(relativePath);
+  } catch {
+    return false;
+  }
+
+  try {
+    const { lstat } = await import("node:fs/promises");
+    await lstat(path.join(rootDir, relativePath));
+    return true;
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function isIgnoreLinePresent(lines: string[], target: string): boolean {
+  const trimmed = target.replace(/\/$/u, "");
+  return lines.some((line) => {
+    const normalized = line.replace(/^\//u, "").replace(/\/$/u, "");
+    return normalized === trimmed;
+  });
+}
+
+async function checkForeignSkillAndSubagentCollisions(
+  rootDir: string,
+  generatedFiles: GeneratedFile[],
+  lockfile: AiProfileLockV2 | undefined,
+  issues: DoctorIssue[],
+): Promise<void> {
+  const ownedPaths = new Set(
+    (lockfile?.outputs ?? []).map((output) => output.path),
+  );
+  const generatedSkillByName = new Map<string, string>();
+  const generatedSubagentByName = new Map<string, string>();
+
+  for (const file of generatedFiles) {
+    const name = parseSkillOrSubagentName(decodeUtf8(file.bytes));
+    if (!name) continue;
+    if (
+      file.target === "codex-workflow-skills" ||
+      file.target === "claude-workflow-skills"
+    ) {
+      generatedSkillByName.set(name, file.path);
+    }
+    if (
+      file.target === "claude-subagents" ||
+      file.target === "codex-subagents" ||
+      file.target === "tabnine-subagents"
+    ) {
+      generatedSubagentByName.set(name, file.path);
+    }
+  }
+
+  const skillFiles = await collectSkillFiles(rootDir);
+
+  for (const skillPath of skillFiles) {
+    if (ownedPaths.has(skillPath)) continue;
+    const generatedPath = generatedFiles.find(
+      (file) => file.path === skillPath,
+    );
+    const file = await readKnownFile(rootDir, skillPath);
+    if (!file.ok) continue;
+    const text = decodeUtf8(file.bytes);
+    const name = parseSkillOrSubagentName(text);
+
+    if (generatedPath) {
+      issues.push(
+        issue(
+          "LINT-OWN-001",
+          "error",
+          skillPath,
+          "lockfile-owned generated skill",
+          "foreign skill at generated path",
+          `${skillPath} exists at a generated output path but is not lockfile-owned.`,
+          "Move or rename the existing skill, or run compile --write --force only after reviewing the diff.",
+        ),
+      );
+      continue;
+    }
+
+    if (name && generatedSkillByName.has(name)) {
+      const generatedSkillPath = generatedSkillByName.get(name)!;
+      if (generatedSkillPath !== skillPath) {
+        issues.push(
+          issue(
+            "LINT-SKILL-009",
+            "warning",
+            skillPath,
+            "skill name distinct from generated skills",
+            `name collides with generated ${generatedSkillPath}`,
+            `${skillPath} declares skill name ${name}, which collides with generated ${generatedSkillPath}.`,
+            "Rename the foreign skill or move it to a different name to avoid runtime collision.",
+          ),
+        );
+      }
+    }
+  }
+
+  const subagentFiles: string[] = [];
+  for (const root of SUBAGENT_ROOTS) {
+    const files = await collectSubagentFilesUnder(rootDir, root);
+    for (const file of files) subagentFiles.push(file);
+  }
+
+  for (const subagentPath of subagentFiles) {
+    if (ownedPaths.has(subagentPath)) continue;
+    const generatedPath = generatedFiles.find(
+      (file) => file.path === subagentPath,
+    );
+    const file = await readKnownFile(rootDir, subagentPath);
+    if (!file.ok) continue;
+    const text = decodeUtf8(file.bytes);
+    const name = parseSkillOrSubagentName(text);
+
+    if (generatedPath) {
+      issues.push(
+        issue(
+          "LINT-OWN-001",
+          "error",
+          subagentPath,
+          "lockfile-owned generated subagent",
+          "foreign subagent at generated path",
+          `${subagentPath} exists at a generated output path but is not lockfile-owned.`,
+          "Move or rename the existing subagent, or run compile --write --force only after reviewing the diff.",
+        ),
+      );
+      continue;
+    }
+
+    if (name && generatedSubagentByName.has(name)) {
+      const generatedSubagentPath = generatedSubagentByName.get(name)!;
+      if (generatedSubagentPath !== subagentPath) {
+        issues.push(
+          issue(
+            "LINT-SUBAGENT-009",
+            "warning",
+            subagentPath,
+            "subagent name distinct from generated subagents",
+            `name collides with generated ${generatedSubagentPath}`,
+            `${subagentPath} declares subagent name ${name}, which collides with generated ${generatedSubagentPath}.`,
+            "Rename the foreign subagent to avoid runtime collision.",
+          ),
+        );
+      }
+    }
+  }
+}
+
+function parseSkillOrSubagentName(text: string): string | undefined {
+  const fm = parseMarkdownFrontmatter(text);
+  if (typeof fm.name === "string" && fm.name.length > 0) return fm.name;
+  const tomlMatch = /^\s*name\s*=\s*"([^"]+)"/mu.exec(text);
+  if (tomlMatch && tomlMatch[1]) return tomlMatch[1];
+  return undefined;
 }

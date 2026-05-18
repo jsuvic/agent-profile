@@ -11,11 +11,40 @@ export {
 } from "./shared.js";
 export {
   buildLockfile,
+  buildLockfileV1,
   createLockfileFile,
+  createLockfileV1File,
+  migrateLockfileV1ToV2,
   serializeLockfile,
+  toLockfileV2View,
   validateLockfileText,
   validateLockfileValue,
 } from "./lockfile.js";
+export type {
+  BuildLockfileInput,
+  MixedOutputDescriptor,
+} from "./lockfile.js";
+export {
+  GENERATED_END_MARKER,
+  GENERATED_START_MARKER,
+  LEGACY_GENERATED_MARKER,
+  MANUAL_END_MARKER,
+  MANUAL_START_MARKER,
+  REGION_PRECEDENCE_TEXT,
+  ensureLfTrailingNewline,
+  hasAllRegionMarkers,
+  hasAnyRegionMarker,
+  hasLegacyGeneratedMarker,
+  parseMixedFile,
+  replaceGeneratedRegion,
+  serializeMixedFile,
+} from "./regions.js";
+export type {
+  ParsedRegions,
+  RegionOwnership,
+  RegionParseIssue,
+  RegionParseIssueCode,
+} from "./regions.js";
 export {
   compileProfile,
   getDefaultTemplates,
@@ -36,6 +65,8 @@ export {
 } from "./golden.js";
 export type {
   AiProfileLockV1,
+  AiProfileLockV2,
+  AnyAiProfileLock,
   CompilerInfo,
   CompilerTargetId,
   CompileIssue,
@@ -45,6 +76,12 @@ export type {
   GeneratedFile,
   GoldenFailure,
   LockOutput,
+  LockOutputOwnership,
+  LockOutputV2,
+  LockGeneratedOwnedOutputV2,
+  LockManualOwnedOutputV2,
+  LockMixedOutputV2,
+  LockRegionV2,
   LockTemplate,
   LockfileIssue,
   LockfileIssueCode,

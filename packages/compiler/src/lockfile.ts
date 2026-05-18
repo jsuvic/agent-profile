@@ -10,14 +10,27 @@ import {
 } from "./shared.js";
 import type {
   AiProfileLockV1,
+  AiProfileLockV2,
+  AnyAiProfileLock,
   CompilerInfo,
   GeneratedFile,
   LockfileIssue,
   LockfileValidationResult,
+  LockGeneratedOwnedOutputV2,
+  LockMixedOutputV2,
   LockOutput,
+  LockOutputV2,
+  LockRegionV2,
   LockTemplate,
   TemplateDescriptor,
 } from "./types.js";
+
+export type MixedOutputDescriptor = {
+  path: string;
+  target: string;
+  templateId: string;
+  regionHash: string;
+};
 
 export type BuildLockfileInput = {
   profilePath?: string;
@@ -25,9 +38,37 @@ export type BuildLockfileInput = {
   compiler?: CompilerInfo;
   templates: TemplateDescriptor[];
   files: GeneratedFile[];
+  /** Optional: paths with mixed ownership and their region hashes. */
+  mixedOutputs?: MixedOutputDescriptor[];
 };
 
-export function buildLockfile(input: BuildLockfileInput): AiProfileLockV1 {
+const SUPPORTED_VERSIONS = new Set([1, 2]);
+
+export function buildLockfile(input: BuildLockfileInput): AiProfileLockV2 {
+  const profilePath = safeOutputPath(input.profilePath ?? "ai-profile.yaml");
+  const mixedByPath = new Map(
+    (input.mixedOutputs ?? []).map((entry) => [
+      safeOutputPath(entry.path),
+      entry,
+    ]),
+  );
+
+  return {
+    version: 2,
+    profile: {
+      path: profilePath,
+      schemaVersion: 1,
+      sha256: sha256Hex(input.profileBytes),
+    },
+    compiler: input.compiler ?? AGENT_PROFILE_COMPILER,
+    templates: input.templates.map(toLockTemplate).sort(compareLockTemplates),
+    outputs: input.files
+      .map((file) => toLockOutputV2(file, mixedByPath))
+      .sort(compareLockOutputsV2),
+  };
+}
+
+export function buildLockfileV1(input: BuildLockfileInput): AiProfileLockV1 {
   const profilePath = safeOutputPath(input.profilePath ?? "ai-profile.yaml");
 
   return {
@@ -39,11 +80,11 @@ export function buildLockfile(input: BuildLockfileInput): AiProfileLockV1 {
     },
     compiler: input.compiler ?? AGENT_PROFILE_COMPILER,
     templates: input.templates.map(toLockTemplate).sort(compareLockTemplates),
-    outputs: input.files.map(toLockOutput).sort(compareLockOutputs),
+    outputs: input.files.map(toLockOutputV1).sort(compareLockOutputs),
   };
 }
 
-export function serializeLockfile(lockfile: AiProfileLockV1): string {
+export function serializeLockfile(lockfile: AnyAiProfileLock): string {
   return `${JSON.stringify(lockfile, null, 2)}\n`;
 }
 
@@ -54,6 +95,40 @@ export function createLockfileFile(input: BuildLockfileInput): GeneratedFile {
     "targets/lockfile@1",
     serializeLockfile(buildLockfile(input)),
   );
+}
+
+export function createLockfileV1File(input: BuildLockfileInput): GeneratedFile {
+  return createGeneratedTextFile(
+    "ai-profile.lock",
+    "lockfile",
+    "targets/lockfile@1",
+    serializeLockfile(buildLockfileV1(input)),
+  );
+}
+
+/**
+ * Migrate a parsed v1 lockfile to v2 by promoting every v1 output to
+ * `generated-owned`. Order, hashes, target, and template ids are copied
+ * unchanged. The migration is deterministic and idempotent: calling it on the
+ * result of `buildLockfile(input)` for the same inputs produces byte-identical
+ * v2 bytes.
+ */
+export function migrateLockfileV1ToV2(lockfile: AiProfileLockV1): AiProfileLockV2 {
+  return {
+    version: 2,
+    profile: lockfile.profile,
+    compiler: lockfile.compiler,
+    templates: [...lockfile.templates].sort(compareLockTemplates),
+    outputs: lockfile.outputs
+      .map<LockGeneratedOwnedOutputV2>((output) => ({
+        path: output.path,
+        target: output.target,
+        templateId: output.templateId,
+        ownership: "generated-owned",
+        sha256: output.sha256,
+      }))
+      .sort(compareLockOutputsV2),
+  };
 }
 
 export function validateLockfileText(source: string): LockfileValidationResult {
@@ -79,19 +154,42 @@ export function validateLockfileValue(
   value: unknown,
 ): LockfileValidationResult {
   const issues: LockfileIssue[] = [];
-  validateLockfileObject(value, issues);
 
-  if (issues.length > 0) {
-    return {
-      ok: false,
-      issues: issues.sort(compareLockfileIssues),
-    };
+  if (!isRecord(value)) {
+    issues.push(schemaIssue("/", "object", describeValue(value)));
+    return { ok: false, issues };
   }
 
-  return {
-    ok: true,
-    lockfile: value as AiProfileLockV1,
-  };
+  const version = (value as Record<string, unknown>).version;
+
+  if (typeof version !== "number" || !SUPPORTED_VERSIONS.has(version)) {
+    issues.push({
+      code: "lockfile_unsupported_version",
+      path: "/version",
+      expected: "supported lockfile version (1 or 2)",
+      actual: describeValue(version),
+      message: `/version is not a supported lockfile version.`,
+    });
+    return { ok: false, issues };
+  }
+
+  if (version === 1) {
+    validateLockfileV1Object(value, issues);
+
+    if (issues.length > 0) {
+      return { ok: false, issues: issues.sort(compareLockfileIssues) };
+    }
+
+    return { ok: true, lockfile: value as AiProfileLockV1, version: 1 };
+  }
+
+  validateLockfileV2Object(value, issues);
+
+  if (issues.length > 0) {
+    return { ok: false, issues: issues.sort(compareLockfileIssues) };
+  }
+
+  return { ok: true, lockfile: value as AiProfileLockV2, version: 2 };
 }
 
 function toLockTemplate(template: TemplateDescriptor): LockTemplate {
@@ -103,7 +201,7 @@ function toLockTemplate(template: TemplateDescriptor): LockTemplate {
   };
 }
 
-function validateLockfileObject(value: unknown, issues: LockfileIssue[]): void {
+function validateLockfileV1Object(value: unknown, issues: LockfileIssue[]): void {
   if (!isRecord(value)) {
     issues.push(schemaIssue("/", "object", describeValue(value)));
     return;
@@ -125,7 +223,32 @@ function validateLockfileObject(value: unknown, issues: LockfileIssue[]): void {
   validateProfile(value.profile, issues);
   validateCompiler(value.compiler, issues);
   validateTemplates(value.templates, issues);
-  validateOutputs(value.outputs, issues);
+  validateOutputsV1(value.outputs, issues);
+}
+
+function validateLockfileV2Object(value: unknown, issues: LockfileIssue[]): void {
+  if (!isRecord(value)) {
+    issues.push(schemaIssue("/", "object", describeValue(value)));
+    return;
+  }
+
+  requireExactKeys(
+    value,
+    "/",
+    ["version", "profile", "compiler", "templates", "outputs"],
+    issues,
+  );
+
+  if (value.version !== 2) {
+    issues.push(
+      schemaIssue("/version", "constant 2", describeValue(value.version)),
+    );
+  }
+
+  validateProfile(value.profile, issues);
+  validateCompiler(value.compiler, issues);
+  validateTemplates(value.templates, issues);
+  validateOutputsV2(value.outputs, issues);
 }
 
 function validateProfile(value: unknown, issues: LockfileIssue[]): void {
@@ -214,7 +337,7 @@ function validateTemplates(value: unknown, issues: LockfileIssue[]): void {
   });
 }
 
-function validateOutputs(value: unknown, issues: LockfileIssue[]): void {
+function validateOutputsV1(value: unknown, issues: LockfileIssue[]): void {
   if (!Array.isArray(value)) {
     issues.push(schemaIssue("/outputs", "array", describeValue(value)));
     return;
@@ -254,6 +377,144 @@ function validateOutputs(value: unknown, issues: LockfileIssue[]): void {
     }
 
     previous = current;
+  });
+}
+
+function validateOutputsV2(value: unknown, issues: LockfileIssue[]): void {
+  if (!Array.isArray(value)) {
+    issues.push(schemaIssue("/outputs", "array", describeValue(value)));
+    return;
+  }
+
+  let previous: LockOutputV2 | undefined;
+
+  value.forEach((item, index) => {
+    const path = `/outputs/${index}`;
+
+    if (!isRecord(item)) {
+      issues.push(schemaIssue(path, "object", describeValue(item)));
+      return;
+    }
+
+    const ownership = (item as { ownership?: unknown }).ownership;
+
+    if (ownership === "generated-owned") {
+      requireExactKeys(
+        item,
+        path,
+        ["path", "target", "templateId", "ownership", "sha256"],
+        issues,
+      );
+      validatePath(item.path, `${path}/path`, issues);
+      validateString(item.target, `${path}/target`, issues);
+      validateString(item.templateId, `${path}/templateId`, issues);
+      validateHash(item.sha256, `${path}/sha256`, issues);
+    } else if (ownership === "mixed") {
+      requireExactKeys(
+        item,
+        path,
+        ["path", "target", "templateId", "ownership", "regions"],
+        issues,
+      );
+      validatePath(item.path, `${path}/path`, issues);
+      validateString(item.target, `${path}/target`, issues);
+      validateString(item.templateId, `${path}/templateId`, issues);
+      validateRegions(item.regions, `${path}/regions`, issues);
+    } else if (ownership === "manual-owned") {
+      requireExactKeys(
+        item,
+        path,
+        ["path", "target", "templateId", "ownership"],
+        issues,
+      );
+      validatePath(item.path, `${path}/path`, issues);
+      if (item.target !== "manual") {
+        issues.push(
+          schemaIssue(`${path}/target`, '"manual"', describeValue(item.target)),
+        );
+      }
+      if (item.templateId !== "manual") {
+        issues.push(
+          schemaIssue(
+            `${path}/templateId`,
+            '"manual"',
+            describeValue(item.templateId),
+          ),
+        );
+      }
+    } else {
+      issues.push(
+        schemaIssue(
+          `${path}/ownership`,
+          '"generated-owned" | "mixed" | "manual-owned"',
+          describeValue(ownership),
+        ),
+      );
+    }
+
+    const current = item as LockOutputV2;
+
+    if (previous && compareLockOutputsV2(previous, current) > 0) {
+      issues.push({
+        code: "lockfile_order_error",
+        path,
+        expected: "outputs sorted by path then target",
+        actual: "out of order",
+        message: `${path} is not in deterministic order.`,
+      });
+    }
+
+    previous = current;
+  });
+}
+
+function validateRegions(
+  value: unknown,
+  pathPrefix: string,
+  issues: LockfileIssue[],
+): void {
+  if (!Array.isArray(value)) {
+    issues.push(schemaIssue(pathPrefix, "array", describeValue(value)));
+    return;
+  }
+
+  if (value.length !== 1) {
+    issues.push(
+      schemaIssue(
+        pathPrefix,
+        "exactly one generated region",
+        `${value.length} regions`,
+      ),
+    );
+  }
+
+  value.forEach((item, index) => {
+    const path = `${pathPrefix}/${index}`;
+    if (!isRecord(item)) {
+      issues.push(schemaIssue(path, "object", describeValue(item)));
+      return;
+    }
+
+    requireExactKeys(
+      item,
+      path,
+      ["id", "target", "templateId", "sha256"],
+      issues,
+    );
+
+    if (item.id !== "agent-profile:generated") {
+      issues.push(
+        schemaIssue(
+          `${path}/id`,
+          '"agent-profile:generated"',
+          describeValue(item.id),
+        ),
+      );
+    }
+
+    validateString(item.target, `${path}/target`, issues);
+    validateString(item.templateId, `${path}/templateId`, issues);
+    validateHash(item.sha256, `${path}/sha256`, issues);
   });
 }
 
@@ -386,13 +647,46 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function toLockOutput(file: GeneratedFile): LockOutput {
+function toLockOutputV1(file: GeneratedFile): LockOutput {
   return {
     path: safeOutputPath(file.path),
     target: file.target,
     templateId: file.templateId,
     sha256: file.sha256,
   };
+}
+
+function toLockOutputV2(
+  file: GeneratedFile,
+  mixedByPath: Map<string, MixedOutputDescriptor>,
+): LockOutputV2 {
+  const safePath = safeOutputPath(file.path);
+  const mixed = mixedByPath.get(safePath);
+
+  if (mixed) {
+    return {
+      path: safePath,
+      target: file.target,
+      templateId: file.templateId,
+      ownership: "mixed",
+      regions: [
+        {
+          id: "agent-profile:generated",
+          target: mixed.target,
+          templateId: mixed.templateId,
+          sha256: mixed.regionHash,
+        },
+      ],
+    } satisfies LockMixedOutputV2;
+  }
+
+  return {
+    path: safePath,
+    target: file.target,
+    templateId: file.templateId,
+    ownership: "generated-owned",
+    sha256: file.sha256,
+  } satisfies LockGeneratedOwnedOutputV2;
 }
 
 function compareLockTemplates(left: LockTemplate, right: LockTemplate): number {
@@ -406,3 +700,22 @@ function compareLockOutputs(left: LockOutput, right: LockOutput): number {
     compareText(left.path, right.path) || compareText(left.target, right.target)
   );
 }
+
+function compareLockOutputsV2(left: LockOutputV2, right: LockOutputV2): number {
+  return (
+    compareText(left.path, right.path) || compareText(left.target, right.target)
+  );
+}
+
+export type AnyLockOutput = LockOutput | LockOutputV2;
+
+/**
+ * Normalize a v1 or v2 lockfile to a uniform v2 view for consumers. v1
+ * outputs are promoted to `generated-owned` outputs.
+ */
+export function toLockfileV2View(lockfile: AnyAiProfileLock): AiProfileLockV2 {
+  if (lockfile.version === 2) return lockfile;
+  return migrateLockfileV1ToV2(lockfile);
+}
+
+export type { LockRegionV2 };
