@@ -1753,47 +1753,52 @@ function checkClaudeSubagentFile(
   }
 
   const tools = parseClaudeToolList(frontmatter.tools);
-  if (tools.includes("Bash") && effective.shell.run !== "allow") {
+  // Phase 13: the subagent tool allowlist is broadened by the renderer
+  // whenever the corresponding effectivePermission is not `deny`. Doctor
+  // therefore only flags broadening when the permission is explicitly
+  // denied; the per-call `ask` flow is handled by Claude's runtime
+  // permission system, not by the tool allowlist.
+  if (tools.includes("Bash") && effective.shell.run === "deny") {
     issues.push(
       issue(
         "LINT-SUBAGENT-001",
         "error",
         relativePath,
-        "tools narrower than effectivePermissions.shell.run",
+        "tools narrower than effectivePermissions.shell.run=deny",
         "Bash tool granted",
-        `${relativePath} grants the Bash tool while effectivePermissions.shell.run is ${effective.shell.run}.`,
-        "Remove Bash from the Claude subagent tools list or tighten effectivePermissions.",
+        `${relativePath} grants the Bash tool while effectivePermissions.shell.run is deny.`,
+        "Remove Bash from the Claude subagent tools list or relax shell.run from deny.",
       ),
     );
   }
 
   if (
     tools.some((tool) => CLAUDE_WRITE_TOOLS.has(tool)) &&
-    effective.filesystem.write !== "allow"
+    effective.filesystem.write === "deny"
   ) {
     issues.push(
       issue(
         "LINT-SUBAGENT-001",
         "error",
         relativePath,
-        "tools narrower than effectivePermissions.filesystem.write",
+        "tools narrower than effectivePermissions.filesystem.write=deny",
         "Edit/Write tool granted",
-        `${relativePath} grants write tools while effectivePermissions.filesystem.write is ${effective.filesystem.write}.`,
-        "Remove Edit/Write from the Claude subagent tools list or tighten effectivePermissions.",
+        `${relativePath} grants write tools while effectivePermissions.filesystem.write is deny.`,
+        "Remove Edit/Write from the Claude subagent tools list or relax filesystem.write from deny.",
       ),
     );
   }
 
-  if (tools.includes("WebFetch") && effective.network.external !== "allow") {
+  if (tools.includes("WebFetch") && effective.network.external === "deny") {
     issues.push(
       issue(
         "LINT-SUBAGENT-001",
         "error",
         relativePath,
-        "tools narrower than effectivePermissions.network.external",
+        "tools narrower than effectivePermissions.network.external=deny",
         "WebFetch tool granted",
-        `${relativePath} grants the WebFetch tool while effectivePermissions.network.external is ${effective.network.external}.`,
-        "Remove WebFetch from the Claude subagent tools list or tighten effectivePermissions.",
+        `${relativePath} grants the WebFetch tool while effectivePermissions.network.external is deny.`,
+        "Remove WebFetch from the Claude subagent tools list or relax network.external from deny.",
       ),
     );
   }

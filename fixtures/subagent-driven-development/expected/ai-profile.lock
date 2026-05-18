@@ -44,7 +44,7 @@
       "id": "targets/claude-subagents/implementer@1",
       "target": "claude-subagents",
       "version": "1",
-      "sha256": "1115a9abb7a9a32c8d864bf13a1e4185d30b4dcb7d34170f882237a879f775b1"
+      "sha256": "42142a3518a7bb92bb8204446847609cd770213374797a40c9c2f5a665b13651"
     },
     {
       "id": "targets/claude-subagents/spec-reviewer@1",
@@ -166,7 +166,7 @@
       "target": "claude-subagents",
       "templateId": "targets/claude-subagents/implementer@1",
       "ownership": "generated-owned",
-      "sha256": "1115a9abb7a9a32c8d864bf13a1e4185d30b4dcb7d34170f882237a879f775b1"
+      "sha256": "42142a3518a7bb92bb8204446847609cd770213374797a40c9c2f5a665b13651"
     },
     {
       "path": ".claude/agents/spec-reviewer.md",

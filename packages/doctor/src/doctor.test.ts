@@ -573,8 +573,12 @@ capabilities:
     "LINT-SUBAGENT-003",
   );
 
-  // Claude Bash tool while shell.run=ask -> LINT-SUBAGENT-001
-  const broadenRoot = await createGeneratedProject({ extraYaml: subagentExtras });
+  // Claude Bash tool while shell.run=deny -> LINT-SUBAGENT-001
+  // The Phase 13 contract treats `deny` as the safety floor for subagent
+  // tool allowlists; `ask` is delegated to Claude's runtime per-call gate.
+  const broadenRoot = await createGeneratedProject({
+    extraYaml: `${subagentExtras}\npermissions:\n  filesystem:\n    read: allow\n    write: ask\n  shell:\n    run: deny\n  secrets:\n    access: deny\n  dependencies:\n    install: ask\n  network:\n    external: ask\n  production:\n    access: deny\n`,
+  });
   await writeProjectFile(
     broadenRoot,
     ".claude/agents/code-reviewer.md",

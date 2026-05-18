@@ -1049,14 +1049,20 @@ function renderClaudeSubagent(
   if (agent.toolScope === "read-only") {
     lines.push("tools: Read, Glob, Grep");
   } else {
+    // Workspace-write subagents need the tools required to do their work.
+    // The Phase 13 contract aligns the tool allowlist with the Codex
+    // sandbox_mode: grant write/shell/network tools whenever the
+    // corresponding effectivePermission is not explicitly `deny`. Per-call
+    // approval (`ask` mode) is handled by Claude's runtime permission
+    // system, not by suppressing tools from the subagent frontmatter.
     const tools = ["Read", "Glob", "Grep"];
-    if (effective.filesystem.write === "allow") {
+    if (effective.filesystem.write !== "deny") {
       tools.push("Edit", "Write");
     }
-    if (effective.shell.run === "allow") {
+    if (effective.shell.run !== "deny") {
       tools.push("Bash");
     }
-    if (effective.network.external === "allow") {
+    if (effective.network.external !== "deny") {
       tools.push("WebFetch");
     }
     lines.push(`tools: ${tools.join(", ")}`);

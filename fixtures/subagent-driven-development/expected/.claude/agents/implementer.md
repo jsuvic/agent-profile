@@ -1,7 +1,7 @@
 ---
 name: implementer
 description: Use for a bounded implementation task after the parent agent has provided the full task text, relevant spec excerpts, file ownership, constraints, and expected tests. Returns an explicit status and does not commit or push unless the parent request includes that requirement.
-tools: Read, Glob, Grep
+tools: Read, Glob, Grep, Edit, Write, Bash, WebFetch
 model: inherit
 maxTurns: 18
 ---
