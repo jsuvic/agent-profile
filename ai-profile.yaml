@@ -23,6 +23,18 @@ workflow:
   sdd: true
   tdd: true
   finalReview: true
+  subagentDrivenDevelopment: true
+capabilities:
+  delegation:
+    subagents:
+      enabled: true
+      defaults:
+        maxConcurrent: 3
+        maxDepth: 1
+      agents:
+        - useTemplate: implementer
+        - useTemplate: spec-reviewer
+        - useTemplate: code-quality-reviewer
 permissions:
   filesystem:
     read: allow
