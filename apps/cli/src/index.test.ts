@@ -337,13 +337,19 @@ test("compile protects existing user-authored files until force is supplied", as
   );
 
   assert.equal(protectedCode, 3);
-  assert.match(protectedOutput.stderrText(), /without --force/u);
-  assert.match(protectedOutput.stderrText(), /no lockfile/u);
+  assert.match(
+    protectedOutput.stderrText(),
+    /init --import --strategy regions --write/u,
+  );
   assert.equal(
     await readFile(path.join(rootDir, "AGENTS.md"), "utf8"),
     "manual instructions\n",
   );
 
+  // Phase 14: --force does not bypass region-aware refusal for AGENTS.md /
+  // CLAUDE.md. The supported repair path is to remove or adopt the file via
+  // init --import --strategy regions --write before re-running compile.
+  await rm(path.join(rootDir, "AGENTS.md"));
   const forcedCode = await runCli(
     ["compile", "--root", rootDir, "--write", "--force"],
     { io: createOutput() },
@@ -368,8 +374,16 @@ test("compile treats invalid lockfiles as protected unless force is supplied", a
   );
 
   assert.equal(protectedCode, 3);
-  assert.match(protectedOutput.stderrText(), /invalid lockfile/u);
+  assert.match(
+    protectedOutput.stderrText(),
+    /init --import --strategy regions --write|invalid lockfile/u,
+  );
 
+  // After Phase 14, the region-aware refusal takes precedence over the
+  // protected-paths invalid-lockfile reason. Removing the manual AGENTS.md
+  // (or running init --strategy regions) is required before compile can
+  // continue; we exercise the explicit replacement path here.
+  await rm(path.join(rootDir, "AGENTS.md"));
   const forcedCode = await runCli(
     [
       "compile",
@@ -1440,7 +1454,11 @@ async function createFixtureRoot(): Promise<string> {
     path.join(rootDir, "ai-profile.yaml"),
     await readFile(path.join(fixtureDir, "ai-profile.yaml")),
   );
-  await writeFile(path.join(rootDir, ".gitignore"), ".env\n.env.*\n", "utf8");
+  await writeFile(
+    path.join(rootDir, ".gitignore"),
+    ".env\n.env.*\n.cce/\n.mcp.json\n.claude/settings.local.json\n.claude/worktrees/\n.codex/config.toml\n.codex/hooks.json\n",
+    "utf8",
+  );
   await copyExpectedFiles(expectedDir, rootDir);
   return rootDir;
 }

@@ -11,7 +11,7 @@ import test from "node:test";
 import {
   compileProfile,
   createLockfileFile,
-  type AiProfileLockV1,
+  type AiProfileLockV2,
 } from "@agent-profile/compiler";
 import { parseProfileYaml } from "@agent-profile/core";
 
@@ -94,10 +94,14 @@ test("doctor reports profile, template, output metadata, and generated file drif
 
   const outputRoot = await createGeneratedProject();
   const outputLock = await readLockfile(outputRoot);
-  outputLock.outputs[0] = {
-    ...outputLock.outputs[0],
-    sha256: "1111111111111111111111111111111111111111111111111111111111111111",
-  };
+  const firstOutput = outputLock.outputs[0];
+  if (firstOutput && firstOutput.ownership === "generated-owned") {
+    outputLock.outputs[0] = {
+      ...firstOutput,
+      sha256:
+        "1111111111111111111111111111111111111111111111111111111111111111",
+    };
+  }
   await writeLockfile(outputRoot, outputLock);
   assertHasIssue(await runDoctor({ rootDir: outputRoot }), "LINT-LOCK-005");
 
@@ -128,6 +132,7 @@ test("doctor reports profile, template, output metadata, and generated file drif
     path: "secrets/token.txt",
     target: "agents-md",
     templateId: "targets/agents-md@1",
+    ownership: "generated-owned",
     sha256: "3333333333333333333333333333333333333333333333333333333333333333",
   });
   await writeLockfile(extraSecretRoot, extraSecretLock);
@@ -703,7 +708,11 @@ async function createGeneratedProject(
   }
 
   await writeProjectFile(rootDir, "ai-profile.yaml", profileBytes);
-  await writeProjectFile(rootDir, ".gitignore", ".env\n.env.*\n");
+  await writeProjectFile(
+    rootDir,
+    ".gitignore",
+    ".env\n.env.*\n.cce/\n.mcp.json\n.claude/settings.local.json\n.claude/worktrees/\n.codex/config.toml\n.codex/hooks.json\n",
+  );
 
   for (const file of compileResult.files) {
     await writeProjectFile(rootDir, file.path, file.bytes);
@@ -757,15 +766,15 @@ async function writeProjectFile(
   await writeFile(target, bytes);
 }
 
-async function readLockfile(rootDir: string): Promise<AiProfileLockV1> {
+async function readLockfile(rootDir: string): Promise<AiProfileLockV2> {
   return JSON.parse(
     await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
-  ) as AiProfileLockV1;
+  ) as AiProfileLockV2;
 }
 
 async function writeLockfile(
   rootDir: string,
-  lockfile: AiProfileLockV1,
+  lockfile: AiProfileLockV2,
 ): Promise<void> {
   await writeFile(
     path.join(rootDir, "ai-profile.lock"),

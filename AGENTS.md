@@ -1,3 +1,68 @@
+<!-- agent-profile:generated:start -->
+# AGENTS.md
+
+## Instruction Precedence
+
+If generated and manual instructions conflict, follow the manual project instructions unless they would weaken safety, privacy, or permission limits. Safety, privacy, and explicit deny rules always win.
+
+## Project
+
+Name: agent-profile
+
+Description: Local AI-agent setup.
+
+## Stack
+
+- Languages: typescript
+- Frameworks: None declared
+- Package managers: npm
+- Testing: None declared
+
+## Enabled AI Clients
+
+- Codex
+- Claude
+
+## Development Workflow
+
+- SDD: Required
+- TDD: Required
+- Final implementation review: Required
+
+## Permissions
+
+| Permission         | Mode  |
+| ------------------ | ----- |
+| filesystem read    | allow |
+| filesystem write   | ask   |
+| shell run          | ask   |
+| dependency install | ask   |
+| external network   | ask   |
+| secrets access     | deny  |
+| production access  | deny  |
+
+## Safety Rules
+
+- No source-code upload.
+- No secret upload.
+- No literal tokens in generated configs.
+- No telemetry by default.
+- No hosted execution in the MVP.
+
+## Scope Limits
+
+Cursor, Aider, Copilot, hosted gateways, enterprise RBAC, SIEM integrations, and custom sandbox runtimes are out of scope unless an approved spec adds them.
+
+## Completion Checklist
+
+- Run tests.
+- Run golden tests when generated files change.
+- Run doctor/check once available.
+- Review the implementation against the relevant spec.
+- List remaining risks or TODOs.
+<!-- agent-profile:generated:end -->
+
+<!-- agent-profile:manual:start -->
 # AGENTS.md
 
 ## Project
@@ -98,3 +163,4 @@ End every implementation task with:
 4. Security impact
 5. Remaining risks or TODOs
 6. Whether the spec acceptance criteria are fully met
+<!-- agent-profile:manual:end -->

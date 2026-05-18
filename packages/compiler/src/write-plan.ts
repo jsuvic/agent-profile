@@ -143,6 +143,12 @@ async function assertWritePathContained(
   const existingTarget = await lstatOptional(absolutePath);
 
   if (existingTarget) {
+    if (existingTarget.isSymbolicLink()) {
+      throw new Error(
+        `Planned write target is a symlink (refusing to follow): ${safePath}`,
+      );
+    }
+
     const targetRealPath = await fsPromises.realpath(absolutePath);
 
     if (!isContainedBy(rootRealPath, targetRealPath)) {
@@ -164,7 +170,8 @@ async function findExistingAncestor(startPath: string): Promise<string> {
   let current = startPath;
 
   while (true) {
-    if (await lstatOptional(current)) {
+    const stat = await lstatOptional(current);
+    if (stat) {
       return current;
     }
 
@@ -192,10 +199,11 @@ async function readOptionalFile(
   }
 }
 
-async function lstatOptional(absolutePath: string): Promise<true | undefined> {
+async function lstatOptional(
+  absolutePath: string,
+): Promise<Awaited<ReturnType<typeof fsPromises.lstat>> | undefined> {
   try {
-    await fsPromises.lstat(absolutePath);
-    return true;
+    return await fsPromises.lstat(absolutePath);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;

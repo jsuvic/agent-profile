@@ -7,6 +7,15 @@ Verified
 Approved for Phase 5 implementation on 2026-05-02. Implemented on
 2026-05-03. Verified on 2026-05-03 with workspace checks, tests, and build.
 
+Phase 14 supersedes parts of this spec for repositories that want
+region-aware adoption of existing instruction files. The Phase 5 conservative
+preserve-by-default behavior remains the default; Phase 14 adds an explicit
+`--strategy regions` opt-in path with byte-for-byte preservation of manual
+content. See
+[`docs/specs/phase-14/001-safe-import-ownership-and-regions.md`](../phase-14/001-safe-import-ownership-and-regions.md)
+for the ownership model, region markers, write-plan behavior, and structured
+`ImportReport` JSON shape emitted by `init --import --json`.
+
 ## Problem
 
 Many repositories already have `AGENTS.md`, `CLAUDE.md`, or Tabnine guideline

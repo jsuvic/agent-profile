@@ -18,13 +18,20 @@ Deferred:
 ```bash
 agent-profile doctor [--root <path>] [--json]
 agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
-agent-profile init [--root <path>] [--profile <path>] [--import] [--preset <token>] [--client <list>] [--no-client <list>] [--json] [--quiet] [--dry-run|--write]
+agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--json] [--quiet] [--dry-run|--write]
 agent-profile ui [--root <path>] [--host <host>] [--port <number>] [--open]
 ```
 
 `compile` and `init` default to dry-run. File mutation requires `--write`.
 `compile --write` requires `--force` before replacing existing generated-path
 files that are not proven compiler-owned by `ai-profile.lock`.
+
+For region-aware root instruction files (`AGENTS.md` and `CLAUDE.md`),
+`compile --write` refuses to overwrite unmarked existing files and does not
+accept `--force` as a bypass; the supported repair path is
+`agent-profile init --import --strategy regions --write` (or moving/removing
+the file). This matches the Phase 14 spec, which classifies marker repair as
+manual.
 
 `--root` is the repository trust boundary. The CLI rejects unsafe relative
 paths and symlinks that resolve outside that root.
@@ -120,3 +127,70 @@ Phase 9 incompatibilities:
 
 Hosted preset builder ships in a later phase. The CLI is ready to verify tokens
 that match this contract.
+
+## Init Import (Phase 14)
+
+`agent-profile init --import` reports existing agent artifacts and, when
+`--strategy regions --write` is added, wraps existing `AGENTS.md` and
+`CLAUDE.md` content into a manual region with a compiler-managed generated
+region above it.
+
+```bash
+agent-profile init --import --dry-run
+agent-profile init --import --strategy preserve --dry-run
+agent-profile init --import --strategy regions --write
+agent-profile init --import --update-gitignore --write
+```
+
+Strategy rules:
+
+- `--strategy preserve` (default) never modifies existing agent artifacts;
+  the command writes only `ai-profile.yaml` when needed.
+- `--strategy regions` is allowed only with `--import`. With `--write` it
+  wraps existing `AGENTS.md`/`CLAUDE.md` bytes inside the manual region and
+  inserts the generated region. It is a no-op for skills, subagents, MCP
+  config, and client runtime config.
+- `--strategy regions --write` refuses (exit `3`) when a region-aware file
+  has partial markers, duplicate markers, or is a symlink. The repair path
+  is manual: move/remove the file, then re-run.
+
+`--update-gitignore` is allowed only with `--write` and appends missing
+recommended ignore lines for local-runtime files:
+
+```text
+.cce/
+.mcp.json
+.claude/settings.local.json
+.claude/worktrees/
+.codex/config.toml
+.codex/hooks.json
+```
+
+`.claude/settings.json` is generated client config in this product and is
+intentionally **not** recommended for ignore.
+
+`init --import --json` emits the Phase 14 `ImportReport` shape at the JSON
+top level (`command`, `mode`, `strategy`, `root`, `profilePath`, `stack`,
+`files[]`, `gitignore[]`, `summary{}`). Plain-text mode prints the same
+facts in deterministic path order under "Phase 14 import report:".
+
+`init` and `compile` never follow file symlinks for paths Phase 14 reads or
+writes (`AGENTS.md`, `CLAUDE.md`, skill/subagent scan roots, generated write
+targets, `.gitignore`). Symlinked items are reported as `refuse-conflict` in
+the import report.
+
+## Lockfile Version 2 (Phase 14)
+
+`ai-profile.lock` is now version 2 with explicit ownership labels:
+
+- `generated-owned` — the whole file is generated and lockfile-owned.
+- `mixed` — the file has a generated region and a manual region; only the
+  generated region is hashed.
+- `manual-owned` — the file is intentionally user-authored (path-tracked
+  only).
+
+Version 1 lockfiles remain readable and are migrated to v2 on the next
+successful `compile --write`. The migration is deterministic and idempotent.
+Older `agent-profile` binaries that only know v1 will reject v2 lockfiles;
+this forward-incompatibility is documented in
+[`docs/release-notes/phase-14.md`](../release-notes/phase-14.md).
