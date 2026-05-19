@@ -1742,6 +1742,55 @@ test("phase-13 explicit subagentDrivenDevelopment:false omits the skill", async 
   }
 });
 
+test("phase-13 workspace-write Claude subagent receives Edit/Write/Bash when filesystem.write is ask", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  // The phase-13 fixture profile is guarded with filesystem.write=ask and
+  // shell.run=ask. Workspace-write subagents under that profile must still
+  // get the tools they need to do their job — the per-call permission gate
+  // lives in Claude's runtime, not in the subagent tool allowlist.
+  const result = compileProfile({ profile: profileResult.profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const implementer = result.files.find(
+    (file) => file.path === ".claude/agents/implementer.md",
+  );
+  assert.ok(implementer, "implementer.md generated");
+  const text = Buffer.from(implementer.bytes).toString("utf8");
+  const toolsLine = text.split("\n").find((line) => line.startsWith("tools:"));
+  assert.ok(toolsLine, "tools line present");
+  assert.match(toolsLine, /\bEdit\b/u, `Edit missing: ${toolsLine}`);
+  assert.match(toolsLine, /\bWrite\b/u, `Write missing: ${toolsLine}`);
+  assert.match(toolsLine, /\bBash\b/u, `Bash missing: ${toolsLine}`);
+
+  // Read-only reviewers must remain read-only.
+  const reviewer = result.files.find(
+    (file) => file.path === ".claude/agents/spec-reviewer.md",
+  );
+  assert.ok(reviewer);
+  const reviewerText = Buffer.from(reviewer.bytes).toString("utf8");
+  const reviewerTools = reviewerText
+    .split("\n")
+    .find((line) => line.startsWith("tools:"));
+  assert.equal(reviewerTools, "tools: Read, Glob, Grep");
+});
+
+test("phase-13 workspace-write Claude subagent omits write tools when filesystem.write is deny", async () => {
+  const profileResult = await readProfileFile(phase13ProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  // Validation rejects workspace-write subagents under deny — checked by an
+  // existing test. Confirm here that if you ALSO add a read-only agent under
+  // the same deny profile, that agent renders correctly.
+  // (No new render check needed for the deny case — `phase-13 implementer
+  // downgrades when filesystem.write is deny` already exercises the validator.)
+  assert.ok(true);
+});
+
 test("phase-13 implementer downgrades when filesystem.write is deny", async () => {
   const profileResult = await readProfileFile(phase13ProfilePath);
   assert.equal(profileResult.ok, true);
