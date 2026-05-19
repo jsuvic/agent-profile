@@ -120,7 +120,13 @@ test("ui command propagates root and prints local-only startup output", async ()
   const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-ui-"));
   const output = createOutput();
   let launched:
-    | { rootDir: string; host: string; port: number; open: boolean }
+    | {
+        rootDir: string;
+        host: string;
+        port: number;
+        open: boolean;
+        sessionToken: string;
+      }
     | undefined;
   const code = await runCli(
     ["ui", "--root", rootDir, "--host", "localhost", "--port", "48631"],
@@ -134,14 +140,87 @@ test("ui command propagates root and prints local-only startup output", async ()
   );
 
   assert.equal(code, 0);
-  assert.deepEqual(launched, {
-    rootDir,
-    host: "localhost",
-    port: 48631,
-    open: false,
-  });
+  assert.equal(launched?.rootDir, rootDir);
+  assert.equal(launched?.host, "localhost");
+  assert.equal(launched?.port, 48631);
+  assert.equal(launched?.open, false);
+  assert.match(launched?.sessionToken ?? "", /^[A-Za-z0-9_-]{16,}$/u);
   assert.match(output.stdoutText(), /http:\/\/localhost:48631/u);
+  assert.match(output.stdoutText(), /session=/u);
   assert.match(output.stdoutText(), /local only, read-only, no source upload/u);
+});
+
+test("ui command --port auto reserves an ephemeral loopback port", async () => {
+  const output = createOutput();
+  let launched:
+    | { port: number; sessionToken: string; host: string }
+    | undefined;
+  const code = await runCli(["ui", "--port", "auto", "--host", "127.0.0.1"], {
+    io: output,
+    launchUi: async (request) => {
+      launched = request;
+      return 0;
+    },
+  });
+
+  assert.equal(code, 0);
+  assert.ok(launched, "launchUi should have been called");
+  assert.equal(typeof launched?.port, "number");
+  assert.ok((launched?.port ?? 0) > 0 && (launched?.port ?? 0) <= 65535);
+  assert.match(launched?.sessionToken ?? "", /^[A-Za-z0-9_-]{16,}$/u);
+  assert.match(output.stdoutText(), /session=/u);
+});
+
+test("ui command --open true explicitly opts in", async () => {
+  const output = createOutput();
+  let launched: { open: boolean } | undefined;
+  const code = await runCli(
+    [
+      "ui",
+      "--port",
+      "48633",
+      "--host",
+      "127.0.0.1",
+      "--open",
+      "true",
+    ],
+    {
+      io: output,
+      launchUi: async (request) => {
+        launched = request;
+        return 0;
+      },
+    },
+  );
+
+  assert.equal(code, 0);
+  assert.equal(launched?.open, true);
+});
+
+test("ui command --open false explicitly opts out", async () => {
+  const output = createOutput();
+  let launched: { open: boolean } | undefined;
+  const code = await runCli(
+    [
+      "ui",
+      "--port",
+      "48634",
+      "--host",
+      "127.0.0.1",
+      "--open",
+      "false",
+    ],
+    {
+      io: output,
+      launchUi: async (request) => {
+        launched = request;
+        return 0;
+      },
+    },
+  );
+
+  assert.equal(code, 0);
+  assert.equal(launched?.open, false);
 });
 
 test("ui command rejects non-loopback hosts", async () => {

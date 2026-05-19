@@ -96,3 +96,20 @@ export type {
   WritePlanResult,
   WriteProfileAtomicResult,
 } from "./write-plan.js";
+export {
+  buildPhase14ImportReport,
+  containsAbsolutePathLiteral,
+  getLocalRuntimeGitignoreFindings,
+  PHASE_14_SCAN_DIRS,
+  PHASE_14_SUPPORTED_PATHS,
+  RECOMMENDED_IGNORE_LINES,
+  readLockfileForRegions,
+  readRegionAwareFile,
+} from "./import-report.js";
+export type {
+  ImportStrategy,
+  Phase14GitignoreFinding,
+  Phase14ImportFileFinding,
+  Phase14ImportInput,
+  Phase14ImportReport,
+} from "./import-report.js";
