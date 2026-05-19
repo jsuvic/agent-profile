@@ -41,6 +41,7 @@
   const CRUMB_MAP: CrumbEntry[] = [
     { href: "/dashboard", crumbs: ["agent-profile", "overview"] },
     { href: "/profile", crumbs: ["agent-profile", "profile editor"] },
+    { href: "/migration", crumbs: ["agent-profile", "migration"] },
     { href: "/artifacts", crumbs: ["agent-profile", "artifacts"] },
     { href: "/diff", crumbs: ["agent-profile", "diff"] },
     { href: "/doctor", crumbs: ["agent-profile", "doctor"] },
@@ -75,6 +76,12 @@
       href: "/profile",
       label: "Profile",
       icon: `<path d="M3 3h7l3 3v7H3z"/><path d="M10 3v3h3"/><path d="M5.5 8.5h5M5.5 11h3.5"/>`,
+    },
+    {
+      id: "migration",
+      href: "/migration",
+      label: "Migration",
+      icon: `<path d="M2.5 4h7M2.5 8h11M2.5 12h7"/><path d="M11 4l2.5 4-2.5 4"/>`,
     },
     {
       id: "artifacts",

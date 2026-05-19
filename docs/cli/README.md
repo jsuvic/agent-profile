@@ -19,7 +19,7 @@ Deferred:
 agent-profile doctor [--root <path>] [--json]
 agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
 agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
-agent-profile ui [--root <path>] [--host <host>] [--port <number>] [--open]
+agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 ```
 
 `compile` and `init` default to dry-run. File mutation requires `--write`.
@@ -39,6 +39,27 @@ paths and symlinks that resolve outside that root.
 `ui` starts the read-only browser UI for the selected root. It binds to
 `127.0.0.1` by default, accepts only `127.0.0.1`, `localhost`, or `::1` for
 `--host`, and passes the root explicitly to the server.
+
+`--port` defaults to `auto` (an ephemeral loopback port reserved at startup).
+Passing `--port <number>` pins a specific port and exits with code 1 if it
+is already in use. `--open` defaults to `true` in interactive TTY sessions
+and `false` otherwise (no browser opens under CI or scripted invocations).
+
+The CLI generates a one-time session token at launch and embeds it in the
+URL it prints. The spawned server reads the token from the
+`AGENT_PROFILE_SESSION_TOKEN` environment variable and rejects requests
+that do not carry it via query string, cookie, or `x-agent-profile-session`
+header. Loopback origin checks remain enforced for every request.
+
+The UI's **Migration view** at `/migration` surfaces the same Phase 14
+import report that `init --import` builds, with per-row actions
+(`Preserve`, `Add regions`, `Update generated region`,
+`Replace generated-owned`, `Skip`). Writes go through the same
+`applyWritePlan` helper the CLI uses; unsafe `Replace generated-owned`
+actions require an explicit per-row second confirmation and `confirmReplace:
+true` on apply. After write, the UI runs `doctor` and shows the result
+inline — failures are surfaced, not auto-reverted. `.env*` paths are
+denied by name and never read.
 
 Exit codes:
 
