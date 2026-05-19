@@ -232,6 +232,29 @@ test("buildMigrationReport surfaces scanned subagent files", async () => {
   assert.equal(row?.kind, "subagent");
 });
 
+test("buildMigrationReport surfaces skill name collisions", async () => {
+  const root = await createTempRoot();
+  await mkdir(path.join(root, ".agents/skills/one"), { recursive: true });
+  await mkdir(path.join(root, ".claude/skills/two"), { recursive: true });
+  await writeFile(
+    path.join(root, ".agents/skills/one/SKILL.md"),
+    "---\nname: dupe\n---\n",
+    "utf8",
+  );
+  await writeFile(
+    path.join(root, ".claude/skills/two/SKILL.md"),
+    "---\nname: dupe\n---\n",
+    "utf8",
+  );
+
+  const report = await buildMigrationReport(root);
+
+  assert.equal(report.collisions.length, 1);
+  assert.equal(report.collisions[0].name, "dupe");
+  assert.equal(report.collisions[0].kind, "workflow-skill");
+  assert.equal(report.summary.nameCollisions, 1);
+});
+
 test("buildMigrationReport refuses a symlinked scan root for skills", async () => {
   const { symlink } = await import("node:fs/promises");
   const root = await createTempRoot();

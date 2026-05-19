@@ -99,6 +99,7 @@ export type {
 export {
   buildPhase14ImportReport,
   containsAbsolutePathLiteral,
+  extractDeclaredName,
   getLocalRuntimeGitignoreFindings,
   PHASE_14_SCAN_DIRS,
   PHASE_14_SUPPORTED_PATHS,
@@ -114,5 +115,6 @@ export type {
   Phase14ImportFileFinding,
   Phase14ImportInput,
   Phase14ImportReport,
+  Phase14SkillCollision,
   RootInstructionsAdoption,
 } from "./import-report.js";

@@ -2392,8 +2392,16 @@ function formatPhase14ImportReportLines(report: Phase14ImportReport): string[] {
       );
     }
   }
+  if (report.collisions.length > 0) {
+    lines.push("  collisions:");
+    for (const collision of report.collisions) {
+      lines.push(
+        `    - ${collision.kind} name="${collision.name}" in [${collision.paths.join(", ")}]`,
+      );
+    }
+  }
   lines.push(
-    `  summary: wouldCreateProfile=${report.summary.wouldCreateProfile} wouldUpdateRegions=${report.summary.wouldUpdateRegions} preservedManualFiles=${report.summary.preservedManualFiles} conflicts=${report.summary.conflicts}`,
+    `  summary: wouldCreateProfile=${report.summary.wouldCreateProfile} wouldUpdateRegions=${report.summary.wouldUpdateRegions} preservedManualFiles=${report.summary.preservedManualFiles} conflicts=${report.summary.conflicts} nameCollisions=${report.summary.nameCollisions}`,
   );
   return lines;
 }

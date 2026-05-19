@@ -267,6 +267,11 @@
       <Badge tone="muted">
         {report.summary.wouldUpdateRegions} would update regions
       </Badge>
+      <Badge
+        tone={report.summary.nameCollisions > 0 ? "warn" : "muted"}
+      >
+        {report.summary.nameCollisions} name collisions
+      </Badge>
       {#if report.profileFound}
         <Badge tone="ok">ai-profile.yaml present</Badge>
       {:else}
@@ -313,6 +318,31 @@
       {/each}
     {/if}
   </section>
+
+  {#if report.collisions.length > 0}
+    <section data-testid="collisions-section">
+      <h3 class="step">5a. Skill / subagent name collisions</h3>
+      <p class="muted-line">
+        Two or more files declare the same <span class="path">name:</span>
+        in their frontmatter. Compile clients deduplicate by name, so
+        only one of the colliding entries wins — rename or delete the
+        others before applying.
+      </p>
+      <ul class="collisions-list">
+        {#each report.collisions as collision}
+          <li>
+            <Badge tone="warn">{collision.kind}</Badge>
+            <span class="path">{collision.name}</span>
+            <ul class="collisions-paths">
+              {#each collision.paths as p}
+                <li><span class="path">{p}</span></li>
+              {/each}
+            </ul>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/if}
 
   <section>
     <h3 class="step">6. .gitignore recommendations</h3>
@@ -485,6 +515,32 @@
     list-style: disc inside;
     font-family: var(--font-mono, ui-monospace, monospace);
     font-size: 12px;
+  }
+  .collisions-list {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .collisions-list > li {
+    border: 1px solid var(--warn, #b58900);
+    border-radius: 4px;
+    padding: 8px;
+    background: var(--warn-bg, #3a2a10);
+    font-size: 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .collisions-paths {
+    list-style: disc inside;
+    margin: 4px 0 0;
+    flex-basis: 100%;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
   }
   .plan-actions {
     display: flex;

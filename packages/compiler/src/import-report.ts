@@ -41,11 +41,13 @@ export type Phase14ImportReport = {
   };
   files: Phase14ImportFileFinding[];
   gitignore: Phase14GitignoreFinding[];
+  collisions: Phase14SkillCollision[];
   summary: {
     wouldCreateProfile: boolean;
     wouldUpdateRegions: number;
     preservedManualFiles: number;
     conflicts: number;
+    nameCollisions: number;
   };
 };
 
@@ -76,6 +78,19 @@ export type Phase14GitignoreFinding = {
   line: string;
   action: "already-present" | "suggest-add" | "would-add";
   reason: string;
+};
+
+/**
+ * Two or more scanned skill or subagent files declared the same `name:`
+ * value in their frontmatter. The collision is surfaced separately so the
+ * UI can render a dedicated section and so CLI consumers can refuse on
+ * write if they want to. We do not classify which file is "right" — that
+ * is a human decision.
+ */
+export type Phase14SkillCollision = {
+  name: string;
+  kind: "workflow-skill" | "subagent";
+  paths: string[];
 };
 
 export type Phase14ImportInput = {
@@ -174,6 +189,10 @@ export async function buildPhase14ImportReport(
   let wouldUpdateRegions = 0;
   let preservedManualFiles = 0;
   let conflicts = 0;
+  // Keyed by `${kind}\0${name}` so workflow skills and subagents share the
+  // same namespace per-kind but never collide across kinds. Values are
+  // sorted lists of paths that declared that name.
+  const collisionsByKey = new Map<string, string[]>();
 
   // Lockfile v2 ownership wins per the spec's ownership proof order. Loading
   // it here lets us classify already-adopted skills/subagents correctly
@@ -363,6 +382,24 @@ export async function buildPhase14ImportReport(
       if (!scan.fileFilter(relativePath)) continue;
       const read = await readRegionAwareFile(input.rootDir, relativePath);
       const tags: Phase14ImportFileFinding["tags"] = [];
+      if (read.bytes) {
+        // Extract `name:` for collision detection. The extraction is
+        // tolerant — missing names are silently skipped (no frontmatter
+        // means no collision can be detected) and the file still
+        // participates in the rest of the scan-loop classification.
+        const name = extractDeclaredName(
+          Buffer.from(read.bytes),
+          relativePath,
+        );
+        if (name) {
+          recordName(
+            scan.kind === "workflow-skill" ? "workflow-skill" : "subagent",
+            name,
+            relativePath,
+            collisionsByKey,
+          );
+        }
+      }
       if (read.refused) {
         files.push({
           path: relativePath,
@@ -444,6 +481,35 @@ export async function buildPhase14ImportReport(
     }),
   );
 
+  const collisions: Phase14SkillCollision[] = [];
+  for (const [key, paths] of collisionsByKey) {
+    if (paths.length < 2) continue;
+    const [kindPart, name] = key.split("\0");
+    collisions.push({
+      name,
+      kind: kindPart === "workflow-skill" ? "workflow-skill" : "subagent",
+      paths: [...paths].sort(),
+    });
+    // Stamp affected file rows with a note so the per-row view also
+    // surfaces the collision; users can act on a row without consulting
+    // the top-level collisions list.
+    for (const collidingPath of paths) {
+      const row = files.find((f) => f.path === collidingPath);
+      if (row && !row.notes.some((n) => n.startsWith("name collision"))) {
+        const others = paths.filter((p) => p !== collidingPath).sort();
+        row.notes.push(
+          `name collision: \"${name}\" also declared by ${others.join(", ")}`,
+        );
+      }
+    }
+  }
+  collisions.sort((left, right) => {
+    if (left.kind !== right.kind) {
+      return left.kind === "workflow-skill" ? -1 : 1;
+    }
+    return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+  });
+
   return {
     command: "init",
     mode: input.mode,
@@ -460,13 +526,107 @@ export async function buildPhase14ImportReport(
       left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     ),
     gitignore,
+    collisions,
     summary: {
       wouldCreateProfile: input.wouldCreateProfile,
       wouldUpdateRegions,
       preservedManualFiles,
       conflicts,
+      nameCollisions: collisions.length,
     },
   };
+}
+
+function recordName(
+  kind: "workflow-skill" | "subagent",
+  name: string,
+  path: string,
+  map: Map<string, string[]>,
+): void {
+  const key = `${kind}\0${name}`;
+  const existing = map.get(key);
+  if (existing) {
+    existing.push(path);
+  } else {
+    map.set(key, [path]);
+  }
+}
+
+/**
+ * Extract the declared `name:` value from a SKILL.md / claude-style
+ * subagent (.md with YAML frontmatter) or codex-style subagent (.toml).
+ *
+ * This deliberately avoids pulling in a YAML or TOML parser — the
+ * relevant section is small, the line shape is fixed, and we want the
+ * shared report module to stay dependency-light. Returns undefined when
+ * no name is found; callers treat that as "this file does not
+ * participate in collision detection."
+ */
+export function extractDeclaredName(
+  bytes: Buffer,
+  relativePath: string,
+): string | undefined {
+  const text = bytes.toString("utf8");
+  if (relativePath.endsWith(".toml")) {
+    return findTomlTopLevelName(text);
+  }
+  if (relativePath.endsWith(".md")) {
+    return findYamlFrontmatterName(text);
+  }
+  return undefined;
+}
+
+function findYamlFrontmatterName(text: string): string | undefined {
+  const lines = text.split(/\r?\n/u);
+  if (lines.length === 0 || lines[0].trim() !== "---") return undefined;
+  for (let index = 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    const trimmed = line.trim();
+    if (trimmed === "---") return undefined;
+    // YAML key: support `name: foo` and `name: "foo"`; reject lines that
+    // are not at indentation zero so we never match nested mapping keys.
+    if (!line.startsWith("name")) continue;
+    const match = line.match(/^name\s*:\s*(.+?)\s*$/u);
+    if (!match) continue;
+    return stripYamlQuotes(match[1]);
+  }
+  return undefined;
+}
+
+function findTomlTopLevelName(text: string): string | undefined {
+  const lines = text.split(/\r?\n/u);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#") || trimmed === "") continue;
+    // Stop at the first table heading so we never match a nested `name`
+    // key inside `[some.section]`.
+    if (trimmed.startsWith("[")) break;
+    const match = trimmed.match(/^name\s*=\s*(.+?)\s*$/u);
+    if (!match) continue;
+    return stripTomlQuotes(match[1]);
+  }
+  return undefined;
+}
+
+function stripYamlQuotes(value: string): string {
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
+}
+
+function stripTomlQuotes(value: string): string {
+  if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+    return value.slice(1, -1);
+  }
+  if (value.startsWith("'") && value.endsWith("'") && value.length >= 2) {
+    return value.slice(1, -1);
+  }
+  return value;
 }
 
 // ---------------------------------------------------------------------------
