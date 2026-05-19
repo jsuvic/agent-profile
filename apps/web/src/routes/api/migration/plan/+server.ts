@@ -88,8 +88,14 @@ export const POST: RequestHandler = async ({ request }) => {
   const plan = await buildMigrationPlan(rootDir, rows);
   const preview = await previewMigrationPlan(rootDir, plan);
 
-  const requiresReplaceConfirmation = rows.some(
-    (row) => row.action === "replace-generated-owned",
+  // Derive the unsafe-replace confirmation requirement from the resolved
+  // plan, not from the raw request rows. If a `replace-generated-owned`
+  // row was refused during planning (missing per-row confirmation,
+  // ownership mismatch, etc.), no replace write will actually run and
+  // we must not force the user through a second confirmation that
+  // protects nothing.
+  const requiresReplaceConfirmation = plan.resolved.some(
+    (entry) => entry.action === "replace-generated-owned",
   );
 
   const planToken = storeMigrationPlan({

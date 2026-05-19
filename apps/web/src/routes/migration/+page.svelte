@@ -23,16 +23,31 @@
   // when the user reloads the report.
   // ------------------------------------------------------------
 
-  // svelte-ignore state_referenced_locally
-  // The initial selection is computed once from the loaded report. After an
-  // apply, `invalidateAll()` re-runs the loader and SvelteKit re-mounts the
-  // page, which re-initialises this state from the fresh report.
-  let selectedByPath = $state<Record<string, SelectedAction>>(
-    initialSelections(data.report),
-  );
+  // The per-row selection map is recomputed whenever `data.report` changes
+  // identity (e.g. after `invalidateAll()` reloads the loader). We track
+  // that change explicitly because Svelte does not rerun `$state` initial
+  // values on prop updates — without this, stale paths from a pre-refresh
+  // report would still be sent to /api/migration/plan after the first
+  // apply, producing confusing refusals and ghost rows in the plan body.
+  let selectedByPath = $state<Record<string, SelectedAction>>({});
   let expandedByPath = $state<Record<string, boolean>>({});
   let previewByPath = $state<Record<string, PreviewState>>({});
   let confirmReplaceByPath = $state<Record<string, boolean>>({});
+  let lastReportRef: MigrationPageData["report"] | null = null;
+  $effect(() => {
+    // Track identity of `data.report` so we reset selections only when the
+    // loader actually produced a fresh report, not on every selection edit.
+    if (data.report !== lastReportRef) {
+      lastReportRef = data.report;
+      selectedByPath = initialSelections(data.report);
+      expandedByPath = {};
+      previewByPath = {};
+      confirmReplaceByPath = {};
+      planSummary = null;
+      applyResult = null;
+      errorMessage = null;
+    }
+  });
 
   // Apply-flow state
   let applying = $state(false);

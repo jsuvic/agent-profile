@@ -227,7 +227,12 @@ test("POST /api/migration/apply writes add-regions plan and surfaces doctor prev
   });
 });
 
-test("POST /api/migration/apply rejects unsafe replace without confirmReplace echo and preserves the token", async () => {
+test("requiresReplaceConfirmation is false when the replace row was refused during planning", async () => {
+  // The user requested replace-generated-owned on a root path, which the
+  // plan refuses (ownership-mismatch). Because no replace write will
+  // actually run, the apply endpoint must NOT force a second
+  // confirmation — the flag is derived from the resolved plan, not the
+  // raw request rows.
   await withTempProject(async (root) => {
     await writeFile(path.join(root, "AGENTS.md"), "manual\n", "utf8");
 
@@ -249,9 +254,96 @@ test("POST /api/migration/apply rejects unsafe replace without confirmReplace ec
     } as Parameters<typeof planMigration>[0]);
     assert.equal(planResponse.status, 200);
     const planBody = await planResponse.json();
-    assert.equal(planBody.requiresReplaceConfirmation, true);
+    assert.equal(
+      planBody.requiresReplaceConfirmation,
+      false,
+      "refused replace rows must not gate apply",
+    );
 
-    // Apply without confirmReplace must return 412.
+    // Apply without confirmReplace should succeed (no writes to perform).
+    const applyResponse = await applyMigration({
+      request: jsonRequest(
+        "/api/migration/apply",
+        { planToken: planBody.planToken },
+        csrf,
+      ),
+    } as Parameters<typeof applyMigration>[0]);
+    assert.equal(applyResponse.status, 200);
+  });
+});
+
+test("requiresReplaceConfirmation is true when replace produces a real write, and the token survives a 412", async () => {
+  // Set up the minimum needed for a successful replace-generated-owned:
+  //   1) ai-profile.yaml so compile produces .claude/settings.json bytes,
+  //   2) ai-profile.lock marking .claude/settings.json as generated-owned,
+  //   3) an on-disk .claude/settings.json the user wants to replace.
+  await withTempProject(async (root) => {
+    const { compileProfile, createLockfileFile, getDefaultTemplates } =
+      await import("@agent-profile/compiler");
+    const { parseProfileYaml } = await import("@agent-profile/core");
+    const profileBytes = await readFile(
+      path.join(root, "ai-profile.yaml"),
+    );
+    const parsed = parseProfileYaml(profileBytes.toString("utf8"));
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+    const compile = compileProfile({ profile: parsed.profile });
+    assert.equal(compile.ok, true);
+    if (!compile.ok) return;
+
+    // Write every generated file to disk so the lockfile's hashes match
+    // the on-disk content (compile is deterministic).
+    for (const f of compile.files) {
+      const target = path.join(root, ...f.path.split("/"));
+      await import("node:fs/promises").then((fs) =>
+        fs.mkdir(path.dirname(target), { recursive: true }),
+      );
+      await writeFile(target, Buffer.from(f.bytes));
+    }
+    const lockfile = createLockfileFile({
+      profileBytes,
+      templates: getDefaultTemplates(),
+      files: compile.files,
+    });
+    await writeFile(
+      path.join(root, "ai-profile.lock"),
+      Buffer.from(lockfile.bytes),
+    );
+
+    // Tamper with .claude/settings.json so replace is a real change.
+    const tamperedPath = path.join(root, ".claude", "settings.json");
+    const before = await readFile(tamperedPath, "utf8");
+    await writeFile(
+      tamperedPath,
+      before.replace(/\}\s*$/u, ',"_tampered":true}'),
+      "utf8",
+    );
+
+    const csrf = issueCsrfToken();
+    const planResponse = await planMigration({
+      request: jsonRequest(
+        "/api/migration/plan",
+        {
+          actions: [
+            {
+              path: ".claude/settings.json",
+              action: "replace-generated-owned",
+              confirmReplace: true,
+            },
+          ],
+        },
+        csrf,
+      ),
+    } as Parameters<typeof planMigration>[0]);
+    assert.equal(planResponse.status, 200);
+    const planBody = await planResponse.json();
+    assert.equal(
+      planBody.requiresReplaceConfirmation,
+      true,
+      "real replace write must require apply-time confirmation",
+    );
+
+    // Apply without confirmReplace → 412, token preserved.
     const firstApply = await applyMigration({
       request: jsonRequest(
         "/api/migration/apply",
@@ -260,14 +352,7 @@ test("POST /api/migration/apply rejects unsafe replace without confirmReplace ec
       ),
     } as Parameters<typeof applyMigration>[0]);
     assert.equal(firstApply.status, 412);
-    const firstBody = await firstApply.json();
-    assert.equal(firstBody.error, "confirm_replace_required");
 
-    // CRITICAL: the plan token must NOT have been consumed by the 412
-    // rejection. A second apply with confirmReplace:true should be
-    // accepted by the token store (it may still 410 / fail for other
-    // reasons, but it must not be `plan_expired` because of the prior
-    // rejected attempt).
     const secondApply = await applyMigration({
       request: jsonRequest(
         "/api/migration/apply",
