@@ -91,8 +91,66 @@ function prunePlans(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Migration plan tokens (Phase 16)
+// The Migration view computes a per-row plan and presents it for review.
+// Apply consumes the token and runs applyWritePlan; the token is single-use.
+// ---------------------------------------------------------------------------
+
+export type MigrationPlanEntry = {
+  // Opaque JSON encoding of the plan; the apply route deserializes it.
+  serializedPlan: string;
+  // Whether any row in the plan requires the explicit unsafe-replace
+  // confirmation. Apply will reject the token if confirmReplace was not
+  // re-supplied on the apply request.
+  requiresReplaceConfirmation: boolean;
+  expiresAt: number;
+};
+
+const migrationPlanTokens = new Map<string, MigrationPlanEntry>();
+
+export function storeMigrationPlan(
+  entry: Omit<MigrationPlanEntry, "expiresAt">,
+): string {
+  pruneMigrationPlans();
+  const token = randomBytes(16).toString("base64url");
+  migrationPlanTokens.set(token, {
+    ...entry,
+    expiresAt: Date.now() + PLAN_TTL_MS,
+  });
+  return token;
+}
+
+export function lookupMigrationPlan(
+  token: string,
+): MigrationPlanEntry | undefined {
+  const entry = migrationPlanTokens.get(token);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    migrationPlanTokens.delete(token);
+    return undefined;
+  }
+  return entry;
+}
+
+export function consumeMigrationPlan(
+  token: string,
+): MigrationPlanEntry | undefined {
+  const entry = lookupMigrationPlan(token);
+  if (entry) migrationPlanTokens.delete(token);
+  return entry;
+}
+
+function pruneMigrationPlans(): void {
+  const now = Date.now();
+  for (const [token, entry] of migrationPlanTokens) {
+    if (now > entry.expiresAt) migrationPlanTokens.delete(token);
+  }
+}
+
 // Test helpers – only for use in test files.
 export function _clearStoresForTesting(): void {
   csrfTokens.clear();
   planTokens.clear();
+  migrationPlanTokens.clear();
 }

@@ -14,16 +14,23 @@ function buildEvent(
   url: string,
   headers: Record<string, string>,
   method = "GET",
+  cookieStore?: Map<string, string>,
 ): RequestEvent {
   const request = new Request(url, { method, headers });
+  const store = cookieStore ?? new Map<string, string>();
   const event: Partial<RequestEvent> = {
     request,
     url: new URL(url),
     cookies: {
-      get: () => undefined,
-      getAll: () => [],
-      set: () => {},
-      delete: () => {},
+      get: (name: string) => store.get(name),
+      getAll: () =>
+        Array.from(store, ([name, value]) => ({ name, value })),
+      set: (name: string, value: string) => {
+        store.set(name, value);
+      },
+      delete: (name: string) => {
+        store.delete(name);
+      },
       serialize: () => "",
     } as unknown as RequestEvent["cookies"],
     fetch,
@@ -38,6 +45,27 @@ function buildEvent(
   };
 
   return event as RequestEvent;
+}
+
+async function withSessionToken<T>(
+  token: string | undefined,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const prev = process.env.AGENT_PROFILE_SESSION_TOKEN;
+  if (token === undefined) {
+    delete process.env.AGENT_PROFILE_SESSION_TOKEN;
+  } else {
+    process.env.AGENT_PROFILE_SESSION_TOKEN = token;
+  }
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) {
+      delete process.env.AGENT_PROFILE_SESSION_TOKEN;
+    } else {
+      process.env.AGENT_PROFILE_SESSION_TOKEN = prev;
+    }
+  }
 }
 
 const baseUrl = "http://127.0.0.1:5174/dashboard";
@@ -187,6 +215,82 @@ test("server hook rejects DELETE with missing Origin header", async () => {
       }),
     /only accepts localhost/u,
   );
+});
+
+test("server hook rejects requests when session token env is set but request omits it", async () => {
+  await withSessionToken("test-session-token-123", async () => {
+    await assert.rejects(
+      () =>
+        callHandle({
+          event: buildEvent(baseUrl, {
+            host: "127.0.0.1:5174",
+            origin: "http://127.0.0.1:5174",
+          }),
+          resolve: okResolve,
+        }),
+      /session token/u,
+    );
+  });
+});
+
+test("server hook accepts requests carrying the session token in the query string", async () => {
+  const token = "test-session-token-abc";
+  await withSessionToken(token, async () => {
+    const response = await callHandle({
+      event: buildEvent(`${baseUrl}?session=${encodeURIComponent(token)}`, {
+        host: "127.0.0.1:5174",
+        origin: "http://127.0.0.1:5174",
+      }),
+      resolve: okResolve,
+    });
+    assert.equal(await response.text(), "ok");
+  });
+});
+
+test("server hook accepts requests carrying the session token in a cookie", async () => {
+  const token = "cookie-session-token-xyz";
+  const cookies = new Map<string, string>([["agent_profile_session", token]]);
+  await withSessionToken(token, async () => {
+    const response = await callHandle({
+      event: buildEvent(
+        baseUrl,
+        { host: "127.0.0.1:5174", origin: "http://127.0.0.1:5174" },
+        "GET",
+        cookies,
+      ),
+      resolve: okResolve,
+    });
+    assert.equal(await response.text(), "ok");
+  });
+});
+
+test("server hook rejects requests with a wrong session token", async () => {
+  await withSessionToken("correct-token", async () => {
+    await assert.rejects(
+      () =>
+        callHandle({
+          event: buildEvent(`${baseUrl}?session=wrong-token`, {
+            host: "127.0.0.1:5174",
+            origin: "http://127.0.0.1:5174",
+          }),
+          resolve: okResolve,
+        }),
+      /session token/u,
+    );
+  });
+});
+
+test("server hook skips session token check when env is unset", async () => {
+  await withSessionToken(undefined, async () => {
+    const response = await callHandle({
+      event: buildEvent(baseUrl, {
+        host: "127.0.0.1:5174",
+        origin: "http://127.0.0.1:5174",
+      }),
+      resolve: okResolve,
+    });
+    assert.equal(await response.text(), "ok");
+  });
 });
 
 test("server hook skips localhost checks during marketing static builds", async () => {

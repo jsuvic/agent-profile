@@ -6,15 +6,22 @@ import fsPromises from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { createServer } from "node:net";
+import { randomBytes } from "node:crypto";
+import { createServer, type AddressInfo } from "node:net";
 import { pathToFileURL } from "node:url";
 
 import {
   applyWritePlan,
+  buildPhase14ImportReport,
   compileProfile,
   createLockfileFile,
+  getLocalRuntimeGitignoreFindings,
   parseMixedFile,
+  planRootInstructionsAdoption,
   planWrites,
+  readLockfileForRegions,
+  readRegionAwareFile,
+  RECOMMENDED_IGNORE_LINES,
   replaceGeneratedRegion,
   safeOutputPath,
   serializeMixedFile,
@@ -25,11 +32,12 @@ import {
   GENERATED_START_MARKER,
   hasAllRegionMarkers,
   hasAnyRegionMarker,
-  hasLegacyGeneratedMarker,
   type CompilerTargetId,
   type GeneratedFile,
+  type ImportStrategy,
   type LockOutputV2,
   type MixedOutputDescriptor,
+  type Phase14ImportReport,
   type PlannedWrite,
   type WritePlanResult,
 } from "@agent-profile/compiler";
@@ -89,6 +97,7 @@ export type UiLaunchRequest = {
   host: LoopbackHost;
   port: number;
   open: boolean;
+  sessionToken: string;
 };
 
 export type UiLaunchFunction = (request: UiLaunchRequest) => Promise<number>;
@@ -121,8 +130,6 @@ type ParsedCompileArgs =
       message: string;
     };
 
-type ImportStrategy = "preserve" | "regions";
-
 type ParsedInitArgs =
   | {
       ok: true;
@@ -154,8 +161,12 @@ type ParsedUiArgs =
       ok: true;
       root: string;
       host: LoopbackHost;
-      port: number;
-      open: boolean;
+      // `port` may be the literal "auto" sentinel meaning "pick an ephemeral
+      // loopback port at launch time", or a fixed integer between 1 and 65535.
+      port: number | "auto";
+      // `open` is tri-state: explicit true/false from `--open <bool>`, or
+      // undefined when omitted (the launcher resolves to TTY-based default).
+      open: boolean | undefined;
       help: boolean;
     }
   | {
@@ -259,16 +270,39 @@ async function runUi(
   }
 
   const rootDir = path.resolve(cwd, parsed.root);
-  const portCheck = await assertPortAvailable(parsed.host, parsed.port);
 
-  if (!portCheck.ok) {
-    io.stderr(
-      `Port ${parsed.port} is not available on ${parsed.host}. Another process may be listening; choose a different port with --port <number>.\n`,
-    );
-    return 1;
+  let resolvedPort: number;
+  if (parsed.port === "auto") {
+    const ephemeral = await reserveEphemeralPort(parsed.host);
+    if (!ephemeral.ok) {
+      io.stderr(
+        `No ephemeral loopback port could be reserved on ${parsed.host}. Specify --port <number> explicitly.\n`,
+      );
+      return 1;
+    }
+    resolvedPort = ephemeral.port;
+  } else {
+    const portCheck = await assertPortAvailable(parsed.host, parsed.port);
+    if (!portCheck.ok) {
+      io.stderr(
+        `Port ${parsed.port} is not available on ${parsed.host}. Another process may be listening; choose a different port with --port <number>.\n`,
+      );
+      return 1;
+    }
+    resolvedPort = parsed.port;
   }
 
-  const url = formatUiUrl(parsed.host, parsed.port);
+  // Phase 16 transport contract: the spawned server requires a one-time
+  // session token. The CLI generates the token, prints it as part of the
+  // URL, and forwards it to the server via env. Requests without a matching
+  // token are rejected by the server hook.
+  const sessionToken = generateSessionToken();
+  const url = formatUiUrl(parsed.host, resolvedPort, sessionToken);
+
+  // `--open` defaults to true in interactive TTY sessions and false
+  // otherwise. Tests and CI pipelines therefore see no browser launch.
+  const open = parsed.open ?? isInteractiveTty(io);
+
   io.stdout(`Agent Profile UI\n`);
   io.stdout(`url: ${url}\n`);
   io.stdout(`root: ${rootDir}\n`);
@@ -283,8 +317,9 @@ async function runUi(
   return launchUi({
     rootDir,
     host: parsed.host,
-    port: parsed.port,
-    open: parsed.open,
+    port: resolvedPort,
+    open,
+    sessionToken,
   });
 }
 
@@ -1410,8 +1445,8 @@ function uniqueClients(clients: ClientId[]): ClientId[] {
 function parseUiArgs(args: string[]): ParsedUiArgs {
   let root = ".";
   let host: LoopbackHost = DEFAULT_UI_HOST;
-  let port = DEFAULT_UI_PORT;
-  let open = false;
+  let port: number | "auto" = "auto";
+  let open: boolean | undefined;
   let help = false;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -1452,7 +1487,16 @@ function parseUiArgs(args: string[]): ParsedUiArgs {
         const value = args[index + 1];
 
         if (!value || value.startsWith("--")) {
-          return { ok: false, message: "--port requires a number." };
+          return {
+            ok: false,
+            message: "--port requires a number or the literal 'auto'.",
+          };
+        }
+
+        if (value === "auto") {
+          port = "auto";
+          index += 1;
+          break;
         }
 
         const parsed = Number(value);
@@ -1460,7 +1504,8 @@ function parseUiArgs(args: string[]): ParsedUiArgs {
         if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
           return {
             ok: false,
-            message: "--port must be an integer between 1 and 65535.",
+            message:
+              "--port must be 'auto' or an integer between 1 and 65535.",
           };
         }
 
@@ -1468,9 +1513,19 @@ function parseUiArgs(args: string[]): ParsedUiArgs {
         index += 1;
         break;
       }
-      case "--open":
-        open = true;
+      case "--open": {
+        // --open accepts an optional true|false argument. A bare --open with
+        // no following value (or followed by another flag) keeps the legacy
+        // behavior of meaning "open the browser".
+        const value = args[index + 1];
+        if (value === "true" || value === "false") {
+          open = value === "true";
+          index += 1;
+        } else {
+          open = true;
+        }
         break;
+      }
       case "--help":
       case "-h":
         help = true;
@@ -1579,57 +1634,6 @@ type InitReport = {
     code: InitFailureReason;
     message: string;
   };
-};
-
-type Phase14ImportReport = {
-  command: "init";
-  mode: "dry-run" | "write";
-  strategy: ImportStrategy;
-  root: string;
-  profilePath: string;
-  stack: {
-    languages: string[];
-    frameworks: string[];
-    packageManagers: string[];
-    testing: string[];
-  };
-  files: Phase14ImportFileFinding[];
-  gitignore: Phase14GitignoreFinding[];
-  summary: {
-    wouldCreateProfile: boolean;
-    wouldUpdateRegions: number;
-    preservedManualFiles: number;
-    conflicts: number;
-  };
-};
-
-type Phase14ImportFileFinding = {
-  path: string;
-  exists: boolean;
-  kind:
-    | "root-instructions"
-    | "workflow-skill"
-    | "subagent"
-    | "client-config"
-    | "mcp-config"
-    | "unknown";
-  ownership: "generated-owned" | "mixed" | "manual-owned" | "unknown";
-  tags: Array<"generated-looking" | "contains-absolute-path" | "local-runtime">;
-  action:
-    | "create"
-    | "preserve"
-    | "insert-regions"
-    | "update-generated-region"
-    | "refuse-conflict"
-    | "ignore-local-runtime";
-  notes: string[];
-};
-
-type Phase14GitignoreFinding = {
-  path: ".gitignore";
-  line: string;
-  action: "already-present" | "suggest-add" | "would-add";
-  reason: string;
 };
 
 function createInitRefusal(input: {
@@ -2074,6 +2078,41 @@ async function assertPortAvailable(
   });
 }
 
+// Reserve an ephemeral loopback port by asking the kernel for one (port 0),
+// reading it back, and immediately releasing it. There is a small TOCTOU
+// window between releasing the socket here and the spawned server binding
+// it, but this is acceptable for a local dev tool on the loopback interface.
+async function reserveEphemeralPort(
+  host: LoopbackHost,
+): Promise<{ ok: true; port: number } | { ok: false }> {
+  return new Promise((resolve) => {
+    const server = createServer();
+
+    server.once("error", () => resolve({ ok: false }));
+    server.once("listening", () => {
+      const address = server.address();
+      if (address && typeof address === "object") {
+        const port = (address as AddressInfo).port;
+        server.close(() => resolve({ ok: true, port }));
+      } else {
+        server.close(() => resolve({ ok: false }));
+      }
+    });
+    server.listen(0, host);
+  });
+}
+
+function generateSessionToken(): string {
+  return randomBytes(24).toString("base64url");
+}
+
+function isInteractiveTty(io: CliIo): boolean {
+  // The CliIo abstraction may be overridden by tests; defer to the real
+  // process streams only when the default writer is in use.
+  if (io.stdout !== DEFAULT_IO.stdout) return false;
+  return Boolean(process.stdout.isTTY) && process.env.CI !== "true";
+}
+
 async function launchPublishedUi(request: UiLaunchRequest): Promise<number> {
   let serverEntry: string;
   try {
@@ -2091,6 +2130,7 @@ async function launchPublishedUi(request: UiLaunchRequest): Promise<number> {
     env: {
       ...process.env,
       AGENT_PROFILE_ROOT: request.rootDir,
+      AGENT_PROFILE_SESSION_TOKEN: request.sessionToken,
       HOST: request.host,
       PORT: String(request.port),
     },
@@ -2103,7 +2143,9 @@ async function launchPublishedUi(request: UiLaunchRequest): Promise<number> {
     // crash will already be visible on stderr.
     void waitForPortInUse(request.host, request.port).then((ready) => {
       if (ready) {
-        openInBrowser(formatUiUrl(request.host, request.port));
+        openInBrowser(
+          formatUiUrl(request.host, request.port, request.sessionToken),
+        );
       }
     });
   }
@@ -2154,8 +2196,14 @@ async function waitForPortInUse(
   return false;
 }
 
-function formatUiUrl(host: LoopbackHost, port: number): string {
-  return `http://${host === "::1" ? "[::1]" : host}:${port}`;
+function formatUiUrl(
+  host: LoopbackHost,
+  port: number,
+  sessionToken?: string,
+): string {
+  const base = `http://${host === "::1" ? "[::1]" : host}:${port}`;
+  if (!sessionToken) return base;
+  return `${base}/?session=${encodeURIComponent(sessionToken)}`;
 }
 
 function openInBrowser(url: string): void {
@@ -2241,7 +2289,7 @@ Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
   agent-profile doctor [--root <path>] [--json]
   agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
-  agent-profile ui [--root <path>] [--host <host>] [--port <number>] [--open]
+  agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 
 Commands:
   compile   Preview or write generated agent artifacts.
@@ -2553,21 +2601,6 @@ type RegionAdoption = {
   bytes: Buffer;
 };
 
-const RECOMMENDED_IGNORE_LINES = [
-  ".cce/",
-  ".mcp.json",
-  ".claude/settings.local.json",
-  ".claude/worktrees/",
-  ".codex/config.toml",
-  ".codex/hooks.json",
-] as const;
-
-type GitignoreFinding = {
-  line: string;
-  action: "already-present" | "would-add";
-  reason: string;
-};
-
 type RegionAdoptionRefusal = {
   path: string;
   reason: "partial-markers" | "duplicate-markers" | "symlink";
@@ -2585,75 +2618,42 @@ async function planRegionAdoptions(
   const compileResult = compileProfile({ profile });
   if (!compileResult.ok) return { adoptions: [], refusals: [] };
 
-  const adoptions: RegionAdoption[] = [];
-  const refusals: RegionAdoptionRefusal[] = [];
-
+  // Build the path→compiled-bytes map and delegate to the shared adoption
+  // helper. The helper is the single source of truth for region adoption
+  // semantics; this CLI wrapper just translates its result back into the
+  // CLI's existing return shape so the rest of the init flow does not have
+  // to change.
+  const generatedBytesByPath = new Map<string, Uint8Array>();
   for (const file of compileResult.files) {
     if (file.path !== "AGENTS.md" && file.path !== "CLAUDE.md") continue;
+    generatedBytesByPath.set(file.path, file.bytes);
+  }
 
-    const read = await readRegionAwareFile(rootDir, file.path);
-    if (read.refused) {
-      refusals.push({ path: file.path, reason: "symlink" });
+  const outcomes = await planRootInstructionsAdoption(
+    rootDir,
+    generatedBytesByPath,
+  );
+
+  const adoptions: RegionAdoption[] = [];
+  const refusals: RegionAdoptionRefusal[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.ok) {
+      adoptions.push({ path: outcome.path, bytes: outcome.bytes });
       continue;
     }
-
-    const existing = read.bytes;
-    if (!existing) continue;
-
-    const existingBuffer = Buffer.from(existing);
-    if (hasAllRegionMarkers(existingBuffer)) {
-      const updated = replaceGeneratedRegion(
-        existingBuffer,
-        Buffer.from(file.bytes),
-      );
-      if (updated) {
-        adoptions.push({ path: file.path, bytes: updated });
-      } else {
-        refusals.push({ path: file.path, reason: "duplicate-markers" });
-      }
+    // Shared helper emits `missing-file` and `missing-generated-bytes`
+    // outcomes that the CLI's adoption flow has historically treated as
+    // "skip without complaint" — keep that behaviour by dropping them.
+    if (
+      outcome.reason === "missing-file" ||
+      outcome.reason === "missing-generated-bytes"
+    ) {
       continue;
     }
-
-    if (hasAnyRegionMarker(existingBuffer)) {
-      refusals.push({ path: file.path, reason: "partial-markers" });
-      continue;
-    }
-
-    const mixed = serializeMixedFile({
-      generatedInner: Buffer.from(file.bytes),
-      manualInner: existingBuffer,
-    });
-    adoptions.push({ path: file.path, bytes: mixed });
+    refusals.push({ path: outcome.path, reason: outcome.reason });
   }
 
   return { adoptions, refusals };
-}
-
-async function getLocalRuntimeGitignoreFindings(
-  rootDir: string,
-): Promise<GitignoreFinding[]> {
-  const gitignore = await readOptionalText(rootDir, ".gitignore").catch(
-    () => undefined,
-  );
-  const lines = (gitignore ?? "")
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line !== "" && !line.startsWith("#"));
-
-  const findings: GitignoreFinding[] = [];
-  for (const recommended of RECOMMENDED_IGNORE_LINES) {
-    const present = lines.some((line) => {
-      const a = line.replace(/^\//u, "").replace(/\/$/u, "");
-      const b = recommended.replace(/\/$/u, "");
-      return a === b;
-    });
-    findings.push({
-      line: recommended,
-      action: present ? "already-present" : "would-add",
-      reason: "local runtime or machine-specific path",
-    });
-  }
-  return findings;
 }
 
 async function appendMissingGitignoreLines(
@@ -2681,464 +2681,6 @@ type RegionAwareRefusal = {
     | "hash-mismatch";
 };
 
-type Phase14ImportInput = {
-  rootDir: string;
-  mode: "dry-run" | "write";
-  strategy: ImportStrategy;
-  profilePath: string;
-  profile: AiProfile | undefined;
-  wouldCreateProfile: boolean;
-  stack: DetectedStack;
-};
-
-type Phase14SupportedPath = {
-  path: string;
-  kind: Phase14ImportFileFinding["kind"];
-  isLocalRuntime: boolean;
-};
-
-const PHASE_14_SUPPORTED_PATHS: Phase14SupportedPath[] = [
-  { path: "AGENTS.md", kind: "root-instructions", isLocalRuntime: false },
-  { path: "CLAUDE.md", kind: "root-instructions", isLocalRuntime: false },
-  // .claude/settings.json is generated client config per the Phase 14 spec
-  // and must be classified separately from .claude/settings.local.json.
-  { path: ".claude/settings.json", kind: "client-config", isLocalRuntime: false },
-  {
-    path: ".claude/settings.local.json",
-    kind: "client-config",
-    isLocalRuntime: true,
-  },
-  { path: ".codex/config.toml", kind: "client-config", isLocalRuntime: true },
-  { path: ".codex/hooks.json", kind: "client-config", isLocalRuntime: true },
-  { path: ".mcp.json", kind: "mcp-config", isLocalRuntime: true },
-];
-
-const PHASE_14_SCAN_DIRS: Array<{
-  root: string;
-  kind: Phase14ImportFileFinding["kind"];
-  fileFilter: (relativePath: string) => boolean;
-  recursive: boolean;
-}> = [
-  {
-    root: ".agents/skills",
-    kind: "workflow-skill",
-    fileFilter: (rel) => rel.endsWith("/SKILL.md"),
-    recursive: true,
-  },
-  {
-    root: ".claude/skills",
-    kind: "workflow-skill",
-    fileFilter: (rel) => rel.endsWith("/SKILL.md"),
-    recursive: true,
-  },
-  {
-    root: ".claude/agents",
-    kind: "subagent",
-    fileFilter: (rel) => rel.endsWith(".md"),
-    recursive: false,
-  },
-  {
-    root: ".codex/agents",
-    kind: "subagent",
-    fileFilter: (rel) => rel.endsWith(".toml"),
-    recursive: false,
-  },
-  {
-    root: ".tabnine/agent/agents",
-    kind: "subagent",
-    fileFilter: (rel) => rel.endsWith(".md"),
-    recursive: false,
-  },
-];
-
-async function buildPhase14ImportReport(
-  input: Phase14ImportInput,
-): Promise<Phase14ImportReport> {
-  const files: Phase14ImportFileFinding[] = [];
-  let wouldUpdateRegions = 0;
-  let preservedManualFiles = 0;
-  let conflicts = 0;
-
-  // Lockfile v2 ownership wins per the spec's ownership proof order. Loading
-  // it here lets us classify already-adopted skills/subagents correctly
-  // instead of always reporting them as manual-owned.
-  const lockfile = await readLockfileForRegions(input.rootDir);
-  const ownershipByPath = new Map<
-    string,
-    "generated-owned" | "mixed" | "manual-owned"
-  >();
-  if (lockfile) {
-    for (const output of lockfile.outputs) {
-      ownershipByPath.set(output.path, output.ownership);
-    }
-  }
-
-  for (const entry of PHASE_14_SUPPORTED_PATHS) {
-    const read = await readRegionAwareFile(input.rootDir, entry.path);
-    if (read.refused) {
-      files.push({
-        path: entry.path,
-        exists: true,
-        kind: entry.kind,
-        ownership: "unknown",
-        tags: [],
-        action: "refuse-conflict",
-        notes: ["symlinked; Phase 14 refuses to follow file symlinks"],
-      });
-      conflicts += 1;
-      continue;
-    }
-
-    const existing = read.bytes;
-    if (!existing) {
-      if (entry.kind === "root-instructions") {
-        files.push({
-          path: entry.path,
-          exists: false,
-          kind: entry.kind,
-          ownership: "unknown",
-          tags: [],
-          action: "create",
-          notes: [],
-        });
-      }
-      continue;
-    }
-
-    const bytes = Buffer.from(existing);
-    const tags: Phase14ImportFileFinding["tags"] = [];
-    if (entry.isLocalRuntime) {
-      tags.push("local-runtime");
-    }
-    if (containsAbsolutePathLiteral(bytes)) {
-      tags.push("contains-absolute-path");
-    }
-
-    if (entry.kind === "client-config" && !entry.isLocalRuntime) {
-      // .claude/settings.json is generated client config. We do not adopt or
-      // mutate it from init, but we report it as preserved rather than
-      // local-runtime so callers can compile/refresh it without confusion.
-      // If the lockfile already claims ownership we honor that label.
-      const ownership = ownershipByPath.get(entry.path) ?? "generated-owned";
-      files.push({
-        path: entry.path,
-        exists: true,
-        kind: entry.kind,
-        ownership,
-        tags,
-        action: "preserve",
-        notes: [
-          "generated client config; refresh via `agent-profile compile --write`",
-        ],
-      });
-      preservedManualFiles += 1;
-      continue;
-    }
-
-    if (entry.kind !== "root-instructions") {
-      files.push({
-        path: entry.path,
-        exists: true,
-        kind: entry.kind,
-        ownership: "manual-owned",
-        tags,
-        action: "ignore-local-runtime",
-        notes:
-          entry.kind === "mcp-config"
-            ? [
-                "contains MCP entries; not imported into ai-profile.yaml in Phase 14",
-              ]
-            : ["local runtime config; not adopted by Phase 14"],
-      });
-      preservedManualFiles += 1;
-      continue;
-    }
-
-    if (hasAllRegionMarkers(bytes)) {
-      const parsed = parseMixedFile(bytes);
-      if (!parsed.ok) {
-        files.push({
-          path: entry.path,
-          exists: true,
-          kind: entry.kind,
-          ownership: "unknown",
-          tags,
-          action: "refuse-conflict",
-          notes: parsed.issues.map((item) => item.message),
-        });
-        conflicts += 1;
-        continue;
-      }
-      files.push({
-        path: entry.path,
-        exists: true,
-        kind: entry.kind,
-        ownership: "mixed",
-        tags,
-        action: "update-generated-region",
-        notes: [],
-      });
-      if (input.strategy === "regions") {
-        wouldUpdateRegions += 1;
-      }
-      continue;
-    }
-
-    if (hasAnyRegionMarker(bytes)) {
-      files.push({
-        path: entry.path,
-        exists: true,
-        kind: entry.kind,
-        ownership: "unknown",
-        tags,
-        action: "refuse-conflict",
-        notes: ["partial region markers; manual repair required"],
-      });
-      conflicts += 1;
-      continue;
-    }
-
-    if (hasLegacyGeneratedMarker(bytes)) {
-      tags.push("generated-looking");
-    }
-
-    if (input.strategy === "regions") {
-      files.push({
-        path: entry.path,
-        exists: true,
-        kind: entry.kind,
-        ownership: "unknown",
-        tags,
-        action: "insert-regions",
-        notes: ["existing content will be preserved in manual region"],
-      });
-      wouldUpdateRegions += 1;
-    } else {
-      files.push({
-        path: entry.path,
-        exists: true,
-        kind: entry.kind,
-        ownership: "unknown",
-        tags,
-        action: "preserve",
-        notes: [
-          "Run init --import --strategy regions --write to adopt into mixed ownership",
-        ],
-      });
-      preservedManualFiles += 1;
-    }
-  }
-
-  for (const scan of PHASE_14_SCAN_DIRS) {
-    const { files: discovered, refusals: scanRefusals } = await listFilesUnder(
-      input.rootDir,
-      scan.root,
-      scan.recursive,
-    );
-    for (const refusedPath of scanRefusals) {
-      files.push({
-        path: refusedPath,
-        exists: true,
-        kind: scan.kind,
-        ownership: "unknown",
-        tags: [],
-        action: "refuse-conflict",
-        notes: ["symlinked; Phase 14 refuses to follow file symlinks"],
-      });
-      conflicts += 1;
-    }
-    for (const relativePath of discovered) {
-      if (!scan.fileFilter(relativePath)) continue;
-      const read = await readRegionAwareFile(input.rootDir, relativePath);
-      const tags: Phase14ImportFileFinding["tags"] = [];
-      if (read.refused) {
-        files.push({
-          path: relativePath,
-          exists: true,
-          kind: scan.kind,
-          ownership: "unknown",
-          tags,
-          action: "refuse-conflict",
-          notes: ["symlinked; Phase 14 refuses to follow file symlinks"],
-        });
-        conflicts += 1;
-        continue;
-      }
-      if (!read.bytes) continue;
-      const lockOwnership = ownershipByPath.get(relativePath);
-      if (lockOwnership === "generated-owned") {
-        files.push({
-          path: relativePath,
-          exists: true,
-          kind: scan.kind,
-          ownership: "generated-owned",
-          tags,
-          action: "preserve",
-          notes: [
-            "lockfile-owned generated output; refresh via `agent-profile compile --write`",
-          ],
-        });
-        preservedManualFiles += 1;
-        continue;
-      }
-      if (lockOwnership === "mixed") {
-        files.push({
-          path: relativePath,
-          exists: true,
-          kind: scan.kind,
-          ownership: "mixed",
-          tags,
-          action: "update-generated-region",
-          notes: [
-            "lockfile-owned mixed file; generated region is updated on compile --write",
-          ],
-        });
-        if (input.strategy === "regions") {
-          wouldUpdateRegions += 1;
-        }
-        continue;
-      }
-      files.push({
-        path: relativePath,
-        exists: true,
-        kind: scan.kind,
-        ownership: "manual-owned",
-        tags,
-        action: "preserve",
-        notes: [
-          scan.kind === "workflow-skill"
-            ? "existing workflow skill; not adopted as generated output"
-            : "existing subagent file; not adopted as generated output",
-        ],
-      });
-      preservedManualFiles += 1;
-    }
-  }
-
-  const gitignoreFindings = await getLocalRuntimeGitignoreFindings(
-    input.rootDir,
-  );
-  const gitignore: Phase14GitignoreFinding[] = gitignoreFindings.map(
-    (finding) => ({
-      path: ".gitignore",
-      line: finding.line,
-      action:
-        finding.action === "already-present"
-          ? "already-present"
-          : input.mode === "write"
-            ? "would-add"
-            : "suggest-add",
-      reason: finding.reason,
-    }),
-  );
-
-  return {
-    command: "init",
-    mode: input.mode,
-    strategy: input.strategy,
-    root: ".",
-    profilePath: input.profilePath,
-    stack: {
-      languages: [...input.stack.languages].sort(),
-      frameworks: [...input.stack.frameworks].sort(),
-      packageManagers: [...input.stack.packageManagers].sort(),
-      testing: [...input.stack.testing].sort(),
-    },
-    files: files.sort((left, right) =>
-      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-    ),
-    gitignore,
-    summary: {
-      wouldCreateProfile: input.wouldCreateProfile,
-      wouldUpdateRegions,
-      preservedManualFiles,
-      conflicts,
-    },
-  };
-}
-
-type ListFilesResult = {
-  files: string[];
-  refusals: string[]; // paths that were symlinks and therefore skipped
-};
-
-async function listFilesUnder(
-  rootDir: string,
-  relativeRoot: string,
-  recursive: boolean,
-): Promise<ListFilesResult> {
-  const files: string[] = [];
-  const refusals: string[] = [];
-  // Phase 14 rule: do not follow symlinks for any path the import flow
-  // reads. lstat the scan root first; if it is a symlink, refuse the whole
-  // subtree rather than descending through it.
-  const rootStat = await lstatOptionalCli(
-    path.join(rootDir, relativeRoot),
-  );
-  if (!rootStat) {
-    return { files: [], refusals: [] };
-  }
-  if (rootStat.isSymbolicLink()) {
-    return { files: [], refusals: [relativeRoot] };
-  }
-  if (!rootStat.isDirectory()) {
-    return { files: [], refusals: [] };
-  }
-  await walk(rootDir, relativeRoot, recursive, files, refusals);
-  return { files: files.sort(), refusals: refusals.sort() };
-}
-
-async function walk(
-  rootDir: string,
-  relativeRoot: string,
-  recursive: boolean,
-  out: string[],
-  refusals: string[],
-): Promise<void> {
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = await fsPromises.readdir(path.join(rootDir, relativeRoot), {
-      withFileTypes: true,
-    });
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return;
-    throw error;
-  }
-  for (const entry of entries) {
-    const child = `${relativeRoot}/${entry.name}`;
-    // Phase 14: never descend through symlinked directories or read
-    // symlinked files. We record the path as a refusal so the caller can
-    // surface it in the import report.
-    if (entry.isSymbolicLink()) {
-      refusals.push(child);
-      continue;
-    }
-    if (entry.isDirectory() && recursive) {
-      await walk(rootDir, child, recursive, out, refusals);
-      continue;
-    }
-    if (entry.isFile()) {
-      out.push(child);
-    }
-  }
-}
-
-async function lstatOptionalCli(
-  absolutePath: string,
-): Promise<Awaited<ReturnType<typeof fsPromises.lstat>> | undefined> {
-  try {
-    return await fsPromises.lstat(absolutePath);
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return undefined;
-    throw error;
-  }
-}
-
-function containsAbsolutePathLiteral(bytes: Buffer): boolean {
-  const text = bytes.toString("utf8");
-  return /[A-Z]:\\\\|"\/[A-Za-z]/u.test(text);
-}
-
 function formatRegionAdoptionRefusals(
   refusals: RegionAdoptionRefusal[],
 ): string {
@@ -3149,34 +2691,6 @@ function formatRegionAdoptionRefusals(
     "",
   ];
   return lines.join("\n");
-}
-
-async function readRegionAwareFile(
-  rootDir: string,
-  relativePath: string,
-): Promise<{ refused: boolean; bytes?: Uint8Array }> {
-  const safePath = safeOutputPath(relativePath);
-  const absolutePath = path.resolve(rootDir, ...safePath.split("/"));
-
-  let stat: Awaited<ReturnType<typeof fsPromises.lstat>>;
-  try {
-    stat = await fsPromises.lstat(absolutePath);
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
-      return { refused: false, bytes: undefined };
-    }
-    throw error;
-  }
-
-  if (stat.isSymbolicLink()) {
-    return { refused: true };
-  }
-
-  if (!stat.isFile()) {
-    return { refused: false, bytes: undefined };
-  }
-
-  return { refused: false, bytes: await fsPromises.readFile(absolutePath) };
 }
 
 type RegionAwareWritePlan = {
@@ -3286,14 +2800,6 @@ async function planRegionAwareWrites(
   }
 
   return { writes, mixedOutputs, refusals };
-}
-
-async function readLockfileForRegions(rootDir: string) {
-  const bytes = await readOptionalBytes(rootDir, "ai-profile.lock");
-  if (!bytes) return undefined;
-  const result = validateLockfileText(Buffer.from(bytes).toString("utf8"));
-  if (!result.ok) return undefined;
-  return toLockfileV2View(result.lockfile);
 }
 
 function generatedInnerBytesFor(file: GeneratedFile): Buffer {

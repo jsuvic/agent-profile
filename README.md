@@ -145,7 +145,7 @@ agent-profile compile --write
 agent-profile doctor
 agent-profile doctor --json
 agent-profile ui
-agent-profile ui --root /path/to/project --port 5174
+agent-profile ui --root /path/to/project --port auto --open true
 ```
 
 Exit codes:
@@ -181,6 +181,38 @@ manual.
 readable and are migrated to v2 on the next successful write; the migration
 is deterministic and idempotent. Older `agent-profile` binaries will reject
 v2 lockfiles — see [Release notes](docs/release-notes/phase-14.md).
+
+### Local Migration UI (Phase 16)
+
+For repos where reviewing import findings visually is easier than reading CLI
+output, `agent-profile ui` includes a **Migration view** at `/migration` that
+displays the same Phase 14 import report and lets you pick a per-file action
+before writing.
+
+```text
+agent-profile ui [--root <path>] [--port auto|<number>] [--open true|false]
+```
+
+- `--port` defaults to `auto` (ephemeral loopback port).
+- `--open` defaults to `true` in interactive TTY sessions, `false` otherwise.
+- The CLI prints a one-time session token in the URL; the server rejects any
+  request that does not carry the token via query string, cookie, or
+  `x-agent-profile-session` header.
+- The server binds `127.0.0.1` by default and never binds `0.0.0.0`.
+
+Per-file row actions in the Migration view:
+
+| Action                    | When it appears                                   |
+| ------------------------- | ------------------------------------------------- |
+| `Preserve`                | always (for non-refused rows)                     |
+| `Add regions`             | unmarked supported root file (AGENTS.md/CLAUDE.md)|
+| `Update generated region` | file already has region markers                   |
+| `Replace generated-owned` | only for `generated-owned` non-root files; needs a per-row second confirmation, then `confirmReplace:true` on apply |
+| `Skip`                    | always                                            |
+
+The UI never writes without showing a plan first, never reads or previews
+`.env*` files, and surfaces a post-write doctor result inline — failed
+doctor checks are reported, not auto-reverted.
 
 ## How It Works
 
