@@ -158,6 +158,16 @@ function classifyPath(relativePath: string): Classification | null {
     // bodies are typically Markdown (.md) or TOML (.toml). Local runtime
     // dirs (like .codex/agents/*.toml) are still readable for preview
     // because the file itself is documentation, not credentials.
+    //
+    // Honour the scan dir's `recursive` flag — non-recursive roots
+    // (`.claude/agents`, `.codex/agents`, `.tabnine/agent/agents`) only
+    // surface direct children in the import report, so the preview
+    // endpoint must reject nested paths under them. Otherwise the
+    // preview API exposes files that are not in the migration file set.
+    if (!scanDir.recursive) {
+      const remainder = relativePath.slice(scanDir.root.length + 1);
+      if (remainder.includes("/")) return null;
+    }
     return { kind: kindFromExtension(relativePath), isLocalRuntime: false };
   }
 

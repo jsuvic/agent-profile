@@ -120,6 +120,47 @@ test("readMigrationPreview previews .claude/settings.json as escaped JSON", asyn
   assert.equal(result.sanitizedText.includes("<script>"), false);
 });
 
+test("readMigrationPreview rejects nested paths under non-recursive scan roots", async () => {
+  // `.claude/agents` is a non-recursive scan dir per PHASE_14_SCAN_DIRS,
+  // so the import report never surfaces files at `.claude/agents/nested/...`.
+  // The preview endpoint must enforce the same contract — otherwise it
+  // exposes files that are not in the migration set.
+  const root = await createTempRoot();
+  await mkdir(path.join(root, ".claude/agents/nested"), { recursive: true });
+  await writeFile(
+    path.join(root, ".claude/agents/nested/secret.md"),
+    "should never appear in a preview",
+    "utf8",
+  );
+
+  const result = await readMigrationPreview(
+    root,
+    ".claude/agents/nested/secret.md",
+  );
+
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.reason, "unsupported_path");
+});
+
+test("readMigrationPreview allows direct children of non-recursive scan roots", async () => {
+  // Sanity-check the negative side: `.claude/agents/foo.md` is a valid
+  // direct child and must still be previewable.
+  const root = await createTempRoot();
+  await mkdir(path.join(root, ".claude/agents"), { recursive: true });
+  await writeFile(
+    path.join(root, ".claude/agents/foo.md"),
+    "---\nname: foo\n---\nbody\n",
+    "utf8",
+  );
+
+  const result = await readMigrationPreview(root, ".claude/agents/foo.md");
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.kind, "markdown");
+});
+
 test("readMigrationPreview previews a scanned workflow skill SKILL.md", async () => {
   const root = await createTempRoot();
   await mkdir(path.join(root, ".claude/skills/example"), { recursive: true });

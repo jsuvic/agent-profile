@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   buildPhase14ImportReport,
   extractDeclaredName,
+  planRootInstructionsAdoption,
 } from "./index.js";
 
 async function createTempRoot(): Promise<string> {
@@ -68,6 +69,26 @@ test("extractDeclaredName: TOML top-level `name = \"foo\"`", () => {
   assert.equal(
     extractDeclaredName(bytes, ".codex/agents/foo.toml"),
     "my-agent",
+  );
+});
+
+test("extractDeclaredName: TOML strips inline `# comment` from the value", () => {
+  // `name = "reviewer" # note` must extract `reviewer`, otherwise two
+  // files declaring the same name disagree on equality whenever one of
+  // them carries an inline comment.
+  const bytes = Buffer.from('name = "reviewer" # inline comment\n');
+  assert.equal(
+    extractDeclaredName(bytes, ".codex/agents/foo.toml"),
+    "reviewer",
+  );
+});
+
+test("extractDeclaredName: TOML does NOT strip `#` that appears inside a quoted string", () => {
+  // A literal `#` inside the quoted value must be preserved.
+  const bytes = Buffer.from('name = "edge#case"\n');
+  assert.equal(
+    extractDeclaredName(bytes, ".codex/agents/foo.toml"),
+    "edge#case",
   );
 });
 
@@ -197,6 +218,84 @@ test("buildPhase14ImportReport: skill and subagent sharing a name do NOT collide
   const report = await emptyReport(root);
 
   assert.equal(report.collisions.length, 0);
+});
+
+test("buildPhase14ImportReport: TOML inline comments do not hide a real collision", async () => {
+  // Two codex subagents with the same TOML `name = "reviewer"` — one has
+  // an inline comment, one does not. The collision must still be
+  // detected even though the raw RHS strings differ.
+  const root = await createTempRoot();
+  await mkdir(path.join(root, ".codex", "agents"), { recursive: true });
+  await mkdir(path.join(root, ".claude", "agents"), { recursive: true });
+  await writeFile(
+    path.join(root, ".codex", "agents", "a.toml"),
+    'name = "reviewer" # generated\n',
+    "utf8",
+  );
+  await writeFile(
+    path.join(root, ".claude", "agents", "a.md"),
+    "---\nname: reviewer\n---\nbody\n",
+    "utf8",
+  );
+
+  const report = await emptyReport(root);
+
+  const subagentCollisions = report.collisions.filter(
+    (c) => c.kind === "subagent",
+  );
+  assert.equal(
+    subagentCollisions.length,
+    1,
+    "TOML inline comment must not mask the collision",
+  );
+  assert.equal(subagentCollisions[0].name, "reviewer");
+});
+
+// ---------------------------------------------------------------------------
+// planRootInstructionsAdoption — fail-closed when compiled bytes missing
+// ---------------------------------------------------------------------------
+
+test("planRootInstructionsAdoption: refuses with missing-generated-bytes when an existing file has no compiled output", async () => {
+  // Existing AGENTS.md, but the caller did not supply compiled bytes
+  // for it. Adopting silently with an empty generated region would
+  // blank a future-compiled section, so the helper must refuse.
+  const root = await createTempRoot();
+  await writeFile(path.join(root, "AGENTS.md"), "manual body\n", "utf8");
+
+  const outcomes = await planRootInstructionsAdoption(root, new Map());
+
+  const agents = outcomes.find((o) => o.path === "AGENTS.md");
+  assert.ok(agents);
+  assert.equal(agents?.ok, false);
+  if (agents && !agents.ok) {
+    assert.equal(agents.reason, "missing-generated-bytes");
+  }
+});
+
+test("planRootInstructionsAdoption: still reports missing-file for absent on-disk files", async () => {
+  // Sanity-check that the missing-file branch is not swallowed by the
+  // new missing-generated-bytes check.
+  const root = await createTempRoot();
+  const outcomes = await planRootInstructionsAdoption(root, new Map());
+  const agents = outcomes.find((o) => o.path === "AGENTS.md");
+  assert.ok(agents && !agents.ok);
+  if (agents && !agents.ok) {
+    assert.equal(agents.reason, "missing-file");
+  }
+});
+
+test("planRootInstructionsAdoption: emits an adoption when compiled bytes are supplied", async () => {
+  const root = await createTempRoot();
+  await writeFile(path.join(root, "AGENTS.md"), "manual body\n", "utf8");
+  const generated = new Map<string, Uint8Array>([
+    ["AGENTS.md", Buffer.from("# generated\n")],
+  ]);
+
+  const outcomes = await planRootInstructionsAdoption(root, generated);
+
+  const agents = outcomes.find((o) => o.path === "AGENTS.md");
+  assert.ok(agents);
+  assert.equal(agents?.ok, true);
 });
 
 test("buildPhase14ImportReport: missing name field is silently ignored (no false collision)", async () => {

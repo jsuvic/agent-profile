@@ -137,6 +137,54 @@ test("regions plan refuses add-regions when ai-profile.yaml is absent", async ()
   assert.equal(refusal?.reason, "requires-profile");
 });
 
+test("add-regions refuses with no-compiled-output when the profile does not emit that root", async () => {
+  // A profile with Claude disabled does not produce CLAUDE.md. If the
+  // user has an existing CLAUDE.md on disk and asks for add-regions,
+  // the plan must refuse rather than silently insert an empty generated
+  // region (which would blank out the section on the next compile).
+  const root = await createTempRoot();
+  const profileWithoutClaude = `version: 1
+profile:
+  name: no-claude
+  description: Profile without claude.
+stack:
+  languages: [typescript]
+  frameworks: []
+  packageManagers: [npm]
+  testing: []
+clients:
+  tabnine: { enabled: false }
+  codex: { enabled: true }
+  claude: { enabled: false }
+workflow:
+  sdd: false
+  tdd: false
+  finalReview: false
+`;
+  await writeFile(
+    path.join(root, "ai-profile.yaml"),
+    profileWithoutClaude,
+    "utf8",
+  );
+  await writeFile(
+    path.join(root, "CLAUDE.md"),
+    "existing claude instructions\n",
+    "utf8",
+  );
+
+  const plan = await buildMigrationPlan(root, [
+    { path: "CLAUDE.md", action: "add-regions" },
+  ]);
+
+  assert.equal(
+    plan.writes.length,
+    0,
+    "must not write when compile produced no bytes for this path",
+  );
+  const refusal = plan.refusals.find((r) => r.path === "CLAUDE.md");
+  assert.equal(refusal?.reason, "no-compiled-output");
+});
+
 test("add-regions on an already-mixed file is idempotent (writes via replaceGeneratedRegion)", async () => {
   const root = await createTempRoot();
   await writeFixtureProfile(root);
