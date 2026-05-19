@@ -608,6 +608,45 @@ test("explicit --import flag bypasses wizard", async () => {
   assert.equal(prompts.calls.length, 0);
 });
 
+test("regions strategy on a fresh repo does not claim to create missing AGENTS.md/CLAUDE.md", async () => {
+  const rootDir = await createTsRoot("fresh-regions-plan");
+  // Intentionally no AGENTS.md or CLAUDE.md present.
+  const output = createOutput();
+  const prompts = scriptedPrompts({
+    strategy: "regions",
+    clients: [],
+    gitignore: false,
+    confirm: true,
+  });
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0);
+
+  const text = output.stdoutText();
+  const planIndex = text.indexOf("Write plan:");
+  const planSection = text.slice(planIndex);
+  // The wizard must not advertise a create for missing root instruction
+  // files — Phase 14 init only adopts existing files; AGENTS.md/CLAUDE.md
+  // are materialized later by `agent-profile compile --write`.
+  assert.equal(
+    /create AGENTS\.md/u.test(planSection),
+    false,
+    "plan should not announce AGENTS.md creation when the file is absent",
+  );
+  assert.equal(
+    /create CLAUDE\.md/u.test(planSection),
+    false,
+    "plan should not announce CLAUDE.md creation when the file is absent",
+  );
+  // The only file actually written should be ai-profile.yaml.
+  assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), true);
+  assert.equal(await fileExists(path.join(rootDir, "AGENTS.md")), false);
+  assert.equal(await fileExists(path.join(rootDir, "CLAUDE.md")), false);
+});
+
 test("regions strategy choice updates write plan before final confirmation", async () => {
   const rootDir = await createTsRoot("regions-plan-refresh");
   await writeUnmarkedRoots(rootDir);

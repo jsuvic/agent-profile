@@ -259,10 +259,11 @@ export function formatWizardPlan(
 
   for (const file of context.report.files) {
     if (file.kind === "root-instructions") {
+      // init does not create missing root instruction files; that happens via
+      // a subsequent `agent-profile compile --write`. The Phase 14 import
+      // pipeline (planRegionAdoptions) only adopts files that already exist,
+      // so the wizard plan must not advertise a create that will not happen.
       if (!file.exists) {
-        if (outcome.strategy === "regions") {
-          lines.push(`- create ${file.path} (generated + manual regions)`);
-        }
         continue;
       }
       if (outcome.strategy === "regions" && file.action === "insert-regions") {
