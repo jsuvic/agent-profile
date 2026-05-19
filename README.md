@@ -78,7 +78,7 @@ Requirements: Node.js 24+ and npm 11+.
 From the repository you want to configure:
 
 ```bash
-npx agent-profile init --client codex --write
+npx agent-profile init
 npx agent-profile compile --dry-run
 npx agent-profile compile --write
 npx agent-profile doctor
@@ -87,9 +87,14 @@ npx agent-profile ui
 
 The workflow is:
 
-1. `init --client codex --write` creates a starting `ai-profile.yaml` with the
-   Codex client enabled. Omit `--client` to keep all clients disabled, or use
-   `--client all --no-client tabnine` to choose a deterministic subset.
+1. `init` opens an interactive wizard that detects the stack and existing
+   agent files, recommends a safe import strategy, and writes only after the
+   final `Write this plan?` confirmation. In non-interactive environments
+   (no TTY, `CI=true`, or `--non-interactive`) `init` reports a dry-run
+   `--import --strategy preserve` plan and writes nothing. Power users can
+   bypass the wizard with explicit flags such as
+   `init --client codex --write` or
+   `init --import --strategy regions --write`.
 2. `compile --dry-run` previews the files that would be generated.
 3. `compile --write` writes generated files under the project root.
 4. `doctor` checks profile validity, drift, safety posture, and generated files.
@@ -127,6 +132,8 @@ that root after path and symlink containment checks.
 ## Commands
 
 ```bash
+agent-profile init                                            # interactive wizard (Phase 15)
+agent-profile init --non-interactive                          # dry-run preserve, writes nothing
 agent-profile init --dry-run
 agent-profile init --write
 agent-profile init --client codex,claude --write

@@ -55,6 +55,20 @@ import {
   type DoctorResult,
 } from "@agent-profile/doctor";
 
+import {
+  createDefaultPrompts,
+  formatWizardDeclined,
+  isNonInteractive,
+  recommendStrategy,
+  runInitWizard,
+  WIZARD_CLIENT_IDS,
+  type CliPrompts,
+  type WizardClientId,
+  type WizardContext,
+  type WizardFileFinding,
+  type WizardImportReport,
+} from "./wizard.js";
+
 export type CliIo = {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
@@ -66,6 +80,8 @@ export type CliOptions = {
   launchUi?: UiLaunchFunction;
   presetNow?: () => number;
   presetVerificationKeys?: readonly PresetVerificationKey[];
+  prompts?: CliPrompts;
+  nonInteractive?: boolean;
 };
 
 export type UiLaunchRequest = {
@@ -124,6 +140,7 @@ type ParsedInitArgs =
       json: boolean;
       quiet: boolean;
       help: boolean;
+      nonInteractive: boolean;
     }
   | {
       ok: false;
@@ -205,13 +222,16 @@ export async function runCli(
     case "doctor":
       return runDoctorCommand(rest, cwd, io);
     case "init":
-      return runInit(
-        rest,
-        cwd,
-        io,
-        options.presetNow,
-        options.presetVerificationKeys,
-      );
+      return runInit(rest, cwd, io, {
+        ...(options.presetNow ? { presetNow: options.presetNow } : {}),
+        ...(options.presetVerificationKeys
+          ? { presetVerificationKeys: options.presetVerificationKeys }
+          : {}),
+        ...(options.prompts ? { prompts: options.prompts } : {}),
+        ...(options.nonInteractive !== undefined
+          ? { nonInteractive: options.nonInteractive }
+          : {}),
+      });
     case "ui":
       return runUi(rest, cwd, io, options.launchUi ?? launchPublishedUi);
     default:
@@ -484,12 +504,18 @@ async function runCompile(
   return 0;
 }
 
+type RunInitOptions = {
+  presetNow?: () => number;
+  presetVerificationKeys?: readonly PresetVerificationKey[];
+  prompts?: CliPrompts;
+  nonInteractive?: boolean;
+};
+
 async function runInit(
   args: string[],
   cwd: string,
   io: CliIo,
-  presetNow?: () => number,
-  presetVerificationKeys?: readonly PresetVerificationKey[],
+  options: RunInitOptions = {},
 ): Promise<number> {
   const parsed = parseInitArgs(args);
 
@@ -502,6 +528,9 @@ async function runInit(
     io.stdout(formatHelp());
     return 0;
   }
+
+  const presetNow = options.presetNow;
+  const presetVerificationKeys = options.presetVerificationKeys;
 
   const rootDir = path.resolve(cwd, parsed.root);
   const safeProfilePath = toSafeCliPath(parsed.profile);
@@ -553,6 +582,21 @@ async function runInit(
       }),
     );
     return 1;
+  }
+
+  if (isWizardEligibleArgs(args) && presetPayload === undefined) {
+    const dispatch = await dispatchInitWizard({
+      args: parsed,
+      rootDir,
+      profilePath: safeProfilePath.path,
+      existingProfileBytes,
+      io,
+      promptsOverride: options.prompts,
+      nonInteractiveOverride: options.nonInteractive,
+    });
+    if (dispatch === "declined") {
+      return 0;
+    }
   }
 
   if (existingProfileBytes) {
@@ -842,6 +886,141 @@ async function runInit(
   return 0;
 }
 
+type ParsedInitOk = Extract<ParsedInitArgs, { ok: true }>;
+
+type DispatchInitWizardInput = {
+  args: ParsedInitOk;
+  rootDir: string;
+  profilePath: string;
+  existingProfileBytes: Uint8Array | undefined;
+  io: CliIo;
+  promptsOverride: CliPrompts | undefined;
+  nonInteractiveOverride: boolean | undefined;
+};
+
+type DispatchInitWizardResult = "non-interactive" | "confirmed" | "declined";
+
+async function dispatchInitWizard(
+  input: DispatchInitWizardInput,
+): Promise<DispatchInitWizardResult> {
+  const nonInteractive = isNonInteractive({
+    env: process.env,
+    stdin: process.stdin,
+    stdout: process.stdout,
+    flag: input.args.nonInteractive,
+    ...(input.nonInteractiveOverride !== undefined
+      ? { override: input.nonInteractiveOverride }
+      : {}),
+  });
+
+  if (nonInteractive) {
+    input.args.importExisting = true;
+    // strategy remains the parsed default ("preserve") and write stays false
+    return "non-interactive";
+  }
+
+  let profileForReport: AiProfile | undefined;
+  if (input.existingProfileBytes) {
+    const parsedProfile = parseProfileYaml(
+      Buffer.from(input.existingProfileBytes).toString("utf8"),
+      { sourcePath: input.profilePath },
+    );
+    if (parsedProfile.ok) {
+      profileForReport = parsedProfile.profile;
+    }
+  }
+
+  const stackForWizard = await detectStack(input.rootDir);
+  const importForWizard = await analyzeExistingArtifacts(input.rootDir);
+  const wizardPhaseReport = await buildPhase14ImportReport({
+    rootDir: input.rootDir,
+    mode: "dry-run",
+    strategy: "preserve",
+    profilePath: input.profilePath,
+    profile: profileForReport,
+    wouldCreateProfile: input.existingProfileBytes === undefined,
+    stack: stackForWizard.stack,
+  });
+
+  const detectedClients: WizardClientId[] = WIZARD_CLIENT_IDS.filter(
+    (id) => importForWizard.clients[id],
+  );
+
+  const context: WizardContext = {
+    stack: {
+      languages: stackForWizard.stack.languages,
+      frameworks: stackForWizard.stack.frameworks,
+      packageManagers: stackForWizard.stack.packageManagers,
+      testing: stackForWizard.stack.testing,
+    },
+    detectedClients,
+    hasExistingProfile: input.existingProfileBytes !== undefined,
+    report: toWizardImportReport(wizardPhaseReport),
+  };
+
+  const prompts = input.promptsOverride ?? createDefaultPrompts(input.io);
+  const outcome = await runInitWizard({
+    context,
+    io: input.io,
+    prompts,
+    rebuildReport: async (strategy) => {
+      const refreshed = await buildPhase14ImportReport({
+        rootDir: input.rootDir,
+        mode: "dry-run",
+        strategy,
+        profilePath: input.profilePath,
+        profile: profileForReport,
+        wouldCreateProfile: input.existingProfileBytes === undefined,
+        stack: stackForWizard.stack,
+      });
+      return toWizardImportReport(refreshed);
+    },
+  });
+
+  if (!outcome.confirmed) {
+    return "declined";
+  }
+
+  input.args.importExisting = true;
+  input.args.strategy = outcome.strategy;
+  input.args.updateGitignore = outcome.updateGitignore;
+  input.args.write = true;
+  input.args.clients = WIZARD_CLIENT_IDS.filter((id) =>
+    outcome.clients.includes(id),
+  );
+  input.args.noClients = WIZARD_CLIENT_IDS.filter(
+    (id) => !outcome.clients.includes(id),
+  );
+
+  return "confirmed";
+}
+
+function toWizardImportReport(
+  report: Phase14ImportReport,
+): WizardImportReport {
+  return {
+    files: report.files.map<WizardFileFinding>((file) => ({
+      path: file.path,
+      exists: file.exists,
+      kind: file.kind,
+      ownership: file.ownership,
+      tags: [...file.tags],
+      action: file.action,
+      notes: [...file.notes],
+    })),
+    gitignore: report.gitignore.map((finding) => ({
+      line: finding.line,
+      action: finding.action,
+    })),
+    summary: {
+      wouldCreateProfile: report.summary.wouldCreateProfile,
+      wouldUpdateRegions: report.summary.wouldUpdateRegions,
+      preservedManualFiles: report.summary.preservedManualFiles,
+      conflicts: report.summary.conflicts,
+    },
+  };
+}
+
 function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
   let root = ".";
   let json = false;
@@ -967,6 +1146,7 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
   let json = false;
   let quiet = false;
   let help = false;
+  let nonInteractive = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -1087,6 +1267,9 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
       case "--quiet":
         quiet = true;
         break;
+      case "--non-interactive":
+        nonInteractive = true;
+        break;
       case "--interactive":
         return {
           ok: false,
@@ -1153,7 +1336,26 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
     json,
     quiet,
     help,
+    nonInteractive,
   };
+}
+
+const WIZARD_BYPASS_FLAGS: ReadonlySet<string> = new Set([
+  "--preset",
+  "--dry-run",
+  "--write",
+  "--import",
+  "--strategy",
+  "--update-gitignore",
+  "--client",
+  "--no-client",
+  "--profile",
+  "--json",
+  "--quiet",
+]);
+
+function isWizardEligibleArgs(args: string[]): boolean {
+  return !args.some((arg) => WIZARD_BYPASS_FLAGS.has(arg));
 }
 
 function parseClientList(
@@ -2038,14 +2240,20 @@ function formatHelp(): string {
 Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
   agent-profile doctor [--root <path>] [--json]
-  agent-profile init [--root <path>] [--profile <path>] [--import] [--preset <token>] [--client <list>] [--no-client <list>] [--json] [--quiet] [--dry-run|--write]
+  agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
   agent-profile ui [--root <path>] [--host <host>] [--port <number>] [--open]
 
 Commands:
   compile   Preview or write generated agent artifacts.
   doctor    Run local profile, lockfile, and permission checks.
-  init      Create a starting ai-profile.yaml.
+  init      Create a starting ai-profile.yaml (interactive wizard with no args).
   ui        Start the local read-only UI.
+
+Init wizard (Phase 15):
+  Plain \`agent-profile init\` opens a friendly wizard that maps to Phase 14
+  --import / --strategy / --update-gitignore / --write. In non-interactive
+  environments (no TTY, CI=true, or --non-interactive), init defaults to
+  --import --strategy preserve --dry-run and writes nothing.
 
 Init presets:
   --preset verifies a short-lived hosted preset token offline. Repository
