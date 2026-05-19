@@ -10,7 +10,10 @@
     "agent-profile": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist/index.d.ts",
+    "dist/index.d.ts.map",
+    "dist/index.js",
+    "dist/index.js.map"
   ],
   "scripts": {
     "build": "tsc -b tsconfig.json && node bundle.mjs",

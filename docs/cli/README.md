@@ -18,7 +18,7 @@ Deferred:
 ```bash
 agent-profile doctor [--root <path>] [--json]
 agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
-agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--json] [--quiet] [--dry-run|--write]
+agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
 agent-profile ui [--root <path>] [--host <host>] [--port <number>] [--open]
 ```
 
@@ -54,6 +54,46 @@ requires a separate approved spec.
 
 All write-capable commands must default to dry-run and use diff-before-write
 before mutating repository files.
+
+## Init Wizard (Phase 15)
+
+Plain `agent-profile init` opens a friendly interactive wizard that maps the
+user's answers to the Phase 14 import and write flags. The wizard runs only
+when the command is invoked without behavior flags (`--import`, `--strategy`,
+`--write`, `--client`, `--no-client`, `--profile`, `--preset`,
+`--update-gitignore`, `--json`, `--quiet`, `--dry-run`).
+
+Screens, in order:
+
+1. Detected stack, existing instruction files, local runtime files, generated
+   client config, and any foreign skills/subagents.
+2. Strategy choice (default tracks the recommendation table below).
+3. Client selection (defaults to clients detected from existing files).
+4. `.gitignore` recommendation prompt (only shown when at least one
+   recommended line is missing).
+5. Write plan summary.
+6. Final confirmation (default `No`).
+
+The wizard never bypasses Phase 14 ownership, region, path-safety, or conflict
+checks: choosing `Add generated regions` produces the same bytes as
+`init --import --strategy regions --write`, and choosing
+`Preserve existing files` writes only `ai-profile.yaml`.
+
+In non-interactive environments — `stdin`/`stdout` is not a TTY, `CI=true`,
+or `--non-interactive` is present — `init` behaves as
+`init --import --strategy preserve --dry-run` and writes nothing. The wizard
+does not introduce `--yes`: a write always requires the explicit Phase 14
+flags or the interactive final confirmation.
+
+Recommendation rules:
+
+| Detected state                                  | Recommendation                            |
+| ----------------------------------------------- | ----------------------------------------- |
+| unmarked supported root instruction file exists | `Add generated regions`                   |
+| only valid mixed root instruction files exist   | `Preserve existing files`                 |
+| no agent files exist                            | `Preserve existing files`                 |
+| legacy generated marker without lockfile exists | `Preserve existing files` plus warning    |
+| foreign skill or subagent path conflict exists  | `Preserve existing files` plus conflict   |
 
 ## Init Clients
 
