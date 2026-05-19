@@ -103,6 +103,8 @@ export {
   PHASE_14_SCAN_DIRS,
   PHASE_14_SUPPORTED_PATHS,
   RECOMMENDED_IGNORE_LINES,
+  REGION_AWARE_ROOT_PATHS,
+  planRootInstructionsAdoption,
   readLockfileForRegions,
   readRegionAwareFile,
 } from "./import-report.js";
@@ -112,4 +114,5 @@ export type {
   Phase14ImportFileFinding,
   Phase14ImportInput,
   Phase14ImportReport,
+  RootInstructionsAdoption,
 } from "./import-report.js";

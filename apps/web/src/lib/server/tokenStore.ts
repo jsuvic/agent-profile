@@ -121,7 +121,7 @@ export function storeMigrationPlan(
   return token;
 }
 
-export function consumeMigrationPlan(
+export function lookupMigrationPlan(
   token: string,
 ): MigrationPlanEntry | undefined {
   const entry = migrationPlanTokens.get(token);
@@ -130,7 +130,14 @@ export function consumeMigrationPlan(
     migrationPlanTokens.delete(token);
     return undefined;
   }
-  migrationPlanTokens.delete(token);
+  return entry;
+}
+
+export function consumeMigrationPlan(
+  token: string,
+): MigrationPlanEntry | undefined {
+  const entry = lookupMigrationPlan(token);
+  if (entry) migrationPlanTokens.delete(token);
   return entry;
 }
 

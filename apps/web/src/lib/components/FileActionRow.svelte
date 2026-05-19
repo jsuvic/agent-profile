@@ -24,6 +24,7 @@
     expanded: boolean;
     confirmReplace: boolean;
     onToggleConfirmReplace: (path: string, value: boolean) => void;
+    profileFound: boolean;
   };
 
   export type SelectedAction = PublicSelectedAction;
@@ -51,13 +52,14 @@
     expanded,
     confirmReplace,
     onToggleConfirmReplace,
+    profileFound,
   }: FileActionRowProps = $props();
 
   // The action set depends on the finding's classification per the Phase 14
   // import report. We never offer Replace generated-owned for `unknown`,
   // `manual-owned`, or local runtime files. Decision logic lives in the
   // shared `fileRowActions` module so it can be unit-tested separately.
-  const offered = $derived(computeOffered(finding));
+  const offered = $derived(computeOffered(finding, { profileFound }));
 
   const isRuntime = $derived(
     finding.tags.includes("local-runtime") ||

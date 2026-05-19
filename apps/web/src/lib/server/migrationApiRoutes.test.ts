@@ -227,7 +227,7 @@ test("POST /api/migration/apply writes add-regions plan and surfaces doctor prev
   });
 });
 
-test("POST /api/migration/apply rejects unsafe replace without confirmReplace echo", async () => {
+test("POST /api/migration/apply rejects unsafe replace without confirmReplace echo and preserves the token", async () => {
   await withTempProject(async (root) => {
     await writeFile(path.join(root, "AGENTS.md"), "manual\n", "utf8");
 
@@ -251,18 +251,35 @@ test("POST /api/migration/apply rejects unsafe replace without confirmReplace ec
     const planBody = await planResponse.json();
     assert.equal(planBody.requiresReplaceConfirmation, true);
 
-    // Apply without confirmReplace must return 412 even if the plan token is
-    // valid. The user has to re-confirm explicitly.
-    const applyResponse = await applyMigration({
+    // Apply without confirmReplace must return 412.
+    const firstApply = await applyMigration({
       request: jsonRequest(
         "/api/migration/apply",
         { planToken: planBody.planToken },
         csrf,
       ),
     } as Parameters<typeof applyMigration>[0]);
-    assert.equal(applyResponse.status, 412);
-    const body = await applyResponse.json();
-    assert.equal(body.error, "confirm_replace_required");
+    assert.equal(firstApply.status, 412);
+    const firstBody = await firstApply.json();
+    assert.equal(firstBody.error, "confirm_replace_required");
+
+    // CRITICAL: the plan token must NOT have been consumed by the 412
+    // rejection. A second apply with confirmReplace:true should be
+    // accepted by the token store (it may still 410 / fail for other
+    // reasons, but it must not be `plan_expired` because of the prior
+    // rejected attempt).
+    const secondApply = await applyMigration({
+      request: jsonRequest(
+        "/api/migration/apply",
+        { planToken: planBody.planToken, confirmReplace: true },
+        csrf,
+      ),
+    } as Parameters<typeof applyMigration>[0]);
+    assert.notEqual(
+      secondApply.status,
+      410,
+      "the unsafe-replace rejection must not consume the plan token",
+    );
   });
 });
 

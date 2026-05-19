@@ -11,6 +11,7 @@ import { readJsonRequestBody } from "$lib/server/profileApiHelpers";
 import { resolveProjectRoot } from "$lib/server/projectContext";
 import {
   consumeMigrationPlan,
+  lookupMigrationPlan,
   verifyCsrfToken,
 } from "$lib/server/tokenStore";
 
@@ -41,8 +42,12 @@ export const POST: RequestHandler = async ({ request }) => {
     );
   }
 
-  const entry = consumeMigrationPlan(body.planToken);
-  if (!entry) {
+  // Peek at the plan first so we can validate the unsafe-replace
+  // confirmation before consuming the token. Consuming-then-rejecting
+  // would force the user to rebuild the plan from scratch just because
+  // they forgot to echo confirmReplace.
+  const peeked = lookupMigrationPlan(body.planToken);
+  if (!peeked) {
     return json(
       {
         error: "plan_expired",
@@ -53,9 +58,9 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   // The spec requires an explicit second confirmation for unsafe replace
-  // actions. If the original plan request included any replace-generated-
-  // owned rows, the apply request must echo confirmReplace:true.
-  if (entry.requiresReplaceConfirmation && body.confirmReplace !== true) {
+  // actions. The plan token survives this 412 so the user can re-issue
+  // apply with confirmReplace:true without rebuilding the plan.
+  if (peeked.requiresReplaceConfirmation && body.confirmReplace !== true) {
     return json(
       {
         error: "confirm_replace_required",
@@ -63,6 +68,19 @@ export const POST: RequestHandler = async ({ request }) => {
           "This plan touches generated-owned files. Re-issue apply with confirmReplace:true.",
       },
       { status: 412 },
+    );
+  }
+
+  // All preconditions pass — now consume the token (single use).
+  const entry = consumeMigrationPlan(body.planToken);
+  if (!entry) {
+    // Token expired in the tiny window between lookup and consume.
+    return json(
+      {
+        error: "plan_expired",
+        message: "Migration plan token expired while applying.",
+      },
+      { status: 410 },
     );
   }
 
@@ -115,7 +133,7 @@ export const POST: RequestHandler = async ({ request }) => {
   } catch (err) {
     return json(
       {
-        action: writeResult.counts,
+        counts: writeResult.counts,
         writes: writeResult.actions,
         doctor: {
           ok: false,

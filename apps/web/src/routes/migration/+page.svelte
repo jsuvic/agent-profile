@@ -8,6 +8,7 @@
     type PreviewState,
     type SelectedAction,
   } from "$lib/components/FileActionRow.svelte";
+  import { defaultActionFor } from "$lib/fileRowActions";
   import { invalidateAll } from "$app/navigation";
   import type { MigrationPageData } from "./+page.server";
 
@@ -67,28 +68,9 @@
   ): Record<string, SelectedAction> {
     const out: Record<string, SelectedAction> = {};
     for (const f of r.files) {
-      out[f.path] = defaultActionFor(f);
+      out[f.path] = defaultActionFor(f, { profileFound: r.profileFound });
     }
     return out;
-  }
-
-  function defaultActionFor(
-    f: MigrationPageData["report"]["files"][number],
-  ): SelectedAction {
-    switch (f.action) {
-      case "create":
-        return "preserve";
-      case "insert-regions":
-        return "add-regions";
-      case "update-generated-region":
-        return "update-generated-region";
-      case "preserve":
-        return "preserve";
-      case "ignore-local-runtime":
-        return "preserve";
-      case "refuse-conflict":
-        return "skip";
-    }
   }
 
   function selectAction(path: string, action: SelectedAction): void {
@@ -311,6 +293,7 @@
           expanded={!!expandedByPath[finding.path]}
           confirmReplace={!!confirmReplaceByPath[finding.path]}
           onToggleConfirmReplace={toggleConfirmReplace}
+          profileFound={report.profileFound}
         />
       {/each}
     {/if}

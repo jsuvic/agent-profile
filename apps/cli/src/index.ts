@@ -17,6 +17,7 @@ import {
   createLockfileFile,
   getLocalRuntimeGitignoreFindings,
   parseMixedFile,
+  planRootInstructionsAdoption,
   planWrites,
   readLockfileForRegions,
   readRegionAwareFile,
@@ -2617,45 +2618,39 @@ async function planRegionAdoptions(
   const compileResult = compileProfile({ profile });
   if (!compileResult.ok) return { adoptions: [], refusals: [] };
 
-  const adoptions: RegionAdoption[] = [];
-  const refusals: RegionAdoptionRefusal[] = [];
-
+  // Build the path→compiled-bytes map and delegate to the shared adoption
+  // helper. The helper is the single source of truth for region adoption
+  // semantics; this CLI wrapper just translates its result back into the
+  // CLI's existing return shape so the rest of the init flow does not have
+  // to change.
+  const generatedBytesByPath = new Map<string, Uint8Array>();
   for (const file of compileResult.files) {
     if (file.path !== "AGENTS.md" && file.path !== "CLAUDE.md") continue;
+    generatedBytesByPath.set(file.path, file.bytes);
+  }
 
-    const read = await readRegionAwareFile(rootDir, file.path);
-    if (read.refused) {
-      refusals.push({ path: file.path, reason: "symlink" });
+  const outcomes = await planRootInstructionsAdoption(
+    rootDir,
+    generatedBytesByPath,
+  );
+
+  const adoptions: RegionAdoption[] = [];
+  const refusals: RegionAdoptionRefusal[] = [];
+  for (const outcome of outcomes) {
+    if (outcome.ok) {
+      adoptions.push({ path: outcome.path, bytes: outcome.bytes });
       continue;
     }
-
-    const existing = read.bytes;
-    if (!existing) continue;
-
-    const existingBuffer = Buffer.from(existing);
-    if (hasAllRegionMarkers(existingBuffer)) {
-      const updated = replaceGeneratedRegion(
-        existingBuffer,
-        Buffer.from(file.bytes),
-      );
-      if (updated) {
-        adoptions.push({ path: file.path, bytes: updated });
-      } else {
-        refusals.push({ path: file.path, reason: "duplicate-markers" });
-      }
+    // Shared helper emits `missing-file` and `missing-generated-bytes`
+    // outcomes that the CLI's adoption flow has historically treated as
+    // "skip without complaint" — keep that behaviour by dropping them.
+    if (
+      outcome.reason === "missing-file" ||
+      outcome.reason === "missing-generated-bytes"
+    ) {
       continue;
     }
-
-    if (hasAnyRegionMarker(existingBuffer)) {
-      refusals.push({ path: file.path, reason: "partial-markers" });
-      continue;
-    }
-
-    const mixed = serializeMixedFile({
-      generatedInner: Buffer.from(file.bytes),
-      manualInner: existingBuffer,
-    });
-    adoptions.push({ path: file.path, bytes: mixed });
+    refusals.push({ path: outcome.path, reason: outcome.reason });
   }
 
   return { adoptions, refusals };

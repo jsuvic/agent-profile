@@ -158,3 +158,59 @@ test("defaultActionFor proposes update-generated-region for mixed files", () => 
     "update-generated-region",
   );
 });
+
+// ---------------------------------------------------------------------------
+// profileFound gating — Phase 16 fix
+// ---------------------------------------------------------------------------
+
+test("offeredActions hides add-regions when ai-profile.yaml is absent", () => {
+  const actions = offeredActions(
+    finding({ action: "insert-regions", ownership: "unknown" }),
+    { profileFound: false },
+  );
+  assert.equal(actions.includes("add-regions"), false);
+  assert.deepEqual(actions, ["preserve", "skip"]);
+});
+
+test("offeredActions hides update-generated-region for mixed root file without a profile", () => {
+  const actions = offeredActions(
+    finding({
+      action: "update-generated-region",
+      ownership: "mixed",
+    }),
+    { profileFound: false },
+  );
+  assert.equal(actions.includes("update-generated-region"), false);
+  assert.deepEqual(actions, ["preserve", "skip"]);
+});
+
+test("offeredActions hides replace-generated-owned for generated-owned non-root without a profile", () => {
+  const actions = offeredActions(
+    finding({
+      path: ".claude/settings.json",
+      kind: "client-config",
+      ownership: "generated-owned",
+      action: "preserve",
+    }),
+    { profileFound: false },
+  );
+  assert.equal(actions.includes("replace-generated-owned"), false);
+});
+
+test("defaultActionFor proposes preserve for insert-regions when no profile is loaded", () => {
+  assert.equal(
+    defaultActionFor(finding({ action: "insert-regions" }), {
+      profileFound: false,
+    }),
+    "preserve",
+  );
+});
+
+test("defaultActionFor proposes preserve for update-generated-region when no profile is loaded", () => {
+  assert.equal(
+    defaultActionFor(finding({ action: "update-generated-region" }), {
+      profileFound: false,
+    }),
+    "preserve",
+  );
+});
