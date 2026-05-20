@@ -113,6 +113,19 @@ Generated Markdown must use:
 - YAML frontmatter at the start of the file
 - stable section order
 
+## Phase 18 Amendment
+
+`docs/specs/phase-18/001-request-to-spec-issues-skill.md` adds a fifth
+workflow skill to this target: `request-to-spec-issues`. It is generated when
+`workflow.sdd: true` for enabled Codex clients. The output path is
+`.agents/skills/request-to-spec-issues/SKILL.md` and the template id is
+`targets/codex-workflow-skills/request-to-spec-issues@1`. The exact generated
+Markdown is defined in the Phase 18 spec and must remain byte-identical to the
+matching `claude-workflow-skills` output, modulo path and lockfile descriptor.
+
+Existing Phase 17 `grill-change` skill bytes must remain byte-identical when
+this skill is added.
+
 ## Generated Artifact Shape
 
 For `fixtures/minimal-valid/ai-profile.yaml`, the exact

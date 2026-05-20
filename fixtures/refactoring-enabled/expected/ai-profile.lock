@@ -53,6 +53,12 @@
       "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
     },
     {
+      "id": "targets/claude-workflow-skills/request-to-spec-issues@1",
+      "target": "claude-workflow-skills",
+      "version": "1",
+      "sha256": "a053d3cb4cec764673660b8cc1d77f4f6030f547eef0f0ee9de1a0ad0c897672"
+    },
+    {
       "id": "targets/claude-workflow-skills/sdd-change@1",
       "target": "claude-workflow-skills",
       "version": "1",
@@ -81,6 +87,12 @@
       "target": "codex-workflow-skills",
       "version": "1",
       "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
+    },
+    {
+      "id": "targets/codex-workflow-skills/request-to-spec-issues@1",
+      "target": "codex-workflow-skills",
+      "version": "1",
+      "sha256": "a053d3cb4cec764673660b8cc1d77f4f6030f547eef0f0ee9de1a0ad0c897672"
     },
     {
       "id": "targets/codex-workflow-skills/sdd-change@1",
@@ -147,6 +159,13 @@
       "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
     },
     {
+      "path": ".agents/skills/request-to-spec-issues/SKILL.md",
+      "target": "codex-workflow-skills",
+      "templateId": "targets/codex-workflow-skills/request-to-spec-issues@1",
+      "ownership": "generated-owned",
+      "sha256": "a053d3cb4cec764673660b8cc1d77f4f6030f547eef0f0ee9de1a0ad0c897672"
+    },
+    {
       "path": ".agents/skills/sdd-change/SKILL.md",
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/sdd-change@1",
@@ -180,6 +199,13 @@
       "templateId": "targets/claude-workflow-skills/grill-change@1",
       "ownership": "generated-owned",
       "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
+    },
+    {
+      "path": ".claude/skills/request-to-spec-issues/SKILL.md",
+      "target": "claude-workflow-skills",
+      "templateId": "targets/claude-workflow-skills/request-to-spec-issues@1",
+      "ownership": "generated-owned",
+      "sha256": "a053d3cb4cec764673660b8cc1d77f4f6030f547eef0f0ee9de1a0ad0c897672"
     },
     {
       "path": ".claude/skills/sdd-change/SKILL.md",

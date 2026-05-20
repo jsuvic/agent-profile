@@ -17,6 +17,8 @@ minimal-valid/
           SKILL.md
         grill-change/
           SKILL.md
+        request-to-spec-issues/
+          SKILL.md
         sdd-change/
           SKILL.md
         tdd-change/
@@ -39,6 +41,8 @@ minimal-valid/
         final-review/
           SKILL.md
         grill-change/
+          SKILL.md
+        request-to-spec-issues/
           SKILL.md
         sdd-change/
           SKILL.md

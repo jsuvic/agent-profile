@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft. Belongs to Phase 18. Depends on Phase 17 `grill-change`
+Implemented. Belongs to Phase 18. Depends on Phase 17 `grill-change`
 implementation.
 
 The exact generated skill wording requires explicit human approval before

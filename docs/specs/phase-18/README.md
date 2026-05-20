@@ -2,8 +2,10 @@
 
 ## Status
 
-Draft. Phase 18 is the post-grill synthesis and planning-guidance slice that
-follows Phase 17's `grill-change` skill.
+In progress. Spec 001 (`request-to-spec-issues` skill) is implemented; spec
+002 (Tabnine planning guideline) remains Draft. Phase 18 is the post-grill
+synthesis and planning-guidance slice that follows Phase 17's `grill-change`
+skill.
 
 Exact generated wording must be explicitly approved before implementation
 because these artifacts steer planning, issue boundaries, and team workflow.

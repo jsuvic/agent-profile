@@ -63,9 +63,12 @@
 ## Generated Skills
 
 - Keep skills task-specific.
-- MVP skill set is `sdd-change`, `tdd-change`, `final-review`, and
-  `grill-change` (the Phase 17 pre-spec clarification skill, generated when
-  `workflow.sdd` is enabled).
+- MVP skill set is `sdd-change`, `tdd-change`, `final-review`,
+  `grill-change` (the Phase 17 pre-spec clarification skill), and
+  `request-to-spec-issues` (the Phase 18 post-grill synthesis skill that
+  turns the grill agreement into an intent-first spec candidate and vertical
+  TDD-ready issue briefs). `grill-change` and `request-to-spec-issues` are
+  generated when `workflow.sdd` is enabled.
 - Generate Codex repository skills under `.agents/skills/<skill-name>/SKILL.md`.
 - Generate Claude project skills under `.claude/skills/<skill-name>/SKILL.md`.
 - Prefer concise action rules over large contextual essays.
