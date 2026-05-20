@@ -17,6 +17,8 @@ minimal-valid/
           SKILL.md
         grill-change/
           SKILL.md
+        request-to-spec-issues/
+          SKILL.md
         sdd-change/
           SKILL.md
         tdd-change/
@@ -24,6 +26,7 @@ minimal-valid/
     .tabnine/
       guidelines/
         00-general-agent-behavior.md
+        05-planning-workflow.md
         10-sdd-workflow.md
         20-tdd-workflow.md
         30-stack-typescript-svelte.md
@@ -39,6 +42,8 @@ minimal-valid/
         final-review/
           SKILL.md
         grill-change/
+          SKILL.md
+        request-to-spec-issues/
           SKILL.md
         sdd-change/
           SKILL.md

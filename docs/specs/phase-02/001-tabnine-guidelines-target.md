@@ -6,8 +6,11 @@ Verified
 
 Implemented in `packages/compiler` for the minimal fixture. Workflow and
 stack-specific guideline files are emitted only when the relevant profile
-workflow flag or stack value is present. Verified on 2026-05-02 after final
-implementation review.
+workflow flag or stack value is present. The Phase 2 base contract was
+verified on 2026-05-02. Phase 10 added conditional stack/workflow outputs.
+Phase 18 added the `05-planning-workflow.md` output; the Phase 18 amendment
+section below records when and why that file was added so the original Phase
+2 verification date is not misread as covering the planning-workflow file.
 
 ## Problem
 
@@ -50,7 +53,8 @@ validated `ai-profile.yaml` and derived `effectivePermissions`.
 ## Outputs
 
 - target id: `tabnine-guidelines`
-- generated project files:
+- generated project files (Phase 2 base contract; Phase 18 adds
+  `05-planning-workflow.md` — see the Phase 18 amendment section below):
   - `.tabnine/guidelines/00-general-agent-behavior.md`
   - `.tabnine/guidelines/10-sdd-workflow.md`
   - `.tabnine/guidelines/20-tdd-workflow.md`
@@ -82,12 +86,25 @@ These outputs are additive amendments from phase 10 and are emitted only when
 the corresponding gate is open. Absence of the gate emits nothing and produces
 no warning.
 
-| Output path                                          | Template id                                                | Gate                                  |
-| ---------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------- |
-| `.tabnine/guidelines/30-stack-typescript-react.md`   | `targets/tabnine-guidelines/30-stack-typescript-react@1`   | `stack.frameworks` contains `react`   |
-| `.tabnine/guidelines/60-code-review.md`              | `targets/tabnine-guidelines/60-code-review@1`              | `workflow.codeReview: true`           |
-| `.tabnine/guidelines/70-refactoring.md`              | `targets/tabnine-guidelines/70-refactoring@1`              | `workflow.refactoring: true`          |
-| `.tabnine/guidelines/80-documentation.md`            | `targets/tabnine-guidelines/80-documentation@1`            | `workflow.documentation: true`        |
+| Output path                                        | Template id                                              | Gate                                |
+| -------------------------------------------------- | -------------------------------------------------------- | ----------------------------------- |
+| `.tabnine/guidelines/30-stack-typescript-react.md` | `targets/tabnine-guidelines/30-stack-typescript-react@1` | `stack.frameworks` contains `react` |
+| `.tabnine/guidelines/60-code-review.md`            | `targets/tabnine-guidelines/60-code-review@1`            | `workflow.codeReview: true`         |
+| `.tabnine/guidelines/70-refactoring.md`            | `targets/tabnine-guidelines/70-refactoring@1`            | `workflow.refactoring: true`        |
+| `.tabnine/guidelines/80-documentation.md`          | `targets/tabnine-guidelines/80-documentation@1`          | `workflow.documentation: true`      |
+
+### Phase-18 Amendment: Planning Workflow
+
+Added by `docs/specs/phase-18/002-tabnine-planning-guideline.md`. This output
+is additive and was not part of the Phase 2 verification on 2026-05-02; its
+acceptance criteria live in the Phase 18 spec.
+
+| Output path                                   | Template id                                         | Gate                                                     |
+| --------------------------------------------- | --------------------------------------------------- | -------------------------------------------------------- |
+| `.tabnine/guidelines/05-planning-workflow.md` | `targets/tabnine-guidelines/05-planning-workflow@1` | `clients.tabnine.enabled: true` and `workflow.sdd: true` |
+
+The guideline sits before `10-sdd-workflow.md` because clarification and
+issue planning happen before implementation against an approved spec.
 
 Generated Markdown must use:
 
@@ -113,6 +130,7 @@ The minimal fixture golden files are:
 ```text
 fixtures/minimal-valid/expected/.tabnine/guidelines/
   00-general-agent-behavior.md
+  05-planning-workflow.md
   10-sdd-workflow.md
   20-tdd-workflow.md
   30-stack-typescript-svelte.md
@@ -144,6 +162,10 @@ Mapping rules:
 | Playwright/JUnit test items   | `50-testing-playwright-junit.md` for the fixture    |
 | `workflow.finalReview`        | `90-final-review.md` when true                      |
 | `effectivePermissions`        | Safety instructions inside relevant guideline files |
+
+Phase 18 adds one more row to this mapping via
+`docs/specs/phase-18/002-tabnine-planning-guideline.md`:
+`workflow.sdd` also emits `05-planning-workflow.md` when true.
 
 Official-doc verification is a required implementation gate. If Tabnine changes
 the documented guideline path, file type, or structural recommendations, update

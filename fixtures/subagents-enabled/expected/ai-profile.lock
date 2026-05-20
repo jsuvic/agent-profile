@@ -53,6 +53,12 @@
       "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
     },
     {
+      "id": "targets/claude-workflow-skills/request-to-spec-issues@1",
+      "target": "claude-workflow-skills",
+      "version": "1",
+      "sha256": "a053d3cb4cec764673660b8cc1d77f4f6030f547eef0f0ee9de1a0ad0c897672"
+    },
+    {
       "id": "targets/claude-workflow-skills/sdd-change@1",
       "target": "claude-workflow-skills",
       "version": "1",
@@ -89,6 +95,12 @@
       "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
     },
     {
+      "id": "targets/codex-workflow-skills/request-to-spec-issues@1",
+      "target": "codex-workflow-skills",
+      "version": "1",
+      "sha256": "a053d3cb4cec764673660b8cc1d77f4f6030f547eef0f0ee9de1a0ad0c897672"
+    },
+    {
       "id": "targets/codex-workflow-skills/sdd-change@1",
       "target": "codex-workflow-skills",
       "version": "1",
@@ -105,6 +117,12 @@
       "target": "tabnine-guidelines",
       "version": "1",
       "sha256": "c1c353d9cc60fc9d244ace2d6be9da2862bb2955767c32b75af2b3eba0c362cf"
+    },
+    {
+      "id": "targets/tabnine-guidelines/05-planning-workflow@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "dbdaec1a4d30017a9d6cd1325b696abc05cfc3f7e7c40e619c5aa6af89557519"
     },
     {
       "id": "targets/tabnine-guidelines/10-sdd-workflow@1",
@@ -153,6 +171,13 @@
       "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
     },
     {
+      "path": ".agents/skills/request-to-spec-issues/SKILL.md",
+      "target": "codex-workflow-skills",
+      "templateId": "targets/codex-workflow-skills/request-to-spec-issues@1",
+      "ownership": "generated-owned",
+      "sha256": "a053d3cb4cec764673660b8cc1d77f4f6030f547eef0f0ee9de1a0ad0c897672"
+    },
+    {
       "path": ".agents/skills/sdd-change/SKILL.md",
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/sdd-change@1",
@@ -193,6 +218,13 @@
       "templateId": "targets/claude-workflow-skills/grill-change@1",
       "ownership": "generated-owned",
       "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
+    },
+    {
+      "path": ".claude/skills/request-to-spec-issues/SKILL.md",
+      "target": "claude-workflow-skills",
+      "templateId": "targets/claude-workflow-skills/request-to-spec-issues@1",
+      "ownership": "generated-owned",
+      "sha256": "a053d3cb4cec764673660b8cc1d77f4f6030f547eef0f0ee9de1a0ad0c897672"
     },
     {
       "path": ".claude/skills/sdd-change/SKILL.md",
@@ -242,6 +274,13 @@
       "templateId": "targets/tabnine-guidelines/00-general-agent-behavior@1",
       "ownership": "generated-owned",
       "sha256": "1c7ddfdb7f36c92235b1d2a4392d840f66e0d7c8e7279362de9b9091576665ab"
+    },
+    {
+      "path": ".tabnine/guidelines/05-planning-workflow.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/05-planning-workflow@1",
+      "ownership": "generated-owned",
+      "sha256": "dbdaec1a4d30017a9d6cd1325b696abc05cfc3f7e7c40e619c5aa6af89557519"
     },
     {
       "path": ".tabnine/guidelines/10-sdd-workflow.md",

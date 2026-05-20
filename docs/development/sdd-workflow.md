@@ -33,6 +33,34 @@ Only approved specs should be implemented.
 9. Review the implementation against the spec.
 10. Mark the spec `Verified` only after all acceptance criteria pass.
 
+## Planning Flow Before Implementation
+
+When a stakeholder request is rough, ambiguous, or not yet tied to an
+approved spec, run the planning flow before step 1 of the required loop:
+
+```text
+stakeholder request
+  -> grill-change
+  -> request-to-spec-issues
+  -> vertical TDD-ready issues
+  -> tdd-change / subagent-driven-change
+```
+
+- `grill-change` clarifies one decision at a time, provides a recommended
+  answer per question, and ends with an explicit agreement record. It does
+  not produce specs or implementation plans.
+- `request-to-spec-issues` runs only after the grill is complete. It turns
+  the agreement record into an intent-first spec candidate and vertical
+  TDD-ready issue briefs without re-interviewing the user unless a
+  contradiction or genuinely missing decision is found.
+- Tabnine projects receive the same workflow through the
+  `.tabnine/guidelines/05-planning-workflow.md` guideline rather than as a
+  project skill, because Tabnine consumes guidelines instead of skills.
+
+Skip the planning flow when the request is already tied to an approved spec
+and the next step is implementation; in that case begin at step 1 of the
+required loop.
+
 ## Contract Rules
 
 - `ai-profile.yaml` schema changes require a versioning decision.
