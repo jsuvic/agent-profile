@@ -107,6 +107,12 @@
       "sha256": "c1c353d9cc60fc9d244ace2d6be9da2862bb2955767c32b75af2b3eba0c362cf"
     },
     {
+      "id": "targets/tabnine-guidelines/05-planning-workflow@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "dbdaec1a4d30017a9d6cd1325b696abc05cfc3f7e7c40e619c5aa6af89557519"
+    },
+    {
       "id": "targets/tabnine-guidelines/10-sdd-workflow@1",
       "target": "tabnine-guidelines",
       "version": "1",
@@ -247,6 +253,13 @@
       "templateId": "targets/tabnine-guidelines/00-general-agent-behavior@1",
       "ownership": "generated-owned",
       "sha256": "c5bce3255ab72b9fe32377629029dd699bd7ecc6a491ae0aeaf12a55a42b5176"
+    },
+    {
+      "path": ".tabnine/guidelines/05-planning-workflow.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/05-planning-workflow@1",
+      "ownership": "generated-owned",
+      "sha256": "dbdaec1a4d30017a9d6cd1325b696abc05cfc3f7e7c40e619c5aa6af89557519"
     },
     {
       "path": ".tabnine/guidelines/10-sdd-workflow.md",

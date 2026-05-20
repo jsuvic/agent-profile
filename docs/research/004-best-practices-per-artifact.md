@@ -30,6 +30,11 @@
 - Preserve ask/deny behavior for mutating, shell, dependency, and network work.
 - Never instruct source upload, secret reads, production access, auto-install,
   or unsafe auto-approval.
+- When `workflow.sdd` is enabled, emit `05-planning-workflow.md` before
+  `10-sdd-workflow.md` so Tabnine clarifies a rough request before
+  implementation against an approved spec. The planning guideline expresses
+  the same intent as the Codex/Claude `grill-change` and
+  `request-to-spec-issues` skills but uses Tabnine's guideline surface.
 
 ## Generated Tabnine MCP Config
 

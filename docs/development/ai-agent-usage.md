@@ -53,6 +53,42 @@ Rules:
   6. Whether all acceptance criteria are met
 ```
 
+## Vertical Issue Prompt
+
+Use this prompt when asking an AI tool to implement a vertical TDD-ready
+issue produced by the `request-to-spec-issues` workflow:
+
+```text
+You are working in the Agent Profile Compiler repository.
+
+Follow AGENTS.md strictly.
+
+Task:
+Implement the vertical issue: <issue title or brief link>.
+Parent spec: <path-to-spec>.
+
+Rules:
+- Read the issue brief and the parent spec first.
+- Honour the issue's dependency state (ready / blocked / parallel-safe /
+  sequenced / human-gate). Do not start a blocked issue.
+- Do not expand scope beyond the behavior slice in the brief.
+- Add or update tests so the expected RED proof fails first, then implement
+  the smallest change that produces the expected GREEN proof.
+- Stay inside the brief's likely file ownership unless a contradiction with
+  the spec forces a wider edit; surface that contradiction first.
+- Preserve existing contracts and generated output determinism.
+- Do not create GitHub issues, labels, projects, or milestones.
+- Do not upload source, read secrets, install dependencies, or change
+  runtime permissions.
+- End with:
+  1. What changed
+  2. Tests run (with RED and GREEN evidence)
+  3. Contract impact
+  4. Security impact
+  5. Remaining risks or TODOs
+  6. Whether the issue's acceptance criteria are fully met
+```
+
 ## Review Prompt
 
 Use this prompt when asking an AI tool to review an implementation:

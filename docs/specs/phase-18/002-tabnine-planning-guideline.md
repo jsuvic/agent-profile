@@ -2,8 +2,13 @@
 
 ## Status
 
-Draft. Belongs to Phase 18. Provides the Tabnine guideline counterpart to the
-Phase 17 and Phase 18 Codex/Claude planning skills.
+Verified on 2026-05-20.
+
+Implemented in `packages/compiler` and covered by golden, content,
+banned-topics, post-001 byte-stability, and determinism tests in
+`packages/compiler/src/compiler.test.ts`. Doctor no-drift across affected
+fixtures is proven by `packages/doctor/src/doctor.test.ts`. Belongs to Phase 18. Provides the Tabnine guideline counterpart to the Phase 17 and Phase 18
+Codex/Claude planning skills.
 
 The exact generated guideline wording requires explicit human approval before
 implementation because it affects how Tabnine approaches planning before

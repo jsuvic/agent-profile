@@ -26,6 +26,7 @@ minimal-valid/
     .tabnine/
       guidelines/
         00-general-agent-behavior.md
+        05-planning-workflow.md
         10-sdd-workflow.md
         20-tdd-workflow.md
         30-stack-typescript-svelte.md

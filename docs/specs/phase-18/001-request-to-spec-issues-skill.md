@@ -2,8 +2,12 @@
 
 ## Status
 
-Implemented. Belongs to Phase 18. Depends on Phase 17 `grill-change`
-implementation.
+Verified on 2026-05-20.
+
+Implemented in `packages/compiler` and covered by golden, content,
+trigger-language, banned-topics, byte-stability, and determinism tests in
+`packages/compiler/src/compiler.test.ts`. Doctor no-drift across affected
+fixtures is proven by `packages/doctor/src/doctor.test.ts`. Belongs to Phase 18. Depends on Phase 17 `grill-change` implementation.
 
 The exact generated skill wording requires explicit human approval before
 implementation because it controls how agents turn product intent into specs
