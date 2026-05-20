@@ -345,9 +345,9 @@ Return:
   guideline, skill, or MCP artifact is emitted by this spec
 - regression test proving existing post-Phase-17 workflow skill file bytes,
   including `grill-change`, remain byte-identical
-- combined Phase 18 regeneration test proving a Codex + Claude + Tabnine + SDD
-  fixture has clean lockfile state after both `001` and
-  `002-tabnine-planning-guideline.md` outputs are present
+- no test in this spec requires `002-tabnine-planning-guideline.md` outputs;
+  the combined Phase 18 regeneration proof belongs to `002` or to a same-change
+  coordinated rollout
 - content tests for missing-grill redirection, no-reinterview guidance, full
   `SPEC_TEMPLATE` section coverage, intent-first spec extensions, vertical
   issue brief format, dependency states, architecture rescue candidate fields,
