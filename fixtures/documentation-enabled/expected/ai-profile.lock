@@ -47,6 +47,12 @@
       "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
     },
     {
+      "id": "targets/claude-workflow-skills/grill-change@1",
+      "target": "claude-workflow-skills",
+      "version": "1",
+      "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
+    },
+    {
       "id": "targets/claude-workflow-skills/sdd-change@1",
       "target": "claude-workflow-skills",
       "version": "1",
@@ -69,6 +75,12 @@
       "target": "codex-workflow-skills",
       "version": "1",
       "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
+    },
+    {
+      "id": "targets/codex-workflow-skills/grill-change@1",
+      "target": "codex-workflow-skills",
+      "version": "1",
+      "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
     },
     {
       "id": "targets/codex-workflow-skills/sdd-change@1",
@@ -128,6 +140,13 @@
       "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
     },
     {
+      "path": ".agents/skills/grill-change/SKILL.md",
+      "target": "codex-workflow-skills",
+      "templateId": "targets/codex-workflow-skills/grill-change@1",
+      "ownership": "generated-owned",
+      "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
+    },
+    {
       "path": ".agents/skills/sdd-change/SKILL.md",
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/sdd-change@1",
@@ -154,6 +173,13 @@
       "templateId": "targets/claude-workflow-skills/final-review@1",
       "ownership": "generated-owned",
       "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
+    },
+    {
+      "path": ".claude/skills/grill-change/SKILL.md",
+      "target": "claude-workflow-skills",
+      "templateId": "targets/claude-workflow-skills/grill-change@1",
+      "ownership": "generated-owned",
+      "sha256": "b874763eefaba6312531413551abb7057c05a9f4f1a43e8c9d4fe61497864f5f"
     },
     {
       "path": ".claude/skills/sdd-change/SKILL.md",
