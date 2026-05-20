@@ -2,10 +2,11 @@
 
 ## Status
 
-Draft. Phase 17 is the first implementation slice of the post-grill planning
-workflow approved in `docs/specs/phase-later/020-post-grill-planning-workflow.md`.
-The exact generated skill wording must be explicitly approved before
-implementation because trigger wording affects runtime behavior.
+Implemented. Phase 17 is the first implementation slice of the post-grill
+planning workflow approved in
+`docs/specs/phase-later/020-post-grill-planning-workflow.md`. The exact
+generated skill wording was explicitly approved before implementation
+because trigger wording affects runtime behavior.
 
 ## Purpose
 

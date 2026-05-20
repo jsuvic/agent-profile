@@ -95,6 +95,15 @@ id is `targets/codex-workflow-skills/tdd-change@2`, while `sdd-change` and
 `final-review` remain on their existing template ids unless a later approved
 spec changes them.
 
+## Phase 17 Amendment
+
+`docs/specs/phase-17/001-grill-change-skill.md` adds a fourth workflow skill
+to this target: `grill-change`. It is generated when `workflow.sdd: true` for
+enabled Codex clients. The output path is
+`.agents/skills/grill-change/SKILL.md` and the template id is
+`targets/codex-workflow-skills/grill-change@1`. The exact generated Markdown
+is defined in the Phase 17 spec.
+
 Generated Markdown must use:
 
 - UTF-8

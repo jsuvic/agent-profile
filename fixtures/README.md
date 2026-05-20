@@ -15,6 +15,8 @@ minimal-valid/
       skills/
         final-review/
           SKILL.md
+        grill-change/
+          SKILL.md
         sdd-change/
           SKILL.md
         tdd-change/
@@ -35,6 +37,8 @@ minimal-valid/
       settings.json
       skills/
         final-review/
+          SKILL.md
+        grill-change/
           SKILL.md
         sdd-change/
           SKILL.md

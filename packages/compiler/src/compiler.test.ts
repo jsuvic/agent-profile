@@ -70,10 +70,12 @@ test("compiler emits deterministic generated files for the minimal fixture", asy
     first.files.map((file) => file.path),
     [
       ".agents/skills/final-review/SKILL.md",
+      ".agents/skills/grill-change/SKILL.md",
       ".agents/skills/sdd-change/SKILL.md",
       ".agents/skills/tdd-change/SKILL.md",
       ".claude/settings.json",
       ".claude/skills/final-review/SKILL.md",
+      ".claude/skills/grill-change/SKILL.md",
       ".claude/skills/sdd-change/SKILL.md",
       ".claude/skills/tdd-change/SKILL.md",
       ".codex/config.toml",
@@ -490,6 +492,11 @@ test("workflow skill targets emit approved project-local skills", async () => {
         templateId: "targets/codex-workflow-skills/final-review@1",
       },
       {
+        path: ".agents/skills/grill-change/SKILL.md",
+        target: "codex-workflow-skills",
+        templateId: "targets/codex-workflow-skills/grill-change@1",
+      },
+      {
         path: ".agents/skills/sdd-change/SKILL.md",
         target: "codex-workflow-skills",
         templateId: "targets/codex-workflow-skills/sdd-change@1",
@@ -503,6 +510,11 @@ test("workflow skill targets emit approved project-local skills", async () => {
         path: ".claude/skills/final-review/SKILL.md",
         target: "claude-workflow-skills",
         templateId: "targets/claude-workflow-skills/final-review@1",
+      },
+      {
+        path: ".claude/skills/grill-change/SKILL.md",
+        target: "claude-workflow-skills",
+        templateId: "targets/claude-workflow-skills/grill-change@1",
       },
       {
         path: ".claude/skills/sdd-change/SKILL.md",
@@ -808,7 +820,10 @@ test("phase-10 conditional Tabnine and AGENTS.md outputs gate on profile flags",
       true,
       `${path} exceeds 500 lines`,
     );
-    assert.equal(text.includes("Final implementation review is required"), false);
+    assert.equal(
+      text.includes("Final implementation review is required"),
+      false,
+    );
     assert.equal(text.includes("Compare the implementation"), false);
   }
 
@@ -834,9 +849,9 @@ test("phase-10 conditional Tabnine and AGENTS.md outputs gate on profile flags",
     agentsText.includes("Run golden tests when generated files change."),
     true,
   );
-  const checklistOccurrences = agentsText.split(
-    "Run golden tests when generated files change.",
-  ).length - 1;
+  const checklistOccurrences =
+    agentsText.split("Run golden tests when generated files change.").length -
+    1;
   assert.equal(checklistOccurrences, 1);
 
   const disabled = compileProfile({
@@ -972,7 +987,10 @@ test("phase-10 fixture topic outputs contain no secret-like literals", async () 
 
 test("phase-10 CLAUDE.md is byte-identical to minimal-valid CLAUDE.md across fixtures", async () => {
   const referencePath = fileURLToPath(
-    new URL("../../../fixtures/minimal-valid/expected/CLAUDE.md", import.meta.url),
+    new URL(
+      "../../../fixtures/minimal-valid/expected/CLAUDE.md",
+      import.meta.url,
+    ),
   );
   const reference = await readFile(referencePath);
   const fixtures = [
@@ -982,10 +1000,7 @@ test("phase-10 CLAUDE.md is byte-identical to minimal-valid CLAUDE.md across fix
   ];
   for (const name of fixtures) {
     const claudePath = fileURLToPath(
-      new URL(
-        `../../../fixtures/${name}/expected/CLAUDE.md`,
-        import.meta.url,
-      ),
+      new URL(`../../../fixtures/${name}/expected/CLAUDE.md`, import.meta.url),
     );
     const actual = await readFile(claudePath);
     assert.equal(actual.equals(reference), true, `${name} CLAUDE.md differs`);
@@ -1222,10 +1237,11 @@ test("phase-11 subagents emit deterministic per-target files", async () => {
   if (!result.ok) return;
 
   const subagentFiles = result.files
-    .filter((file) =>
-      file.path.startsWith(".claude/agents/") ||
-      file.path.startsWith(".codex/agents/") ||
-      file.path.startsWith(".tabnine/agent/agents/"),
+    .filter(
+      (file) =>
+        file.path.startsWith(".claude/agents/") ||
+        file.path.startsWith(".codex/agents/") ||
+        file.path.startsWith(".tabnine/agent/agents/"),
     )
     .map((file) => ({
       path: file.path,
@@ -1253,9 +1269,17 @@ test("phase-11 subagents emit deterministic per-target files", async () => {
 
   for (const file of result.files) {
     const text = Buffer.from(file.bytes).toString("utf8");
-    assert.equal(text.includes("bypassPermissions"), false, file.path);
+    // The grill-change skill prohibits proposing `bypassPermissions` in a
+    // "Do not …" sentence. Strip prohibitive sentences before banning the
+    // literal token to allow that safety wording.
+    const withoutProhibitions = text.replace(/Do not[^.]*\./giu, "");
+    assert.equal(
+      withoutProhibitions.includes("bypassPermissions"),
+      false,
+      file.path,
+    );
     assert.equal(text.includes("danger-full-access"), false, file.path);
-    assert.equal(text.includes("approval_policy = \"never\""), false, file.path);
+    assert.equal(text.includes('approval_policy = "never"'), false, file.path);
   }
 });
 
@@ -1398,8 +1422,7 @@ test("phase-13 expands useTemplate references preserving profile order", async (
         subagents: {
           enabled: true,
           defaults:
-            profileResult.profile.capabilities?.delegation?.subagents
-              ?.defaults,
+            profileResult.profile.capabilities?.delegation?.subagents?.defaults,
           agents: [
             { useTemplate: "code-quality-reviewer" },
             { useTemplate: "spec-reviewer" },
@@ -1530,9 +1553,7 @@ test("phase-13 emits subagent-driven-change workflow skill for Codex and Claude"
     );
 
     assert.equal(
-      text.includes(
-        "`DONE`, `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`",
-      ),
+      text.includes("`DONE`, `DONE_WITH_CONCERNS`, `BLOCKED`, `NEEDS_CONTEXT`"),
       true,
       file.path,
     );
@@ -1853,8 +1874,169 @@ test("phase-13 disabling Codex or Claude omits that client's subagent-driven-cha
   if (!claudeResult.ok) return;
 
   for (const file of claudeResult.files) {
+    assert.equal(file.path.startsWith(".claude/"), false, file.path);
+  }
+});
+
+test("phase-17 emits grill-change workflow skill for Codex and Claude when sdd is true", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const skillPaths = result.files
+    .filter((file) => file.path.endsWith("/grill-change/SKILL.md"))
+    .map((file) => file.path);
+
+  assert.deepEqual(skillPaths, [
+    ".agents/skills/grill-change/SKILL.md",
+    ".claude/skills/grill-change/SKILL.md",
+  ]);
+
+  for (const file of result.files.filter((f) =>
+    f.path.endsWith("/grill-change/SKILL.md"),
+  )) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+    assert.equal(text.includes("name: grill-change"), true, file.path);
+    assert.match(
+      text,
+      /description: Use when a stakeholder request is rough, ambiguous, or underspecified/u,
+    );
+    assert.equal(text.includes("# Grill Change"), true, file.path);
+    assert.equal(text.includes("## Operating Rules"), true, file.path);
+    assert.equal(text.includes("Ask one focused question"), true, file.path);
+    assert.equal(text.includes("Recommended answer"), true, file.path);
     assert.equal(
-      file.path.startsWith(".claude/"),
+      text.includes("Inspect relevant local specs"),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("Challenge vague terms"), true, file.path);
+    assert.equal(
+      text.includes("Capture durable terms and hard-to-reverse decisions"),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("agreement record"), true, file.path);
+
+    assert.equal(text.includes("allowed-tools"), false, file.path);
+    assert.equal(text.includes("agents/openai.yaml"), false, file.path);
+    assert.equal(text.includes(".codex/skills"), false, file.path);
+    assert.equal(text.includes("references/"), false, file.path);
+    assert.equal(text.includes("scripts/"), false, file.path);
+    assert.equal(text.includes("!`"), false, file.path);
+    assert.equal(text.includes("```!"), false, file.path);
+    assert.equal(text.includes("bypassPermissions"), true, file.path);
+    assert.equal(text.split("\n").length < 300, true, file.path);
+    assert.equal(text.includes("\r"), false, file.path);
+    assert.equal(text.endsWith("\n"), true, file.path);
+    assert.equal(text.endsWith("\n\n"), false, file.path);
+  }
+});
+
+test("phase-17 grill-change is absent when workflow.sdd is false", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const sddOff: AiProfile = {
+    ...profileResult.profile,
+    workflow: {
+      ...profileResult.profile.workflow,
+      sdd: false,
+    },
+  };
+  const result = compileProfile({
+    profile: sddOff,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const file of result.files) {
+    assert.equal(
+      file.path.endsWith("/grill-change/SKILL.md"),
+      false,
+      file.path,
+    );
+  }
+  for (const template of result.templates) {
+    assert.equal(template.id.endsWith("/grill-change@1"), false, template.id);
+  }
+});
+
+test("phase-17 disabling Codex or Claude omits that client's grill-change skill", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const codexOff: AiProfile = {
+    ...profileResult.profile,
+    clients: {
+      ...profileResult.profile.clients,
+      codex: { enabled: false },
+    },
+  };
+  const codexResult = compileProfile({ profile: codexOff });
+  assert.equal(codexResult.ok, true);
+  if (!codexResult.ok) return;
+
+  for (const file of codexResult.files) {
+    assert.equal(
+      file.path === ".agents/skills/grill-change/SKILL.md",
+      false,
+      file.path,
+    );
+  }
+
+  const claudeOff: AiProfile = {
+    ...profileResult.profile,
+    clients: {
+      ...profileResult.profile.clients,
+      claude: { enabled: false },
+    },
+  };
+  const claudeResult = compileProfile({ profile: claudeOff });
+  assert.equal(claudeResult.ok, true);
+  if (!claudeResult.ok) return;
+
+  for (const file of claudeResult.files) {
+    assert.equal(
+      file.path === ".claude/skills/grill-change/SKILL.md",
+      false,
+      file.path,
+    );
+  }
+});
+
+test("phase-17 grill-change is not emitted for Tabnine", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({ profile: profileResult.profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const file of result.files) {
+    if (file.path.startsWith(".tabnine/")) {
+      const text = Buffer.from(file.bytes).toString("utf8");
+      assert.equal(
+        text.toLowerCase().includes("grill-change"),
+        false,
+        file.path,
+      );
+    }
+    assert.equal(
+      file.path.includes("/grill-change") &&
+        !file.path.startsWith(".agents/") &&
+        !file.path.startsWith(".claude/"),
       false,
       file.path,
     );

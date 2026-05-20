@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft. Belongs to Phase 17. Implements the first vertical slice from
+Implemented. Belongs to Phase 17. Implements the first vertical slice from
 `docs/specs/phase-later/020-post-grill-planning-workflow.md`.
 
 The exact generated skill wording requires explicit human approval before
