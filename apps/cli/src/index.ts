@@ -619,6 +619,7 @@ async function runInit(
     return 1;
   }
 
+  let wizardCreatesClientFiles = false;
   if (isWizardEligibleArgs(args) && presetPayload === undefined) {
     const dispatch = await dispatchInitWizard({
       args: parsed,
@@ -629,9 +630,11 @@ async function runInit(
       promptsOverride: options.prompts,
       nonInteractiveOverride: options.nonInteractive,
     });
-    if (dispatch === "declined") {
+    if (dispatch.kind === "declined") {
       return 0;
     }
+    wizardCreatesClientFiles =
+      dispatch.kind === "confirmed" && dispatch.createClientFiles;
   }
 
   if (existingProfileBytes) {
@@ -674,15 +677,17 @@ async function runInit(
       }
     }
 
+    let gitignoreUpdated = false;
     if (parsed.updateGitignore && parsed.write) {
+      const suggestions = await getGitignoreSuggestions(rootDir);
       const findings = await getLocalRuntimeGitignoreFindings(rootDir);
       try {
-        await appendMissingGitignoreLines(
-          rootDir,
-          findings
+        gitignoreUpdated = await appendMissingGitignoreLines(rootDir, [
+          ...suggestions,
+          ...findings
             .filter((finding) => finding.action === "would-add")
             .map((finding) => finding.line),
-        );
+        ]);
       } catch {
         // best-effort
       }
@@ -721,6 +726,7 @@ async function runInit(
       stackWarnings: [],
       importFindings: [],
       gitignoreSuggestions: [],
+      gitignoreUpdated,
       ...(importReport ? { import: importReport } : {}),
     });
     return 0;
@@ -876,18 +882,41 @@ async function runInit(
       ? await getLocalRuntimeGitignoreFindings(rootDir)
       : [];
 
+  let gitignoreUpdated = false;
   if (parsed.updateGitignore && parsed.write) {
     try {
-      await appendMissingGitignoreLines(
-        rootDir,
-        gitignoreFindings
+      gitignoreUpdated = await appendMissingGitignoreLines(rootDir, [
+        ...suggestions,
+        ...gitignoreFindings
           .filter((finding) => finding.action === "would-add")
           .map((finding) => finding.line),
-      );
+      ]);
     } catch {
       // Non-fatal: surface in the report instead of erroring out.
     }
   }
+
+  let clientWritePlan: WritePlanResult | undefined;
+  if (wizardCreatesClientFiles && parsed.write) {
+    const clientWrite = await writeCompiledClientFiles({
+      rootDir,
+      profilePath: safeProfilePath.path,
+      profile: validation.profile,
+      profileBytes: Buffer.from(profileText, "utf8"),
+    });
+
+    if (!clientWrite.ok) {
+      io.stderr(clientWrite.message);
+      return clientWrite.code;
+    }
+
+    clientWritePlan = clientWrite.plan;
+  }
+
+  const finalGitignoreSuggestions =
+    gitignoreUpdated && presetPayload === undefined
+      ? await getGitignoreSuggestions(rootDir)
+      : suggestions;
 
   let importReport: Phase14ImportReport | undefined;
   if (parsed.importExisting) {
@@ -909,13 +938,15 @@ async function runInit(
     action: parsed.write ? "write" : "create",
     wouldWrite: !parsed.write && plan.counts.create + plan.counts.change > 0,
     wrote: parsed.write && plan.counts.create + plan.counts.change > 0,
+    clientWritePlan,
+    gitignoreUpdated,
     clients,
     clientsEnabled: enabledClients(clients),
     detectedStack: stackResult.stack.languages,
     preset: presetPayload,
     stackWarnings: stackResult.warnings,
     importFindings: importResult?.findings ?? [],
-    gitignoreSuggestions: suggestions,
+    gitignoreSuggestions: finalGitignoreSuggestions,
     ...(importReport ? { import: importReport } : {}),
   });
   return 0;
@@ -933,7 +964,14 @@ type DispatchInitWizardInput = {
   nonInteractiveOverride: boolean | undefined;
 };
 
-type DispatchInitWizardResult = "non-interactive" | "confirmed" | "declined";
+type DispatchInitWizardResult =
+  | { kind: "non-interactive" }
+  | { kind: "confirmed"; createClientFiles: boolean }
+  | { kind: "declined" };
+
+type ClientFileWriteResult =
+  | { ok: true; plan: WritePlanResult }
+  | { ok: false; code: number; message: string };
 
 async function dispatchInitWizard(
   input: DispatchInitWizardInput,
@@ -951,7 +989,7 @@ async function dispatchInitWizard(
   if (nonInteractive) {
     input.args.importExisting = true;
     // strategy remains the parsed default ("preserve") and write stays false
-    return "non-interactive";
+    return { kind: "non-interactive" };
   }
 
   let profileForReport: AiProfile | undefined;
@@ -990,6 +1028,7 @@ async function dispatchInitWizard(
     },
     detectedClients,
     hasExistingProfile: input.existingProfileBytes !== undefined,
+    gitignoreSuggestions: await getGitignoreSuggestions(input.rootDir),
     report: toWizardImportReport(wizardPhaseReport),
   };
 
@@ -1013,7 +1052,7 @@ async function dispatchInitWizard(
   });
 
   if (!outcome.confirmed) {
-    return "declined";
+    return { kind: "declined" };
   }
 
   input.args.importExisting = true;
@@ -1027,7 +1066,11 @@ async function dispatchInitWizard(
     (id) => !outcome.clients.includes(id),
   );
 
-  return "confirmed";
+  return {
+    kind: "confirmed",
+    createClientFiles:
+      input.existingProfileBytes === undefined && outcome.clients.length > 0,
+  };
 }
 
 function toWizardImportReport(
@@ -1329,7 +1372,7 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
   if (preset !== undefined && importExisting) {
     return {
       ok: false,
-      message: "--preset cannot be used with --import in Phase 9.",
+      message: "--preset cannot be used with --import.",
     };
   }
 
@@ -1337,7 +1380,7 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
     return {
       ok: false,
       message:
-        "--preset cannot be used with --profile in Phase 9; preset init writes only ai-profile.yaml.",
+        "--preset cannot be used with --profile; preset init writes only ai-profile.yaml.",
     };
   }
 
@@ -1621,6 +1664,8 @@ type InitReport = {
   action?: "create" | "write" | "existing";
   wouldWrite: boolean;
   wrote: boolean;
+  clientWritePlan?: WritePlanResult;
+  gitignoreUpdated?: boolean;
   clients: ClientMatrix;
   clientsEnabled: ClientId[];
   detectedStack: string[];
@@ -2061,6 +2106,109 @@ async function createOrApplyWritePlan(
   }
 }
 
+async function writeCompiledClientFiles(input: {
+  rootDir: string;
+  profilePath: string;
+  profile: AiProfile;
+  profileBytes: Uint8Array;
+}): Promise<ClientFileWriteResult> {
+  const compileResult = compileProfile({ profile: input.profile });
+
+  if (!compileResult.ok) {
+    return {
+      ok: false,
+      code: 1,
+      message: formatCompileIssues(compileResult.issues),
+    };
+  }
+
+  let regionPlan: RegionAwareWritePlan;
+  try {
+    regionPlan = await planRegionAwareWrites(
+      input.rootDir,
+      compileResult.files,
+    );
+  } catch {
+    return {
+      ok: false,
+      code: 1,
+      message: formatSimpleError(
+        "generated outputs",
+        "safe repository-local readable paths",
+        "unsafe path",
+        "Existing generated output paths could not be safely read under --root.",
+      ),
+    };
+  }
+
+  if (regionPlan.refusals.length > 0) {
+    return {
+      ok: false,
+      code: 3,
+      message: formatRegionAwareWriteRefusals(regionPlan.refusals),
+    };
+  }
+
+  let protectedPaths: ProtectedGeneratedPath[];
+  try {
+    protectedPaths = await getProtectedGeneratedPaths(
+      input.rootDir,
+      compileResult.files,
+    );
+  } catch {
+    return {
+      ok: false,
+      code: 1,
+      message: formatSimpleError(
+        "generated outputs",
+        "safe repository-local readable paths",
+        "unsafe path",
+        "Existing generated output paths could not be safely read under --root.",
+      ),
+    };
+  }
+
+  if (protectedPaths.length > 0) {
+    return {
+      ok: false,
+      code: 3,
+      message: `Refusing to replace existing generated paths without --force:\n${protectedPaths
+        .map((item) => `- ${item.path} (${item.reason})`)
+        .join("\n")}\n`,
+    };
+  }
+
+  const lockfile = createLockfileFile({
+    profilePath: input.profilePath,
+    profileBytes: input.profileBytes,
+    templates: compileResult.templates,
+    files: compileResult.files,
+    mixedOutputs: regionPlan.mixedOutputs,
+  });
+  const writes = [
+    ...regionPlan.writes,
+    { path: lockfile.path, bytes: lockfile.bytes },
+  ];
+
+  try {
+    return {
+      ok: true,
+      plan: await applyWritePlan({ rootDir: input.rootDir, writes }),
+    };
+  } catch {
+    return {
+      ok: false,
+      code: 1,
+      message: formatSimpleError(
+        "write-plan",
+        "safe repository-local write paths",
+        "unsafe path",
+        "Planned writes could not be safely resolved under --root.",
+      ),
+    };
+  }
+}
+
 async function assertPortAvailable(
   host: LoopbackHost,
   port: number,
@@ -2297,18 +2445,17 @@ Commands:
   init      Create a starting ai-profile.yaml (interactive wizard with no args).
   ui        Start the local read-only UI.
 
-Init wizard (Phase 15):
-  Plain \`agent-profile init\` opens a friendly wizard that maps to Phase 14
-  --import / --strategy / --update-gitignore / --write. In non-interactive
+Init wizard:
+  Plain \`agent-profile init\` opens a guided setup wizard. In non-interactive
   environments (no TTY, CI=true, or --non-interactive), init defaults to
   --import --strategy preserve --dry-run and writes nothing.
 
 Init presets:
   --preset verifies a short-lived hosted preset token offline. Repository
   analysis happens locally and no source code is uploaded. Dry-run is the
-  default; use --write to create ai-profile.yaml. In Phase 9, --preset cannot
-  be combined with --import or --profile. The hosted preset builder ships in a
-  later phase; this CLI verifies tokens that match its contract.
+  default; use --write to create ai-profile.yaml. --preset cannot be combined
+  with --import or --profile. This CLI verifies tokens that match the hosted
+  preset builder contract.
 
 Init clients:
   --client enables one or more profile clients: tabnine, codex, claude, or all.
@@ -2377,7 +2524,7 @@ function formatPhase14ImportReportLines(report: Phase14ImportReport): string[] {
     for (const finding of report.files) {
       lines.push(`    - ${finding.path}: ${formatImportFileAction(finding)}`);
       for (const note of finding.notes) {
-        lines.push(`        note: ${note}`);
+        lines.push(`        note: ${formatImportNote(note)}`);
       }
     }
   }
@@ -2411,9 +2558,12 @@ function formatImportFileAction(finding: ImportReportFile): string {
   switch (finding.action) {
     case "create":
       return finding.kind === "root-instructions"
-        ? "not written by init; generated by compile --write"
+        ? "will be created when client files are generated"
         : "will be created by the generated output step";
     case "preserve":
+      if (finding.ownership === "generated-owned") {
+        return "present (generated)";
+      }
       return "preserved";
     case "insert-regions":
       return "can be adopted into generated/manual regions";
@@ -2426,6 +2576,18 @@ function formatImportFileAction(finding: ImportReportFile): string {
   }
 }
 
+function formatImportNote(note: string): string {
+  return note
+    .replace(
+      "lockfile-owned generated output; refresh via `agent-profile compile --write`",
+      "generated output already recorded by setup",
+    )
+    .replace(
+      "generated client config; refresh via `agent-profile compile --write`",
+      "generated client config already recorded by setup",
+    );
+}
+
 function formatGitignoreFinding(finding: ImportReportGitignoreFinding): string {
   if (finding.action === "already-present") {
     return `${finding.line}: already ignored`;
@@ -2435,9 +2597,7 @@ function formatGitignoreFinding(finding: ImportReportGitignoreFinding): string {
 }
 
 function formatInitOutcomeSummary(input: InitReport): string[] {
-  const lines: string[] = [
-    input.wrote ? "What happened:" : "What would happen:",
-  ];
+  const lines: string[] = [input.wrote ? "Setup report:" : "Setup preview:"];
 
   lines.push(`- ${input.wrote ? "wrote" : "would write"} ${input.profilePath}`);
 
@@ -2450,10 +2610,17 @@ function formatInitOutcomeSummary(input: InitReport): string[] {
     }
   }
 
-  if (input.clientsEnabled.length > 0) {
-    lines.push(
-      `- Client-specific ${formatClientDisplayList(input.clientsEnabled)} files are generated by compile, not init.`,
+  if (input.clientWritePlan) {
+    const clientChanges = input.clientWritePlan.actions.filter(
+      (action) => action.action === "create" || action.action === "change",
     );
+    if (clientChanges.length > 0) {
+      lines.push(`- generated ${String(clientChanges.length)} client files`);
+    }
+  }
+
+  if (input.gitignoreUpdated) {
+    lines.push("- updated .gitignore");
   }
 
   return lines;
@@ -2461,12 +2628,7 @@ function formatInitOutcomeSummary(input: InitReport): string[] {
 
 function formatNextStepLines(input: InitReport): string[] {
   if (input.wrote) {
-    return [
-      "",
-      "Next steps:",
-      "- Preview generated client files: `agent-profile compile --dry-run`",
-      "- Write generated client files: `agent-profile compile --write`",
-    ];
+    return [];
   }
 
   return [
@@ -2512,13 +2674,8 @@ function formatInitText(input: InitReport): string {
   lines.push(...formatInitOutcomeSummary(input));
   lines.push(
     "",
-    "Selected clients:",
-    ...CLIENT_IDS.map(
-      (client) =>
-        `  ${client}: ${input.clients[client].enabled ? "enabled" : "disabled"}${formatClientSource(input.clients[client].source)}`,
-    ),
-    `clients enabled: ${formatEnabledClients(input.clientsEnabled)}`,
-    `stack detected: ${formatDetectedStack(input.detectedStack)}`,
+    `Clients selected: ${formatClientDisplayList(input.clientsEnabled)}`,
+    `Stack detected: ${formatDetectedStack(input.detectedStack)}`,
   );
 
   if (input.stackWarnings.length > 0) {
@@ -2575,14 +2732,6 @@ function formatInitRefusalFacts(input: InitReport): string {
   ].join("\n");
 }
 
-function formatClientSource(source: ClientSource): string {
-  return source === "default" ? "" : ` (${source})`;
-}
-
-function formatEnabledClients(clients: ClientId[]): string {
-  return clients.length === 0 ? "(none)" : clients.join(", ");
-}
-
 function formatClientDisplayList(clients: ClientId[]): string {
   const labels = clients.map((client) => {
     switch (client) {
@@ -2596,7 +2745,7 @@ function formatClientDisplayList(clients: ClientId[]): string {
   });
 
   if (labels.length === 0) {
-    return "client";
+    return "(none)";
   }
 
   if (labels.length === 1) {
@@ -2760,16 +2909,22 @@ async function planRegionAdoptions(
 async function appendMissingGitignoreLines(
   rootDir: string,
   lines: string[],
-): Promise<void> {
-  if (lines.length === 0) return;
+): Promise<boolean> {
+  if (lines.length === 0) return false;
   const existing = (await readOptionalText(rootDir, ".gitignore")) ?? "";
+  const existingLines = new Set(existing.split(/\r?\n/u));
+  const missingLines = lines.filter(
+    (line, index) => lines.indexOf(line) === index && !existingLines.has(line),
+  );
+  if (missingLines.length === 0) return false;
   const trailing = existing.endsWith("\n") || existing === "" ? "" : "\n";
-  const addition = `${lines.join("\n")}\n`;
+  const addition = `${missingLines.join("\n")}\n`;
   const next = `${existing}${trailing}${addition}`;
   await applyWritePlan({
     rootDir,
     writes: [{ path: ".gitignore", bytes: next }],
   });
+  return true;
 }
 
 type RegionAwareRefusal = {
@@ -2792,6 +2947,36 @@ function formatRegionAdoptionRefusals(
     "",
   ];
   return lines.join("\n");
+}
+
+function formatRegionAwareWriteRefusals(
+  refusals: RegionAwareRefusal[],
+): string {
+  const hashMismatches = refusals.filter(
+    (item) => item.reason === "hash-mismatch",
+  );
+  const adoptionRefusals = refusals.filter(
+    (item) => item.reason !== "hash-mismatch",
+  );
+  const lines: string[] = [];
+
+  if (adoptionRefusals.length > 0) {
+    lines.push(
+      "Refusing to overwrite region-aware instruction files without explicit adoption:",
+      ...adoptionRefusals.map((item) => `- ${item.path} (${item.reason})`),
+      "Run `agent-profile init --import --strategy regions --write` to adopt existing files into mixed ownership.",
+    );
+  }
+
+  if (hashMismatches.length > 0) {
+    lines.push(
+      "Refusing to overwrite lockfile-owned generated region files that differ from ai-profile.lock:",
+      ...hashMismatches.map((item) => `- ${item.path} (${item.reason})`),
+      "Re-run with --force after reviewing the diff, or regenerate ai-profile.lock to record the new bytes.",
+    );
+  }
+
+  return `${lines.join("\n")}\n`;
 }
 
 type RegionAwareWritePlan = {

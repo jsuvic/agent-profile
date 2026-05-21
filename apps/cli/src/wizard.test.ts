@@ -21,6 +21,7 @@ import {
 import { runCli } from "./index.js";
 import {
   formatWizardClientSelectionQuestion,
+  formatWizardGitignoreQuestion,
   formatWizardStrategyQuestion,
   formatWizardWriteConfirmationQuestion,
   isNonInteractive,
@@ -34,7 +35,11 @@ import {
 type PromptCall =
   | { kind: "selectStrategy"; default: string }
   | { kind: "selectClients"; defaults: ReadonlyArray<string> }
-  | { kind: "confirmGitignore"; default: boolean }
+  | {
+      kind: "confirmGitignore";
+      default: boolean;
+      entries: ReadonlyArray<string>;
+    }
   | { kind: "confirmWritePlan"; default: boolean };
 
 type ScriptedPrompts = CliPrompts & { calls: PromptCall[] };
@@ -56,8 +61,8 @@ function scriptedPrompts(options: {
       calls.push({ kind: "selectClients", defaults });
       return options.clients ?? defaults;
     },
-    async confirmGitignore({ default: def }) {
-      calls.push({ kind: "confirmGitignore", default: def });
+    async confirmGitignore({ default: def, entries }) {
+      calls.push({ kind: "confirmGitignore", default: def, entries });
       return options.gitignore ?? def;
     },
     async confirmWritePlan({ default: def }) {
@@ -189,8 +194,8 @@ test("parseWizardClientSelection ignores malformed partial numbers", () => {
 
 test("formatWizardClientSelectionQuestion explains multi-client syntax", () => {
   const text = formatWizardClientSelectionQuestion(["codex"]);
-  assert.match(text, /== Choose clients ==/u);
-  assert.match(text, /Which clients should this profile enable\?/u);
+  assert.match(text, /== Generate client files ==/u);
+  assert.match(text, /Which clients should this setup create files for\?/u);
   assert.match(text, /2\) codex \(default\)/u);
   assert.match(
     text,
@@ -204,12 +209,20 @@ test("wizard strategy question has a visible section heading", () => {
   assert.match(text, /2\) Add generated regions \(default\)/u);
 });
 
-test("wizard final run-mode question offers dry-run and write choices", () => {
+test("wizard final run-mode question offers preview and create choices", () => {
   const text = formatWizardWriteConfirmationQuestion();
-  assert.match(text, /== Choose run mode ==/u);
-  assert.match(text, /1\) Dry run preview \(default\)/u);
-  assert.match(text, /2\) Write files now \(--write\)/u);
+  assert.match(text, /== Create setup ==/u);
+  assert.match(text, /1\) Preview only \(default\)/u);
+  assert.match(text, /2\) Create setup now/u);
+  assert.doesNotMatch(text, /--write/u);
   assert.match(text, /Choose \[1\/2\]/u);
+});
+
+test("formatWizardGitignoreQuestion lists only missing entries under yes option", () => {
+  const text = formatWizardGitignoreQuestion([".env.*", ".mcp.json"]);
+  assert.match(text, /== Local file ignores ==/u);
+  assert.match(text, /1\) Yes - add all missing entries\n     - \.env\.\*/u);
+  assert.match(text, /     - \.mcp\.json\n  2\) No/u);
 });
 
 test("recommendStrategy: unmarked supported root file recommends regions", () => {
@@ -361,8 +374,8 @@ test("interactive wizard with dry-run mode writes nothing", async () => {
   assert.match(output.stdoutText(), /Agent Profile Init/u);
   assert.match(output.stdoutText(), /== Detected ==/u);
   assert.match(output.stdoutText(), /== Recommendation ==/u);
-  assert.match(output.stdoutText(), /== Write plan ==/u);
-  assert.match(output.stdoutText(), /Dry-run selected/u);
+  assert.match(output.stdoutText(), /== Create setup plan ==/u);
+  assert.match(output.stdoutText(), /Preview selected/u);
   assert.match(output.stdoutText(), /No files written/u);
 });
 
@@ -406,6 +419,28 @@ test("interactive wizard skips .gitignore prompt when no recommendation is missi
     "selectStrategy",
     "selectClients",
     "confirmWritePlan",
+  ]);
+});
+
+test("interactive wizard .gitignore prompt receives only missing entries", async () => {
+  const rootDir = await createTsRoot("gitignore-missing-only");
+  await writeFile(path.join(rootDir, ".gitignore"), ".env\n.cce/\n", "utf8");
+  const output = createOutput();
+  const prompts = scriptedPrompts({ confirm: false });
+  await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  const call = prompts.calls.find((item) => item.kind === "confirmGitignore");
+  assert.ok(call);
+  assert.deepEqual(call.entries, [
+    ".env.*",
+    ".mcp.json",
+    ".claude/settings.local.json",
+    ".claude/worktrees/",
+    ".codex/config.toml",
+    ".codex/hooks.json",
   ]);
 });
 
@@ -463,7 +498,7 @@ test("interactive regions flow produces same files as explicit --strategy region
   }
 });
 
-test("interactive write output explains init result and compile next step", async () => {
+test("interactive write creates selected client files and reports setup result", async () => {
   const rootDir = await createTsRoot("write-summary");
   await writeFile(
     path.join(rootDir, "AGENTS.md"),
@@ -487,15 +522,24 @@ test("interactive write output explains init result and compile next step", asyn
   assert.equal(code, 0);
   const text = output.stdoutText();
   assert.doesNotMatch(text, /Phase 14 import report/u);
-  assert.match(text, /What happened:/u);
+  assert.doesNotMatch(text, /Client-specific Codex and Claude files/u);
+  assert.doesNotMatch(text, /Selected clients:/u);
+  assert.match(text, /Setup report:/u);
   assert.match(text, /wrote ai-profile\.yaml/u);
   assert.match(text, /updated generated region in AGENTS\.md/u);
-  assert.match(
-    text,
-    /Client-specific Codex and Claude files are generated by compile, not init/u,
+  assert.match(text, /generated \d+ client files/u);
+  assert.match(text, /Clients selected: Codex and Claude/u);
+  assert.doesNotMatch(text, /agent-profile compile --write/u);
+  assert.equal(await fileExists(path.join(rootDir, "ai-profile.lock")), true);
+  assert.equal(
+    await fileExists(path.join(rootDir, ".codex", "config.toml")),
+    true,
   );
-  assert.match(text, /agent-profile compile --dry-run/u);
-  assert.match(text, /agent-profile compile --write/u);
+  assert.equal(
+    await fileExists(path.join(rootDir, ".claude", "settings.json")),
+    true,
+  );
+  assert.equal(await fileExists(path.join(rootDir, ".mcp.json")), true);
 });
 
 test("interactive preserve flow does not modify existing AGENTS.md", async () => {
@@ -505,7 +549,7 @@ test("interactive preserve flow does not modify existing AGENTS.md", async () =>
   const output = createOutput();
   const prompts = scriptedPrompts({
     strategy: "preserve",
-    clients: ["codex"],
+    clients: [],
     gitignore: false,
     confirm: true,
   });
@@ -543,6 +587,14 @@ test("interactive flow respects selected clients in written profile", async () =
   assert.match(profile, /codex:\n\s*enabled: true/u);
   assert.match(profile, /claude:\n\s*enabled: false/u);
   assert.match(profile, /tabnine:\n\s*enabled: false/u);
+  assert.equal(
+    await fileExists(path.join(rootDir, ".codex", "config.toml")),
+    true,
+  );
+  assert.equal(
+    await fileExists(path.join(rootDir, ".claude", "settings.json")),
+    false,
+  );
 });
 
 test("foreign subagent conflict appears in wizard output before final confirmation", async () => {
@@ -598,8 +650,9 @@ test("gitignore yes vs no only affects .gitignore content", async () => {
     gitignore: true,
     confirm: true,
   });
+  const yesOutput = createOutput();
   await runCli(["init", "--root", yesRoot], {
-    io: createOutput(),
+    io: yesOutput,
     nonInteractive: false,
     prompts: yesPrompts,
   });
@@ -607,6 +660,11 @@ test("gitignore yes vs no only affects .gitignore content", async () => {
 
   assert.ok(yesGitignore.length > noGitignore.length);
   assert.match(yesGitignore, /\.cce\//u);
+  assert.match(yesOutput.stdoutText(), /updated \.gitignore/u);
+  assert.doesNotMatch(
+    yesOutput.stdoutText(),
+    /Recommended \.gitignore entries:\n  \.gitignore: add/u,
+  );
 
   // Profile YAML differs only by the tmpdir basename in `profile.name`;
   // normalize that field before comparing.
@@ -703,11 +761,11 @@ test("regions strategy on a fresh repo does not claim to create missing AGENTS.m
   assert.equal(code, 0);
 
   const text = output.stdoutText();
-  const planIndex = text.indexOf("== Write plan ==");
+  const planIndex = text.indexOf("== Create setup plan ==");
   const planSection = text.slice(planIndex);
   // The wizard must not advertise a create for missing root instruction
   // files — Phase 14 init only adopts existing files; AGENTS.md/CLAUDE.md
-  // are materialized later by `agent-profile compile --write`.
+  // client-file generation is skipped when no clients were selected.
   assert.equal(
     /create AGENTS\.md/u.test(planSection),
     false,
@@ -740,7 +798,7 @@ test("regions strategy choice updates write plan before final confirmation", asy
     prompts,
   });
   const text = output.stdoutText();
-  const planIndex = text.indexOf("== Write plan ==");
+  const planIndex = text.indexOf("== Create setup plan ==");
   assert.notEqual(planIndex, -1);
   const planSection = text.slice(planIndex);
   // After selecting regions, the plan must reflect that AGENTS.md/CLAUDE.md
@@ -818,6 +876,7 @@ permissions:
     "selectClients prompt must not run when profile already exists",
   );
   assert.match(output.stdoutText(), /Clients: unchanged \(existing profile\)/u);
+  assert.doesNotMatch(output.stdoutText(), /create Codex files/u);
 });
 
 test("--non-interactive flag bypasses wizard prompts even when prompts are injected", async () => {
