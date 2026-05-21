@@ -183,8 +183,11 @@ export function formatWizardGitignoreQuestion(): string {
 
 export function formatWizardWriteConfirmationQuestion(): string {
   return (
-    `${formatWizardSectionTitle("Confirm write")}\n` +
-    "Write this plan? Type y to write. Press Enter to leave files unchanged."
+    `${formatWizardSectionTitle("Choose run mode")}\n` +
+    "How should this plan run?\n" +
+    "  1) Dry run preview (default) - write nothing\n" +
+    "  2) Write files now (--write)\n" +
+    "Choose [1/2]: "
   );
 }
 
@@ -380,9 +383,9 @@ export function formatWizardPlan(
 
 export function formatWizardDeclined(): string {
   return [
+    "Dry-run selected.",
     "No files written.",
-    "The final write confirmation was not accepted.",
-    "Re-run with --write or answer y at the final confirmation to write.",
+    "Re-run with --write or choose 2 in the wizard to write.",
     "",
   ].join("\n");
 }
@@ -512,7 +515,36 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
     },
     async confirmWritePlan({ default: def }) {
       try {
-        return await confirm(formatWizardWriteConfirmationQuestion(), def);
+        const raw = await ask(
+          formatWizardWriteConfirmationQuestion(),
+          def ? "2" : "1",
+        );
+        const normalized = raw.trim().toLowerCase();
+
+        if (
+          normalized === "2" ||
+          normalized === "write" ||
+          normalized === "--write" ||
+          normalized === "w" ||
+          normalized === "y" ||
+          normalized === "yes"
+        ) {
+          return true;
+        }
+
+        if (
+          normalized === "1" ||
+          normalized === "dry-run" ||
+          normalized === "dryrun" ||
+          normalized === "dry run" ||
+          normalized === "preview" ||
+          normalized === "n" ||
+          normalized === "no"
+        ) {
+          return false;
+        }
+
+        return def;
       } finally {
         rl.close();
       }

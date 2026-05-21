@@ -95,8 +95,8 @@ Screens, in order:
 4. `.gitignore` recommendation prompt (only shown when at least one
    recommended line is missing).
 5. Write plan summary, under a visible `Write plan` section.
-6. Final confirmation (default `No`). Type `y` to write; pressing Enter keeps
-   the run as a dry-run and writes nothing.
+6. Run mode choice. `Dry run preview` is the default; choose
+   `Write files now (--write)` to apply the plan locally.
 
 The wizard never bypasses Phase 14 ownership, region, path-safety, or conflict
 checks: choosing `Add generated regions` produces the same bytes as
@@ -107,7 +107,7 @@ In non-interactive environments — `stdin`/`stdout` is not a TTY, `CI=true`,
 or `--non-interactive` is present — `init` behaves as
 `init --import --strategy preserve --dry-run` and writes nothing. The wizard
 does not introduce `--yes`: a write always requires the explicit Phase 14
-flags or the interactive final confirmation.
+flags or selecting `Write files now (--write)` in the wizard.
 
 Recommendation rules:
 

@@ -204,11 +204,12 @@ test("wizard strategy question has a visible section heading", () => {
   assert.match(text, /2\) Add generated regions \(default\)/u);
 });
 
-test("wizard final confirmation explains that enter means no write", () => {
+test("wizard final run-mode question offers dry-run and write choices", () => {
   const text = formatWizardWriteConfirmationQuestion();
-  assert.match(text, /== Confirm write ==/u);
-  assert.match(text, /Type y to write/u);
-  assert.match(text, /Press Enter to leave files unchanged/u);
+  assert.match(text, /== Choose run mode ==/u);
+  assert.match(text, /1\) Dry run preview \(default\)/u);
+  assert.match(text, /2\) Write files now \(--write\)/u);
+  assert.match(text, /Choose \[1\/2\]/u);
 });
 
 test("recommendStrategy: unmarked supported root file recommends regions", () => {
@@ -345,7 +346,7 @@ test("CI=true environment defaults to non-interactive dry-run", async () => {
   }
 });
 
-test("interactive wizard with no-confirm writes nothing", async () => {
+test("interactive wizard with dry-run mode writes nothing", async () => {
   const rootDir = await createTsRoot("decline");
   await writeUnmarkedRoots(rootDir);
   const output = createOutput();
@@ -361,10 +362,7 @@ test("interactive wizard with no-confirm writes nothing", async () => {
   assert.match(output.stdoutText(), /== Detected ==/u);
   assert.match(output.stdoutText(), /== Recommendation ==/u);
   assert.match(output.stdoutText(), /== Write plan ==/u);
-  assert.match(
-    output.stdoutText(),
-    /final write confirmation was not accepted/u,
-  );
+  assert.match(output.stdoutText(), /Dry-run selected/u);
   assert.match(output.stdoutText(), /No files written/u);
 });
 

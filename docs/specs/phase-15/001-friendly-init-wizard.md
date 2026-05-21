@@ -46,7 +46,7 @@ The CLI shows a wizard:
 4. client selection
 5. `.gitignore` recommendations
 6. write plan
-7. final confirmation
+7. final run-mode choice
 
 Non-interactive terminal or CI:
 
@@ -70,7 +70,8 @@ Non-interactive means any of:
 - `--non-interactive` is present
 
 Phase 15 does not add `--yes`. A write still requires either the existing
-explicit non-wizard write flags or an interactive final confirmation.
+explicit non-wizard write flags or an interactive selection of the write run
+mode.
 
 ## Inputs
 
@@ -159,18 +160,23 @@ Default: `No`
 If user selects `Yes`, the write plan includes the equivalent of
 `--update-gitignore`.
 
-### Final Confirmation
+### Final Run Mode
 
 Question:
 
 ```text
-Write this plan?
+How should this plan run?
 ```
 
-Default: `No`
+Choices:
 
-If user selects `No`, the command exits with status `0` after printing the
-dry-run plan.
+| Choice                       | Default | Meaning                            |
+| ---------------------------- | ------- | ---------------------------------- |
+| `Dry run preview`            | yes     | Preview the plan and write nothing |
+| `Write files now (--write)`  | no      | Apply the plan locally             |
+
+If the user selects `Dry run preview`, the command exits with status `0` after
+printing the dry-run plan.
 
 ## Example Interactive Output
 
@@ -196,13 +202,14 @@ Write plan:
 - create or migrate ai-profile.lock to version 2
 - preserve .mcp.json
 
-No files written. Re-run with --write or confirm in the wizard to write.
+Dry-run selected.
+No files written. Re-run with --write or choose Write files now in the wizard to write.
 ```
 
 ## Contracts
 
 - Non-interactive mode never writes by default.
-- Interactive mode never writes without final confirmation.
+- Interactive mode never writes unless the final run mode is `Write files now`.
 - Wizard choices map to Phase 14 deterministic commands.
 - Prompt defaults must be safe.
 - Wizard output must not include secrets.
@@ -229,7 +236,7 @@ No files written. Re-run with --write or confirm in the wizard to write.
 - Strategy default is preserve when existing instruction files are ambiguous.
 - Strategy recommendation is regions when supported unmarked `AGENTS.md` or
   `CLAUDE.md` exist.
-- Final confirmation defaults to no.
+- Final run mode defaults to dry-run preview.
 - Choosing regions writes only Phase 14 region changes.
 - Choosing preserve writes no existing agent artifacts.
 - Choosing `.gitignore` update appends only missing recommended lines.
@@ -237,7 +244,7 @@ No files written. Re-run with --write or confirm in the wizard to write.
 ## Tests
 
 - mocked non-interactive init defaults to dry-run preserve
-- mocked interactive init no-confirm writes nothing
+- mocked interactive init dry-run selection writes nothing
 - mocked interactive regions flow produces same plan as
   `init --import --strategy regions`
 - mocked interactive preserve flow preserves existing files
