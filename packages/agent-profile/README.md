@@ -9,7 +9,7 @@ same policy across separate tool configs.
 
 ## Preview Status
 
-This package is in preview / early access. `agent-profile@0.3.0` is usable for
+This package is in preview / early access. `agent-profile@0.3.2` is usable for
 experimentation, but the schema, generated files, and command details may change
 before `1.0`.
 
