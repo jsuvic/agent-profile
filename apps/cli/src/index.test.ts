@@ -525,7 +525,7 @@ test("init dry-run previews a valid profile without writing", async () => {
 
   assert.equal(code, 0);
   assert.match(output.stdoutText(), /Agent Profile Init/u);
-  assert.match(output.stdoutText(), /would write: ai-profile\.yaml/u);
+  assert.match(output.stdoutText(), /would write ai-profile\.yaml/u);
   assert.match(output.stdoutText(), /clients enabled: \(none\)/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
@@ -555,7 +555,7 @@ test("init write creates a schema-valid guarded profile and leaves gitignore unc
     await readFile(path.join(rootDir, ".gitignore"), "utf8"),
     beforeGitignore,
   );
-  assert.match(output.stdoutText(), /suggestions:/u);
+  assert.match(output.stdoutText(), /Recommended \.gitignore entries:/u);
   assert.equal(profileText, expectedInitProfile(rootDir, defaultTestClients()));
   assert.match(profileText, /mode: guarded/u);
   assert.match(profileText, /access: deny/u);
@@ -590,7 +590,7 @@ test("init dry-run reports Flutter stack from pubspec.yaml without writing", asy
 
   assert.equal(code, 0);
   assert.match(output.stdoutText(), /Agent Profile Init \(dry-run\)/u);
-  assert.match(output.stdoutText(), /would write: ai-profile\.yaml/u);
+  assert.match(output.stdoutText(), /would write ai-profile\.yaml/u);
   assert.match(output.stdoutText(), /stack detected: dart/u);
   assert.match(output.stdoutText(), /codex: enabled \(--client\)/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
@@ -893,7 +893,7 @@ test("init import defaults to dry-run", async () => {
   });
 
   assert.equal(code, 0);
-  assert.match(output.stdoutText(), /Import findings/u);
+  assert.match(output.stdoutText(), /Existing files found/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
@@ -918,7 +918,7 @@ test("init preset dry-run prints summary before write plan without network or to
   );
   assert.match(stdout, /- preset: phase9-cli/u);
   assert.match(stdout, /- stack: detected locally/u);
-  assert.match(stdout, /would write: ai-profile\.yaml/u);
+  assert.match(stdout, /would write ai-profile\.yaml/u);
   assert.equal(stdout.includes(token), false);
   assert.equal(stdout.includes('"preferences"'), false);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
@@ -987,7 +987,7 @@ test("init preset write creates only ai-profile.yaml with preset preferences", a
   assert.match(profileText, /secrets:\n    access: deny/u);
   assert.match(profileText, /production:\n    access: deny/u);
   assert.match(profileText, /languages:\n    - typescript/u);
-  assert.match(output.stdoutText(), /wrote: ai-profile\.yaml/u);
+  assert.match(output.stdoutText(), /wrote ai-profile\.yaml/u);
 });
 
 test("init preset dry-run output is deterministic for the same token and metadata", async () => {
