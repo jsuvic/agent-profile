@@ -18,9 +18,10 @@ import path from "node:path";
 const root = process.cwd();
 
 // One row per place that has to track the wrapper version. `kind` is either
-// `version` (set this package.json's `version`) or `dependency` (set this
-// dependency pin in the named package.json) or `constant` (rewrite a TS
-// constant at this path).
+// `version` (set this package.json's `version`), `dependency` (set this
+// dependency pin in the named package.json), `constant` (rewrite a TS
+// constant at this path), or `readmeReference` (rewrite a Markdown npm version
+// reference).
 const targets = [
   {
     kind: "version",
@@ -54,6 +55,18 @@ const targets = [
     file: "apps/web/src/lib/version.ts",
     pattern: /(export const VERSION = )"[^"]+";/u,
     label: "apps/web/src/lib/version.ts VERSION constant",
+  },
+  {
+    kind: "readmeReference",
+    file: "README.md",
+    pattern: /(`agent-profile@)([^`]+)(`)/u,
+    label: "README.md npm version reference",
+  },
+  {
+    kind: "readmeReference",
+    file: "packages/agent-profile/README.md",
+    pattern: /(`agent-profile@)([^`]+)(`)/u,
+    label: "packages/agent-profile/README.md npm version reference",
   },
 ];
 
@@ -127,6 +140,24 @@ function applyTarget(target, version) {
 
     const before = match[0].slice(match[1].length).slice(1, -2);
     const next = text.replace(target.pattern, `$1"${version}";`);
+    writeText(target.file, next);
+    return { before, after: version };
+  }
+
+  if (target.kind === "readmeReference") {
+    const text = readText(target.file);
+    const match = text.match(target.pattern);
+
+    if (!match) {
+      console.error(`Could not find npm version reference in ${target.file}.`);
+      process.exit(1);
+    }
+
+    const before = match[2];
+    const next = text.replace(
+      target.pattern,
+      (_full, prefix, _previous, suffix) => `${prefix}${version}${suffix}`,
+    );
     writeText(target.file, next);
     return { before, after: version };
   }
