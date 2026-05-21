@@ -25,6 +25,10 @@ function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(absolutePath, "utf8"));
 }
 
+function readText(relativePath) {
+  return fs.readFileSync(path.join(root, relativePath), "utf8");
+}
+
 function fail(message) {
   console.error(message);
   process.exitCode = 1;
@@ -112,6 +116,23 @@ if (!versionMatch) {
   fail(
     `apps/web/src/lib/version.ts VERSION ${versionMatch[1]} must match agent-profile ${productVersion}. Run \`node scripts/sync-versions.mjs\`.`,
   );
+}
+
+const readmeVersionPattern =
+  /agent-profile@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)/gu;
+const readmePaths = ["README.md", "packages/agent-profile/README.md"];
+
+for (const readmePath of readmePaths) {
+  const readme = readText(readmePath);
+  const references = [...readme.matchAll(readmeVersionPattern)];
+
+  for (const reference of references) {
+    if (reference[1] !== productVersion) {
+      fail(
+        `${readmePath} references agent-profile@${reference[1]}, but package version is ${productVersion}. Run \`node scripts/sync-versions.mjs\`.`,
+      );
+    }
+  }
 }
 
 if (process.exitCode) {

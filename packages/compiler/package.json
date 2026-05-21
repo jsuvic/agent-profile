@@ -1,6 +1,6 @@
 {
   "name": "@agent-profile/compiler",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Deterministic output compiler for Agent Profile Compiler.",
   "license": "Apache-2.0",
   "type": "module",
