@@ -1,6 +1,6 @@
 {
   "name": "agent-profile",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Local-first AI Agent Profile Compiler CLI.",
   "license": "Apache-2.0",
   "type": "module",
@@ -29,7 +29,7 @@
     "bin"
   ],
   "dependencies": {
-    "@agent-profile/cli": "0.3.2"
+    "@agent-profile/cli": "0.3.3"
   },
   "engines": {
     "node": ">=24.0.0",
