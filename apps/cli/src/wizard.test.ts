@@ -20,7 +20,11 @@ import {
 
 import { runCli } from "./index.js";
 import {
+  formatWizardClientSelectionQuestion,
+  formatWizardStrategyQuestion,
+  formatWizardWriteConfirmationQuestion,
   isNonInteractive,
+  parseWizardClientSelection,
   recommendStrategy,
   type CliPrompts,
   type WizardClientId,
@@ -174,6 +178,39 @@ test("isNonInteractive: TTY on both streams and no CI is interactive", () => {
   );
 });
 
+test("parseWizardClientSelection accepts multiple numeric clients", () => {
+  assert.deepEqual(parseWizardClientSelection("2,3"), ["codex", "claude"]);
+  assert.deepEqual(parseWizardClientSelection("2;3"), ["codex", "claude"]);
+});
+
+test("parseWizardClientSelection ignores malformed partial numbers", () => {
+  assert.deepEqual(parseWizardClientSelection("2abc,claude"), ["claude"]);
+});
+
+test("formatWizardClientSelectionQuestion explains multi-client syntax", () => {
+  const text = formatWizardClientSelectionQuestion(["codex"]);
+  assert.match(text, /== Choose clients ==/u);
+  assert.match(text, /Which clients should this profile enable\?/u);
+  assert.match(text, /2\) codex \(default\)/u);
+  assert.match(
+    text,
+    /Select multiple with commas or semicolons, for example 2,3\./u,
+  );
+});
+
+test("wizard strategy question has a visible section heading", () => {
+  const text = formatWizardStrategyQuestion("regions");
+  assert.match(text, /== Choose strategy ==/u);
+  assert.match(text, /2\) Add generated regions \(default\)/u);
+});
+
+test("wizard final confirmation explains that enter means no write", () => {
+  const text = formatWizardWriteConfirmationQuestion();
+  assert.match(text, /== Confirm write ==/u);
+  assert.match(text, /Type y to write/u);
+  assert.match(text, /Press Enter to leave files unchanged/u);
+});
+
 test("recommendStrategy: unmarked supported root file recommends regions", () => {
   const report: WizardImportReport = {
     files: [
@@ -321,6 +358,13 @@ test("interactive wizard with no-confirm writes nothing", async () => {
   assert.equal(code, 0);
   assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);
   assert.match(output.stdoutText(), /Agent Profile Init/u);
+  assert.match(output.stdoutText(), /== Detected ==/u);
+  assert.match(output.stdoutText(), /== Recommendation ==/u);
+  assert.match(output.stdoutText(), /== Write plan ==/u);
+  assert.match(
+    output.stdoutText(),
+    /final write confirmation was not accepted/u,
+  );
   assert.match(output.stdoutText(), /No files written/u);
 });
 
@@ -626,7 +670,7 @@ test("regions strategy on a fresh repo does not claim to create missing AGENTS.m
   assert.equal(code, 0);
 
   const text = output.stdoutText();
-  const planIndex = text.indexOf("Write plan:");
+  const planIndex = text.indexOf("== Write plan ==");
   const planSection = text.slice(planIndex);
   // The wizard must not advertise a create for missing root instruction
   // files — Phase 14 init only adopts existing files; AGENTS.md/CLAUDE.md
@@ -663,7 +707,7 @@ test("regions strategy choice updates write plan before final confirmation", asy
     prompts,
   });
   const text = output.stdoutText();
-  const planIndex = text.indexOf("Write plan:");
+  const planIndex = text.indexOf("== Write plan ==");
   assert.notEqual(planIndex, -1);
   const planSection = text.slice(planIndex);
   // After selecting regions, the plan must reflect that AGENTS.md/CLAUDE.md
@@ -756,4 +800,3 @@ test("--non-interactive flag bypasses wizard prompts even when prompts are injec
   assert.equal(prompts.calls.length, 0);
   assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);
 });
-

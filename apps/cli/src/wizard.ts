@@ -121,6 +121,73 @@ export function isNonInteractive(input: NonInteractiveInputs): boolean {
   return false;
 }
 
+export function parseWizardClientSelection(
+  raw: string,
+): ReadonlyArray<WizardClientId> {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "" || normalized === "none") return [];
+
+  const selected: WizardClientId[] = [];
+  for (const token of normalized
+    .split(/[;,]/u)
+    .map((item) => item.trim())
+    .filter((item) => item !== "")) {
+    let client: WizardClientId | undefined;
+    if (/^[0-9]+$/u.test(token)) {
+      client = WIZARD_CLIENT_IDS[Number.parseInt(token, 10) - 1];
+    } else if ((WIZARD_CLIENT_IDS as readonly string[]).includes(token)) {
+      client = token as WizardClientId;
+    }
+
+    if (client && !selected.includes(client)) {
+      selected.push(client);
+    }
+  }
+
+  return WIZARD_CLIENT_IDS.filter((id) => selected.includes(id));
+}
+
+export function formatWizardClientSelectionQuestion(
+  defaults: ReadonlyArray<WizardClientId>,
+): string {
+  const summary = WIZARD_CLIENT_IDS.map((id, index) => {
+    const enabled = defaults.includes(id);
+    return `  ${index + 1}) ${id}${enabled ? " (default)" : ""}`;
+  }).join("\n");
+  const fallback = defaults.length > 0 ? defaults.join(",") : "none";
+
+  return (
+    `${formatWizardSectionTitle("Choose clients")}\n` +
+    `Which clients should this profile enable?\n${summary}\n` +
+    `Select multiple with commas or semicolons, for example 2,3.\n` +
+    `Enter numbers or names, or press enter for defaults [${fallback}]: `
+  );
+}
+
+export function formatWizardStrategyQuestion(def: WizardStrategy): string {
+  return (
+    `${formatWizardSectionTitle("Choose strategy")}\n` +
+    `How should existing agent instruction files be handled?\n` +
+    `  1) Preserve existing files${def === "preserve" ? " (default)" : ""}\n` +
+    `  2) Add generated regions${def === "regions" ? " (default)" : ""}\n` +
+    `Choose [1/2]: `
+  );
+}
+
+export function formatWizardGitignoreQuestion(): string {
+  return (
+    `${formatWizardSectionTitle("Optional .gitignore update")}\n` +
+    "Add recommended local-runtime ignore entries to .gitignore?"
+  );
+}
+
+export function formatWizardWriteConfirmationQuestion(): string {
+  return (
+    `${formatWizardSectionTitle("Confirm write")}\n` +
+    "Write this plan? Type y to write. Press Enter to leave files unchanged."
+  );
+}
+
 export function recommendStrategy(
   report: WizardImportReport,
 ): WizardRecommendation {
@@ -200,7 +267,7 @@ export function formatWizardIntro(
 ): string {
   const lines: string[] = [];
   lines.push("Agent Profile Init", "");
-  lines.push("Detected:");
+  lines.push(formatWizardSectionTitle("Detected"));
   lines.push(`- languages: ${formatList(context.stack.languages)}`);
   lines.push(
     `- package managers: ${formatList(context.stack.packageManagers)}`,
@@ -220,6 +287,7 @@ export function formatWizardIntro(
     lines.push(`- foreign skills/subagents: ${formatList(foreign)}`);
   }
   lines.push("");
+  lines.push(formatWizardSectionTitle("Recommendation"));
   lines.push(`Recommended strategy: ${formatStrategyLabel(recommendation.strategy)}`);
   lines.push(`Reason: ${recommendation.reason}`);
 
@@ -248,7 +316,7 @@ export function formatWizardPlan(
   outcome: WizardOutcome,
 ): string {
   const lines: string[] = [];
-  lines.push("Write plan:");
+  lines.push(formatWizardSectionTitle("Write plan"));
   if (!context.hasExistingProfile) {
     lines.push("- create ai-profile.yaml");
   } else {
@@ -313,7 +381,8 @@ export function formatWizardPlan(
 export function formatWizardDeclined(): string {
   return [
     "No files written.",
-    "Re-run with --write or confirm in the wizard to write.",
+    "The final write confirmation was not accepted.",
+    "Re-run with --write or answer y at the final confirmation to write.",
     "",
   ].join("\n");
 }
@@ -421,10 +490,7 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
   return {
     async selectStrategy({ default: def }) {
       const raw = await ask(
-        `How should existing agent instruction files be handled?\n` +
-          `  1) Preserve existing files${def === "preserve" ? " (default)" : ""}\n` +
-          `  2) Add generated regions${def === "regions" ? " (default)" : ""}\n` +
-          `Choose [1/2]: `,
+        formatWizardStrategyQuestion(def),
         def === "preserve" ? "1" : "2",
       );
       if (raw === "2" || raw.toLowerCase().startsWith("r")) return "regions";
@@ -432,46 +498,21 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
       return def;
     },
     async selectClients({ defaults }) {
-      const order = WIZARD_CLIENT_IDS;
-      const summary = order
-        .map((id, index) => {
-          const enabled = defaults.includes(id);
-          return `  ${index + 1}) ${id}${enabled ? " (default)" : ""}`;
-        })
-        .join("\n");
-      const fallback = defaults.length > 0 ? defaults.join(",") : "none";
       const raw = await ask(
-        `Which clients should this profile enable?\n${summary}\n` +
-          `Enter comma-separated numbers or names, or press enter for defaults [${fallback}]: `,
+        formatWizardClientSelectionQuestion(defaults),
         defaults.join(","),
       );
-      if (raw === "" || raw === "none") return [];
-      const tokens = raw
-        .split(",")
-        .map((token) => token.trim().toLowerCase())
-        .filter((token) => token !== "");
-      const selected: WizardClientId[] = [];
-      for (const token of tokens) {
-        const byIndex = order[Number.parseInt(token, 10) - 1];
-        if (byIndex !== undefined) {
-          selected.push(byIndex);
-          continue;
-        }
-        if ((order as readonly string[]).includes(token)) {
-          selected.push(token as WizardClientId);
-        }
-      }
-      return order.filter((id) => selected.includes(id));
+      return parseWizardClientSelection(raw);
     },
     async confirmGitignore({ default: def }) {
       return confirm(
-        "Add recommended local-runtime ignore entries to .gitignore?",
+        formatWizardGitignoreQuestion(),
         def,
       );
     },
     async confirmWritePlan({ default: def }) {
       try {
-        return await confirm("Write this plan?", def);
+        return await confirm(formatWizardWriteConfirmationQuestion(), def);
       } finally {
         rl.close();
       }
@@ -487,6 +528,10 @@ function formatStrategyLabel(strategy: WizardStrategy): string {
   return strategy === "regions"
     ? "Add generated regions"
     : "Preserve existing files";
+}
+
+function formatWizardSectionTitle(title: string): string {
+  return `== ${title} ==`;
 }
 
 function existingRootInstructions(report: WizardImportReport): string[] {

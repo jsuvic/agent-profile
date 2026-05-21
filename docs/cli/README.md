@@ -89,11 +89,14 @@ Screens, in order:
 1. Detected stack, existing instruction files, local runtime files, generated
    client config, and any foreign skills/subagents.
 2. Strategy choice (default tracks the recommendation table below).
-3. Client selection (defaults to clients detected from existing files).
+3. Client selection (defaults to clients detected from existing files; select
+   multiple clients with comma-separated numbers or names, for example `2,3` or
+   `codex,claude`).
 4. `.gitignore` recommendation prompt (only shown when at least one
    recommended line is missing).
-5. Write plan summary.
-6. Final confirmation (default `No`).
+5. Write plan summary, under a visible `Write plan` section.
+6. Final confirmation (default `No`). Type `y` to write; pressing Enter keeps
+   the run as a dry-run and writes nothing.
 
 The wizard never bypasses Phase 14 ownership, region, path-safety, or conflict
 checks: choosing `Add generated regions` produces the same bytes as
