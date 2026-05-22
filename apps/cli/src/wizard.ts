@@ -67,6 +67,7 @@ export type WizardContext = {
   };
   detectedClients: ReadonlyArray<WizardClientId>;
   hasExistingProfile: boolean;
+  gitignoreSuggestions: ReadonlyArray<string>;
   report: WizardImportReport;
 };
 
@@ -92,14 +93,17 @@ export type ClientPrompt = (options: {
   defaults: ReadonlyArray<WizardClientId>;
 }) => Promise<ReadonlyArray<WizardClientId>>;
 
-export type ConfirmPrompt = (options: {
+export type ConfirmPrompt = (options: { default: boolean }) => Promise<boolean>;
+
+export type GitignorePrompt = (options: {
   default: boolean;
+  entries: ReadonlyArray<string>;
 }) => Promise<boolean>;
 
 export type CliPrompts = {
   selectStrategy: StrategyPrompt;
   selectClients: ClientPrompt;
-  confirmGitignore: ConfirmPrompt;
+  confirmGitignore: GitignorePrompt;
   confirmWritePlan: ConfirmPrompt;
 };
 
@@ -157,8 +161,8 @@ export function formatWizardClientSelectionQuestion(
   const fallback = defaults.length > 0 ? defaults.join(",") : "none";
 
   return (
-    `${formatWizardSectionTitle("Choose clients")}\n` +
-    `Which clients should this profile enable?\n${summary}\n` +
+    `${formatWizardSectionTitle("Generate client files")}\n` +
+    `Which clients should this setup create files for?\n${summary}\n` +
     `Select multiple with commas or semicolons, for example 2,3.\n` +
     `Enter numbers or names, or press enter for defaults [${fallback}]: `
   );
@@ -174,19 +178,30 @@ export function formatWizardStrategyQuestion(def: WizardStrategy): string {
   );
 }
 
-export function formatWizardGitignoreQuestion(): string {
+export function formatWizardGitignoreQuestion(
+  entries: ReadonlyArray<string>,
+): string {
+  const formattedEntries =
+    entries.length > 0
+      ? `${entries.map((entry) => `     - ${entry}`).join("\n")}\n`
+      : "";
+
   return (
-    `${formatWizardSectionTitle("Optional .gitignore update")}\n` +
-    "Add recommended local-runtime ignore entries to .gitignore?"
+    `${formatWizardSectionTitle("Local file ignores")}\n` +
+    "Add missing recommended .gitignore entries?\n" +
+    "  1) Yes - add all missing entries\n" +
+    formattedEntries +
+    "  2) No\n" +
+    "Choose [1/2]: "
   );
 }
 
 export function formatWizardWriteConfirmationQuestion(): string {
   return (
-    `${formatWizardSectionTitle("Choose run mode")}\n` +
+    `${formatWizardSectionTitle("Create setup")}\n` +
     "How should this plan run?\n" +
-    "  1) Dry run preview (default) - write nothing\n" +
-    "  2) Write files now (--write)\n" +
+    "  1) Preview only (default) - write nothing\n" +
+    "  2) Create setup now\n" +
     "Choose [1/2]: "
   );
 }
@@ -247,7 +262,8 @@ export function recommendStrategy(
   const onlyMixed =
     rootFiles.length > 0 &&
     rootFiles.every(
-      (file) => file.ownership === "mixed" || file.ownership === "generated-owned",
+      (file) =>
+        file.ownership === "mixed" || file.ownership === "generated-owned",
     );
   if (onlyMixed) {
     return {
@@ -259,7 +275,8 @@ export function recommendStrategy(
 
   return {
     strategy: "preserve",
-    reason: "no existing agent instruction files detected; create profile only.",
+    reason:
+      "no existing agent instruction files detected; create profile only.",
     warnings,
   };
 }
@@ -281,7 +298,9 @@ export function formatWizardIntro(
   lines.push(
     `- existing instruction files: ${formatList(existingRootInstructions(context.report))}`,
   );
-  lines.push(`- local runtime files: ${formatList(localRuntimePaths(context.report))}`);
+  lines.push(
+    `- local runtime files: ${formatList(localRuntimePaths(context.report))}`,
+  );
   lines.push(
     `- generated client config: ${formatList(generatedClientConfigPaths(context.report))}`,
   );
@@ -291,7 +310,9 @@ export function formatWizardIntro(
   }
   lines.push("");
   lines.push(formatWizardSectionTitle("Recommendation"));
-  lines.push(`Recommended strategy: ${formatStrategyLabel(recommendation.strategy)}`);
+  lines.push(
+    `Recommended strategy: ${formatStrategyLabel(recommendation.strategy)}`,
+  );
   lines.push(`Reason: ${recommendation.reason}`);
 
   const conflictRows = context.report.files.filter(
@@ -319,7 +340,7 @@ export function formatWizardPlan(
   outcome: WizardOutcome,
 ): string {
   const lines: string[] = [];
-  lines.push(formatWizardSectionTitle("Write plan"));
+  lines.push(formatWizardSectionTitle("Create setup plan"));
   if (!context.hasExistingProfile) {
     lines.push("- create ai-profile.yaml");
   } else {
@@ -330,15 +351,16 @@ export function formatWizardPlan(
 
   for (const file of context.report.files) {
     if (file.kind === "root-instructions") {
-      // init does not create missing root instruction files; that happens via
-      // a subsequent `agent-profile compile --write`. The Phase 14 import
-      // pipeline (planRegionAdoptions) only adopts files that already exist,
-      // so the wizard plan must not advertise a create that will not happen.
+      // The import/adoption phase only adopts root instruction files that
+      // already exist. Missing root files are created later in the same wizard
+      // run when selected client files are generated.
       if (!file.exists) {
         continue;
       }
       if (outcome.strategy === "regions" && file.action === "insert-regions") {
-        lines.push(`- adopt ${file.path} into mixed ownership (manual region preserves existing content)`);
+        lines.push(
+          `- adopt ${file.path} into mixed ownership (manual region preserves existing content)`,
+        );
       } else if (file.action === "update-generated-region") {
         lines.push(`- update generated region in ${file.path}`);
       } else {
@@ -347,7 +369,9 @@ export function formatWizardPlan(
       continue;
     }
     if (file.action === "refuse-conflict") {
-      lines.push(`- refuse ${file.path} (${file.notes.join("; ") || "conflict"})`);
+      lines.push(
+        `- refuse ${file.path} (${file.notes.join("; ") || "conflict"})`,
+      );
       continue;
     }
     if (file.tags.includes("local-runtime")) {
@@ -355,18 +379,20 @@ export function formatWizardPlan(
       continue;
     }
     if (file.kind === "client-config") {
-      lines.push(`- preserve ${file.path} (refresh via \`agent-profile compile --write\`)`);
+      lines.push(`- preserve ${file.path} (already exists)`);
+    }
+  }
+
+  if (!context.hasExistingProfile) {
+    for (const client of outcome.clients) {
+      lines.push(`- create ${formatClientDisplayName(client)} files`);
     }
   }
 
   if (outcome.updateGitignore) {
-    const adds = context.report.gitignore.filter(
-      (item) => item.action !== "already-present",
-    );
+    const adds = missingGitignoreEntries(context);
     if (adds.length > 0) {
-      lines.push(
-        `- update .gitignore (${adds.map((item) => item.line).join(", ")})`,
-      );
+      lines.push(`- update .gitignore (${adds.join(", ")})`);
     }
   }
   lines.push("");
@@ -374,7 +400,7 @@ export function formatWizardPlan(
   if (context.hasExistingProfile) {
     lines.push("Clients: unchanged (existing profile)");
   } else {
-    lines.push(`Clients to enable: ${formatList(outcome.clients)}`);
+    lines.push(`Clients selected: ${formatClientDisplayList(outcome.clients)}`);
   }
   lines.push(`Update .gitignore: ${outcome.updateGitignore ? "yes" : "no"}`);
   lines.push("");
@@ -382,12 +408,7 @@ export function formatWizardPlan(
 }
 
 export function formatWizardDeclined(): string {
-  return [
-    "Dry-run selected.",
-    "No files written.",
-    "Re-run with --write or choose 2 in the wizard to write.",
-    "",
-  ].join("\n");
+  return ["Preview selected.", "No files written.", ""].join("\n");
 }
 
 export async function runInitWizard(input: {
@@ -436,11 +457,13 @@ export async function runInitWizard(input: {
     );
   }
 
-  const gitignoreNeedsRecommendation = context.report.gitignore.some(
-    (item) => item.action !== "already-present",
-  );
+  const missingGitignore = missingGitignoreEntries(context);
+  const gitignoreNeedsRecommendation = missingGitignore.length > 0;
   const updateGitignore = gitignoreNeedsRecommendation
-    ? await input.prompts.confirmGitignore({ default: false })
+    ? await input.prompts.confirmGitignore({
+        default: false,
+        entries: missingGitignore,
+      })
     : false;
 
   const outcomeDraft: WizardOutcome = {
@@ -471,23 +494,10 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
     terminal: true,
   });
 
-  const ask = async (
-    question: string,
-    fallback: string,
-  ): Promise<string> => {
+  const ask = async (question: string, fallback: string): Promise<string> => {
     io.stdout(question);
     const answer = await rl.question("");
     return answer.trim() === "" ? fallback : answer.trim();
-  };
-
-  const confirm = async (question: string, def: boolean): Promise<boolean> => {
-    const suffix = def ? "[Y/n]" : "[y/N]";
-    const fallback = def ? "y" : "n";
-    const raw = await ask(`${question} ${suffix} `, fallback);
-    const lower = raw.toLowerCase();
-    if (lower === "y" || lower === "yes") return true;
-    if (lower === "n" || lower === "no") return false;
-    return def;
   };
 
   return {
@@ -507,11 +517,19 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
       );
       return parseWizardClientSelection(raw);
     },
-    async confirmGitignore({ default: def }) {
-      return confirm(
-        formatWizardGitignoreQuestion(),
-        def,
+    async confirmGitignore({ default: def, entries }) {
+      const raw = await ask(
+        formatWizardGitignoreQuestion(entries),
+        def ? "1" : "2",
       );
+      const normalized = raw.trim().toLowerCase();
+      if (normalized === "1" || normalized === "y" || normalized === "yes") {
+        return true;
+      }
+      if (normalized === "2" || normalized === "n" || normalized === "no") {
+        return false;
+      }
+      return def;
     },
     async confirmWritePlan({ default: def }) {
       try {
@@ -564,6 +582,36 @@ function formatStrategyLabel(strategy: WizardStrategy): string {
 
 function formatWizardSectionTitle(title: string): string {
   return `== ${title} ==`;
+}
+
+function formatClientDisplayName(client: WizardClientId): string {
+  switch (client) {
+    case "codex":
+      return "Codex";
+    case "claude":
+      return "Claude";
+    case "tabnine":
+      return "Tabnine";
+  }
+}
+
+function formatClientDisplayList(clients: ReadonlyArray<WizardClientId>): string {
+  const labels = clients.map(formatClientDisplayName);
+  if (labels.length === 0) return "(none)";
+  if (labels.length === 1) return labels[0];
+  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
+  return `${labels.slice(0, -1).join(", ")}, and ${labels.at(-1)}`;
+}
+
+function missingGitignoreEntries(context: WizardContext): string[] {
+  const lines = [
+    ...context.gitignoreSuggestions,
+    ...context.report.gitignore
+      .filter((item) => item.action !== "already-present")
+      .map((item) => item.line),
+  ];
+
+  return lines.filter((line, index) => lines.indexOf(line) === index);
 }
 
 function existingRootInstructions(report: WizardImportReport): string[] {

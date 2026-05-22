@@ -526,7 +526,7 @@ test("init dry-run previews a valid profile without writing", async () => {
   assert.equal(code, 0);
   assert.match(output.stdoutText(), /Agent Profile Init/u);
   assert.match(output.stdoutText(), /would write ai-profile\.yaml/u);
-  assert.match(output.stdoutText(), /clients enabled: \(none\)/u);
+  assert.match(output.stdoutText(), /Clients selected: \(none\)/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
@@ -591,8 +591,8 @@ test("init dry-run reports Flutter stack from pubspec.yaml without writing", asy
   assert.equal(code, 0);
   assert.match(output.stdoutText(), /Agent Profile Init \(dry-run\)/u);
   assert.match(output.stdoutText(), /would write ai-profile\.yaml/u);
-  assert.match(output.stdoutText(), /stack detected: dart/u);
-  assert.match(output.stdoutText(), /codex: enabled \(--client\)/u);
+  assert.match(output.stdoutText(), /Stack detected: dart/u);
+  assert.match(output.stdoutText(), /Clients selected: Codex/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
@@ -632,27 +632,27 @@ test("init client flags write byte-exact profiles", async () => {
     {
       args: ["--client", "codex"],
       clients: { tabnine: false, codex: true, claude: false },
-      enabledText: "codex",
+      enabledText: "Codex",
     },
     {
       args: ["--client", "claude"],
       clients: { tabnine: false, codex: false, claude: true },
-      enabledText: "claude",
+      enabledText: "Claude",
     },
     {
       args: ["--client", "tabnine"],
       clients: { tabnine: true, codex: false, claude: false },
-      enabledText: "tabnine",
+      enabledText: "Tabnine",
     },
     {
       args: ["--client", "all"],
       clients: { tabnine: true, codex: true, claude: true },
-      enabledText: "tabnine, codex, claude",
+      enabledText: "Tabnine, Codex, and Claude",
     },
     {
       args: ["--client", "all", "--no-client", "tabnine"],
       clients: { tabnine: false, codex: true, claude: true },
-      enabledText: "codex, claude",
+      enabledText: "Codex and Claude",
     },
   ];
 
@@ -672,7 +672,7 @@ test("init client flags write byte-exact profiles", async () => {
     assert.equal(profileText, expectedInitProfile(rootDir, item.clients));
     assert.match(
       output.stdoutText(),
-      new RegExp(`clients enabled: ${item.enabledText}`, "u"),
+      new RegExp(`Clients selected: ${item.enabledText}`, "u"),
     );
   }
 });
@@ -685,7 +685,7 @@ test("init client flags dry-run without mutating profile", async () => {
   });
 
   assert.equal(code, 0);
-  assert.match(output.stdoutText(), /codex: enabled \(--client\)/u);
+  assert.match(output.stdoutText(), /Clients selected: Codex/u);
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
@@ -1714,6 +1714,12 @@ function createOutput(): {
 // ---------------------------------------------------------------------------
 
 const cliBin = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+const wrapperBin = fileURLToPath(
+  new URL(
+    "../../../packages/agent-profile/bin/agent-profile.js",
+    import.meta.url,
+  ),
+);
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 
 function runBin(args: string[]): {
@@ -1744,6 +1750,60 @@ test("built binary: init --dry-run exits 0 and prints header", async () => {
   ]);
   assert.equal(code, 0, `expected exit 0; stderr: ${stderr}`);
   assert.match(stdout, /Agent Profile Init/u);
+});
+
+test("built binary: npm-style symlink invokes CLI main", async (t) => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "agent-profile-bin-"));
+  const linkPath = path.join(
+    tempDir,
+    process.platform === "win32" ? "agent-profile.js" : "agent-profile",
+  );
+
+  try {
+    await symlink(cliBin, linkPath, "file");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      t.skip("file symlinks are not available in this environment");
+      await rm(tempDir, { recursive: true, force: true });
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const result = spawnSync(process.execPath, [linkPath, "--help"], {
+      encoding: "utf8",
+      cwd: repoRoot,
+      timeout: 10_000,
+      windowsHide: true,
+    });
+
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0; stderr: ${result.stderr ?? ""}`,
+    );
+    assert.match(result.stdout ?? "", /Agent Profile Compiler/u);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("wrapper binary: --help invokes CLI", () => {
+  const result = spawnSync(process.execPath, [wrapperBin, "--help"], {
+    encoding: "utf8",
+    cwd: repoRoot,
+    timeout: 10_000,
+    windowsHide: true,
+  });
+
+  assert.equal(
+    result.status,
+    0,
+    `expected exit 0; stderr: ${result.stderr ?? ""}`,
+  );
+  assert.match(result.stdout ?? "", /Agent Profile Compiler/u);
 });
 
 test("built binary: doctor runs and prints header without crashing", () => {
