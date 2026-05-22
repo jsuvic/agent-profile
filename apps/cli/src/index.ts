@@ -8,7 +8,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer, type AddressInfo } from "node:net";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   applyWritePlan,
@@ -3099,9 +3099,33 @@ async function main(): Promise<void> {
   process.exitCode = await runCli();
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href
-) {
+async function isMainModule(): Promise<boolean> {
+  if (!process.argv[1]) {
+    return false;
+  }
+
+  const modulePath = fileURLToPath(import.meta.url);
+  const argvPath = path.resolve(process.argv[1]);
+
+  try {
+    const [moduleRealPath, argvRealPath] = await Promise.all([
+      fsPromises.realpath(modulePath),
+      fsPromises.realpath(argvPath),
+    ]);
+    return sameFilesystemPath(moduleRealPath, argvRealPath);
+  } catch {
+    return import.meta.url === pathToFileURL(argvPath).href;
+  }
+}
+
+function sameFilesystemPath(left: string, right: string): boolean {
+  const normalizedLeft = path.normalize(left);
+  const normalizedRight = path.normalize(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+if (await isMainModule()) {
   await main();
 }

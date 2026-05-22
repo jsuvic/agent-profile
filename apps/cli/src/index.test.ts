@@ -1714,6 +1714,12 @@ function createOutput(): {
 // ---------------------------------------------------------------------------
 
 const cliBin = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+const wrapperBin = fileURLToPath(
+  new URL(
+    "../../../packages/agent-profile/bin/agent-profile.js",
+    import.meta.url,
+  ),
+);
 const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
 
 function runBin(args: string[]): {
@@ -1744,6 +1750,60 @@ test("built binary: init --dry-run exits 0 and prints header", async () => {
   ]);
   assert.equal(code, 0, `expected exit 0; stderr: ${stderr}`);
   assert.match(stdout, /Agent Profile Init/u);
+});
+
+test("built binary: npm-style symlink invokes CLI main", async (t) => {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "agent-profile-bin-"));
+  const linkPath = path.join(
+    tempDir,
+    process.platform === "win32" ? "agent-profile.js" : "agent-profile",
+  );
+
+  try {
+    await symlink(cliBin, linkPath, "file");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      t.skip("file symlinks are not available in this environment");
+      await rm(tempDir, { recursive: true, force: true });
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const result = spawnSync(process.execPath, [linkPath, "--help"], {
+      encoding: "utf8",
+      cwd: repoRoot,
+      timeout: 10_000,
+      windowsHide: true,
+    });
+
+    assert.equal(
+      result.status,
+      0,
+      `expected exit 0; stderr: ${result.stderr ?? ""}`,
+    );
+    assert.match(result.stdout ?? "", /Agent Profile Compiler/u);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("wrapper binary: --help invokes CLI", () => {
+  const result = spawnSync(process.execPath, [wrapperBin, "--help"], {
+    encoding: "utf8",
+    cwd: repoRoot,
+    timeout: 10_000,
+    windowsHide: true,
+  });
+
+  assert.equal(
+    result.status,
+    0,
+    `expected exit 0; stderr: ${result.stderr ?? ""}`,
+  );
+  assert.match(result.stdout ?? "", /Agent Profile Compiler/u);
 });
 
 test("built binary: doctor runs and prints header without crashing", () => {
