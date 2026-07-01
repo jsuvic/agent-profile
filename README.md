@@ -105,14 +105,18 @@ The workflow is:
 Write-capable commands require an explicit `--write`. Dry-run is the default
 review path.
 
-`init` is intentionally conservative. It only detects supported local metadata
-files and does not infer stack choices from prose in `README.md` or from source
-contents. Supported metadata files include `package.json`, `tsconfig.json`,
-`svelte.config.*`, `vite.config.*`, `playwright.config.*`, `pom.xml`,
-`build.gradle`, `build.gradle.kts`, and `pubspec.yaml` (Flutter/Dart). If the
-repository is a documentation-only scaffold or uses an unsupported stack
-detector, create `ai-profile.yaml` manually and then run
-`agent-profile compile --dry-run`.
+`init` is intentionally conservative. As a temporary first-run workaround, it
+checks allowlisted metadata at the repository root and candidate project roots
+up to two directories below it. It never reads source, `.env*`, lockfiles,
+hidden/tool directories, build output, or symlinked metadata. React and plain
+JavaScript detection are temporary metadata-only bridges. When no language is
+detected, the interactive wizard offers bounded manual slug entry and other
+flows use the inert `unknown` fallback instead of refusing setup.
+
+See the [CLI reference](docs/cli/README.md#temporary-shallow-init-stack-scan)
+for the exact depth, skip, allowlist, reporting, and fallback contracts. This
+temporary aggregation does not create per-package profiles or workspace
+ownership.
 
 ## Local-First Contract
 

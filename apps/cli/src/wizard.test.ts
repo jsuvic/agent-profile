@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
+import fsPromises from "node:fs/promises";
 import {
   mkdtemp,
   mkdir,
@@ -25,6 +26,7 @@ import {
   formatWizardStrategyQuestion,
   formatWizardWriteConfirmationQuestion,
   isNonInteractive,
+  parseManualLanguageSlugs,
   parseWizardClientSelection,
   recommendStrategy,
   type CliPrompts,
@@ -33,6 +35,8 @@ import {
 } from "./wizard.js";
 
 type PromptCall =
+  | { kind: "confirmManualLanguages"; default: boolean }
+  | { kind: "enterManualLanguages" }
   | { kind: "selectStrategy"; default: string }
   | { kind: "selectClients"; defaults: ReadonlyArray<string> }
   | {
@@ -42,17 +46,38 @@ type PromptCall =
     }
   | { kind: "confirmWritePlan"; default: boolean };
 
-type ScriptedPrompts = CliPrompts & { calls: PromptCall[] };
+type ScriptedPrompts = CliPrompts & {
+  calls: PromptCall[];
+  confirmManualLanguages: (options: { default: boolean }) => Promise<boolean>;
+  enterManualLanguages: () => Promise<string>;
+};
 
 function scriptedPrompts(options: {
   strategy?: "preserve" | "regions";
   clients?: ReadonlyArray<WizardClientId>;
   gitignore?: boolean;
   confirm: boolean;
+  manualLanguages?: false | ReadonlyArray<string>;
 }): ScriptedPrompts {
   const calls: PromptCall[] = [];
+  let manualLanguageIndex = 0;
   return {
     calls,
+    async confirmManualLanguages({ default: def }) {
+      calls.push({ kind: "confirmManualLanguages", default: def });
+      return options.manualLanguages === undefined
+        ? def
+        : options.manualLanguages !== false;
+    },
+    async enterManualLanguages() {
+      calls.push({ kind: "enterManualLanguages" });
+      const entry =
+        options.manualLanguages === false
+          ? ""
+          : (options.manualLanguages?.[manualLanguageIndex] ?? "");
+      manualLanguageIndex += 1;
+      return entry;
+    },
     async selectStrategy({ default: def }) {
       calls.push({ kind: "selectStrategy", default: def });
       return options.strategy ?? def;
@@ -190,6 +215,20 @@ test("parseWizardClientSelection accepts multiple numeric clients", () => {
 
 test("parseWizardClientSelection ignores malformed partial numbers", () => {
   assert.deepEqual(parseWizardClientSelection("2abc,claude"), ["claude"]);
+});
+
+test("parseManualLanguageSlugs enforces count, length, and whole-entry validation", () => {
+  assert.deepEqual(parseManualLanguageSlugs(" Java, JAVASCRIPT, java "), {
+    ok: true,
+    languages: ["java", "javascript"],
+  });
+  assert.equal(parseManualLanguageSlugs("").ok, true);
+  assert.equal(parseManualLanguageSlugs("java, invalid slug").ok, false);
+  assert.equal(
+    parseManualLanguageSlugs(Array.from({ length: 11 }, (_, index) => `l${index}`).join(",")).ok,
+    false,
+  );
+  assert.equal(parseManualLanguageSlugs("a".repeat(41)).ok, false);
 });
 
 test("formatWizardClientSelectionQuestion explains multi-client syntax", () => {
@@ -696,6 +735,161 @@ test("wizard never reads or echoes .env content", async () => {
   });
   assert.equal(output.stdoutText().includes(secret), false);
   assert.equal(output.stderrText().includes(secret), false);
+});
+
+test("interactive no-language init normalizes, deduplicates, and sorts manual language slugs", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-wizard-manual-languages-"),
+  );
+  const prompts = scriptedPrompts({
+    confirm: true,
+    manualLanguages: [" Java, JAVASCRIPT, java "],
+  });
+
+  const code = await runCli(["init", "--root", rootDir], {
+    io: createOutput(),
+    nonInteractive: false,
+    prompts,
+  });
+
+  assert.equal(code, 0);
+  const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
+  assert.match(profile, /languages:\n\s+- java\n\s+- javascript/u);
+});
+
+test("interactive invalid manual language entry rejects the whole list and re-prompts", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-wizard-invalid-languages-"),
+  );
+  const prompts = scriptedPrompts({
+    confirm: true,
+    manualLanguages: ["java, invalid slug", "Go"],
+  });
+
+  const code = await runCli(["init", "--root", rootDir], {
+    io: createOutput(),
+    nonInteractive: false,
+    prompts,
+  });
+
+  assert.equal(code, 0);
+  const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
+  assert.match(profile, /languages:\n\s+- go/u);
+  assert.doesNotMatch(profile, /\s+- java/u);
+  assert.equal(
+    prompts.calls.filter((call) => call.kind === "enterManualLanguages").length,
+    2,
+  );
+});
+
+test("interactive declined or empty manual language entry writes unknown", async () => {
+  for (const manualLanguages of [false, [""]] as const) {
+    const rootDir = await mkdtemp(
+      path.join(tmpdir(), "agent-profile-wizard-unknown-"),
+    );
+    const prompts = scriptedPrompts({ confirm: true, manualLanguages });
+    const output = createOutput();
+
+    const code = await runCli(["init", "--root", rootDir], {
+      io: output,
+      nonInteractive: false,
+      prompts,
+    });
+
+    assert.equal(code, 0);
+    const profile = await readFile(
+      path.join(rootDir, "ai-profile.yaml"),
+      "utf8",
+    );
+    assert.match(profile, /languages:\n\s+- unknown/u);
+    assert.match(output.stdoutText(), /Detection sources:\n- \(none\)/u);
+    assert.match(output.stdoutText(), /using unknown/iu);
+  }
+});
+
+test("interactive wizard reports compact shallow detection sources", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-wizard-detection-source-"),
+  );
+  await mkdir(path.join(rootDir, "client"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, "client", "package.json"),
+    JSON.stringify({ dependencies: { react: "ignored" } }),
+  );
+  const output = createOutput();
+
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts: scriptedPrompts({ confirm: false }),
+  });
+
+  assert.equal(code, 0);
+  assert.match(
+    output.stdoutText(),
+    /client\/package\.json: languages=javascript; frameworks=react; packageManagers=npm/u,
+  );
+});
+
+test("interactive confirmed init scans stack metadata once", async () => {
+  const rootDir = await createTsRoot("single-stack-scan");
+  const originalReadFile = fsPromises.readFile;
+  const patchableFs = fsPromises as unknown as {
+    readFile: (...args: unknown[]) => Promise<unknown>;
+  };
+  let packageJsonReads = 0;
+
+  patchableFs.readFile = async (...args: unknown[]) => {
+    const target = args[0];
+    if (
+      typeof target === "string" &&
+      path.resolve(target) === path.join(rootDir, "package.json")
+    ) {
+      packageJsonReads += 1;
+    }
+    return (
+      originalReadFile as (...originalArgs: unknown[]) => Promise<unknown>
+    )(...args);
+  };
+
+  try {
+    const code = await runCli(["init", "--root", rootDir], {
+      io: createOutput(),
+      nonInteractive: false,
+      prompts: scriptedPrompts({ confirm: true, clients: [] }),
+    });
+    assert.equal(code, 0);
+  } finally {
+    patchableFs.readFile = originalReadFile as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+  }
+
+  assert.equal(packageJsonReads, 1);
+});
+
+test("non-interactive no-language JSON write succeeds with unknown", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-noninteractive-unknown-"),
+  );
+  const output = createOutput();
+
+  const code = await runCli(
+    ["init", "--root", rootDir, "--write", "--non-interactive", "--json"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    mode: string;
+    status: string;
+    detectedStack: string[];
+  };
+  assert.equal(report.mode, "write");
+  assert.equal(report.status, "ok");
+  assert.deepEqual(report.detectedStack, ["unknown"]);
+  const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
+  assert.match(profile, /languages:\n\s+- unknown/u);
 });
 
 test("no-argument fresh repo plan equals explicit Phase 14 dry-run invocation", async () => {

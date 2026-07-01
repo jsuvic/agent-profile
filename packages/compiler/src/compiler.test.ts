@@ -464,6 +464,52 @@ test("CLAUDE.md target imports AGENTS.md and stays Claude-specific", async () =>
   assert.equal(text.endsWith("\n\n"), false);
 });
 
+test("unknown is rendered generically but selects no language-specific outputs", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const baseProfile = {
+    ...profileResult.profile,
+    profile: {
+      ...profileResult.profile.profile,
+      description: "Generic local AI-agent setup.",
+    },
+    stack: {
+      languages: ["unknown"],
+      frameworks: [],
+      packageManagers: [],
+      testing: [],
+    },
+  };
+  const unknownResult = compileProfile({ profile: baseProfile });
+  const inertBaseline = compileProfile({
+    profile: {
+      ...baseProfile,
+      stack: { ...baseProfile.stack, languages: ["custom-inert"] },
+    },
+  });
+
+  assert.equal(unknownResult.ok, true);
+  assert.equal(inertBaseline.ok, true);
+  if (!unknownResult.ok || !inertBaseline.ok) return;
+
+  assert.deepEqual(
+    unknownResult.files.map((file) => ({
+      path: file.path,
+      target: file.target,
+      templateId: file.templateId,
+    })),
+    inertBaseline.files.map((file) => ({
+      path: file.path,
+      target: file.target,
+      templateId: file.templateId,
+    })),
+  );
+  const agents = unknownResult.files.find((file) => file.path === "AGENTS.md");
+  assert.match(Buffer.from(agents?.bytes ?? []).toString("utf8"), /unknown/u);
+});
+
 test("workflow skill targets emit approved project-local skills", async () => {
   const profileResult = await readProfileFile(minimalProfileFilePath);
   assert.equal(profileResult.ok, true);

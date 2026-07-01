@@ -65,6 +65,15 @@ export type WizardContext = {
     packageManagers: ReadonlyArray<string>;
     testing: ReadonlyArray<string>;
   };
+  detectionSources: ReadonlyArray<{
+    path: string;
+    signals: {
+      languages: ReadonlyArray<string>;
+      frameworks: ReadonlyArray<string>;
+      packageManagers: ReadonlyArray<string>;
+      testing: ReadonlyArray<string>;
+    };
+  }>;
   detectedClients: ReadonlyArray<WizardClientId>;
   hasExistingProfile: boolean;
   gitignoreSuggestions: ReadonlyArray<string>;
@@ -82,6 +91,7 @@ export type WizardOutcome = {
   strategy: WizardStrategy;
   clients: ReadonlyArray<WizardClientId>;
   updateGitignore: boolean;
+  languages: ReadonlyArray<string>;
 };
 
 export type StrategyPrompt = (options: {
@@ -100,12 +110,28 @@ export type GitignorePrompt = (options: {
   entries: ReadonlyArray<string>;
 }) => Promise<boolean>;
 
+export type ManualLanguagesConfirmPrompt = (options: {
+  default: boolean;
+}) => Promise<boolean>;
+
+export type ManualLanguagesEntryPrompt = () => Promise<string>;
+
 export type CliPrompts = {
+  confirmManualLanguages: ManualLanguagesConfirmPrompt;
+  enterManualLanguages: ManualLanguagesEntryPrompt;
   selectStrategy: StrategyPrompt;
   selectClients: ClientPrompt;
   confirmGitignore: GitignorePrompt;
   confirmWritePlan: ConfirmPrompt;
 };
+
+export type ManualLanguageParseResult =
+  | { ok: true; languages: string[] }
+  | { ok: false; message: string };
+
+const LANGUAGE_SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u;
+const MAX_MANUAL_LANGUAGES = 10;
+const MAX_LANGUAGE_SLUG_LENGTH = 40;
 
 export type NonInteractiveInputs = {
   env: NodeJS.ProcessEnv;
@@ -204,6 +230,54 @@ export function formatWizardWriteConfirmationQuestion(): string {
     "  2) Create setup now\n" +
     "Choose [1/2]: "
   );
+}
+
+export function formatWizardManualLanguagesConfirmationQuestion(): string {
+  return (
+    `${formatWizardSectionTitle("Languages")}` +
+    "\nNo language was detected. Enter language slugs manually? [y/N]: "
+  );
+}
+
+export function formatWizardManualLanguagesEntryQuestion(): string {
+  return "Language slugs (comma-separated): ";
+}
+
+export function parseManualLanguageSlugs(
+  raw: string,
+): ManualLanguageParseResult {
+  if (raw.trim() === "") {
+    return { ok: true, languages: [] };
+  }
+
+  const tokens = raw.split(",").map((token) => token.trim().toLowerCase());
+  if (tokens.length > MAX_MANUAL_LANGUAGES) {
+    return {
+      ok: false,
+      message: `enter no more than ${MAX_MANUAL_LANGUAGES} language slugs.`,
+    };
+  }
+
+  for (const token of tokens) {
+    if (token.length === 0 || token.length > MAX_LANGUAGE_SLUG_LENGTH) {
+      return {
+        ok: false,
+        message: `each slug must contain 1 to ${MAX_LANGUAGE_SLUG_LENGTH} characters.`,
+      };
+    }
+    if (!LANGUAGE_SLUG_PATTERN.test(token)) {
+      return {
+        ok: false,
+        message:
+          "slugs must start with a letter or number and use only lowercase letters, numbers, dots, underscores, or hyphens.",
+      };
+    }
+  }
+
+  return {
+    ok: true,
+    languages: Array.from(new Set(tokens)).sort(compareText),
+  };
 }
 
 export function recommendStrategy(
@@ -307,6 +381,14 @@ export function formatWizardIntro(
   const foreign = foreignWorkflowPaths(context.report);
   if (foreign.length > 0) {
     lines.push(`- foreign skills/subagents: ${formatList(foreign)}`);
+  }
+  lines.push("", "Detection sources:");
+  if (context.detectionSources.length === 0) {
+    lines.push("- (none)");
+  } else {
+    for (const source of context.detectionSources) {
+      lines.push(formatDetectionSource(source));
+    }
   }
   lines.push("");
   lines.push(formatWizardSectionTitle("Recommendation"));
@@ -422,6 +504,13 @@ export async function runInitWizard(input: {
     input.recommendation ?? recommendStrategy(input.context.report);
   input.io.stdout(formatWizardIntro(input.context, recommendation));
 
+  const languages = await resolveWizardLanguages(input);
+  if (languages.length === 1 && languages[0] === "unknown") {
+    input.io.stdout(
+      "No language was detected or provided; using unknown as a temporary fallback.\n\n",
+    );
+  }
+
   const strategy = await input.prompts.selectStrategy({
     default: recommendation.strategy,
     recommendation,
@@ -471,6 +560,7 @@ export async function runInitWizard(input: {
     strategy,
     clients: normalizedClients,
     updateGitignore,
+    languages,
   };
 
   input.io.stdout(formatWizardPlan(context, outcomeDraft));
@@ -501,6 +591,19 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
   };
 
   return {
+    async confirmManualLanguages({ default: def }) {
+      const raw = await ask(
+        formatWizardManualLanguagesConfirmationQuestion(),
+        def ? "yes" : "no",
+      );
+      const normalized = raw.trim().toLowerCase();
+      if (normalized === "y" || normalized === "yes") return true;
+      if (normalized === "n" || normalized === "no") return false;
+      return def;
+    },
+    async enterManualLanguages() {
+      return ask(formatWizardManualLanguagesEntryQuestion(), "");
+    },
     async selectStrategy({ default: def }) {
       const raw = await ask(
         formatWizardStrategyQuestion(def),
@@ -570,8 +673,62 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
   };
 }
 
+async function resolveWizardLanguages(input: {
+  context: WizardContext;
+  io: CliIo;
+  prompts: CliPrompts;
+}): Promise<string[]> {
+  if (input.context.hasExistingProfile) {
+    return [...input.context.stack.languages];
+  }
+
+  if (input.context.stack.languages.length > 0) {
+    return [...input.context.stack.languages];
+  }
+
+  const enterManually = await input.prompts.confirmManualLanguages({
+    default: false,
+  });
+  if (!enterManually) {
+    return ["unknown"];
+  }
+
+  while (true) {
+    const parsed = parseManualLanguageSlugs(
+      await input.prompts.enterManualLanguages(),
+    );
+    if (parsed.ok) {
+      return parsed.languages.length > 0 ? parsed.languages : ["unknown"];
+    }
+
+    input.io.stderr(`Invalid language slugs: ${parsed.message}\n`);
+  }
+}
+
+function compareText(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 function formatList(values: ReadonlyArray<string>): string {
   return values.length === 0 ? "(none)" : values.join(", ");
+}
+
+function formatDetectionSource(
+  source: WizardContext["detectionSources"][number],
+): string {
+  const groups = [
+    ["languages", source.signals.languages],
+    ["frameworks", source.signals.frameworks],
+    ["packageManagers", source.signals.packageManagers],
+    ["testing", source.signals.testing],
+  ] as const;
+  const summary = groups
+    .filter(([, values]) => values.length > 0)
+    .map(([label, values]) => `${label}=${values.join(",")}`)
+    .join("; ");
+  return `- ${source.path}: ${summary}`;
 }
 
 function formatStrategyLabel(strategy: WizardStrategy): string {

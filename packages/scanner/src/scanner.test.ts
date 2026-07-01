@@ -122,6 +122,481 @@ test("missing stack metadata produces empty detection without reading env files"
   assert.equal(after, before);
 });
 
+test("detectStack aggregates allowlisted metadata from candidate roots at depths zero through two", async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-shallow-"));
+  await mkdir(path.join(rootDir, "api"), { recursive: true });
+  await mkdir(path.join(rootDir, "apps", "web"), { recursive: true });
+  await mkdir(path.join(rootDir, "apps", "web", "src"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, "api", "pom.xml"),
+    "<dependency>spring-boot-starter-web</dependency>\n",
+  );
+  await writeFile(
+    path.join(rootDir, "apps", "web", "package.json"),
+    JSON.stringify({ name: "web" }),
+  );
+  await writeFile(
+    path.join(rootDir, "apps", "web", "vite.config.js"),
+    "export default {};\n",
+  );
+  await writeFile(
+    path.join(rootDir, "apps", "web", "src", "pom.xml"),
+    "<dependency>spring-boot-starter-web</dependency>\n",
+  );
+
+  const result = await detectStack(rootDir);
+
+  assert.deepEqual(result.stack, {
+    languages: ["java", "javascript"],
+    frameworks: ["spring-boot", "vite"],
+    packageManagers: ["maven", "npm"],
+    testing: [],
+  });
+  assert.deepEqual(result.detectionSources, [
+    {
+      path: "api/pom.xml",
+      signals: {
+        languages: ["java"],
+        frameworks: ["spring-boot"],
+        packageManagers: ["maven"],
+        testing: [],
+      },
+    },
+    {
+      path: "apps/web/package.json",
+      signals: {
+        languages: ["javascript"],
+        frameworks: [],
+        packageManagers: ["npm"],
+        testing: [],
+      },
+    },
+    {
+      path: "apps/web/vite.config.js",
+      signals: {
+        languages: [],
+        frameworks: ["vite"],
+        packageManagers: [],
+        testing: [],
+      },
+    },
+  ]);
+});
+
+test("detectStack filters skipped directories before descent and never opens non-metadata files", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-shallow-sentinels-"),
+  );
+  const skippedRoots = [
+    ".hidden",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    "coverage",
+    "vendor",
+    "tmp",
+    "temp",
+    "out",
+  ];
+
+  for (const skipped of skippedRoots) {
+    await mkdir(path.join(rootDir, skipped), { recursive: true });
+    await writeFile(
+      path.join(rootDir, skipped, "package.json"),
+      JSON.stringify({ dependencies: { typescript: "SECRET_VALUE" } }),
+    );
+  }
+
+  await mkdir(path.join(rootDir, "client", "generated"), { recursive: true });
+  const forbiddenRelativePaths = [
+    ".env",
+    ".env.local",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "client/index.ts",
+    "client/generated/output.js",
+  ];
+  for (const relativePath of forbiddenRelativePaths) {
+    await writeFile(
+      path.join(rootDir, relativePath),
+      `SECRET_VALUE_${relativePath}\n`,
+    );
+  }
+
+  const { result, reads } = await withFileReadSentinel(rootDir, () =>
+    detectStack(rootDir),
+  );
+
+  assert.deepEqual(result.stack, {
+    languages: [],
+    frameworks: [],
+    packageManagers: [],
+    testing: [],
+  });
+  for (const skipped of skippedRoots) {
+    assert.equal(
+      reads.some(
+        (read) =>
+          read.relativePath === skipped ||
+          read.relativePath.startsWith(`${skipped}/`),
+      ),
+      false,
+      `${skipped} must be filtered before it is opened`,
+    );
+  }
+  for (const forbidden of forbiddenRelativePaths) {
+    assert.equal(
+      reads.some(
+        (read) =>
+          read.operation === "readFile" && read.relativePath === forbidden,
+      ),
+      false,
+      `${forbidden} must not be opened during stack detection`,
+    );
+  }
+});
+
+test("detectStack warns and continues when a shallow candidate is unreadable", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-shallow-unreadable-"),
+  );
+  await mkdir(path.join(rootDir, "api"), { recursive: true });
+  await mkdir(path.join(rootDir, "restricted"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, "api", "pom.xml"),
+    "<dependency>spring-boot-starter-web</dependency>\n",
+  );
+
+  const restrictedPath = path.join(rootDir, "restricted");
+  const originalReaddir = fsPromises.readdir;
+  const patchableFs = fsPromises as unknown as {
+    readdir: (...args: unknown[]) => Promise<unknown>;
+  };
+  patchableFs.readdir = async (...args: unknown[]) => {
+    if (path.resolve(String(args[0])) === restrictedPath) {
+      const error = new Error("INTERNAL_ACCESS_DETAIL") as NodeJS.ErrnoException;
+      error.code = "EACCES";
+      throw error;
+    }
+    return (
+      originalReaddir as (...originalArgs: unknown[]) => Promise<unknown>
+    )(...args);
+  };
+
+  let result: Awaited<ReturnType<typeof detectStack>>;
+  try {
+    result = await detectStack(rootDir);
+  } finally {
+    patchableFs.readdir = originalReaddir as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+  }
+
+  assert.deepEqual(result.stack, {
+    languages: ["java"],
+    frameworks: ["spring-boot"],
+    packageManagers: ["maven"],
+    testing: [],
+  });
+  assert.deepEqual(result.warnings, [
+    {
+      code: "metadata_access_error",
+      path: "restricted",
+      expected: "readable candidate directory",
+      actual: "access denied",
+      message: "Candidate directory could not be read for stack detection.",
+    },
+  ]);
+  assert.equal(JSON.stringify(result).includes("INTERNAL_ACCESS_DETAIL"), false);
+});
+
+test("detectStack does not follow directory symlinks", async (t) => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-shallow-links-"),
+  );
+  const outsideDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-shallow-outside-"),
+  );
+  await writeFile(
+    path.join(outsideDir, "package.json"),
+    JSON.stringify({ dependencies: { typescript: "SECRET_VALUE" } }),
+  );
+
+  try {
+    await symlink(outsideDir, path.join(rootDir, "linked-app"), "junction");
+  } catch (error) {
+    if (error instanceof Error && "code" in error) {
+      await rm(outsideDir, { recursive: true, force: true });
+      t.skip("directory symlinks are unavailable on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const { result, reads } = await withFileReadSentinel(rootDir, () =>
+      detectStack(rootDir),
+    );
+
+    assert.deepEqual(result.stack, {
+      languages: [],
+      frameworks: [],
+      packageManagers: [],
+      testing: [],
+    });
+    assert.equal(
+      reads.some((read) => read.relativePath.startsWith("linked-app/")),
+      false,
+    );
+  } finally {
+    await rm(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test("detectStack does not read symlinked allowlisted metadata", async (t) => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-shallow-file-link-"),
+  );
+  const outsideDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-shallow-file-target-"),
+  );
+  await mkdir(path.join(rootDir, "client"), { recursive: true });
+  await writeFile(
+    path.join(outsideDir, "package.json"),
+    JSON.stringify({ dependencies: { typescript: "SECRET_VALUE" } }),
+  );
+
+  try {
+    await symlink(
+      path.join(outsideDir, "package.json"),
+      path.join(rootDir, "client", "package.json"),
+      "file",
+    );
+  } catch (error) {
+    if (error instanceof Error && "code" in error) {
+      await rm(outsideDir, { recursive: true, force: true });
+      t.skip("file symlinks are unavailable on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const { result, reads } = await withFileReadSentinel(rootDir, () =>
+      detectStack(rootDir),
+    );
+    assert.deepEqual(result.stack, {
+      languages: [],
+      frameworks: [],
+      packageManagers: [],
+      testing: [],
+    });
+    assert.equal(
+      reads.some(
+        (read) =>
+          read.operation === "readFile" &&
+          read.relativePath === "client/package.json",
+      ),
+      false,
+    );
+  } finally {
+    await rm(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test("detectStack resolves a symlinked user root once and keeps descendants bounded", async (t) => {
+  const targetRoot = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-shallow-root-target-"),
+  );
+  const linkParent = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-shallow-root-link-"),
+  );
+  const linkedRoot = path.join(linkParent, "repository");
+  await mkdir(path.join(targetRoot, "api"), { recursive: true });
+  await writeFile(
+    path.join(targetRoot, "api", "pom.xml"),
+    "<dependency>spring-boot-starter-web</dependency>\n",
+  );
+
+  try {
+    await symlink(targetRoot, linkedRoot, "junction");
+  } catch (error) {
+    if (error instanceof Error && "code" in error) {
+      await rm(targetRoot, { recursive: true, force: true });
+      await rm(linkParent, { recursive: true, force: true });
+      t.skip("directory symlinks are unavailable on this runner");
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const result = await detectStack(linkedRoot);
+    assert.deepEqual(result.stack.languages, ["java"]);
+    assert.deepEqual(
+      result.detectionSources.map((source) => source.path),
+      ["api/pom.xml"],
+    );
+  } finally {
+    await rm(targetRoot, { recursive: true, force: true });
+    await rm(linkParent, { recursive: true, force: true });
+  }
+});
+
+test("detectStack bridges nested JavaScript React package metadata without reporting dependency values", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-react-javascript-"),
+  );
+  await mkdir(path.join(rootDir, "client"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, "client", "package.json"),
+    JSON.stringify({
+      dependencies: { react: "SECRET_REACT_VALUE" },
+      devDependencies: { "react-dom": "SECRET_DOM_VALUE" },
+    }),
+  );
+
+  const result = await detectStack(rootDir);
+
+  assert.deepEqual(result.stack, {
+    languages: ["javascript"],
+    frameworks: ["react"],
+    packageManagers: ["npm"],
+    testing: [],
+  });
+  assert.equal(
+    JSON.stringify(result.detectionSources).includes("SECRET_"),
+    false,
+  );
+});
+
+test("detectStack recognizes React keys in either supported dependency map", async () => {
+  const cases = [
+    { dependencies: { react: "ignored" } },
+    { dependencies: { "react-dom": "ignored" } },
+    { devDependencies: { react: "ignored" } },
+    { devDependencies: { "react-dom": "ignored" } },
+  ];
+
+  for (const packageJson of cases) {
+    const rootDir = await mkdtemp(
+      path.join(tmpdir(), "agent-profile-react-key-"),
+    );
+    await writeFile(
+      path.join(rootDir, "package.json"),
+      JSON.stringify(packageJson),
+    );
+
+    const result = await detectStack(rootDir);
+    assert.deepEqual(result.stack.frameworks, ["react"]);
+  }
+});
+
+test("detectStack reports nested malformed metadata with a relative sanitized path", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-nested-malformed-"),
+  );
+  await mkdir(path.join(rootDir, "client"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, "client", "package.json"),
+    "{ SECRET_NESTED_METADATA_VALUE",
+  );
+
+  const result = await detectStack(rootDir);
+
+  assert.equal(result.warnings[0]?.path, "client/package.json");
+  assert.equal(
+    JSON.stringify(result.warnings).includes("SECRET_NESTED_METADATA_VALUE"),
+    false,
+  );
+});
+
+test("detectStack suppresses JavaScript for TypeScript signals in the same candidate root", async () => {
+  const cases: Array<{
+    label: string;
+    packageJson: Record<string, unknown>;
+    tsconfig: boolean;
+  }> = [
+    {
+      label: "tsconfig",
+      packageJson: { dependencies: { react: "ignored" } },
+      tsconfig: true,
+    },
+    {
+      label: "dependency",
+      packageJson: {
+        dependencies: { react: "ignored", typescript: "ignored" },
+      },
+      tsconfig: false,
+    },
+    {
+      label: "dev dependency",
+      packageJson: {
+        devDependencies: { "react-dom": "ignored", typescript: "ignored" },
+      },
+      tsconfig: false,
+    },
+  ];
+
+  for (const item of cases) {
+    const rootDir = await mkdtemp(
+      path.join(tmpdir(), `agent-profile-react-${item.label}-`),
+    );
+    await writeFile(
+      path.join(rootDir, "package.json"),
+      JSON.stringify(item.packageJson),
+    );
+    if (item.tsconfig) {
+      await writeFile(path.join(rootDir, "tsconfig.json"), "{}\n");
+    }
+
+    const result = await detectStack(rootDir);
+
+    assert.deepEqual(result.stack.languages, ["typescript"], item.label);
+    assert.deepEqual(result.stack.frameworks, ["react"], item.label);
+  }
+});
+
+test("detectStack may aggregate JavaScript and TypeScript from sibling candidate roots", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-mixed-script-"),
+  );
+  await mkdir(path.join(rootDir, "client-js"), { recursive: true });
+  await mkdir(path.join(rootDir, "client-ts"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, "client-js", "package.json"),
+    JSON.stringify({ name: "client-js" }),
+  );
+  await writeFile(
+    path.join(rootDir, "client-ts", "package.json"),
+    JSON.stringify({ devDependencies: { typescript: "ignored" } }),
+  );
+
+  const result = await detectStack(rootDir);
+
+  assert.deepEqual(result.stack.languages, ["javascript", "typescript"]);
+});
+
+test("detectStack ignores React Native and peer dependency React signals", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-react-nonsignals-"),
+  );
+  await writeFile(
+    path.join(rootDir, "package.json"),
+    JSON.stringify({
+      dependencies: { "react-native": "ignored" },
+      peerDependencies: { react: "ignored", typescript: "ignored" },
+    }),
+  );
+
+  const result = await detectStack(rootDir);
+
+  assert.deepEqual(result.stack.languages, ["javascript"]);
+  assert.deepEqual(result.stack.frameworks, []);
+});
+
 test("import analysis reports supported artifacts and client signals deterministically", async () => {
   const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-import-"));
   await mkdir(path.join(rootDir, ".tabnine", "guidelines"), {
@@ -421,7 +896,7 @@ test("pubspec detection does not open pubspec.lock, .dart_tool, .env, source, as
 });
 
 type ObservedFsRead = {
-  operation: "readFile" | "lstat";
+  operation: "readFile" | "lstat" | "readdir";
   relativePath: string;
 };
 
@@ -432,9 +907,11 @@ async function withFileReadSentinel<T>(
   const reads: ObservedFsRead[] = [];
   const originalReadFile = fsPromises.readFile;
   const originalLstat = fsPromises.lstat;
+  const originalReaddir = fsPromises.readdir;
   const patchableFs = fsPromises as unknown as {
     readFile: (...args: unknown[]) => Promise<unknown>;
     lstat: (...args: unknown[]) => Promise<unknown>;
+    readdir: (...args: unknown[]) => Promise<unknown>;
   };
 
   patchableFs.readFile = async (...args: unknown[]) => {
@@ -449,6 +926,12 @@ async function withFileReadSentinel<T>(
       ...args,
     );
   };
+  patchableFs.readdir = async (...args: unknown[]) => {
+    recordFsRead(rootDir, reads, "readdir", args[0]);
+    return (
+      originalReaddir as (...originalArgs: unknown[]) => Promise<unknown>
+    )(...args);
+  };
 
   try {
     return { result: await callback(), reads };
@@ -457,6 +940,9 @@ async function withFileReadSentinel<T>(
       ...args: unknown[]
     ) => Promise<unknown>;
     patchableFs.lstat = originalLstat as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+    patchableFs.readdir = originalReaddir as unknown as (
       ...args: unknown[]
     ) => Promise<unknown>;
   }

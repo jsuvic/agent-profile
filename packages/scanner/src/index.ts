@@ -4,6 +4,7 @@
 export {
   detectStack,
   type DetectedStack,
+  type StackDetectionSource,
   type StackDetectionResult,
   type StackDetectionWarning,
 } from "./stack.js";
