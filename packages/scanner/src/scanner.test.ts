@@ -258,6 +258,60 @@ test("detectStack filters skipped directories before descent and never opens non
   }
 });
 
+test("detectStack warns and continues when a shallow candidate is unreadable", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-shallow-unreadable-"),
+  );
+  await mkdir(path.join(rootDir, "api"), { recursive: true });
+  await mkdir(path.join(rootDir, "restricted"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, "api", "pom.xml"),
+    "<dependency>spring-boot-starter-web</dependency>\n",
+  );
+
+  const restrictedPath = path.join(rootDir, "restricted");
+  const originalReaddir = fsPromises.readdir;
+  const patchableFs = fsPromises as unknown as {
+    readdir: (...args: unknown[]) => Promise<unknown>;
+  };
+  patchableFs.readdir = async (...args: unknown[]) => {
+    if (path.resolve(String(args[0])) === restrictedPath) {
+      const error = new Error("INTERNAL_ACCESS_DETAIL") as NodeJS.ErrnoException;
+      error.code = "EACCES";
+      throw error;
+    }
+    return (
+      originalReaddir as (...originalArgs: unknown[]) => Promise<unknown>
+    )(...args);
+  };
+
+  let result: Awaited<ReturnType<typeof detectStack>>;
+  try {
+    result = await detectStack(rootDir);
+  } finally {
+    patchableFs.readdir = originalReaddir as unknown as (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+  }
+
+  assert.deepEqual(result.stack, {
+    languages: ["java"],
+    frameworks: ["spring-boot"],
+    packageManagers: ["maven"],
+    testing: [],
+  });
+  assert.deepEqual(result.warnings, [
+    {
+      code: "metadata_access_error",
+      path: "restricted",
+      expected: "readable candidate directory",
+      actual: "access denied",
+      message: "Candidate directory could not be read for stack detection.",
+    },
+  ]);
+  assert.equal(JSON.stringify(result).includes("INTERNAL_ACCESS_DETAIL"), false);
+});
+
 test("detectStack does not follow directory symlinks", async (t) => {
   const rootDir = await mkdtemp(
     path.join(tmpdir(), "agent-profile-shallow-links-"),

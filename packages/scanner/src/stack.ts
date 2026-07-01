@@ -15,7 +15,7 @@ export type DetectedStack = {
 };
 
 export type StackDetectionWarning = {
-  code: "metadata_parse_error";
+  code: "metadata_parse_error" | "metadata_access_error";
   path: string;
   expected: string;
   actual: string;
@@ -85,7 +85,7 @@ export async function detectStack(
   const stack: DetectedStack = cloneStack(EMPTY_STACK);
   const warnings: StackDetectionWarning[] = [];
   const detectionSources: StackDetectionSource[] = [];
-  const candidateRoots = await discoverCandidateRoots(rootDir);
+  const candidateRoots = await discoverCandidateRoots(rootDir, warnings);
 
   for (const candidateRoot of candidateRoots) {
     await detectCandidateRoot(
@@ -111,10 +111,13 @@ async function detectCandidateRoot(
   warnings: StackDetectionWarning[],
   detectionSources: StackDetectionSource[],
 ): Promise<void> {
-  const hasTsconfig = await fileExists(
-    candidateRoot.absolutePath,
-    "tsconfig.json",
-  );
+  const candidatePath = candidateRoot.relativePath || ".";
+  const metadataFileExists = (relativePath: string): Promise<boolean> =>
+    fileExists(candidateRoot.absolutePath, relativePath, {
+      warnings,
+      accessPath: candidatePath,
+    });
+  const hasTsconfig = await metadataFileExists("tsconfig.json");
 
   if (hasTsconfig) {
     recordSource(
@@ -127,7 +130,7 @@ async function detectCandidateRoot(
   }
 
   for (const configPath of SVELTE_CONFIGS) {
-    if (await fileExists(candidateRoot.absolutePath, configPath)) {
+    if (await metadataFileExists(configPath)) {
       recordSource(
         candidateRoot,
         configPath,
@@ -139,7 +142,7 @@ async function detectCandidateRoot(
   }
 
   for (const configPath of VITE_CONFIGS) {
-    if (await fileExists(candidateRoot.absolutePath, configPath)) {
+    if (await metadataFileExists(configPath)) {
       recordSource(
         candidateRoot,
         configPath,
@@ -150,7 +153,7 @@ async function detectCandidateRoot(
     }
   }
 
-  if (await fileExists(candidateRoot.absolutePath, "package.json")) {
+  if (await metadataFileExists("package.json")) {
     const sourceStack = cloneStack(EMPTY_STACK);
     sourceStack.packageManagers.push("npm");
     const parsed = await detectPackageJson(
@@ -175,7 +178,7 @@ async function detectCandidateRoot(
     );
   }
 
-  if (await fileExists(candidateRoot.absolutePath, "pom.xml")) {
+  if (await metadataFileExists("pom.xml")) {
     const sourceStack = cloneStack(EMPTY_STACK);
     sourceStack.languages.push("java");
     sourceStack.packageManagers.push("maven");
@@ -194,7 +197,7 @@ async function detectCandidateRoot(
   }
 
   for (const gradlePath of ["build.gradle", "build.gradle.kts"] as const) {
-    if (await fileExists(candidateRoot.absolutePath, gradlePath)) {
+    if (await metadataFileExists(gradlePath)) {
       const sourceStack = cloneStack(EMPTY_STACK);
       sourceStack.languages.push("java");
       sourceStack.packageManagers.push("gradle");
@@ -214,7 +217,7 @@ async function detectCandidateRoot(
   }
 
   for (const configPath of PLAYWRIGHT_CONFIGS) {
-    if (await fileExists(candidateRoot.absolutePath, configPath)) {
+    if (await metadataFileExists(configPath)) {
       recordSource(
         candidateRoot,
         configPath,
@@ -225,7 +228,7 @@ async function detectCandidateRoot(
     }
   }
 
-  if (await fileExists(candidateRoot.absolutePath, "pubspec.yaml")) {
+  if (await metadataFileExists("pubspec.yaml")) {
     const sourceStack = cloneStack(EMPTY_STACK);
     await detectPubspecYaml(
       candidateRoot.absolutePath,
@@ -480,12 +483,24 @@ async function detectJavaMetadata(
 async function fileExists(
   rootPath: string,
   relativePath: string,
+  options?: {
+    warnings: StackDetectionWarning[];
+    accessPath: string;
+  },
 ): Promise<boolean> {
   try {
     const stats = await fsPromises.lstat(path.join(rootPath, relativePath));
     return stats.isFile();
   } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") {
+    if (
+      isNodeError(error) &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    ) {
+      return false;
+    }
+
+    if (isAccessError(error) && options) {
+      pushMetadataAccessWarning(options.warnings, options.accessPath);
       return false;
     }
 
@@ -493,7 +508,10 @@ async function fileExists(
   }
 }
 
-async function discoverCandidateRoots(rootDir: string): Promise<CandidateRoot[]> {
+async function discoverCandidateRoots(
+  rootDir: string,
+  warnings: StackDetectionWarning[],
+): Promise<CandidateRoot[]> {
   const requestedRoot = path.resolve(rootDir);
   let rootPath = requestedRoot;
 
@@ -514,7 +532,7 @@ async function discoverCandidateRoots(rootDir: string): Promise<CandidateRoot[]>
     const nextFrontier: CandidateRoot[] = [];
 
     for (const candidate of frontier) {
-      const entries = await readDirectoryEntries(candidate.absolutePath);
+      const entries = await readDirectoryEntries(candidate, warnings);
 
       for (const entry of entries) {
         if (shouldSkipDirectory(entry.name)) {
@@ -547,10 +565,11 @@ async function discoverCandidateRoots(rootDir: string): Promise<CandidateRoot[]>
 }
 
 async function readDirectoryEntries(
-  absolutePath: string,
+  candidate: CandidateRoot,
+  warnings: StackDetectionWarning[],
 ): Promise<Dirent[]> {
   try {
-    const entries = await fsPromises.readdir(absolutePath, {
+    const entries = await fsPromises.readdir(candidate.absolutePath, {
       withFileTypes: true,
     });
     return entries.sort((left, right) => compareText(left.name, right.name));
@@ -562,8 +581,45 @@ async function readDirectoryEntries(
       return [];
     }
 
+    if (isAccessError(error)) {
+      pushMetadataAccessWarning(
+        warnings,
+        candidate.relativePath || ".",
+      );
+      return [];
+    }
+
     throw error;
   }
+}
+
+function pushMetadataAccessWarning(
+  warnings: StackDetectionWarning[],
+  relativePath: string,
+): void {
+  if (
+    warnings.some(
+      (warning) =>
+        warning.code === "metadata_access_error" &&
+        warning.path === relativePath,
+    )
+  ) {
+    return;
+  }
+
+  warnings.push({
+    code: "metadata_access_error",
+    path: relativePath,
+    expected: "readable candidate directory",
+    actual: "access denied",
+    message: "Candidate directory could not be read for stack detection.",
+  });
+}
+
+function isAccessError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    isNodeError(error) && (error.code === "EACCES" || error.code === "EPERM")
+  );
 }
 
 function shouldSkipDirectory(basename: string): boolean {
