@@ -104,6 +104,8 @@ export async function runDoctor(
     return toResult(issues);
   }
 
+  checkUnknownLanguageFallback(profileResult.profile, issues);
+
   const compileResult = compileProfile({ profile: profileResult.profile });
 
   if (!compileResult.ok) {
@@ -164,6 +166,27 @@ export async function runDoctor(
   );
 
   return toResult(issues);
+}
+
+function checkUnknownLanguageFallback(
+  profile: AiProfile,
+  issues: DoctorIssue[],
+): void {
+  if (!profile.stack.languages.includes("unknown")) {
+    return;
+  }
+
+  issues.push(
+    issue(
+      "LINT-SEM-003",
+      "warning",
+      "/stack/languages",
+      "known language slugs",
+      "unknown",
+      "stack.languages contains the temporary unknown fallback.",
+      "Replace unknown with the real language slug when it is known.",
+    ),
+  );
 }
 
 type DriftInput = {

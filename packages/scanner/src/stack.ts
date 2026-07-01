@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import fsPromises from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import path from "node:path";
 
 import { parse as parseYaml } from "yaml";
@@ -24,6 +25,12 @@ export type StackDetectionWarning = {
 export type StackDetectionResult = {
   stack: DetectedStack;
   warnings: StackDetectionWarning[];
+  detectionSources: StackDetectionSource[];
+};
+
+export type StackDetectionSource = {
+  path: string;
+  signals: DetectedStack;
 };
 
 const EMPTY_STACK: DetectedStack = {
@@ -55,64 +62,193 @@ const PLAYWRIGHT_CONFIGS = [
   "playwright.config.mts",
   "playwright.config.cts",
 ] as const;
+const SKIPPED_DIRECTORIES = new Set([
+  "node_modules",
+  "target",
+  "dist",
+  "build",
+  "coverage",
+  "vendor",
+  "tmp",
+  "temp",
+  "out",
+]);
+
+type CandidateRoot = {
+  absolutePath: string;
+  relativePath: string;
+};
 
 export async function detectStack(
   rootDir: string,
 ): Promise<StackDetectionResult> {
-  const rootPath = path.resolve(rootDir);
   const stack: DetectedStack = cloneStack(EMPTY_STACK);
   const warnings: StackDetectionWarning[] = [];
+  const detectionSources: StackDetectionSource[] = [];
+  const candidateRoots = await discoverCandidateRoots(rootDir);
 
-  if (await fileExists(rootPath, "tsconfig.json")) {
-    stack.languages.push("typescript");
-  }
-
-  if (await anyFileExists(rootPath, SVELTE_CONFIGS)) {
-    stack.frameworks.push("sveltekit");
-  }
-
-  if (await anyFileExists(rootPath, VITE_CONFIGS)) {
-    stack.frameworks.push("vite");
-  }
-
-  if (await fileExists(rootPath, "package.json")) {
-    stack.packageManagers.push("npm");
-    await detectPackageJson(rootPath, stack, warnings);
-  }
-
-  if (await fileExists(rootPath, "pom.xml")) {
-    stack.languages.push("java");
-    stack.packageManagers.push("maven");
-    await detectJavaMetadata(rootPath, "pom.xml", stack);
-  }
-
-  for (const gradlePath of ["build.gradle", "build.gradle.kts"] as const) {
-    if (await fileExists(rootPath, gradlePath)) {
-      stack.languages.push("java");
-      stack.packageManagers.push("gradle");
-      await detectJavaMetadata(rootPath, gradlePath, stack);
-    }
-  }
-
-  if (await anyFileExists(rootPath, PLAYWRIGHT_CONFIGS)) {
-    stack.testing.push("playwright");
-  }
-
-  if (await fileExists(rootPath, "pubspec.yaml")) {
-    await detectPubspecYaml(rootPath, stack, warnings);
+  for (const candidateRoot of candidateRoots) {
+    await detectCandidateRoot(
+      candidateRoot,
+      stack,
+      warnings,
+      detectionSources,
+    );
   }
 
   return {
     stack: sortStack(stack),
     warnings: warnings.sort(compareWarnings),
+    detectionSources: detectionSources.sort((left, right) =>
+      compareText(left.path, right.path),
+    ),
   };
+}
+
+async function detectCandidateRoot(
+  candidateRoot: CandidateRoot,
+  aggregateStack: DetectedStack,
+  warnings: StackDetectionWarning[],
+  detectionSources: StackDetectionSource[],
+): Promise<void> {
+  const hasTsconfig = await fileExists(
+    candidateRoot.absolutePath,
+    "tsconfig.json",
+  );
+
+  if (hasTsconfig) {
+    recordSource(
+      candidateRoot,
+      "tsconfig.json",
+      { ...cloneStack(EMPTY_STACK), languages: ["typescript"] },
+      aggregateStack,
+      detectionSources,
+    );
+  }
+
+  for (const configPath of SVELTE_CONFIGS) {
+    if (await fileExists(candidateRoot.absolutePath, configPath)) {
+      recordSource(
+        candidateRoot,
+        configPath,
+        { ...cloneStack(EMPTY_STACK), frameworks: ["sveltekit"] },
+        aggregateStack,
+        detectionSources,
+      );
+    }
+  }
+
+  for (const configPath of VITE_CONFIGS) {
+    if (await fileExists(candidateRoot.absolutePath, configPath)) {
+      recordSource(
+        candidateRoot,
+        configPath,
+        { ...cloneStack(EMPTY_STACK), frameworks: ["vite"] },
+        aggregateStack,
+        detectionSources,
+      );
+    }
+  }
+
+  if (await fileExists(candidateRoot.absolutePath, "package.json")) {
+    const sourceStack = cloneStack(EMPTY_STACK);
+    sourceStack.packageManagers.push("npm");
+    const parsed = await detectPackageJson(
+      candidateRoot.absolutePath,
+      sourceStack,
+      warnings,
+      relativeMetadataPath(candidateRoot, "package.json"),
+    );
+    if (
+      parsed &&
+      !hasTsconfig &&
+      !sourceStack.languages.includes("typescript")
+    ) {
+      sourceStack.languages.push("javascript");
+    }
+    recordSource(
+      candidateRoot,
+      "package.json",
+      sourceStack,
+      aggregateStack,
+      detectionSources,
+    );
+  }
+
+  if (await fileExists(candidateRoot.absolutePath, "pom.xml")) {
+    const sourceStack = cloneStack(EMPTY_STACK);
+    sourceStack.languages.push("java");
+    sourceStack.packageManagers.push("maven");
+    await detectJavaMetadata(
+      candidateRoot.absolutePath,
+      "pom.xml",
+      sourceStack,
+    );
+    recordSource(
+      candidateRoot,
+      "pom.xml",
+      sourceStack,
+      aggregateStack,
+      detectionSources,
+    );
+  }
+
+  for (const gradlePath of ["build.gradle", "build.gradle.kts"] as const) {
+    if (await fileExists(candidateRoot.absolutePath, gradlePath)) {
+      const sourceStack = cloneStack(EMPTY_STACK);
+      sourceStack.languages.push("java");
+      sourceStack.packageManagers.push("gradle");
+      await detectJavaMetadata(
+        candidateRoot.absolutePath,
+        gradlePath,
+        sourceStack,
+      );
+      recordSource(
+        candidateRoot,
+        gradlePath,
+        sourceStack,
+        aggregateStack,
+        detectionSources,
+      );
+    }
+  }
+
+  for (const configPath of PLAYWRIGHT_CONFIGS) {
+    if (await fileExists(candidateRoot.absolutePath, configPath)) {
+      recordSource(
+        candidateRoot,
+        configPath,
+        { ...cloneStack(EMPTY_STACK), testing: ["playwright"] },
+        aggregateStack,
+        detectionSources,
+      );
+    }
+  }
+
+  if (await fileExists(candidateRoot.absolutePath, "pubspec.yaml")) {
+    const sourceStack = cloneStack(EMPTY_STACK);
+    await detectPubspecYaml(
+      candidateRoot.absolutePath,
+      sourceStack,
+      warnings,
+      relativeMetadataPath(candidateRoot, "pubspec.yaml"),
+    );
+    recordSource(
+      candidateRoot,
+      "pubspec.yaml",
+      sourceStack,
+      aggregateStack,
+      detectionSources,
+    );
+  }
 }
 
 async function detectPackageJson(
   rootPath: string,
   stack: DetectedStack,
   warnings: StackDetectionWarning[],
-): Promise<void> {
+  warningPath: string,
+): Promise<boolean> {
   let value: unknown;
 
   try {
@@ -122,12 +258,12 @@ async function detectPackageJson(
   } catch {
     warnings.push({
       code: "metadata_parse_error",
-      path: "package.json",
+      path: warningPath,
       expected: "valid JSON metadata",
       actual: "parse error",
       message: "package.json could not be parsed for stack detection.",
     });
-    return;
+    return false;
   }
 
   const record = getRecord(value);
@@ -135,33 +271,34 @@ async function detectPackageJson(
   if (!record) {
     warnings.push({
       code: "metadata_parse_error",
-      path: "package.json",
+      path: warningPath,
       expected: "object metadata",
       actual: describeValue(value),
       message: "package.json does not contain object metadata.",
     });
-    return;
+    return false;
   }
 
-  const dependencies = {
-    ...getStringRecord(record.dependencies),
-    ...getStringRecord(record.devDependencies),
-  };
+  const dependencies = getDependencyKeys(record);
 
-  if (dependencies.typescript !== undefined) {
+  if (dependencies.has("typescript")) {
     stack.languages.push("typescript");
   }
 
-  if (dependencies["@sveltejs/kit"] !== undefined) {
+  if (dependencies.has("@sveltejs/kit")) {
     stack.frameworks.push("sveltekit");
   }
 
-  if (dependencies.vite !== undefined) {
+  if (dependencies.has("vite")) {
     stack.frameworks.push("vite");
   }
 
-  if (dependencies["@playwright/test"] !== undefined) {
+  if (dependencies.has("@playwright/test")) {
     stack.testing.push("playwright");
+  }
+
+  if (dependencies.has("react") || dependencies.has("react-dom")) {
+    stack.frameworks.push("react");
   }
 
   if (typeof record.packageManager === "string") {
@@ -175,6 +312,8 @@ async function detectPackageJson(
       stack.packageManagers.push("yarn");
     }
   }
+
+  return true;
 }
 
 const RIVERPOD_PACKAGES = new Set([
@@ -218,6 +357,7 @@ async function detectPubspecYaml(
   rootPath: string,
   stack: DetectedStack,
   warnings: StackDetectionWarning[],
+  warningPath: string,
 ): Promise<void> {
   let value: unknown;
 
@@ -228,7 +368,7 @@ async function detectPubspecYaml(
   } catch {
     warnings.push({
       code: "metadata_parse_error",
-      path: "pubspec.yaml",
+      path: warningPath,
       expected: "valid YAML metadata",
       actual: "parse error",
       message: "pubspec.yaml could not be parsed for stack detection.",
@@ -241,7 +381,7 @@ async function detectPubspecYaml(
   if (!record) {
     warnings.push({
       code: "metadata_parse_error",
-      path: "pubspec.yaml",
+      path: warningPath,
       expected: "object metadata",
       actual: describeValue(value),
       message: "pubspec.yaml does not contain object metadata.",
@@ -337,19 +477,6 @@ async function detectJavaMetadata(
   }
 }
 
-async function anyFileExists(
-  rootPath: string,
-  relativePaths: readonly string[],
-): Promise<boolean> {
-  for (const relativePath of relativePaths) {
-    if (await fileExists(rootPath, relativePath)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 async function fileExists(
   rootPath: string,
   relativePath: string,
@@ -364,6 +491,128 @@ async function fileExists(
 
     throw error;
   }
+}
+
+async function discoverCandidateRoots(rootDir: string): Promise<CandidateRoot[]> {
+  const requestedRoot = path.resolve(rootDir);
+  let rootPath = requestedRoot;
+
+  try {
+    rootPath = await fsPromises.realpath(requestedRoot);
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  const candidates: CandidateRoot[] = [
+    { absolutePath: rootPath, relativePath: "" },
+  ];
+  let frontier = [...candidates];
+
+  for (let depth = 0; depth < 2; depth += 1) {
+    const nextFrontier: CandidateRoot[] = [];
+
+    for (const candidate of frontier) {
+      const entries = await readDirectoryEntries(candidate.absolutePath);
+
+      for (const entry of entries) {
+        if (shouldSkipDirectory(entry.name)) {
+          continue;
+        }
+
+        if (!entry.isDirectory() || entry.isSymbolicLink()) {
+          continue;
+        }
+
+        const absolutePath = path.join(candidate.absolutePath, entry.name);
+        const stats = await fsPromises.lstat(absolutePath);
+        if (!stats.isDirectory() || stats.isSymbolicLink()) {
+          continue;
+        }
+
+        const relativePath = candidate.relativePath
+          ? `${candidate.relativePath}/${entry.name}`
+          : entry.name;
+        const child = { absolutePath, relativePath };
+        candidates.push(child);
+        nextFrontier.push(child);
+      }
+    }
+
+    frontier = nextFrontier;
+  }
+
+  return candidates;
+}
+
+async function readDirectoryEntries(
+  absolutePath: string,
+): Promise<Dirent[]> {
+  try {
+    const entries = await fsPromises.readdir(absolutePath, {
+      withFileTypes: true,
+    });
+    return entries.sort((left, right) => compareText(left.name, right.name));
+  } catch (error) {
+    if (
+      isNodeError(error) &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    ) {
+      return [];
+    }
+
+    throw error;
+  }
+}
+
+function shouldSkipDirectory(basename: string): boolean {
+  return basename.startsWith(".") || SKIPPED_DIRECTORIES.has(basename);
+}
+
+function recordSource(
+  candidateRoot: CandidateRoot,
+  metadataPath: string,
+  sourceStack: DetectedStack,
+  aggregateStack: DetectedStack,
+  detectionSources: StackDetectionSource[],
+): void {
+  const signals = sortStack(sourceStack);
+  mergeStack(aggregateStack, signals);
+
+  if (!hasSignals(signals)) {
+    return;
+  }
+
+  detectionSources.push({
+    path: relativeMetadataPath(candidateRoot, metadataPath),
+    signals,
+  });
+}
+
+function relativeMetadataPath(
+  candidateRoot: CandidateRoot,
+  metadataPath: string,
+): string {
+  return candidateRoot.relativePath
+    ? `${candidateRoot.relativePath}/${metadataPath}`
+    : metadataPath;
+}
+
+function mergeStack(target: DetectedStack, source: DetectedStack): void {
+  target.languages.push(...source.languages);
+  target.frameworks.push(...source.frameworks);
+  target.packageManagers.push(...source.packageManagers);
+  target.testing.push(...source.testing);
+}
+
+function hasSignals(stack: DetectedStack): boolean {
+  return (
+    stack.languages.length > 0 ||
+    stack.frameworks.length > 0 ||
+    stack.packageManagers.length > 0 ||
+    stack.testing.length > 0
+  );
 }
 
 function cloneStack(stack: DetectedStack): DetectedStack {
@@ -399,18 +648,21 @@ function compareWarnings(
   );
 }
 
-function getStringRecord(value: unknown): Record<string, string> {
-  const record = getRecord(value);
+function getDependencyKeys(record: Record<string, unknown>): Set<string> {
+  const keys = new Set<string>();
 
-  if (!record) {
-    return {};
+  for (const field of ["dependencies", "devDependencies"] as const) {
+    const dependencies = getRecord(record[field]);
+    if (!dependencies) {
+      continue;
+    }
+
+    for (const key of Object.keys(dependencies)) {
+      keys.add(key);
+    }
   }
 
-  return Object.fromEntries(
-    Object.entries(record).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
+  return keys;
 }
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {

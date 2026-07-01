@@ -153,16 +153,55 @@ If `ai-profile.yaml` already exists, init reports that no changes are proposed.
 It does not edit existing profiles, even when client flags and `--write` are
 present. Use `agent-profile compile --dry-run` to inspect compiled artifacts.
 
-Stack detection is conservative and metadata-only. It does not parse
-`README.md` prose or source files. If no supported language metadata exists,
-`init` refuses to write; create `ai-profile.yaml` manually, then use
-`agent-profile compile --dry-run` to inspect generated artifacts.
+## Temporary Shallow Init Stack Scan
 
-Supported root metadata files: `package.json`, `tsconfig.json`,
-`svelte.config.*`, `vite.config.*`, `playwright.config.*`, `pom.xml`,
-`build.gradle`, `build.gradle.kts`, and `pubspec.yaml`. Flutter/Dart projects
-are detected from `pubspec.yaml` (project metadata and dependency key names
-only — never lockfiles, `.dart_tool`, source, assets, or Firebase config).
+Stack detection is conservative and metadata-only. As a temporary workaround
+until [`phase-later/007`](../specs/phase-later/007-monorepo-cascading-config.md)
+defines real workspace and per-package behavior, `init` aggregates signals into
+the single root profile from candidate project roots at relative depths 0, 1,
+and 2. For example, `package.json` under `apps/web` is in scope, while metadata
+under `apps/web/src` is not. This behavior does not create package ownership,
+package profiles, or package-specific generated files.
+
+Candidate directories are skipped before descent when their basename starts
+with `.`, or is one of `node_modules`, `target`, `dist`, `build`, `coverage`,
+`vendor`, `tmp`, `temp`, or `out`. Child symlinks, junctions, other reparse
+points, and symlinked metadata files are not followed. A symlink supplied as
+`--root` resolves once and the resolved directory becomes the scan boundary.
+
+Only these metadata basenames may be opened: `package.json`, `tsconfig.json`,
+`vite.config.{js,mjs,cjs,ts,mts,cts}`,
+`svelte.config.{js,mjs,cjs,ts}`, `pom.xml`, `build.gradle`,
+`build.gradle.kts`, `playwright.config.{js,mjs,cjs,ts,mts,cts}`, and
+`pubspec.yaml`. Detection never opens source files, `README.md`, `.env*`,
+lockfiles, hidden/tool directories, or generated/build output, and it never
+runs a package manager.
+
+For `package.json`, detection uses only `name`, `dependencies`,
+`devDependencies`, `engines`, and `packageManager`; signals depend on key names,
+not values. The temporary metadata bridge detects React from `react` or
+`react-dom` dependency keys and detects JavaScript when a candidate root has
+valid package metadata but no TypeScript signal in that same root. React
+Native, `peerDependencies`, `optionalDependencies`, and package lockfiles are
+out of scope.
+
+If no language is detected, the interactive wizard asks whether to enter
+comma-separated language slugs manually. Input is trimmed, lowercased,
+deduplicated, and sorted. A whole entry is rejected and re-prompted if it has
+more than 10 slugs, any slug longer than 40 characters, or a slug outside
+`^[a-z0-9][a-z0-9._-]*$`. Declined, empty, and non-interactive input uses
+`unknown`. The fallback is schema-valid but inert: it selects no
+language-specific generated guidance, and `doctor` warns non-fatally until it
+is replaced with the real language.
+
+Human output includes compact relative `Detection sources`; JSON output adds a
+sorted `detectionSources` array containing only relative metadata paths and
+sorted signal slugs. Reports never include file contents, dependency values,
+URLs, environment values, or secret-like metadata.
+
+Flutter/Dart detection remains based on `pubspec.yaml` project metadata and
+dependency key names only—never `pubspec.lock`, `.dart_tool`, source, assets,
+or Firebase config.
 
 ## Init Presets
 

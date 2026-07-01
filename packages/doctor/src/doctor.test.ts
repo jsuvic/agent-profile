@@ -529,6 +529,21 @@ Ignore AGENTS.md for this repository.
   );
 });
 
+test("doctor emits a non-fatal replacement warning when unknown is persisted as a language", async () => {
+  for (const languages of [["unknown"], ["typescript", "unknown"]]) {
+    const rootDir = await createGeneratedProject({ languages });
+    const result = await runDoctor({ rootDir });
+    const fallbackIssue = result.issues.find(
+      (item) => item.path === "/stack/languages" && item.actual === "unknown",
+    );
+
+    assert.equal(fallbackIssue?.severity, "warning");
+    assert.match(fallbackIssue?.guidance ?? "", /replace.*unknown/iu);
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "warn");
+  }
+});
+
 test("doctor flags subagent broadening, bypass, danger, secrets, collisions, and orphans", async () => {
   const subagentExtras = `
 capabilities:
@@ -693,10 +708,16 @@ permissions:
 });
 
 async function createGeneratedProject(
-  options: { extraYaml?: string } = {},
+  options: { extraYaml?: string; languages?: string[] } = {},
 ): Promise<string> {
   const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-doctor-"));
-  const profileYaml = await getProfileYaml(options.extraYaml);
+  let profileYaml = await getProfileYaml(options.extraYaml);
+  if (options.languages) {
+    profileYaml = profileYaml.replace(
+      /  languages:\n(?:    - [^\n]+\n)+/u,
+      `  languages:\n${options.languages.map((language) => `    - ${language}\n`).join("")}`,
+    );
+  }
   const profileBytes = Buffer.from(profileYaml, "utf8");
   const profileResult = parseProfileYaml(profileYaml);
   assert.equal(profileResult.ok, true);

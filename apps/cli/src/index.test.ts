@@ -562,7 +562,7 @@ test("init write creates a schema-valid guarded profile and leaves gitignore unc
   assert.equal(profileText.includes("\n\n"), false);
 });
 
-test("init refuses to write when no supported language is detected", async () => {
+test("init writes unknown when no supported language is detected", async () => {
   const rootDir = await mkdtemp(
     path.join(tmpdir(), "agent-profile-init-empty-"),
   );
@@ -571,13 +571,14 @@ test("init refuses to write when no supported language is detected", async () =>
     io: output,
   });
 
-  assert.equal(code, 1);
-  assert.match(output.stdoutText(), /Agent Profile Init \(refused\)/u);
-  assert.match(output.stdoutText(), /refused: no language detected/u);
-  assert.match(output.stdoutText(), /create ai-profile\.yaml manually/u);
-  await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
-    code: "ENOENT",
-  });
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /Agent Profile Init \(write\)/u);
+  assert.match(output.stdoutText(), /Stack detected: unknown/u);
+  assert.doesNotMatch(output.stdoutText(), /refused: no language detected/u);
+  assert.match(
+    await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8"),
+    /languages:\n\s+- unknown/u,
+  );
 });
 
 test("init dry-run reports Flutter stack from pubspec.yaml without writing", async () => {
@@ -596,6 +597,89 @@ test("init dry-run reports Flutter stack from pubspec.yaml without writing", asy
   await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
     code: "ENOENT",
   });
+});
+
+test("init text and JSON report deterministic shallow detection sources", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-init-sources-"),
+  );
+  await mkdir(path.join(rootDir, "api"), { recursive: true });
+  await mkdir(path.join(rootDir, "client"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, "api", "pom.xml"),
+    "<dependency>spring-boot-starter-web</dependency>\n",
+  );
+  await writeFile(
+    path.join(rootDir, "client", "package.json"),
+    JSON.stringify({ dependencies: { react: "SECRET_DEPENDENCY_VALUE" } }),
+  );
+
+  const textOutput = createOutput();
+  const textCode = await runCli(
+    ["init", "--root", rootDir, "--dry-run"],
+    { io: textOutput },
+  );
+  assert.equal(textCode, 0);
+  assert.match(textOutput.stdoutText(), /Detection sources:/u);
+  assert.ok(
+    textOutput.stdoutText().indexOf("api/pom.xml") <
+      textOutput.stdoutText().indexOf("client/package.json"),
+  );
+  assert.equal(textOutput.stdoutText().includes("SECRET_DEPENDENCY_VALUE"), false);
+
+  const jsonOutput = createOutput();
+  const jsonCode = await runCli(
+    ["init", "--root", rootDir, "--dry-run", "--json"],
+    { io: jsonOutput },
+  );
+  assert.equal(jsonCode, 0);
+  const report = JSON.parse(jsonOutput.stdoutText()) as {
+    detectionSources: Array<{
+      path: string;
+      signals: {
+        languages: string[];
+        frameworks: string[];
+        packageManagers: string[];
+        testing: string[];
+      };
+    }>;
+  };
+  assert.deepEqual(report.detectionSources, [
+    {
+      path: "api/pom.xml",
+      signals: {
+        languages: ["java"],
+        frameworks: ["spring-boot"],
+        packageManagers: ["maven"],
+        testing: [],
+      },
+    },
+    {
+      path: "client/package.json",
+      signals: {
+        languages: ["javascript"],
+        frameworks: ["react"],
+        packageManagers: ["npm"],
+        testing: [],
+      },
+    },
+  ]);
+  assert.equal(jsonOutput.stdoutText().includes("SECRET_DEPENDENCY_VALUE"), false);
+});
+
+test("init reports no detection sources and explains the unknown fallback", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-init-no-sources-"),
+  );
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--dry-run", "--non-interactive"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /Detection sources:\n- \(none\)/u);
+  assert.match(output.stdoutText(), /using unknown/iu);
 });
 
 test("init write produces a byte-exact Flutter profile from pubspec.yaml", async () => {
@@ -833,9 +917,12 @@ test("init report is non-empty across state mode and client-selection matrix", a
         const label = `${state} ${mode} ${selection.join(" ")}`;
 
         assert.notEqual(output.stdoutText(), "", label);
-        assert.equal(code, state === "no-language" ? 1 : 0, label);
+        assert.equal(code, 0, label);
 
-        if (state === "fresh" && mode === "write") {
+        if (
+          (state === "fresh" || state === "no-language") &&
+          mode === "write"
+        ) {
           assert.equal(
             await fileExists(path.join(rootDir, "ai-profile.yaml")),
             true,
@@ -1059,6 +1146,12 @@ test("init preset dry-run reads only stack metadata and the target profile path"
     "vite.config.mts",
     "vite.config.ts",
   ]);
+  for (const relativePath of [...allowedStats]) {
+    if (relativePath !== "." && relativePath !== "ai-profile.yaml") {
+      allowedStats.add(`src/${relativePath}`);
+    }
+  }
+  allowedStats.add("src");
 
   assert.deepEqual(
     reads
@@ -1248,7 +1341,7 @@ test("init preset reports token errors without scanning or writing", async () =>
   });
 });
 
-test("init preset refuses write when no local language metadata is detected", async () => {
+test("init preset writes unknown when no local language metadata is detected", async () => {
   const rootDir = await mkdtemp(
     path.join(tmpdir(), "agent-profile-preset-empty-"),
   );
@@ -1259,11 +1352,12 @@ test("init preset refuses write when no local language metadata is detected", as
     { io: output, ...PRESET_TEST_OPTIONS },
   );
 
-  assert.equal(code, 1);
-  assert.match(output.stdoutText(), /refused: no language detected/u);
-  await assert.rejects(() => readFile(path.join(rootDir, "ai-profile.yaml")), {
-    code: "ENOENT",
-  });
+  assert.equal(code, 0);
+  assert.doesNotMatch(output.stdoutText(), /refused: no language detected/u);
+  assert.match(
+    await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8"),
+    /languages:\n\s+- unknown/u,
+  );
 });
 
 function createCliPresetPayload(

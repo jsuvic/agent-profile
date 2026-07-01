@@ -55,6 +55,8 @@ import {
   detectStack,
   type ArtifactFinding,
   type DetectedStack,
+  type StackDetectionResult,
+  type StackDetectionSource,
   type StackDetectionWarning,
 } from "@agent-profile/scanner";
 import {
@@ -620,6 +622,8 @@ async function runInit(
   }
 
   let wizardCreatesClientFiles = false;
+  let wizardLanguages: ReadonlyArray<string> | undefined;
+  let wizardStackResult: StackDetectionResult | undefined;
   if (isWizardEligibleArgs(args) && presetPayload === undefined) {
     const dispatch = await dispatchInitWizard({
       args: parsed,
@@ -635,6 +639,10 @@ async function runInit(
     }
     wizardCreatesClientFiles =
       dispatch.kind === "confirmed" && dispatch.createClientFiles;
+    if (dispatch.kind === "confirmed") {
+      wizardLanguages = dispatch.languages;
+      wizardStackResult = dispatch.stackResult;
+    }
   }
 
   if (existingProfileBytes) {
@@ -721,6 +729,7 @@ async function runInit(
       clients: existingClients,
       clientsEnabled: enabledClients(existingClients),
       detectedStack: [],
+      detectionSources: [],
       ignoredClientFlags:
         parsed.clients.length > 0 || parsed.noClients.length > 0,
       stackWarnings: [],
@@ -732,7 +741,7 @@ async function runInit(
     return 0;
   }
 
-  const stackResult = await detectStack(rootDir);
+  const stackResult = wizardStackResult ?? (await detectStack(rootDir));
   const importResult = parsed.importExisting
     ? await analyzeExistingArtifacts(rootDir)
     : undefined;
@@ -748,18 +757,7 @@ async function runInit(
   );
 
   if (stackResult.stack.languages.length === 0) {
-    emitInitOutput(
-      parsed,
-      io,
-      createInitRefusal({
-        profilePath: safeProfilePath.path,
-        reason: "no language detected",
-        message: "no language detected under --root.",
-        clients,
-        detectedStack: [],
-      }),
-    );
-    return 1;
+    stackResult.stack.languages = [...(wizardLanguages ?? ["unknown"])];
   }
 
   const profileText = renderInitialProfile({
@@ -943,6 +941,7 @@ async function runInit(
     clients,
     clientsEnabled: enabledClients(clients),
     detectedStack: stackResult.stack.languages,
+    detectionSources: stackResult.detectionSources,
     preset: presetPayload,
     stackWarnings: stackResult.warnings,
     importFindings: importResult?.findings ?? [],
@@ -966,7 +965,12 @@ type DispatchInitWizardInput = {
 
 type DispatchInitWizardResult =
   | { kind: "non-interactive" }
-  | { kind: "confirmed"; createClientFiles: boolean }
+  | {
+      kind: "confirmed";
+      createClientFiles: boolean;
+      languages: ReadonlyArray<string>;
+      stackResult: StackDetectionResult;
+    }
   | { kind: "declined" };
 
 type ClientFileWriteResult =
@@ -1026,6 +1030,7 @@ async function dispatchInitWizard(
       packageManagers: stackForWizard.stack.packageManagers,
       testing: stackForWizard.stack.testing,
     },
+    detectionSources: stackForWizard.detectionSources,
     detectedClients,
     hasExistingProfile: input.existingProfileBytes !== undefined,
     gitignoreSuggestions: await getGitignoreSuggestions(input.rootDir),
@@ -1070,6 +1075,8 @@ async function dispatchInitWizard(
     kind: "confirmed",
     createClientFiles:
       input.existingProfileBytes === undefined && outcome.clients.length > 0,
+    languages: outcome.languages,
+    stackResult: stackForWizard,
   };
 }
 
@@ -1669,6 +1676,7 @@ type InitReport = {
   clients: ClientMatrix;
   clientsEnabled: ClientId[];
   detectedStack: string[];
+  detectionSources: StackDetectionSource[];
   preset?: PresetTokenPayloadV1;
   stackWarnings: StackDetectionWarning[];
   importFindings: ArtifactFinding[];
@@ -1699,6 +1707,7 @@ function createInitRefusal(input: {
     clients,
     clientsEnabled: enabledClients(clients),
     detectedStack: input.detectedStack ?? [],
+    detectionSources: [],
     stackWarnings: [],
     importFindings: [],
     gitignoreSuggestions: [],
@@ -1745,6 +1754,7 @@ function toInitJson(report: InitReport): Record<string, unknown> {
     clientsEnabled: report.clientsEnabled,
     clients: report.clients,
     detectedStack: report.detectedStack,
+    detectionSources: report.detectionSources,
     wouldWrite: report.wouldWrite,
     wrote: report.wrote,
   };
@@ -2678,6 +2688,22 @@ function formatInitText(input: InitReport): string {
     `Stack detected: ${formatDetectedStack(input.detectedStack)}`,
   );
 
+  lines.push("", "Detection sources:");
+  if (input.detectionSources.length === 0) {
+    lines.push("- (none)");
+  } else {
+    for (const source of input.detectionSources) {
+      lines.push(formatDetectionSource(source));
+    }
+  }
+
+  if (input.detectedStack.includes("unknown")) {
+    lines.push(
+      "",
+      "No language was detected or provided; using unknown as a temporary fallback.",
+    );
+  }
+
   if (input.stackWarnings.length > 0) {
     lines.push("", "Stack detection warnings:");
 
@@ -2730,6 +2756,20 @@ function formatInitRefusalFacts(input: InitReport): string {
     "",
     "fix filesystem permissions or choose a safe repository-relative --profile path.",
   ].join("\n");
+}
+
+function formatDetectionSource(source: StackDetectionSource): string {
+  const groups = [
+    ["languages", source.signals.languages],
+    ["frameworks", source.signals.frameworks],
+    ["packageManagers", source.signals.packageManagers],
+    ["testing", source.signals.testing],
+  ] as const;
+  const summary = groups
+    .filter(([, values]) => values.length > 0)
+    .map(([label, values]) => `${label}=${values.join(",")}`)
+    .join("; ");
+  return `- ${source.path}: ${summary}`;
 }
 
 function formatClientDisplayList(clients: ClientId[]): string {
