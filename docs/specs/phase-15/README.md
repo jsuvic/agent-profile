@@ -2,8 +2,9 @@
 
 ## Status
 
-Draft. Phase 15 is the friendly no-argument init flow built on top of Phase 14
-safe import and ownership.
+Implemented. Phase 15 is the friendly no-argument init flow built on top of
+Phase 14 safe import and ownership. Implementation landed on 2026-05-19 in
+`dddc208` (PR #23).
 
 ## Purpose
 

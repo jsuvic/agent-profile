@@ -2,7 +2,8 @@
 
 ## Status
 
-Draft. Belongs to Phase 16. Not approved.
+Implemented. Belongs to Phase 16. Landed on 2026-05-19 in `da5ca4d` (PR #24),
+with skill/subagent name-collision coverage completed in `9698985` (PR #25).
 
 ## Problem
 

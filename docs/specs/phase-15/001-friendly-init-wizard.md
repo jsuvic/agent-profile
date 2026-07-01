@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft. Belongs to Phase 15. Not approved.
+Implemented. Belongs to Phase 15. Landed on 2026-05-19 in `dddc208` (PR #23).
 
 ## Problem
 

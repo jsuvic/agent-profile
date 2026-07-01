@@ -2,7 +2,10 @@
 
 ## Status
 
-Draft. Phase 16 is the local UI migration wizard for safe import and ownership.
+Implemented. Phase 16 is the local UI migration wizard for safe import and
+ownership. The migration wizard landed on 2026-05-19 in `da5ca4d` (PR #24),
+and the remaining skill/subagent name-collision acceptance criterion landed in
+`9698985` (PR #25).
 
 ## Purpose
 
