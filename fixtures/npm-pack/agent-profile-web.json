@@ -3,13 +3,13 @@
   "required": [
     "README.md",
     "build/env.js",
+    "build/env.js.map",
     "build/handler.js",
+    "build/handler.js.map",
     "build/index.js",
-    "build/server/index.js",
-    "build/server/index.js.map",
-    "build/server/manifest.js",
-    "build/server/manifest.js.map",
+    "build/index.js.map",
     "build/shims.js",
+    "build/shims.js.map",
     "package.json"
   ],
   "allowedPrefixes": ["build/client/", "build/server/chunks/"]
