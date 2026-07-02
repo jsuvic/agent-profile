@@ -52,6 +52,9 @@ lockfile-tracked artifacts, diff-before-write, and doctor validation.
   `capabilities.delegation.subagents.packs` requires `enabled: true`. A
   non-empty `packs` with `enabled: false` is a validation/doctor error. `enabled`
   is the single master switch; disabling flips one flag and preserves `packs`.
+  When `enabled: true`, at least one subagent source is required - a non-empty
+  `agents` OR a non-empty `packs` - so a pack-only profile is valid (this relaxes
+  the current schema's `agents`-required rule; owned by `008`).
 
 ## Review Order
 

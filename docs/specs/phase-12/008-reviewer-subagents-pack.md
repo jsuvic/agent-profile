@@ -62,6 +62,16 @@ capabilities:
   the single master switch and there is no implicit/hybrid defaulting (presence
   of `packs` never auto-enables). Disabling flips `enabled` to `false` and
   preserves the `packs` list.
+- Subagent-source rule (required schema amendment): when `enabled: true`, at
+  least one subagent source is required - a non-empty `agents` **or** a non-empty
+  `packs`. The current schema requires a non-empty `agents` whenever
+  `enabled: true` (`if enabled then required: agents, minItems: 1` in
+  `packages/schemas/ai-profile.schema.json`) and, with
+  `additionalProperties: false`, rejects `packs` outright. This spec relaxes both:
+  `packs` is added to the `subagents` object, and the `if/then` becomes "require
+  a non-empty `agents` OR a non-empty `packs`." A pack-only profile
+  (`enabled: true`, `packs: [reviewer-subagents]`, no `agents`) is therefore
+  valid.
 - The skill pack ids (`base`, `review`, `advanced-review`, `automation`,
   `mcp-recommendations`) are unchanged and remain under
   `capabilities.skills.packs`.
@@ -125,6 +135,11 @@ consistent with the Phase 11 schema (`phase-11/001`):
 
 - Additive and backward compatible: profiles without `subagents.packs` behave as
   today; the existing `agents`/`useTemplate` behavior is unchanged.
+- Target enablement derives from the union of expanded `agents` and expanded
+  `packs`. Reviewers expanded from `packs` are treated as subagents equivalent to
+  `agents` entries for target generation, name-collision checks, and doctor, so a
+  pack-only profile still produces reviewer subagent targets (it must not compile
+  to zero subagents).
 - Non-executing: APC generates subagent definition files only. It does not
   launch agents, run loops, execute tests, supervise subagents, or apply
   patches.
@@ -148,7 +163,11 @@ consistent with the Phase 11 schema (`phase-11/001`):
 - `capabilities.delegation.subagents.packs: [reviewer-subagents]` with
   `enabled: true` emits the four reviewer subagent definition files for Claude
   and Codex.
-- `packs` with `enabled: false` (or an unknown pack id) is rejected.
+- A pack-only profile (`enabled: true`, `packs: [reviewer-subagents]`, no
+  `agents`) validates and produces reviewer targets - it must not fail
+  validation or compile to zero subagents.
+- `packs` with `enabled: false` (or an unknown pack id) is rejected; `enabled:
+  true` with neither `agents` nor `packs` is rejected.
 - Generated reviewers default to `read-only` and never exceed
   `effectivePermissions`.
 - No Tabnine reviewer subagents generated.
@@ -157,10 +176,12 @@ consistent with the Phase 11 schema (`phase-11/001`):
 
 ## Tests
 
-- Core: accept `reviewer-subagents`; reject unknown pack id and
-  `packs` with `enabled: false`.
-- Compiler golden fixture `reviewer-subagents-enabled`: four reviewer subagent
-  files for Claude and Codex; none for Tabnine.
+- Core: accept `reviewer-subagents`; accept a pack-only profile (`enabled: true`,
+  `packs` only, no `agents`); reject unknown pack id, `packs` with
+  `enabled: false`, and `enabled: true` with neither `agents` nor `packs`.
+- Compiler golden fixture `reviewer-subagents-enabled` (pack-only, no inline
+  `agents`): four reviewer subagent files for Claude and Codex; none for Tabnine;
+  asserts non-zero subagent targets.
 - Compiler: same-source assertion that reviewer subagent bodies derive from the
   shared neutral reviewer definitions used by `004`.
 - Permission test: generated reviewers are `read-only` and within
@@ -169,10 +190,12 @@ consistent with the Phase 11 schema (`phase-11/001`):
 
 ## TDD Strategy
 
-RED: schema test rejecting `reviewer-subagents` with `enabled: false`, and a
-golden fixture expecting the four reviewer subagent files. GREEN: additive schema
-+ pack expansion through the Phase 11 subagent targets. Refactor: share the
-neutral reviewer definition module with `004`.
+RED: schema test rejecting `reviewer-subagents` with `enabled: false` and
+accepting a pack-only profile (no `agents`), plus a golden fixture expecting the
+four reviewer subagent files from a pack-only profile. GREEN: relax the
+`if/then` agents rule to "agents OR packs", add `packs` to the schema, and expand
+packs through the Phase 11 subagent targets. Refactor: share the neutral reviewer
+definition module with `004`.
 
 ## Issue Plan
 
@@ -189,8 +212,11 @@ neutral reviewer definition module with `004`.
 
 ## Documentation Updates
 
-- `phase-01/001-profile-schema-v1.md` amendment (additive `subagents.packs`).
-- `phase-11/001-subagents-schema.md` cross-reference for the pack expansion.
+- `phase-01/001-profile-schema-v1.md` amendment: add `subagents.packs`, and relax
+  the `if enabled then required agents (minItems 1)` rule to require a non-empty
+  `agents` OR a non-empty `packs`.
+- `phase-11/001-subagents-schema.md`: pack expansion feeds the same subagent
+  expansion/target-enablement pipeline as `agents`.
 - `phase-11/005-doctor-subagent-checks.md` cross-reference for reviewer coverage.
 - `docs/targets/` reviewer subagent mapping.
 
@@ -198,7 +224,9 @@ neutral reviewer definition module with `004`.
 
 - Reviewer subagents modeled under `capabilities.delegation.subagents`, not as a
   skill pack.
-- Additive schema; `enabled: true` required for a non-empty `packs`.
+- Additive schema; `enabled: true` required for a non-empty `packs`; `enabled:
+  true` requires a non-empty `agents` OR `packs`; pack-only profiles validate and
+  produce targets.
 - Define-once neutral definitions render into both skills (`004`) and subagents
   (here).
 - Claude/Codex only; no Tabnine reviewer subagents.

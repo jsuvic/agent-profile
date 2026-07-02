@@ -58,20 +58,25 @@ integrations.
 ## Acceptance Criteria
 
 - `mcp-recommendations` on -> `mcp-fit-check` emitted for Claude and Codex.
-- Skill body contains no install/config/network/token instructions.
+- Skill body issues no affirmative install/config/network/token instruction or
+  command. Safe prohibitions (e.g. "never install or configure", "defer install
+  to the user") are expected content and must pass.
 - Deterministic, byte-stable output.
 
 ## Tests
 
 - Golden fixture: `mcp-recommendations` on -> `mcp-fit-check/SKILL.md` present.
-- Content assertion: body contains no forbidden verbs (install, configure,
-  token, server command).
+- Content assertion: detects affirmative install/config *instructions or
+  commands* (e.g. an imperative "run `npm i ...`" / "add this MCP server"), not
+  mere substring presence. The safe wording "never install or configure" and
+  "defer install/config to the user" must pass the assertion, not trip it.
 - Determinism: byte-stable.
 
 ## TDD Strategy
 
-RED: golden fixture expecting `mcp-fit-check/SKILL.md` and a content test
-asserting absence of install/config instructions. GREEN: emit from resolved set.
+RED: golden fixture expecting `mcp-fit-check/SKILL.md` and a content test that
+fails on an affirmative install/config instruction while passing the safe
+"never install or configure" prohibition. GREEN: emit from resolved set.
 
 ## Issue Plan
 
@@ -86,6 +91,7 @@ asserting absence of install/config instructions. GREEN: emit from resolved set.
 
 ## Final Review Checklist
 
-- Advisory-only; no install/config/network/token content.
+- Advisory-only; no affirmative install/config/network/token instruction (safe
+  prohibitions describing what not to do are allowed).
 - Honest staleness wording.
 - Deterministic fixtures; skill grants no tools.

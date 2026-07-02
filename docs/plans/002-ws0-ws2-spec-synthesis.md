@@ -141,7 +141,10 @@ complements, and does not replace, the `Tests` section above.
   `capabilities.delegation.subagents.packs` requires `enabled: true`; `enabled:
   false` with a non-empty `packs` is a validation/doctor error. `enabled` is the
   single master switch (no implicit/hybrid defaulting); disabling flips the flag
-  and preserves `packs`.
+  and preserves `packs`. When `enabled: true`, at least one subagent source is
+  required (non-empty `agents` OR `packs`); a pack-only profile is valid and must
+  produce targets. This relaxes the current schema's `if enabled then required
+  agents (minItems 1)` rule - owned by phase-12 `008`.
 
 ## Architecture Rescue Candidate (prerequisite)
 
