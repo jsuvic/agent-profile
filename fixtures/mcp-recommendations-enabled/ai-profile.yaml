@@ -1,0 +1,43 @@
+version: 1
+profile:
+  name: mcp-recommendations-enabled
+  description: Fixture exercising the Phase 12 advisory MCP recommendations skill.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: false
+  tdd: false
+  finalReview: false
+capabilities:
+  skills:
+    packs:
+      - mcp-recommendations
+permissions:
+  filesystem:
+    read: allow
+    write: ask
+  shell:
+    run: ask
+  secrets:
+    access: deny
+  dependencies:
+    install: ask
+  network:
+    external: ask
+  production:
+    access: deny

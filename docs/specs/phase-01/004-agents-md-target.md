@@ -80,12 +80,12 @@ inserted at the stable positions below only when their gate is open; absence
 of the gate emits nothing, with no warning, and preserves the fixed order of
 the nine sections above.
 
-| Section title                  | Insertion position                                                            | Gate                                  |
-| ------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------- |
-| `## Stack Guidance — React`    | immediately after `## Stack`                                                  | `stack.frameworks` contains `react`   |
-| `## Code Review`               | immediately after `## Development Workflow`                                   | `workflow.codeReview: true`           |
-| `## Refactoring`               | immediately after `## Code Review` if present, else `## Development Workflow` | `workflow.refactoring: true`          |
-| `## Documentation`             | immediately after `## Refactoring`/`## Code Review`/`## Development Workflow` | `workflow.documentation: true`        |
+| Section title               | Insertion position                                                            | Gate                                |
+| --------------------------- | ----------------------------------------------------------------------------- | ----------------------------------- |
+| `## Stack Guidance — React` | immediately after `## Stack`                                                  | `stack.frameworks` contains `react` |
+| `## Code Review`            | immediately after `## Development Workflow`                                   | `workflow.codeReview: true`         |
+| `## Refactoring`            | immediately after `## Code Review` if present, else `## Development Workflow` | `workflow.refactoring: true`        |
+| `## Documentation`          | immediately after `## Refactoring`/`## Code Review`/`## Development Workflow` | `workflow.documentation: true`      |
 
 ## Rendering Rules
 
@@ -278,3 +278,10 @@ fixtures/minimal-valid/expected/AGENTS.md
 - golden fixture changes are intentional
 - contracts align with `003-compiler-determinism.md` and
   `005-golden-test-harness.md`
+
+## Phase 12 Amendment (2026-07-02)
+
+When Codex or Claude is enabled, review intent is rendered as the generated
+`review-change` skill and the standalone `## Code Review` guidance section is
+omitted to avoid duplicate instructions. Tabnine-only profiles may retain the
+shared guidance section while Tabnine receives its umbrella guideline.

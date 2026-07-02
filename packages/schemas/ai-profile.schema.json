@@ -106,6 +106,26 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "skills": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "packs": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "enum": [
+                  "base",
+                  "review",
+                  "advanced-review",
+                  "automation",
+                  "mcp-recommendations"
+                ]
+              }
+            }
+          }
+        },
         "delegation": {
           "type": "object",
           "additionalProperties": false,
@@ -249,6 +269,14 @@
           "items": {
             "$ref": "#/definitions/subagent"
           }
+        },
+        "packs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["reviewer-subagents"]
+          }
         }
       },
       "if": {
@@ -260,14 +288,32 @@
         "required": ["enabled"]
       },
       "then": {
-        "required": ["agents"],
-        "properties": {
-          "agents": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "$ref": "#/definitions/subagent"
+        "anyOf": [
+          {
+            "required": ["agents"],
+            "properties": {
+              "agents": {
+                "type": "array",
+                "minItems": 1
+              }
             }
+          },
+          {
+            "required": ["packs"],
+            "properties": {
+              "packs": {
+                "type": "array",
+                "minItems": 1
+              }
+            }
+          }
+        ]
+      },
+      "else": {
+        "properties": {
+          "packs": {
+            "type": "array",
+            "maxItems": 0
           }
         }
       }

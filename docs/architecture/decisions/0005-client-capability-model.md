@@ -151,3 +151,23 @@ Revisit this ADR if:
 - a future implementation wants automatic third-party MCP installation.
 - target adapters start sharing enough behavior to justify a common capability
   compiler layer.
+
+## 2026-07 Verification Amendment
+
+Verified on 2026-07-02 against official documentation recorded in
+`docs/research/008-current-agent-capabilities-2026-07.md`.
+
+- Codex and Claude Code officially support project instructions, skills, MCP,
+  hooks, subagents, plugins, runtime permission controls, and command/workflow
+  surfaces.
+- Tabnine officially supports project/admin guidelines, MCP configuration and
+  governance, and native/MCP tool permissions. Its 2026 release notes also
+  announce CLI skills and subagents, but APC treats those as
+  `partial-official`: a stable project-local generation format and permission
+  contract are not sufficiently verified.
+- Phase 12 therefore generates skills and reviewer subagent definitions for
+  Codex and Claude, maps only the umbrella review to a Tabnine guideline, and
+  does not generate Tabnine reviewer subagents or specialist guidelines.
+- Capability support remains separate from generation permission. Hooks,
+  plugins, memory writes, executing loops, global writes, and auto-installation
+  still require dedicated approved specs.

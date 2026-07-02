@@ -41,8 +41,13 @@ import {
   type PlannedWrite,
   type WritePlanResult,
 } from "@agent-profile/compiler";
-import type { AiProfile } from "@agent-profile/core";
+import type {
+  AiProfile,
+  AiProfileSkillPackId,
+  SafetyMode,
+} from "@agent-profile/core";
 import {
+  deriveEffectivePermissions,
   parseProfileYaml,
   verifyPresetToken,
   type PresetPreferences,
@@ -187,12 +192,7 @@ const CLIENT_IDS = ["tabnine", "codex", "claude"] as const;
 type ClientId = (typeof CLIENT_IDS)[number];
 type ClientSettings = Record<ClientId, boolean>;
 type ClientSource =
-  | "default"
-  | "preset"
-  | "import"
-  | "existing"
-  | "--client"
-  | "--no-client";
+  "default" | "preset" | "import" | "existing" | "--client" | "--no-client";
 type ClientMatrix = Record<
   ClientId,
   {
@@ -473,18 +473,14 @@ async function runCompile(
     if (adoptionRefusals.length > 0) {
       lines.push(
         "Refusing to overwrite region-aware instruction files without explicit adoption:",
-        ...adoptionRefusals.map(
-          (item) => `- ${item.path} (${item.reason})`,
-        ),
+        ...adoptionRefusals.map((item) => `- ${item.path} (${item.reason})`),
         "Run `agent-profile init --import --strategy regions --write` to adopt existing files into mixed ownership.",
       );
     }
     if (hashMismatches.length > 0) {
       lines.push(
         "Refusing to overwrite lockfile-owned generated region files that differ from ai-profile.lock:",
-        ...hashMismatches.map(
-          (item) => `- ${item.path} (${item.reason})`,
-        ),
+        ...hashMismatches.map((item) => `- ${item.path} (${item.reason})`),
         "Re-run with --force after reviewing the diff, or regenerate ai-profile.lock to record the new bytes.",
       );
     }
@@ -499,7 +495,10 @@ async function runCompile(
     files: compileResult.files,
     mixedOutputs: regionPlan.mixedOutputs,
   });
-  const writes = [...regionPlan.writes, { path: lockfile.path, bytes: lockfile.bytes }];
+  const writes = [
+    ...regionPlan.writes,
+    { path: lockfile.path, bytes: lockfile.bytes },
+  ];
 
   if (parsed.write && !parsed.force) {
     let protectedPaths: ProtectedGeneratedPath[];
@@ -624,6 +623,9 @@ async function runInit(
   let wizardCreatesClientFiles = false;
   let wizardLanguages: ReadonlyArray<string> | undefined;
   let wizardStackResult: StackDetectionResult | undefined;
+  let wizardSafetyMode: SafetyMode | undefined;
+  let wizardSkillPacks: ReadonlyArray<AiProfileSkillPackId> | undefined;
+  let wizardReviewerSubagents = false;
   if (isWizardEligibleArgs(args) && presetPayload === undefined) {
     const dispatch = await dispatchInitWizard({
       args: parsed,
@@ -642,6 +644,9 @@ async function runInit(
     if (dispatch.kind === "confirmed") {
       wizardLanguages = dispatch.languages;
       wizardStackResult = dispatch.stackResult;
+      wizardSafetyMode = dispatch.safetyMode;
+      wizardSkillPacks = dispatch.skillPacks;
+      wizardReviewerSubagents = dispatch.reviewerSubagents;
     }
   }
 
@@ -765,6 +770,15 @@ async function runInit(
     stack: stackResult.stack,
     preferences: presetPayload?.preferences,
     clients: toClientSettings(clients),
+    ...(wizardSafetyMode === undefined || wizardSkillPacks === undefined
+      ? {}
+      : {
+          wizardCapabilities: {
+            safetyMode: wizardSafetyMode,
+            skillPacks: wizardSkillPacks,
+            reviewerSubagents: wizardReviewerSubagents,
+          },
+        }),
   });
   const validation = parseProfileYaml(profileText, {
     sourcePath: safeProfilePath.path,
@@ -970,6 +984,9 @@ type DispatchInitWizardResult =
       createClientFiles: boolean;
       languages: ReadonlyArray<string>;
       stackResult: StackDetectionResult;
+      safetyMode: SafetyMode;
+      skillPacks: ReadonlyArray<AiProfileSkillPackId>;
+      reviewerSubagents: boolean;
     }
   | { kind: "declined" };
 
@@ -1077,12 +1094,13 @@ async function dispatchInitWizard(
       input.existingProfileBytes === undefined && outcome.clients.length > 0,
     languages: outcome.languages,
     stackResult: stackForWizard,
+    safetyMode: outcome.safetyMode,
+    skillPacks: outcome.skillPacks,
+    reviewerSubagents: outcome.reviewerSubagents,
   };
 }
 
-function toWizardImportReport(
-  report: Phase14ImportReport,
-): WizardImportReport {
+function toWizardImportReport(report: Phase14ImportReport): WizardImportReport {
   return {
     files: report.files.map<WizardFileFinding>((file) => ({
       path: file.path,
@@ -1554,8 +1572,7 @@ function parseUiArgs(args: string[]): ParsedUiArgs {
         if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
           return {
             ok: false,
-            message:
-              "--port must be 'auto' or an integer between 1 and 65535.",
+            message: "--port must be 'auto' or an integer between 1 and 65535.",
           };
         }
 
@@ -1597,31 +1614,27 @@ function renderInitialProfile(input: {
   stack: DetectedStack;
   preferences?: PresetPreferences;
   clients: { tabnine: boolean; codex: boolean; claude: boolean };
+  wizardCapabilities?: {
+    safetyMode: SafetyMode;
+    skillPacks: ReadonlyArray<AiProfileSkillPackId>;
+    reviewerSubagents: boolean;
+  };
 }): string {
   const safety = input.preferences?.safety ?? {
-    mode: "guarded",
-    requiresSandbox: false,
+    mode: input.wizardCapabilities?.safetyMode ?? "guarded",
+    requiresSandbox: input.wizardCapabilities?.safetyMode === "autonomous",
   };
   const workflow = input.preferences?.workflow ?? {
     sdd: true,
     tdd: true,
     finalReview: true,
   };
-  const permissions = input.preferences?.permissions ?? {
-    filesystem: {
-      read: "allow",
-      write: "ask",
-    },
-    shell: {
-      run: "ask",
-    },
-    dependencies: {
-      install: "ask",
-    },
-    network: {
-      external: "ask",
-    },
-  };
+  const permissions =
+    input.preferences?.permissions ??
+    initPermissionsForSafety(input.wizardCapabilities?.safetyMode ?? "guarded");
+  const capabilities = input.wizardCapabilities
+    ? renderInitialCapabilities(input.wizardCapabilities)
+    : "";
 
   return `version: 1
 profile:
@@ -1647,7 +1660,7 @@ workflow:
   sdd: ${String(workflow.sdd)}
   tdd: ${String(workflow.tdd)}
   finalReview: ${String(workflow.finalReview)}
-permissions:
+${capabilities}permissions:
   filesystem:
     read: ${permissions.filesystem.read}
     write: ${permissions.filesystem.write}
@@ -1662,6 +1675,29 @@ permissions:
   production:
     access: deny
 `;
+}
+
+function initPermissionsForSafety(mode: SafetyMode) {
+  return deriveEffectivePermissions({
+    safety: {
+      mode,
+      requiresSandbox: mode === "autonomous",
+    },
+  });
+}
+
+function renderInitialCapabilities(input: {
+  skillPacks: ReadonlyArray<AiProfileSkillPackId>;
+  reviewerSubagents: boolean;
+}): string {
+  const packs =
+    input.skillPacks.length === 0
+      ? "    packs: []\n"
+      : `    packs:\n${input.skillPacks.map((pack) => `      - ${pack}\n`).join("")}`;
+  const subagents = input.reviewerSubagents
+    ? `  delegation:\n    subagents:\n      enabled: true\n      packs:\n        - reviewer-subagents\n`
+    : "";
+  return `capabilities:\n  skills:\n${packs}${subagents}`;
 }
 
 type InitReport = {

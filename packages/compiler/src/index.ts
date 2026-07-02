@@ -20,10 +20,7 @@ export {
   validateLockfileText,
   validateLockfileValue,
 } from "./lockfile.js";
-export type {
-  BuildLockfileInput,
-  MixedOutputDescriptor,
-} from "./lockfile.js";
+export type { BuildLockfileInput, MixedOutputDescriptor } from "./lockfile.js";
 export {
   GENERATED_END_MARKER,
   GENERATED_START_MARKER,
@@ -51,6 +48,12 @@ export {
   renderAgentsMd,
   renderClaudeMd,
 } from "./compiler.js";
+export {
+  getCapabilityArtifactPaths,
+  resolveSelectedSkills,
+  resolveSkillPacks,
+} from "./skill-selection.js";
+export type { SkillId } from "./skill-selection.js";
 export {
   applyWritePlan,
   computeFileEtag,

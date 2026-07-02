@@ -3,6 +3,9 @@
 
 import { createInterface } from "node:readline/promises";
 
+import { getCapabilityArtifactPaths } from "@agent-profile/compiler";
+import type { AiProfileSkillPackId, SafetyMode } from "@agent-profile/core";
+
 export type CliIo = {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
@@ -17,6 +20,21 @@ export const WIZARD_CLIENT_IDS: readonly WizardClientId[] = [
 ] as const;
 
 export type WizardStrategy = "preserve" | "regions";
+export type WizardSetupProfileId =
+  | "guarded-corporate"
+  | "balanced-solo"
+  | "plan-only-review"
+  | "autonomous-sandbox";
+
+export type WizardCapabilitySelection = {
+  skillPacks: ReadonlyArray<AiProfileSkillPackId>;
+  reviewerSubagents: boolean;
+};
+
+export const DEFAULT_WIZARD_SKILL_PACKS: readonly AiProfileSkillPackId[] = [
+  "base",
+  "review",
+] as const;
 
 export type WizardFileFinding = {
   path: string;
@@ -92,6 +110,10 @@ export type WizardOutcome = {
   clients: ReadonlyArray<WizardClientId>;
   updateGitignore: boolean;
   languages: ReadonlyArray<string>;
+  setupProfile: WizardSetupProfileId;
+  safetyMode: SafetyMode;
+  skillPacks: ReadonlyArray<AiProfileSkillPackId>;
+  reviewerSubagents: boolean;
 };
 
 export type StrategyPrompt = (options: {
@@ -116,18 +138,28 @@ export type ManualLanguagesConfirmPrompt = (options: {
 
 export type ManualLanguagesEntryPrompt = () => Promise<string>;
 
+export type SetupProfilePrompt = (options: {
+  default: WizardSetupProfileId;
+}) => Promise<WizardSetupProfileId>;
+
+export type CapabilityPrompt = (options: {
+  defaults: ReadonlyArray<AiProfileSkillPackId>;
+  reviewerSubagentsAvailable: boolean;
+}) => Promise<WizardCapabilitySelection>;
+
 export type CliPrompts = {
   confirmManualLanguages: ManualLanguagesConfirmPrompt;
   enterManualLanguages: ManualLanguagesEntryPrompt;
   selectStrategy: StrategyPrompt;
   selectClients: ClientPrompt;
+  selectSetupProfile: SetupProfilePrompt;
+  selectCapabilities: CapabilityPrompt;
   confirmGitignore: GitignorePrompt;
   confirmWritePlan: ConfirmPrompt;
 };
 
 export type ManualLanguageParseResult =
-  | { ok: true; languages: string[] }
-  | { ok: false; message: string };
+  { ok: true; languages: string[] } | { ok: false; message: string };
 
 const LANGUAGE_SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u;
 const MAX_MANUAL_LANGUAGES = 10;
@@ -177,6 +209,80 @@ export function parseWizardClientSelection(
   return WIZARD_CLIENT_IDS.filter((id) => selected.includes(id));
 }
 
+const SETUP_PROFILE_IDS: readonly WizardSetupProfileId[] = [
+  "guarded-corporate",
+  "balanced-solo",
+  "plan-only-review",
+  "autonomous-sandbox",
+] as const;
+
+const SETUP_PROFILE_SAFETY: Record<WizardSetupProfileId, SafetyMode> = {
+  "guarded-corporate": "guarded",
+  "balanced-solo": "balanced",
+  "plan-only-review": "plan-only",
+  "autonomous-sandbox": "autonomous",
+};
+
+export function parseWizardSetupProfile(raw: string): WizardSetupProfileId {
+  const normalized = raw.trim().toLowerCase();
+  if (/^[1-4]$/u.test(normalized)) {
+    return (
+      SETUP_PROFILE_IDS[Number.parseInt(normalized, 10) - 1] ??
+      "guarded-corporate"
+    );
+  }
+  return SETUP_PROFILE_IDS.includes(normalized as WizardSetupProfileId)
+    ? (normalized as WizardSetupProfileId)
+    : "guarded-corporate";
+}
+
+export function safetyModeForSetupProfile(
+  profile: WizardSetupProfileId,
+): SafetyMode {
+  return SETUP_PROFILE_SAFETY[profile];
+}
+
+const CAPABILITY_OPTIONS = [
+  { id: "base", kind: "skill" },
+  { id: "review", kind: "skill" },
+  { id: "advanced-review", kind: "skill" },
+  { id: "reviewer-subagents", kind: "subagent" },
+  { id: "mcp-recommendations", kind: "skill" },
+] as const;
+
+export function parseWizardCapabilitySelection(
+  raw: string,
+  reviewerSubagentsAvailable: boolean,
+  defaults: ReadonlyArray<AiProfileSkillPackId> = DEFAULT_WIZARD_SKILL_PACKS,
+): WizardCapabilitySelection {
+  const normalized = raw.trim().toLowerCase();
+  const tokens =
+    normalized === ""
+      ? defaults
+      : normalized
+          .split(/[;,]/u)
+          .map((item) => item.trim())
+          .filter((item) => item !== "");
+  const selected = new Set<string>();
+  for (const token of tokens) {
+    if (/^[1-5]$/u.test(token)) {
+      const option = CAPABILITY_OPTIONS[Number.parseInt(token, 10) - 1];
+      if (option) selected.add(option.id);
+    } else if (CAPABILITY_OPTIONS.some((option) => option.id === token)) {
+      selected.add(token);
+    }
+  }
+
+  const skillPacks = CAPABILITY_OPTIONS.filter(
+    (option) => option.kind === "skill" && selected.has(option.id),
+  ).map((option) => option.id as AiProfileSkillPackId);
+  return {
+    skillPacks,
+    reviewerSubagents:
+      reviewerSubagentsAvailable && selected.has("reviewer-subagents"),
+  };
+}
+
 export function formatWizardClientSelectionQuestion(
   defaults: ReadonlyArray<WizardClientId>,
 ): string {
@@ -191,6 +297,47 @@ export function formatWizardClientSelectionQuestion(
     `Which clients should this setup create files for?\n${summary}\n` +
     `Select multiple with commas or semicolons, for example 2,3.\n` +
     `Enter numbers or names, or press enter for defaults [${fallback}]: `
+  );
+}
+
+export function formatWizardSetupProfileQuestion(
+  def: WizardSetupProfileId,
+): string {
+  const labels: ReadonlyArray<[WizardSetupProfileId, string]> = [
+    ["guarded-corporate", "Guarded corporate"],
+    ["balanced-solo", "Balanced solo"],
+    ["plan-only-review", "Plan-only review"],
+    ["autonomous-sandbox", "Autonomous sandbox"],
+  ];
+  return (
+    `${formatWizardSectionTitle("Setup profile")}\n` +
+    `Choose the safety and permission posture.\n${labels
+      .map(
+        ([id, label], index) =>
+          `  ${index + 1}) ${label}${id === def ? " (default)" : ""}`,
+      )
+      .join("\n")}\nChoose [1-4]: `
+  );
+}
+
+export function formatWizardCapabilityQuestion(input: {
+  defaults: ReadonlyArray<AiProfileSkillPackId>;
+  reviewerSubagentsAvailable: boolean;
+}): string {
+  const rows = [
+    `  1) [recommended] Base instructions${input.defaults.includes("base") ? " (default)" : ""}`,
+    `  2) [recommended] Code review${input.defaults.includes("review") ? " (default)" : ""}`,
+    "  3) [optional] Specialist reviews",
+    input.reviewerSubagentsAvailable
+      ? "  4) [optional] Claude/Codex reviewer subagents"
+      : "  4) [unavailable] Claude/Codex reviewer subagents (requires Claude or Codex)",
+    "  5) [optional] MCP recommendations",
+    "  [blocked] Plugins / global memory / auto-install",
+  ];
+  return (
+    `${formatWizardSectionTitle("Capability packs")}\n` +
+    `Select multiple with commas or semicolons.\n${rows.join("\n")}\n` +
+    "Choose [default 1,2]: "
   );
 }
 
@@ -469,6 +616,22 @@ export function formatWizardPlan(
     for (const client of outcome.clients) {
       lines.push(`- create ${formatClientDisplayName(client)} files`);
     }
+    for (const artifact of getCapabilityArtifactPaths({
+      clients: {
+        tabnine: outcome.clients.includes("tabnine"),
+        codex: outcome.clients.includes("codex"),
+        claude: outcome.clients.includes("claude"),
+      },
+      skillPacks: outcome.skillPacks,
+      reviewerSubagents: outcome.reviewerSubagents,
+      workflow: {
+        sdd: true,
+        tdd: true,
+        finalReview: true,
+      },
+    })) {
+      lines.push(`- generate ${artifact}`);
+    }
   }
 
   if (outcome.updateGitignore) {
@@ -481,8 +644,18 @@ export function formatWizardPlan(
   lines.push(`Strategy: ${formatStrategyLabel(outcome.strategy)}`);
   if (context.hasExistingProfile) {
     lines.push("Clients: unchanged (existing profile)");
+    lines.push(
+      "Setup profile and capability packs: unchanged (existing profile)",
+    );
   } else {
     lines.push(`Clients selected: ${formatClientDisplayList(outcome.clients)}`);
+    lines.push(`Safety mode: ${outcome.safetyMode}`);
+    lines.push(
+      `Skill packs: ${outcome.skillPacks.length > 0 ? outcome.skillPacks.join(", ") : "none"}`,
+    );
+    lines.push(
+      `Reviewer subagents: ${outcome.reviewerSubagents ? "enabled" : "disabled"}`,
+    );
   }
   lines.push(`Update .gitignore: ${outcome.updateGitignore ? "yes" : "no"}`);
   lines.push("");
@@ -546,6 +719,23 @@ export async function runInitWizard(input: {
     );
   }
 
+  let setupProfile: WizardSetupProfileId = "guarded-corporate";
+  let capabilities: WizardCapabilitySelection = {
+    skillPacks: DEFAULT_WIZARD_SKILL_PACKS,
+    reviewerSubagents: false,
+  };
+  if (!context.hasExistingProfile) {
+    setupProfile = await input.prompts.selectSetupProfile({
+      default: "guarded-corporate",
+    });
+    capabilities = await input.prompts.selectCapabilities({
+      defaults: DEFAULT_WIZARD_SKILL_PACKS,
+      reviewerSubagentsAvailable:
+        normalizedClients.includes("codex") ||
+        normalizedClients.includes("claude"),
+    });
+  }
+
   const missingGitignore = missingGitignoreEntries(context);
   const gitignoreNeedsRecommendation = missingGitignore.length > 0;
   const updateGitignore = gitignoreNeedsRecommendation
@@ -561,6 +751,10 @@ export async function runInitWizard(input: {
     clients: normalizedClients,
     updateGitignore,
     languages,
+    setupProfile,
+    safetyMode: safetyModeForSetupProfile(setupProfile),
+    skillPacks: capabilities.skillPacks,
+    reviewerSubagents: capabilities.reviewerSubagents,
   };
 
   input.io.stdout(formatWizardPlan(context, outcomeDraft));
@@ -619,6 +813,33 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
         defaults.join(","),
       );
       return parseWizardClientSelection(raw);
+    },
+    async selectSetupProfile({ default: def }) {
+      const raw = await ask(
+        formatWizardSetupProfileQuestion(def),
+        String(SETUP_PROFILE_IDS.indexOf(def) + 1),
+      );
+      return parseWizardSetupProfile(raw);
+    },
+    async selectCapabilities({ defaults, reviewerSubagentsAvailable }) {
+      const defaultNumbers = [
+        defaults.includes("base") ? "1" : "",
+        defaults.includes("review") ? "2" : "",
+        defaults.includes("advanced-review") ? "3" : "",
+        defaults.includes("mcp-recommendations") ? "5" : "",
+      ].filter((value) => value !== "");
+      const raw = await ask(
+        formatWizardCapabilityQuestion({
+          defaults,
+          reviewerSubagentsAvailable,
+        }),
+        defaultNumbers.join(","),
+      );
+      return parseWizardCapabilitySelection(
+        raw,
+        reviewerSubagentsAvailable,
+        defaults,
+      );
     },
     async confirmGitignore({ default: def, entries }) {
       const raw = await ask(
@@ -752,7 +973,9 @@ function formatClientDisplayName(client: WizardClientId): string {
   }
 }
 
-function formatClientDisplayList(clients: ReadonlyArray<WizardClientId>): string {
+function formatClientDisplayList(
+  clients: ReadonlyArray<WizardClientId>,
+): string {
   const labels = clients.map(formatClientDisplayName);
   if (labels.length === 0) return "(none)";
   if (labels.length === 1) return labels[0];

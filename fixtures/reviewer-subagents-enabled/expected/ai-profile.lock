@@ -1,0 +1,211 @@
+{
+  "version": 2,
+  "profile": {
+    "path": "ai-profile.yaml",
+    "schemaVersion": 1,
+    "sha256": "824f450286bb6011b740f7260e0741dc40b912c9dab2df28661eb868a798853e"
+  },
+  "compiler": {
+    "name": "agent-profile",
+    "version": "0.1.0"
+  },
+  "templates": [
+    {
+      "id": "targets/agents-md@1",
+      "target": "agents-md",
+      "version": "1",
+      "sha256": "c52d14fb8b0885e360bb254002aeb236c48b8d6845125e2c95a967ddeff08d0a"
+    },
+    {
+      "id": "targets/claude-mcp@1",
+      "target": "claude-mcp",
+      "version": "1",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    },
+    {
+      "id": "targets/claude-md@1",
+      "target": "claude-md",
+      "version": "1",
+      "sha256": "d504d42408f60436884ed08a55865c43aa0185274ad08e84c306c024ac80a969"
+    },
+    {
+      "id": "targets/claude-settings@1",
+      "target": "claude-settings",
+      "version": "1",
+      "sha256": "5d4ef8e2885f29959de09a6764e6b28af594d976f3251bfd99371fe0ecdb100d"
+    },
+    {
+      "id": "targets/claude-subagents/architecture-reviewer@1",
+      "target": "claude-subagents",
+      "version": "1",
+      "sha256": "cf48f7e77da435601d64403d4cf722159b14578ab4dca9ff0c464ea3027bf792"
+    },
+    {
+      "id": "targets/claude-subagents/readability-reviewer@1",
+      "target": "claude-subagents",
+      "version": "1",
+      "sha256": "ddd8464ceceea9a81242f7378b32e78f6ab632ee5c227a4fafe5d4cbd4465daa"
+    },
+    {
+      "id": "targets/claude-subagents/security-reviewer@1",
+      "target": "claude-subagents",
+      "version": "1",
+      "sha256": "e8671dc69f12352b2b832f5fa58481fb398ba379db60a8aec47cc0eba0e06170"
+    },
+    {
+      "id": "targets/claude-subagents/test-reviewer@1",
+      "target": "claude-subagents",
+      "version": "1",
+      "sha256": "07d2927aa3860a54e99a78cc58ba332ed54d87412d41bac15aa981c367397baf"
+    },
+    {
+      "id": "targets/codex-config@1",
+      "target": "codex-config",
+      "version": "1",
+      "sha256": "bc56f102dbd5552e5932703e7dd722c70ca8f6435d82302fc9f7139e0168361a"
+    },
+    {
+      "id": "targets/codex-subagents/architecture-reviewer@1",
+      "target": "codex-subagents",
+      "version": "1",
+      "sha256": "49f015be4d5e02518269e92259d4333de41202a890a73e181b3e45927d7858ba"
+    },
+    {
+      "id": "targets/codex-subagents/readability-reviewer@1",
+      "target": "codex-subagents",
+      "version": "1",
+      "sha256": "90c2c04b73482b971fe4f16c2262cb7fd70e00e1809d5543900fdfd124b26b7c"
+    },
+    {
+      "id": "targets/codex-subagents/security-reviewer@1",
+      "target": "codex-subagents",
+      "version": "1",
+      "sha256": "798a6133f271d2b93f6f26ad736be708caac4a267a91e4036de1b11fb062e25d"
+    },
+    {
+      "id": "targets/codex-subagents/test-reviewer@1",
+      "target": "codex-subagents",
+      "version": "1",
+      "sha256": "abc77bc226798cf6e194b29c8aa4315e2d146334dc128ba1e75a47eba17fdddb"
+    },
+    {
+      "id": "targets/tabnine-guidelines/00-general-agent-behavior@1",
+      "target": "tabnine-guidelines",
+      "version": "1",
+      "sha256": "c1c353d9cc60fc9d244ace2d6be9da2862bb2955767c32b75af2b3eba0c362cf"
+    },
+    {
+      "id": "targets/tabnine-mcp-config@1",
+      "target": "tabnine-mcp-config",
+      "version": "1",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    }
+  ],
+  "outputs": [
+    {
+      "path": ".claude/agents/architecture-reviewer.md",
+      "target": "claude-subagents",
+      "templateId": "targets/claude-subagents/architecture-reviewer@1",
+      "ownership": "generated-owned",
+      "sha256": "cf48f7e77da435601d64403d4cf722159b14578ab4dca9ff0c464ea3027bf792"
+    },
+    {
+      "path": ".claude/agents/readability-reviewer.md",
+      "target": "claude-subagents",
+      "templateId": "targets/claude-subagents/readability-reviewer@1",
+      "ownership": "generated-owned",
+      "sha256": "ddd8464ceceea9a81242f7378b32e78f6ab632ee5c227a4fafe5d4cbd4465daa"
+    },
+    {
+      "path": ".claude/agents/security-reviewer.md",
+      "target": "claude-subagents",
+      "templateId": "targets/claude-subagents/security-reviewer@1",
+      "ownership": "generated-owned",
+      "sha256": "e8671dc69f12352b2b832f5fa58481fb398ba379db60a8aec47cc0eba0e06170"
+    },
+    {
+      "path": ".claude/agents/test-reviewer.md",
+      "target": "claude-subagents",
+      "templateId": "targets/claude-subagents/test-reviewer@1",
+      "ownership": "generated-owned",
+      "sha256": "07d2927aa3860a54e99a78cc58ba332ed54d87412d41bac15aa981c367397baf"
+    },
+    {
+      "path": ".claude/settings.json",
+      "target": "claude-settings",
+      "templateId": "targets/claude-settings@1",
+      "ownership": "generated-owned",
+      "sha256": "5d4ef8e2885f29959de09a6764e6b28af594d976f3251bfd99371fe0ecdb100d"
+    },
+    {
+      "path": ".codex/agents/architecture-reviewer.toml",
+      "target": "codex-subagents",
+      "templateId": "targets/codex-subagents/architecture-reviewer@1",
+      "ownership": "generated-owned",
+      "sha256": "49f015be4d5e02518269e92259d4333de41202a890a73e181b3e45927d7858ba"
+    },
+    {
+      "path": ".codex/agents/readability-reviewer.toml",
+      "target": "codex-subagents",
+      "templateId": "targets/codex-subagents/readability-reviewer@1",
+      "ownership": "generated-owned",
+      "sha256": "90c2c04b73482b971fe4f16c2262cb7fd70e00e1809d5543900fdfd124b26b7c"
+    },
+    {
+      "path": ".codex/agents/security-reviewer.toml",
+      "target": "codex-subagents",
+      "templateId": "targets/codex-subagents/security-reviewer@1",
+      "ownership": "generated-owned",
+      "sha256": "798a6133f271d2b93f6f26ad736be708caac4a267a91e4036de1b11fb062e25d"
+    },
+    {
+      "path": ".codex/agents/test-reviewer.toml",
+      "target": "codex-subagents",
+      "templateId": "targets/codex-subagents/test-reviewer@1",
+      "ownership": "generated-owned",
+      "sha256": "abc77bc226798cf6e194b29c8aa4315e2d146334dc128ba1e75a47eba17fdddb"
+    },
+    {
+      "path": ".codex/config.toml",
+      "target": "codex-config",
+      "templateId": "targets/codex-config@1",
+      "ownership": "generated-owned",
+      "sha256": "8dc0b7b0bd953c75dc37f165061e3f5369d370540870a5496a53e45b7d77186b"
+    },
+    {
+      "path": ".mcp.json",
+      "target": "claude-mcp",
+      "templateId": "targets/claude-mcp@1",
+      "ownership": "generated-owned",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    },
+    {
+      "path": ".tabnine/guidelines/00-general-agent-behavior.md",
+      "target": "tabnine-guidelines",
+      "templateId": "targets/tabnine-guidelines/00-general-agent-behavior@1",
+      "ownership": "generated-owned",
+      "sha256": "a74927cd3c68c2109f1db60c50963b59b29193dd73dd9f2528f17a824e1c3cef"
+    },
+    {
+      "path": ".tabnine/mcp_servers.json",
+      "target": "tabnine-mcp-config",
+      "templateId": "targets/tabnine-mcp-config@1",
+      "ownership": "generated-owned",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    },
+    {
+      "path": "AGENTS.md",
+      "target": "agents-md",
+      "templateId": "targets/agents-md@1",
+      "ownership": "generated-owned",
+      "sha256": "22b3fbc5fafce2d6ad94a919057dc30920e26b6a4174493fe0cbe72c4ed3f14e"
+    },
+    {
+      "path": "CLAUDE.md",
+      "target": "claude-md",
+      "templateId": "targets/claude-md@1",
+      "ownership": "generated-owned",
+      "sha256": "d504d42408f60436884ed08a55865c43aa0185274ad08e84c306c024ac80a969"
+    }
+  ]
+}

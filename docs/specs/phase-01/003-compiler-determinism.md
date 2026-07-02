@@ -219,3 +219,10 @@ fixtures/minimal-valid/expected/.mcp.json
 - tests would fail on nondeterministic output
 - contracts align with `002-lockfile-v1.md`, `004-agents-md-target.md`, and
   `005-golden-test-harness.md`
+
+## Phase 12 Amendment (2026-07-02)
+
+Skill target determinism consumes the ordered, de-duplicated result of
+`resolveSelectedSkills(profile)`, which unions workflow-flag skills and selected
+skill packs. Reviewer subagent pack expansion is likewise deterministic and
+renders the same neutral reviewer definitions used by specialist skills.

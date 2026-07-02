@@ -584,6 +584,44 @@ describe("profile schema validation", () => {
   });
 });
 
+describe("skills pack schema", () => {
+  function profileWithSkillPacks(packs: unknown): Record<string, unknown> {
+    const base = profileWith({}) as Record<string, unknown>;
+    base["capabilities"] = { skills: { packs } };
+    return base;
+  }
+
+  it("accepts all Phase 12 skill pack ids", () => {
+    const result = validateProfileValue(
+      profileWithSkillPacks([
+        "base",
+        "review",
+        "advanced-review",
+        "automation",
+        "mcp-recommendations",
+      ]),
+    );
+
+    assert.equal(result.ok, true);
+  });
+
+  it("rejects unknown skill pack ids with a focused path", () => {
+    const result = validateProfileValue(profileWithSkillPacks(["bogus"]));
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(getIssuePaths(result), ["/capabilities/skills/packs/0"]);
+  });
+
+  it("rejects duplicate skill pack ids", () => {
+    const result = validateProfileValue(
+      profileWithSkillPacks(["review", "review"]),
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(getIssuePaths(result), ["/capabilities/skills/packs"]);
+  });
+});
+
 describe("subagents schema", () => {
   function validSubagent(): Record<string, unknown> {
     return {
@@ -617,6 +655,44 @@ describe("subagents schema", () => {
       }),
     );
     assert.equal(result.ok, true);
+  });
+
+  it("accepts a pack-only reviewer subagents profile", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        packs: ["reviewer-subagents"],
+      }),
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it("rejects reviewer packs when the master switch is false", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: false,
+        packs: ["reviewer-subagents"],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects unknown reviewer subagent packs", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({ enabled: true, packs: ["bogus"] }),
+    );
+    assert.equal(result.ok, false);
+  });
+
+  it("rejects inline names that collide with the reviewer pack", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        packs: ["reviewer-subagents"],
+        agents: [{ ...validSubagent(), name: "security-reviewer" }],
+      }),
+    );
+    assert.equal(result.ok, false);
   });
 
   it("rejects enabled: true with empty agents", () => {
@@ -679,9 +755,7 @@ describe("subagents schema", () => {
     const result = validateProfileValue(
       profileWithSubagents({
         enabled: true,
-        agents: [
-          { ...validSubagent(), permissionMode: "plan" },
-        ],
+        agents: [{ ...validSubagent(), permissionMode: "plan" }],
       }),
     );
     assert.equal(result.ok, false);
@@ -691,9 +765,7 @@ describe("subagents schema", () => {
     const result = validateProfileValue(
       profileWithSubagents({
         enabled: true,
-        agents: [
-          { ...validSubagent(), modelPreference: "claude-3-5-sonnet" },
-        ],
+        agents: [{ ...validSubagent(), modelPreference: "claude-3-5-sonnet" }],
       }),
     );
     assert.equal(result.ok, false);
@@ -703,9 +775,7 @@ describe("subagents schema", () => {
     const result = validateProfileValue(
       profileWithSubagents({
         enabled: true,
-        agents: [
-          { ...validSubagent(), mcpServers: ["context-engine"] },
-        ],
+        agents: [{ ...validSubagent(), mcpServers: ["context-engine"] }],
       }),
     );
     assert.equal(result.ok, false);
@@ -788,21 +858,14 @@ describe("subagents schema", () => {
 describe("subagentDrivenDevelopment workflow gate", () => {
   function profileWithWorkflowGate(value: unknown): Record<string, unknown> {
     const base = profileWith({}) as Record<string, unknown>;
-    (base["workflow"] as Record<string, unknown>)[
-      "subagentDrivenDevelopment"
-    ] = value;
+    (base["workflow"] as Record<string, unknown>)["subagentDrivenDevelopment"] =
+      value;
     return base;
   }
 
   it("accepts subagentDrivenDevelopment as a boolean", () => {
-    assert.equal(
-      validateProfileValue(profileWithWorkflowGate(true)).ok,
-      true,
-    );
-    assert.equal(
-      validateProfileValue(profileWithWorkflowGate(false)).ok,
-      true,
-    );
+    assert.equal(validateProfileValue(profileWithWorkflowGate(true)).ok, true);
+    assert.equal(validateProfileValue(profileWithWorkflowGate(false)).ok, true);
   });
 
   it("rejects non-boolean subagentDrivenDevelopment", () => {
@@ -1097,6 +1160,45 @@ describe("renderProfileYaml", () => {
       (reparsed as { ok: true; profile: AiProfile }).profile,
       (parsed as { ok: true; profile: AiProfile }).profile,
     );
+  });
+
+  it("round-trips capabilities.skills.packs in schema field order", () => {
+    const profile = {
+      ...MINIMAL_PROFILE,
+      capabilities: {
+        skills: { packs: ["base", "review", "mcp-recommendations"] },
+      },
+    } as AiProfile;
+
+    const yaml = renderProfileYaml(profile);
+    const parsed = parseProfileYaml(yaml);
+
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+    assert.deepEqual(parsed.profile, profile);
+    assert.match(
+      yaml,
+      /capabilities:\n  skills:\n    packs:\n      - base\n      - review\n      - mcp-recommendations/u,
+    );
+  });
+
+  it("round-trips a pack-only reviewer-subagents capability", () => {
+    const profile: AiProfile = {
+      ...MINIMAL_PROFILE,
+      capabilities: {
+        delegation: {
+          subagents: {
+            enabled: true,
+            packs: ["reviewer-subagents"],
+          },
+        },
+      },
+    };
+    const yaml = renderProfileYaml(profile);
+    const parsed = parseProfileYaml(yaml);
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) return;
+    assert.deepEqual(parsed.profile, profile);
   });
 });
 

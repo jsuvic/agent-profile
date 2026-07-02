@@ -366,3 +366,9 @@ Official-doc verification is captured as a required implementation gate:
 - no scripts, dependencies, plugins, or tool pre-approvals are generated
 - no secrets, production access, auto-install, source upload, or unsafe
   auto-approval are introduced
+
+## Phase 12 Amendment (2026-07-02)
+
+Codex skill emission reads `resolveSelectedSkills(profile)`. Pack-selected
+skills are written under `.agents/skills/<skill>/SKILL.md`; the Phase 12 catalog
+adds `review-change`, four specialist reviews, and `mcp-fit-check`.

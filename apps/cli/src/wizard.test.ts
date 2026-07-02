@@ -3,13 +3,7 @@
 
 import assert from "node:assert/strict";
 import fsPromises from "node:fs/promises";
-import {
-  mkdtemp,
-  mkdir,
-  readFile,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -25,13 +19,18 @@ import {
   formatWizardGitignoreQuestion,
   formatWizardStrategyQuestion,
   formatWizardWriteConfirmationQuestion,
+  formatWizardCapabilityQuestion,
+  formatWizardSetupProfileQuestion,
   isNonInteractive,
   parseManualLanguageSlugs,
   parseWizardClientSelection,
+  parseWizardCapabilitySelection,
+  parseWizardSetupProfile,
   recommendStrategy,
   type CliPrompts,
   type WizardClientId,
   type WizardImportReport,
+  type WizardSetupProfileId,
 } from "./wizard.js";
 
 type PromptCall =
@@ -39,6 +38,12 @@ type PromptCall =
   | { kind: "enterManualLanguages" }
   | { kind: "selectStrategy"; default: string }
   | { kind: "selectClients"; defaults: ReadonlyArray<string> }
+  | { kind: "selectSetupProfile"; default: WizardSetupProfileId }
+  | {
+      kind: "selectCapabilities";
+      defaults: ReadonlyArray<string>;
+      reviewerSubagentsAvailable: boolean;
+    }
   | {
       kind: "confirmGitignore";
       default: boolean;
@@ -58,6 +63,11 @@ function scriptedPrompts(options: {
   gitignore?: boolean;
   confirm: boolean;
   manualLanguages?: false | ReadonlyArray<string>;
+  setupProfile?: WizardSetupProfileId;
+  skillPacks?: ReadonlyArray<
+    "base" | "review" | "advanced-review" | "automation" | "mcp-recommendations"
+  >;
+  reviewerSubagents?: boolean;
 }): ScriptedPrompts {
   const calls: PromptCall[] = [];
   let manualLanguageIndex = 0;
@@ -85,6 +95,22 @@ function scriptedPrompts(options: {
     async selectClients({ defaults }) {
       calls.push({ kind: "selectClients", defaults });
       return options.clients ?? defaults;
+    },
+    async selectSetupProfile({ default: def }) {
+      calls.push({ kind: "selectSetupProfile", default: def });
+      return options.setupProfile ?? def;
+    },
+    async selectCapabilities({ defaults, reviewerSubagentsAvailable }) {
+      calls.push({
+        kind: "selectCapabilities",
+        defaults,
+        reviewerSubagentsAvailable,
+      });
+      return {
+        skillPacks: options.skillPacks ?? defaults,
+        reviewerSubagents:
+          reviewerSubagentsAvailable && options.reviewerSubagents === true,
+      };
     },
     async confirmGitignore({ default: def, entries }) {
       calls.push({ kind: "confirmGitignore", default: def, entries });
@@ -118,7 +144,9 @@ async function fileExists(absolutePath: string): Promise<boolean> {
 }
 
 async function createTsRoot(label: string): Promise<string> {
-  const rootDir = await mkdtemp(path.join(tmpdir(), `agent-profile-wizard-${label}-`));
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), `agent-profile-wizard-${label}-`),
+  );
   await writeFile(
     path.join(rootDir, "package.json"),
     JSON.stringify(
@@ -217,6 +245,45 @@ test("parseWizardClientSelection ignores malformed partial numbers", () => {
   assert.deepEqual(parseWizardClientSelection("2abc,claude"), ["claude"]);
 });
 
+test("phase-12 setup profiles parse by number and stable id", () => {
+  assert.equal(parseWizardSetupProfile("2"), "balanced-solo");
+  assert.equal(parseWizardSetupProfile("plan-only-review"), "plan-only-review");
+  assert.equal(parseWizardSetupProfile("invalid"), "guarded-corporate");
+  assert.match(
+    formatWizardSetupProfileQuestion("guarded-corporate"),
+    /Guarded corporate \(default\)/u,
+  );
+});
+
+test("phase-12 capability selection parses numbers and gates reviewer subagents", () => {
+  assert.deepEqual(parseWizardCapabilitySelection("1,3,4,5", true), {
+    skillPacks: ["base", "advanced-review", "mcp-recommendations"],
+    reviewerSubagents: true,
+  });
+  assert.deepEqual(
+    parseWizardCapabilitySelection("base,reviewer-subagents", false),
+    { skillPacks: ["base"], reviewerSubagents: false },
+  );
+  assert.deepEqual(parseWizardCapabilitySelection("", true), {
+    skillPacks: ["base", "review"],
+    reviewerSubagents: false,
+  });
+  assert.deepEqual(
+    parseWizardCapabilitySelection("", true, ["advanced-review"]),
+    {
+      skillPacks: ["advanced-review"],
+      reviewerSubagents: false,
+    },
+  );
+  assert.match(
+    formatWizardCapabilityQuestion({
+      defaults: ["base", "review"],
+      reviewerSubagentsAvailable: false,
+    }),
+    /\[blocked\] Plugins \/ global memory \/ auto-install/u,
+  );
+});
+
 test("parseManualLanguageSlugs enforces count, length, and whole-entry validation", () => {
   assert.deepEqual(parseManualLanguageSlugs(" Java, JAVASCRIPT, java "), {
     ok: true,
@@ -225,7 +292,9 @@ test("parseManualLanguageSlugs enforces count, length, and whole-entry validatio
   assert.equal(parseManualLanguageSlugs("").ok, true);
   assert.equal(parseManualLanguageSlugs("java, invalid slug").ok, false);
   assert.equal(
-    parseManualLanguageSlugs(Array.from({ length: 11 }, (_, index) => `l${index}`).join(",")).ok,
+    parseManualLanguageSlugs(
+      Array.from({ length: 11 }, (_, index) => `l${index}`).join(","),
+    ).ok,
     false,
   );
   assert.equal(parseManualLanguageSlugs("a".repeat(41)).ok, false);
@@ -432,6 +501,8 @@ test("interactive wizard prompts in deterministic order with .gitignore prompt",
   assert.deepEqual(kinds, [
     "selectStrategy",
     "selectClients",
+    "selectSetupProfile",
+    "selectCapabilities",
     "confirmGitignore",
     "confirmWritePlan",
   ]);
@@ -457,6 +528,8 @@ test("interactive wizard skips .gitignore prompt when no recommendation is missi
   assert.deepEqual(kinds, [
     "selectStrategy",
     "selectClients",
+    "selectSetupProfile",
+    "selectCapabilities",
     "confirmWritePlan",
   ]);
 });
@@ -527,8 +600,12 @@ test("interactive regions flow produces same files as explicit --strategy region
   const normalize = (text: string): string =>
     text.replace(/Name: agent-profile-wizard-[^\n]+/u, "Name: <NAME>");
   for (const relative of ["AGENTS.md", "CLAUDE.md"]) {
-    const wizardText = (await readFile(path.join(wizardRoot, relative))).toString("utf8");
-    const explicitText = (await readFile(path.join(explicitRoot, relative))).toString("utf8");
+    const wizardText = (
+      await readFile(path.join(wizardRoot, relative))
+    ).toString("utf8");
+    const explicitText = (
+      await readFile(path.join(explicitRoot, relative))
+    ).toString("utf8");
     assert.equal(
       normalize(wizardText),
       normalize(explicitText),
@@ -619,10 +696,7 @@ test("interactive flow respects selected clients in written profile", async () =
     prompts,
   });
   assert.equal(code, 0);
-  const profile = await readFile(
-    path.join(rootDir, "ai-profile.yaml"),
-    "utf8",
-  );
+  const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
   assert.match(profile, /codex:\n\s*enabled: true/u);
   assert.match(profile, /claude:\n\s*enabled: false/u);
   assert.match(profile, /tabnine:\n\s*enabled: false/u);
@@ -633,6 +707,64 @@ test("interactive flow respects selected clients in written profile", async () =
   assert.equal(
     await fileExists(path.join(rootDir, ".claude", "settings.json")),
     false,
+  );
+});
+
+test("phase-12 wizard writes setup profile, skill packs, and reviewer subagents", async () => {
+  const rootDir = await createTsRoot("phase12-capabilities");
+  const output = createOutput();
+  const prompts = scriptedPrompts({
+    strategy: "preserve",
+    clients: ["codex"],
+    setupProfile: "balanced-solo",
+    skillPacks: ["base", "review", "advanced-review", "mcp-recommendations"],
+    reviewerSubagents: true,
+    gitignore: false,
+    confirm: true,
+  });
+
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+
+  assert.equal(code, 0);
+  const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
+  assert.match(profile, /safety:\n  mode: balanced/u);
+  assert.match(
+    profile,
+    /capabilities:\n  skills:\n    packs:\n      - base\n      - review\n      - advanced-review\n      - mcp-recommendations/u,
+  );
+  assert.match(
+    profile,
+    /delegation:\n    subagents:\n      enabled: true\n      packs:\n        - reviewer-subagents/u,
+  );
+  assert.equal(
+    await fileExists(
+      path.join(rootDir, ".agents", "skills", "security-review", "SKILL.md"),
+    ),
+    true,
+  );
+  assert.equal(
+    await fileExists(
+      path.join(rootDir, ".codex", "agents", "security-reviewer.toml"),
+    ),
+    true,
+  );
+  assert.match(output.stdoutText(), /Safety mode: balanced/u);
+  assert.match(output.stdoutText(), /Reviewer subagents: enabled/u);
+  assert.match(
+    output.stdoutText(),
+    /generate \.codex\/agents\/security-reviewer\.toml/u,
+  );
+  assert.match(
+    output.stdoutText(),
+    /generate \.agents\/skills\/grill-change\/SKILL\.md/u,
+  );
+  assert.match(
+    output.stdoutText(),
+    /generate \.agents\/skills\/request-to-spec-issues\/SKILL\.md/u,
   );
 });
 
@@ -659,11 +791,7 @@ test("foreign subagent conflict appears in wizard output before final confirmati
 
 test("gitignore yes vs no only affects .gitignore content", async () => {
   const noRoot = await createTsRoot("gitignore-no");
-  await writeFile(
-    path.join(noRoot, ".gitignore"),
-    "# pre-existing\n",
-    "utf8",
-  );
+  await writeFile(path.join(noRoot, ".gitignore"), "# pre-existing\n", "utf8");
   const noPrompts = scriptedPrompts({
     strategy: "preserve",
     clients: [],
@@ -678,11 +806,7 @@ test("gitignore yes vs no only affects .gitignore content", async () => {
   const noGitignore = await readFile(path.join(noRoot, ".gitignore"), "utf8");
 
   const yesRoot = await createTsRoot("gitignore-yes");
-  await writeFile(
-    path.join(yesRoot, ".gitignore"),
-    "# pre-existing\n",
-    "utf8",
-  );
+  await writeFile(path.join(yesRoot, ".gitignore"), "# pre-existing\n", "utf8");
   const yesPrompts = scriptedPrompts({
     strategy: "preserve",
     clients: [],
@@ -709,7 +833,10 @@ test("gitignore yes vs no only affects .gitignore content", async () => {
   // normalize that field before comparing.
   const normalize = (text: string): string =>
     text.replace(/^  name: .*\n/mu, "  name: <NAME>\n");
-  const noProfile = await readFile(path.join(noRoot, "ai-profile.yaml"), "utf8");
+  const noProfile = await readFile(
+    path.join(noRoot, "ai-profile.yaml"),
+    "utf8",
+  );
   const yesProfile = await readFile(
     path.join(yesRoot, "ai-profile.yaml"),
     "utf8",
@@ -721,11 +848,7 @@ test("wizard never reads or echoes .env content", async () => {
   const rootDir = await createTsRoot("dotenv-sentinel");
   await writeUnmarkedRoots(rootDir);
   const secret = "AGENT_PROFILE_WIZARD_SECRET_LITERAL";
-  await writeFile(
-    path.join(rootDir, ".env"),
-    `SECRET=${secret}\n`,
-    "utf8",
-  );
+  await writeFile(path.join(rootDir, ".env"), `SECRET=${secret}\n`, "utf8");
   const output = createOutput();
   const prompts = scriptedPrompts({ confirm: false });
   await runCli(["init", "--root", rootDir], {
@@ -1078,10 +1201,11 @@ test("--non-interactive flag bypasses wizard prompts even when prompts are injec
   await writeUnmarkedRoots(rootDir);
   const prompts = scriptedPrompts({ confirm: true });
   const output = createOutput();
-  const code = await runCli(
-    ["init", "--root", rootDir, "--non-interactive"],
-    { io: output, nonInteractive: false, prompts },
-  );
+  const code = await runCli(["init", "--root", rootDir, "--non-interactive"], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
   assert.equal(code, 0);
   assert.equal(prompts.calls.length, 0);
   assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);

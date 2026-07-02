@@ -87,22 +87,22 @@ capabilities:
 
 ### Field Contracts
 
-| Field                                            | Type    | Required               | Contract                                                              |
-| ------------------------------------------------ | ------- | ---------------------- | --------------------------------------------------------------------- |
-| `capabilities.delegation.subagents.enabled`      | boolean | yes                    | defaults to `false` when the `capabilities` block is present          |
-| `capabilities.delegation.subagents.defaults`     | object  | no                     | conservative defaults applied to Codex `[agents]` block               |
-| `defaults.maxConcurrent`                         | integer | no                     | positive integer; omitted means use compiler default `3`              |
-| `defaults.maxDepth`                              | integer | no                     | positive integer; omitted means use compiler default `1`              |
-| `capabilities.delegation.subagents.agents`       | array   | yes when `enabled`     | non-empty when `enabled: true`                                        |
-| `agents[].name`                                  | string  | yes                    | matches `^[a-z0-9][a-z0-9-]*$`                                        |
-| `agents[].description`                           | string  | yes                    | non-empty; routing hint shown to the parent agent                     |
-| `agents[].purpose`                               | string  | yes                    | non-empty; human-readable summary; not emitted verbatim by every target |
-| `agents[].prompt`                                | string  | yes                    | non-empty; mapped to each target's system-prompt body or field        |
-| `agents[].toolScope`                             | string  | yes                    | one of `read-only`, `workspace-write`                                 |
-| `agents[].modelPreference`                       | string  | no                     | one of `inherit`, `fast`, `balanced`, `capable`                       |
-| `agents[].maxTurns`                              | integer | no                     | positive integer                                                      |
-| `agents[].timeoutMinutes`                        | integer | no                     | positive integer                                                      |
-| `agents[].mcpServers`                            | array   | no                     | references only; see MCP rule below                                   |
+| Field                                        | Type    | Required           | Contract                                                                |
+| -------------------------------------------- | ------- | ------------------ | ----------------------------------------------------------------------- |
+| `capabilities.delegation.subagents.enabled`  | boolean | yes                | defaults to `false` when the `capabilities` block is present            |
+| `capabilities.delegation.subagents.defaults` | object  | no                 | conservative defaults applied to Codex `[agents]` block                 |
+| `defaults.maxConcurrent`                     | integer | no                 | positive integer; omitted means use compiler default `3`                |
+| `defaults.maxDepth`                          | integer | no                 | positive integer; omitted means use compiler default `1`                |
+| `capabilities.delegation.subagents.agents`   | array   | yes when `enabled` | non-empty when `enabled: true`                                          |
+| `agents[].name`                              | string  | yes                | matches `^[a-z0-9][a-z0-9-]*$`                                          |
+| `agents[].description`                       | string  | yes                | non-empty; routing hint shown to the parent agent                       |
+| `agents[].purpose`                           | string  | yes                | non-empty; human-readable summary; not emitted verbatim by every target |
+| `agents[].prompt`                            | string  | yes                | non-empty; mapped to each target's system-prompt body or field          |
+| `agents[].toolScope`                         | string  | yes                | one of `read-only`, `workspace-write`                                   |
+| `agents[].modelPreference`                   | string  | no                 | one of `inherit`, `fast`, `balanced`, `capable`                         |
+| `agents[].maxTurns`                          | integer | no                 | positive integer                                                        |
+| `agents[].timeoutMinutes`                    | integer | no                 | positive integer                                                        |
+| `agents[].mcpServers`                        | array   | no                 | references only; see MCP rule below                                     |
 
 ### Naming and Collision Rules
 
@@ -278,3 +278,11 @@ Per-target expected outputs are listed in `002`, `003`, and `004`.
 - conservative defaults are still stricter than Codex's upstream defaults
 - cross-phase amendments are listed and traceable
 - no target output bytes are defined in this spec
+
+## Phase 12 Amendment (2026-07-02)
+
+The optional unique `subagents.packs` array accepts `reviewer-subagents`.
+Pack-only profiles are valid when `enabled: true`; enabled intent requires at
+least one non-empty source (`agents` or `packs`). Pack expansion participates in
+the same name-collision, target-enablement, permission, and deterministic render
+pipeline as inline/template agents.

@@ -10,6 +10,7 @@ import {
   containsSecretLikeLiteral,
   getEnabledSubagents,
   readProfileFile,
+  REVIEWER_DEFINITIONS,
 } from "@agent-profile/core";
 import type { AiProfile } from "@agent-profile/core";
 
@@ -838,7 +839,7 @@ test("phase-10 conditional Tabnine and AGENTS.md outputs gate on profile flags",
   const agentsText = Buffer.from(agentsMd.bytes).toString("utf8");
   assert.equal(agentsText.includes("## Stack Guidance — React"), true);
   assert.equal(agentsText.includes("## Stack Guidance — Svelte"), false);
-  assert.equal(agentsText.includes("## Code Review"), true);
+  assert.equal(agentsText.includes("## Code Review"), false);
   assert.equal(agentsText.includes("## Refactoring"), true);
   assert.equal(agentsText.includes("## Documentation"), true);
   // Section order: Stack → Stack Guidance — React → Enabled AI Clients →
@@ -849,7 +850,6 @@ test("phase-10 conditional Tabnine and AGENTS.md outputs gate on profile flags",
     "## Stack Guidance — React",
     "## Enabled AI Clients",
     "## Development Workflow",
-    "## Code Review",
     "## Refactoring",
     "## Documentation",
     "## Permissions",
@@ -888,7 +888,6 @@ test("phase-10 conditional Tabnine and AGENTS.md outputs gate on profile flags",
 
   const phase10AgentsSections = [
     "## Stack Guidance — React",
-    "## Code Review",
     "## Refactoring",
     "## Documentation",
   ];
@@ -1003,10 +1002,11 @@ test("phase-10 templates are lockfile-gated with their profile conditions", asyn
 
   const enabledTemplateIds = enabled.templates.map((template) => template.id);
   for (const templateId of PHASE_10_TEMPLATE_IDS) {
+    const expected = templateId !== "targets/agents-md/60-code-review@1";
     assert.equal(
       enabledTemplateIds.includes(templateId),
-      true,
-      `${templateId} should appear when its gate is open`,
+      expected,
+      `${templateId} should follow its Phase 12 target mapping`,
     );
   }
 });
@@ -2779,5 +2779,241 @@ test("phase-18 request-to-spec-issues output is deterministic across repeated co
       true,
       `${path}: repeated compile produced different bytes`,
     );
+  }
+});
+
+function phase12Profile(input: {
+  packs: NonNullable<NonNullable<AiProfile["capabilities"]>["skills"]>["packs"];
+  codeReview?: boolean;
+}): AiProfile {
+  return {
+    version: 1,
+    profile: { name: "phase-12", description: "Phase 12 skill pack fixture." },
+    stack: {
+      languages: ["typescript"],
+      frameworks: [],
+      packageManagers: ["npm"],
+      testing: [],
+    },
+    clients: {
+      tabnine: { enabled: true },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      sdd: false,
+      tdd: false,
+      finalReview: false,
+      codeReview: input.codeReview,
+    },
+    capabilities: { skills: { packs: input.packs } },
+  };
+}
+
+test("phase-12 review pack converges codeReview onto one skill per capable target", () => {
+  const result = compileProfile({
+    profile: phase12Profile({ packs: ["review"], codeReview: true }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const paths = result.files.map((file) => file.path);
+  assert.equal(
+    paths.filter((path) => path.endsWith("/review-change/SKILL.md")).length,
+    2,
+  );
+  assert.ok(paths.includes(".tabnine/guidelines/60-code-review.md"));
+  const agentsMd = result.files.find((file) => file.path === "AGENTS.md");
+  assert.ok(agentsMd);
+  assert.doesNotMatch(
+    Buffer.from(agentsMd.bytes).toString("utf8"),
+    /## Code Review/u,
+  );
+});
+
+test("phase-12 advanced review pack emits specialists and only valid pointers", () => {
+  const withSpecialists = compileProfile({
+    profile: phase12Profile({ packs: ["review", "advanced-review"] }),
+  });
+  const withoutSpecialists = compileProfile({
+    profile: phase12Profile({ packs: ["review"] }),
+  });
+
+  assert.equal(withSpecialists.ok && withoutSpecialists.ok, true);
+  if (!withSpecialists.ok || !withoutSpecialists.ok) return;
+  for (const skill of [
+    "security-review",
+    "readability-review",
+    "test-review",
+    "architecture-review",
+  ]) {
+    assert.ok(
+      withSpecialists.files.some(
+        (file) => file.path === `.agents/skills/${skill}/SKILL.md`,
+      ),
+      skill,
+    );
+    assert.ok(
+      withSpecialists.files.some(
+        (file) => file.path === `.claude/skills/${skill}/SKILL.md`,
+      ),
+      skill,
+    );
+    assert.equal(
+      withSpecialists.files.some((file) =>
+        file.path.includes(`tabnine/${skill}`),
+      ),
+      false,
+      skill,
+    );
+  }
+
+  const withBody = withSpecialists.files.find(
+    (file) => file.path === ".agents/skills/review-change/SKILL.md",
+  );
+  const withoutBody = withoutSpecialists.files.find(
+    (file) => file.path === ".agents/skills/review-change/SKILL.md",
+  );
+  assert.ok(withBody && withoutBody);
+  assert.match(
+    Buffer.from(withBody.bytes).toString("utf8"),
+    /security-review/u,
+  );
+  assert.doesNotMatch(
+    Buffer.from(withoutBody.bytes).toString("utf8"),
+    /security-review/u,
+  );
+});
+
+test("phase-12 MCP recommendations pack emits advisory-only skills", () => {
+  const result = compileProfile({
+    profile: phase12Profile({ packs: ["mcp-recommendations"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  for (const path of [
+    ".agents/skills/mcp-fit-check/SKILL.md",
+    ".claude/skills/mcp-fit-check/SKILL.md",
+  ]) {
+    const file = result.files.find((candidate) => candidate.path === path);
+    assert.ok(file, path);
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.match(body, /never install or configure/iu);
+    assert.doesNotMatch(
+      body,
+      /npm\s+(?:i|install)|npx\s|add this MCP server/iu,
+    );
+  }
+});
+
+test("phase-12 skill-pack golden fixtures are byte-stable", async () => {
+  for (const name of [
+    "base-pack-enabled",
+    "advanced-review-enabled",
+    "mcp-recommendations-enabled",
+  ]) {
+    const fixtureDir = fileURLToPath(
+      new URL(`../../../fixtures/${name}/`, import.meta.url),
+    );
+    const result = await compareGoldenFixture(fixtureDir);
+    assert.equal(
+      result.ok,
+      true,
+      `${name}: ${result.ok ? "" : JSON.stringify(result.failures, null, 2)}`,
+    );
+  }
+});
+
+test("phase-12 reviewer-subagents pack expands through Claude and Codex only", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          packs: ["reviewer-subagents"],
+        },
+      },
+    },
+  };
+
+  const first = compileProfile({ profile });
+  const second = compileProfile({ profile });
+  assert.equal(first.ok && second.ok, true);
+  if (!first.ok || !second.ok) return;
+
+  const reviewerPaths = first.files
+    .map((file) => file.path)
+    .filter((path) => path.includes("reviewer"));
+  assert.deepEqual(reviewerPaths, [
+    ".claude/agents/architecture-reviewer.md",
+    ".claude/agents/readability-reviewer.md",
+    ".claude/agents/security-reviewer.md",
+    ".claude/agents/test-reviewer.md",
+    ".codex/agents/architecture-reviewer.toml",
+    ".codex/agents/readability-reviewer.toml",
+    ".codex/agents/security-reviewer.toml",
+    ".codex/agents/test-reviewer.toml",
+  ]);
+  assert.equal(
+    first.files.some((file) => file.path.includes(".tabnine/agent/agents")),
+    false,
+  );
+  for (const file of first.files.filter((candidate) =>
+    reviewerPaths.includes(candidate.path),
+  )) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.doesNotMatch(body, /workspace-write|Write|Edit|Bash/u, file.path);
+  }
+  assert.deepEqual(
+    first.files.map((file) => Buffer.from(file.bytes).toString("utf8")),
+    second.files.map((file) => Buffer.from(file.bytes).toString("utf8")),
+  );
+});
+
+test("phase-12 reviewer-subagents golden fixture is byte-stable", async () => {
+  const fixtureDir = fileURLToPath(
+    new URL("../../../fixtures/reviewer-subagents-enabled/", import.meta.url),
+  );
+  const result = await compareGoldenFixture(fixtureDir);
+  assert.equal(
+    result.ok,
+    true,
+    result.ok ? "" : JSON.stringify(result.failures, null, 2),
+  );
+});
+
+test("phase-12 skills and reviewer subagents share neutral definitions", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: ["advanced-review"] }),
+    capabilities: {
+      skills: { packs: ["advanced-review"] },
+      delegation: {
+        subagents: { enabled: true, packs: ["reviewer-subagents"] },
+      },
+    },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const definition of REVIEWER_DEFINITIONS) {
+    const skill = result.files.find(
+      (file) => file.path === `.agents/skills/${definition.skillId}/SKILL.md`,
+    );
+    const reviewer = result.files.find(
+      (file) => file.path === `.codex/agents/${definition.reviewerId}.toml`,
+    );
+    assert.ok(skill && reviewer, definition.skillId);
+    const skillText = Buffer.from(skill.bytes).toString("utf8");
+    const reviewerText = Buffer.from(reviewer.bytes).toString("utf8");
+    for (const focus of definition.focus) {
+      assert.ok(skillText.includes(focus), `${definition.skillId}: ${focus}`);
+      assert.ok(
+        reviewerText.includes(focus),
+        `${definition.reviewerId}: ${focus}`,
+      );
+    }
   }
 });

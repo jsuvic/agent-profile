@@ -224,14 +224,14 @@ Claude permission mode strings.
 
 ### `workflow`
 
-| Field           | Type    | Required | Contract                                                                        |
-| --------------- | ------- | -------- | ------------------------------------------------------------------------------- |
-| `sdd`           | boolean | yes      | whether spec-driven development is required                                     |
-| `tdd`           | boolean | yes      | whether test-driven development is required                                     |
-| `finalReview`   | boolean | yes      | whether final implementation review is needed                                   |
-| `codeReview`    | boolean | no       | gate for phase-10 code-review guidance on Tabnine and `AGENTS.md`               |
-| `refactoring`   | boolean | no       | gate for phase-10 refactoring guidance on Tabnine and `AGENTS.md`               |
-| `documentation` | boolean | no       | gate for phase-10 documentation guidance on Tabnine and `AGENTS.md`             |
+| Field           | Type    | Required | Contract                                                            |
+| --------------- | ------- | -------- | ------------------------------------------------------------------- |
+| `sdd`           | boolean | yes      | whether spec-driven development is required                         |
+| `tdd`           | boolean | yes      | whether test-driven development is required                         |
+| `finalReview`   | boolean | yes      | whether final implementation review is needed                       |
+| `codeReview`    | boolean | no       | gate for phase-10 code-review guidance on Tabnine and `AGENTS.md`   |
+| `refactoring`   | boolean | no       | gate for phase-10 refactoring guidance on Tabnine and `AGENTS.md`   |
+| `documentation` | boolean | no       | gate for phase-10 documentation guidance on Tabnine and `AGENTS.md` |
 
 ### `permissions`
 
@@ -477,3 +477,16 @@ Rules:
 - validation does not resolve remote `$ref` values
 - validation errors are stable and useful without exposing secrets
 - tests cover both success and failure cases
+
+## Phase 12 Amendment (2026-07-02)
+
+`capabilities.skills.packs` is live with the closed ids `base`, `review`,
+`advanced-review`, `automation`, and `mcp-recommendations`. The optional array
+is unique and deterministic; `automation` is reserved and emits no Phase 12
+skills.
+
+`capabilities.delegation.subagents.packs` is also live with the closed id
+`reviewer-subagents`. Non-empty packs require `enabled: true`. When enabled, a
+non-empty `agents` array or a non-empty `packs` array is required, so pack-only
+reviewer profiles validate. All affected objects retain
+`additionalProperties: false`.

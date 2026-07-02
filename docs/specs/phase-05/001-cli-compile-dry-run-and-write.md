@@ -154,3 +154,9 @@ Exit codes:
 - diff-before-write is used
 - lockfile and generated outputs use the same compile result
 - no secret files are read or printed
+
+## Phase 12 Amendment (2026-07-02)
+
+Compile plans include pack-selected skill files and reviewer-subagent definition
+files. Dry-run, diff-before-write, explicit confirmation, lockfile tracking, and
+atomic write contracts are unchanged.
