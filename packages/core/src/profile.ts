@@ -11,6 +11,7 @@ import {
 } from "ajv";
 import { parseDocument, stringify as yamlStringify } from "yaml";
 import aiProfileSchema from "@agent-profile/schemas/ai-profile.schema.json" with { type: "json" };
+import { REVIEWER_DEFINITIONS } from "./reviewer-definitions.js";
 
 export type PermissionMode = "allow" | "ask" | "deny";
 export type SafetyMode = "guarded" | "balanced" | "autonomous" | "plan-only";
@@ -87,12 +88,11 @@ export type AiProfileEffectivePermissions = {
 };
 
 export type SubagentToolScope = "read-only" | "workspace-write";
-export type SubagentModelPreference = "inherit" | "fast" | "balanced" | "capable";
+export type SubagentModelPreference =
+  "inherit" | "fast" | "balanced" | "capable";
 
 export type SubagentTemplateName =
-  | "implementer"
-  | "spec-reviewer"
-  | "code-quality-reviewer";
+  "implementer" | "spec-reviewer" | "code-quality-reviewer";
 
 export const SUBAGENT_TEMPLATE_NAMES: SubagentTemplateName[] = [
   "implementer",
@@ -117,8 +117,9 @@ export type AiProfileSubagentTemplateRef = {
 };
 
 export type AiProfileSubagentEntry =
-  | AiProfileSubagent
-  | AiProfileSubagentTemplateRef;
+  AiProfileSubagent | AiProfileSubagentTemplateRef;
+
+export type AiProfileSubagentPackId = "reviewer-subagents";
 
 export type AiProfileSubagents = {
   enabled: boolean;
@@ -127,6 +128,14 @@ export type AiProfileSubagents = {
     maxDepth?: number;
   };
   agents?: AiProfileSubagentEntry[];
+  packs?: AiProfileSubagentPackId[];
+};
+
+export type AiProfileSkillPackId =
+  "base" | "review" | "advanced-review" | "automation" | "mcp-recommendations";
+
+export type AiProfileSkills = {
+  packs?: AiProfileSkillPackId[];
 };
 
 export function isSubagentTemplateRef(
@@ -162,14 +171,15 @@ function cloneTemplate(template: AiProfileSubagent): AiProfileSubagent {
   return clone;
 }
 
-const SUBAGENT_TEMPLATES_RAW: Record<SubagentTemplateName, AiProfileSubagent> = {
-  implementer: {
-    name: "implementer",
-    description:
-      "Use for a bounded implementation task after the parent agent has provided the full task text, relevant spec excerpts, file ownership, constraints, and expected tests. Returns an explicit status and does not commit or push unless the parent request includes that requirement.",
-    purpose:
-      "Implement one scoped task with tests, self-review, and honest escalation when requirements or architecture are unclear.",
-    prompt: `You are implementing one bounded task.
+const SUBAGENT_TEMPLATES_RAW: Record<SubagentTemplateName, AiProfileSubagent> =
+  {
+    implementer: {
+      name: "implementer",
+      description:
+        "Use for a bounded implementation task after the parent agent has provided the full task text, relevant spec excerpts, file ownership, constraints, and expected tests. Returns an explicit status and does not commit or push unless the parent request includes that requirement.",
+      purpose:
+        "Implement one scoped task with tests, self-review, and honest escalation when requirements or architecture are unclear.",
+      prompt: `You are implementing one bounded task.
 
 Work only from the task text, spec excerpts, file ownership, constraints,
 and allowed commands provided in the prompt. Do not assume hidden chat
@@ -200,19 +210,19 @@ Report exactly:
 - Files changed
 - Self-review findings
 - Concerns, missing context, or follow-up work`,
-    toolScope: "workspace-write",
-    modelPreference: "balanced",
-    maxTurns: 18,
-    timeoutMinutes: 20,
-    mcpServers: [],
-  },
-  "spec-reviewer": {
-    name: "spec-reviewer",
-    description:
-      "Use after an implementation worker reports DONE or DONE_WITH_CONCERNS to verify the actual changed files against the task text, approved spec, acceptance criteria, and claimed result. Reads code and docs only; does not edit.",
-    purpose:
-      "Catch missing requirements, extra scope, and misunderstandings before code-quality review.",
-    prompt: `You are reviewing whether an implementation matches its specification.
+      toolScope: "workspace-write",
+      modelPreference: "balanced",
+      maxTurns: 18,
+      timeoutMinutes: 20,
+      mcpServers: [],
+    },
+    "spec-reviewer": {
+      name: "spec-reviewer",
+      description:
+        "Use after an implementation worker reports DONE or DONE_WITH_CONCERNS to verify the actual changed files against the task text, approved spec, acceptance criteria, and claimed result. Reads code and docs only; does not edit.",
+      purpose:
+        "Catch missing requirements, extra scope, and misunderstandings before code-quality review.",
+      prompt: `You are reviewing whether an implementation matches its specification.
 
 Work only from the full task text, approved spec excerpts, acceptance
 criteria, changed-file list, and implementer report provided in the prompt.
@@ -235,19 +245,19 @@ Report exactly:
 - Extra or out-of-scope work, if any
 - Missing tests or docs tied to acceptance criteria
 - Recommendation: proceed to code-quality review, fix first, or request context`,
-    toolScope: "read-only",
-    modelPreference: "capable",
-    maxTurns: 10,
-    timeoutMinutes: 8,
-    mcpServers: [],
-  },
-  "code-quality-reviewer": {
-    name: "code-quality-reviewer",
-    description:
-      "Use only after spec review passes to assess maintainability, decomposition, tests, naming, risky mocks, and local code quality in the changed files. Reads code and docs only; does not edit.",
-    purpose:
-      "Catch maintainability and test-quality risks after the implementation is known to match the spec.",
-    prompt: `You are reviewing code quality after spec compliance has passed.
+      toolScope: "read-only",
+      modelPreference: "capable",
+      maxTurns: 10,
+      timeoutMinutes: 8,
+      mcpServers: [],
+    },
+    "code-quality-reviewer": {
+      name: "code-quality-reviewer",
+      description:
+        "Use only after spec review passes to assess maintainability, decomposition, tests, naming, risky mocks, and local code quality in the changed files. Reads code and docs only; does not edit.",
+      purpose:
+        "Catch maintainability and test-quality risks after the implementation is known to match the spec.",
+      prompt: `You are reviewing code quality after spec compliance has passed.
 
 Work only from the full task text, approved spec excerpts, changed-file list,
 spec-review result, test results, and implementer report provided in the
@@ -271,13 +281,13 @@ Report exactly:
 - Test-quality concerns
 - Maintainability concerns
 - Assessment: ready, fix first, or request context`,
-    toolScope: "read-only",
-    modelPreference: "capable",
-    maxTurns: 10,
-    timeoutMinutes: 8,
-    mcpServers: [],
-  },
-};
+      toolScope: "read-only",
+      modelPreference: "capable",
+      maxTurns: 10,
+      timeoutMinutes: 8,
+      mcpServers: [],
+    },
+  };
 
 const SUBAGENT_TEMPLATES: Record<SubagentTemplateName, AiProfileSubagent> = {
   implementer: freezeTemplate(SUBAGENT_TEMPLATES_RAW.implementer),
@@ -319,6 +329,7 @@ export function getSubagentTemplateRefs(
 }
 
 export type AiProfileCapabilities = {
+  skills?: AiProfileSkills;
   delegation?: {
     subagents?: AiProfileSubagents;
   };
@@ -378,7 +389,31 @@ export function getEnabledSubagents(
     return [];
   }
 
-  return (block.agents ?? []).map((entry) => expandSubagentEntry(entry));
+  const agents = (block.agents ?? []).map((entry) =>
+    expandSubagentEntry(entry),
+  );
+
+  if (block.packs?.includes("reviewer-subagents")) {
+    agents.push(
+      ...REVIEWER_DEFINITIONS.map((definition) => ({
+        name: definition.reviewerId,
+        description: definition.description,
+        purpose: `Perform a focused ${definition.title.toLowerCase()} of the requested change.`,
+        prompt: `Review the requested change as a ${definition.title.toLowerCase()} specialist.\n\nFocus on:\n${definition.focus
+          .map((item) => `- ${item}`)
+          .join(
+            "\n",
+          )}\n\nDo not edit files, run commands, install dependencies, read secrets, contact production systems, or upload source.\n\nReport exactly:\n- Status: CLEAR | FINDINGS | NEEDS_CONTEXT\n- Findings grouped by severity with evidence and affected path or contract\n- Missing evidence or context\n- Recommendation`,
+        toolScope: "read-only" as const,
+        modelPreference: "capable" as const,
+        maxTurns: 10,
+        timeoutMinutes: 8,
+        mcpServers: [],
+      })),
+    );
+  }
+
+  return agents;
 }
 
 const SUBAGENT_BUILTIN_NAMES_NORMALIZED = new Set<string>([
@@ -545,7 +580,9 @@ export function validateProfileValue(value: unknown): ProfileValidationResult {
     if (subagentIssues.length > 0) {
       return {
         ok: false,
-        issues: subagentIssues.sort((left, right) => compareIssues(left, right)),
+        issues: subagentIssues.sort((left, right) =>
+          compareIssues(left, right),
+        ),
       };
     }
 
@@ -563,7 +600,9 @@ export function validateProfileValue(value: unknown): ProfileValidationResult {
   };
 }
 
-function validateSubagentSemantics(profile: AiProfile): ProfileValidationIssue[] {
+function validateSubagentSemantics(
+  profile: AiProfile,
+): ProfileValidationIssue[] {
   const subagents = profile.capabilities?.delegation?.subagents;
 
   if (!subagents || subagents.enabled !== true) {
@@ -574,10 +613,26 @@ function validateSubagentSemantics(profile: AiProfile): ProfileValidationIssue[]
   const issues: ProfileValidationIssue[] = [];
   const seenRaw = new Map<string, number>();
   const seenNormalized = new Map<string, number>();
+  const packNames = subagents.packs?.includes("reviewer-subagents")
+    ? new Set(
+        REVIEWER_DEFINITIONS.map((definition) =>
+          normalizeSubagentName(definition.reviewerId),
+        ),
+      )
+    : new Set<string>();
 
   entries.forEach((entry, index) => {
     const expanded = expandSubagentEntry(entry);
     const name = expanded.name;
+    if (packNames.has(normalizeSubagentName(name))) {
+      issues.push({
+        code: "schema_validation_error",
+        path: `/capabilities/delegation/subagents/agents/${index}/name`,
+        expected: "name distinct from expanded subagent packs",
+        actual: "collision with reviewer-subagents",
+        message: `/capabilities/delegation/subagents/agents/${index}/name collides with a subagent generated by the reviewer-subagents pack.`,
+      });
+    }
 
     const rawIndex = seenRaw.get(name);
     if (rawIndex !== undefined) {
@@ -697,6 +752,14 @@ function buildCapabilitiesDoc(
 ): Record<string, unknown> {
   const doc: Record<string, unknown> = {};
 
+  if (capabilities.skills !== undefined) {
+    const skills: Record<string, unknown> = {};
+    if (capabilities.skills.packs !== undefined) {
+      skills["packs"] = capabilities.skills.packs;
+    }
+    doc["skills"] = skills;
+  }
+
   if (capabilities.delegation !== undefined) {
     const delegation: Record<string, unknown> = {};
     const subagents = capabilities.delegation.subagents;
@@ -723,6 +786,10 @@ function buildCapabilitiesDoc(
             ? { useTemplate: entry.useTemplate }
             : buildSubagentDoc(entry),
         );
+      }
+
+      if (subagents.packs !== undefined) {
+        block["packs"] = subagents.packs;
       }
 
       delegation["subagents"] = block;

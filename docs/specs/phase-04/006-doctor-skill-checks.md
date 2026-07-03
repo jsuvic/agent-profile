@@ -101,3 +101,13 @@ are owned by Phase 11 using `LINT-SUBAGENT-*` codes.
 - line-count thresholds match the plan
 - no skill contents are printed
 - no skills are installed or mutated
+
+## Phase 12 Amendment (2026-07-02)
+
+Doctor also compares the resolved skill set to generated artifacts:
+
+- `LINT-SKILL-REF-001`: dangling generated-skill reference.
+- `LINT-SKILL-PACK-001`: generated skill orphaned from current intent.
+- `LINT-SKILL-PACK-002`: selected skill missing from disk.
+
+Findings expose paths and stable metadata only, never skill contents.

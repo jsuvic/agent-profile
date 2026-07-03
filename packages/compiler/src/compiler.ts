@@ -8,6 +8,7 @@ import {
   getEnabledSubagents,
   getSubagentDefaults,
   getSubagentTemplateRefs,
+  REVIEWER_DEFINITIONS,
   SUBAGENT_TEMPLATE_NAMES,
   type AiProfile,
   type AiProfileEffectivePermissions,
@@ -40,6 +41,12 @@ import type {
   GeneratedFile,
   TemplateDescriptor,
 } from "./types.js";
+import {
+  renderMcpFitCheckSkill,
+  renderReviewChangeSkill,
+  renderSpecialistReviewSkill,
+} from "./phase12-skill-content.js";
+import { resolveSelectedSkills, type SkillId } from "./skill-selection.js";
 
 type TemplateSource = {
   id: string;
@@ -48,29 +55,7 @@ type TemplateSource = {
   source: string;
 };
 
-type WorkflowSkillId =
-  | "grill-change"
-  | "request-to-spec-issues"
-  | "sdd-change"
-  | "tdd-change"
-  | "final-review"
-  | "subagent-driven-change";
-
 type WorkflowSkillTargetId = "codex-workflow-skills" | "claude-workflow-skills";
-
-type WorkflowSkill = {
-  id: WorkflowSkillId;
-  workflowFlag: keyof AiProfile["workflow"];
-};
-
-const WORKFLOW_SKILLS: WorkflowSkill[] = [
-  { id: "grill-change", workflowFlag: "sdd" },
-  { id: "request-to-spec-issues", workflowFlag: "sdd" },
-  { id: "sdd-change", workflowFlag: "sdd" },
-  { id: "tdd-change", workflowFlag: "tdd" },
-  { id: "final-review", workflowFlag: "finalReview" },
-  { id: "subagent-driven-change", workflowFlag: "subagentDrivenDevelopment" },
-];
 
 const TEMPLATE_SOURCES: TemplateSource[] = [
   {
@@ -191,6 +176,36 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     "codex-workflow-skills",
     "subagent-driven-change",
   ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/review-change@1",
+    "codex-workflow-skills",
+    "review-change",
+  ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/security-review@1",
+    "codex-workflow-skills",
+    "security-review",
+  ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/readability-review@1",
+    "codex-workflow-skills",
+    "readability-review",
+  ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/test-review@1",
+    "codex-workflow-skills",
+    "test-review",
+  ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/architecture-review@1",
+    "codex-workflow-skills",
+    "architecture-review",
+  ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/mcp-fit-check@1",
+    "codex-workflow-skills",
+    "mcp-fit-check",
+  ),
   {
     id: "targets/claude-settings@1",
     target: "claude-settings",
@@ -238,6 +253,36 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     "targets/claude-workflow-skills/subagent-driven-change@1",
     "claude-workflow-skills",
     "subagent-driven-change",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/review-change@1",
+    "claude-workflow-skills",
+    "review-change",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/security-review@1",
+    "claude-workflow-skills",
+    "security-review",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/readability-review@1",
+    "claude-workflow-skills",
+    "readability-review",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/test-review@1",
+    "claude-workflow-skills",
+    "test-review",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/architecture-review@1",
+    "claude-workflow-skills",
+    "architecture-review",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/mcp-fit-check@1",
+    "claude-workflow-skills",
+    "mcp-fit-check",
   ),
 ];
 
@@ -340,7 +385,7 @@ export function getSubagentTemplates(profile: AiProfile): TemplateDescriptor[] {
   }
 
   if (profile.clients.tabnine.enabled) {
-    for (const agent of agents) {
+    for (const agent of getTabnineSubagents(profile)) {
       if (agent.toolScope !== "read-only") {
         continue;
       }
@@ -363,7 +408,9 @@ export function renderAgentsMd(profile: AiProfile): string {
     ? `\n${renderTopicAsAgentsMdSection(REACT_STACK_TOPIC)}`
     : "";
   const codeReviewSection =
-    profile.workflow.codeReview === true
+    profile.workflow.codeReview === true &&
+    !profile.clients.codex.enabled &&
+    !profile.clients.claude.enabled
       ? `\n${renderTopicAsAgentsMdSection(CODE_REVIEW_TOPIC)}`
       : "";
   const refactoringSection =
@@ -649,7 +696,7 @@ function renderTabnineGuidelines(profile: AiProfile): GeneratedFile[] {
     );
   }
 
-  if (profile.workflow.codeReview === true) {
+  if (resolveSelectedSkills(profile).includes("review-change")) {
     files.push(
       createGeneratedTextFile(
         ".tabnine/guidelines/60-code-review.md",
@@ -701,28 +748,31 @@ function renderWorkflowSkillFiles(
   target: WorkflowSkillTargetId,
   rootPath: ".agents/skills" | ".claude/skills",
 ): GeneratedFile[] {
-  return WORKFLOW_SKILLS.filter(
-    (skill) => profile.workflow[skill.workflowFlag],
-  ).map((skill) =>
+  const selected = resolveSelectedSkills(profile);
+  const selectedSet = new Set(selected);
+  return selected.map((skill) =>
     createGeneratedTextFile(
-      `${rootPath}/${skill.id}/SKILL.md`,
+      `${rootPath}/${skill}/SKILL.md`,
       target,
-      getWorkflowSkillTemplateId(target, skill.id),
-      renderWorkflowSkill(skill.id),
+      getWorkflowSkillTemplateId(target, skill),
+      renderWorkflowSkill(skill, selectedSet),
     ),
   );
 }
 
 function getWorkflowSkillTemplateId(
   target: WorkflowSkillTargetId,
-  skill: WorkflowSkillId,
+  skill: SkillId,
 ): string {
   const version = skill === "tdd-change" ? "2" : "1";
 
   return `targets/${target}/${skill}@${version}`;
 }
 
-function renderWorkflowSkill(skill: WorkflowSkillId): string {
+function renderWorkflowSkill(
+  skill: SkillId,
+  selectedSkills: ReadonlySet<SkillId> = new Set(),
+): string {
   switch (skill) {
     case "grill-change":
       return `---
@@ -1050,6 +1100,20 @@ Code-quality reviewer status values: \`ACCEPTABLE\`, \`ISSUES_FOUND\`, \`NEEDS_C
 
 Final handoff must list what changed, tests run, contract impact, security impact, remaining risks or TODOs, and whether the spec acceptance criteria are fully met.
 `;
+    case "review-change":
+      return renderReviewChangeSkill(selectedSkills);
+    case "security-review":
+    case "readability-review":
+    case "test-review":
+    case "architecture-review": {
+      const rendered = renderSpecialistReviewSkill(skill);
+      if (rendered === undefined) {
+        throw new Error(`Missing specialist review content for ${skill}.`);
+      }
+      return rendered;
+    }
+    case "mcp-fit-check":
+      return renderMcpFitCheckSkill();
   }
 }
 
@@ -1266,7 +1330,7 @@ function renderCodexSubagentFiles(profile: AiProfile): GeneratedFile[] {
 }
 
 function renderTabnineSubagentFiles(profile: AiProfile): GeneratedFile[] {
-  const agents = getEnabledSubagents(profile).filter(
+  const agents = getTabnineSubagents(profile).filter(
     (agent) => agent.toolScope === "read-only",
   );
 
@@ -1278,6 +1342,26 @@ function renderTabnineSubagentFiles(profile: AiProfile): GeneratedFile[] {
       renderTabnineSubagent(agent),
     ),
   );
+}
+
+const REVIEWER_SUBAGENT_NAMES: ReadonlySet<string> = new Set(
+  REVIEWER_DEFINITIONS.map((definition) => definition.reviewerId),
+);
+
+function getTabnineSubagents(profile: AiProfile): AiProfileSubagent[] {
+  const agents = getEnabledSubagents(profile);
+  const reviewerPackSelected =
+    profile.capabilities?.delegation?.subagents?.packs?.includes(
+      "reviewer-subagents",
+    ) === true;
+
+  // Reviewer names are reserved only while the pack is selected; without the
+  // pack, a user-defined agent with such a name is valid Tabnine input.
+  if (!reviewerPackSelected) {
+    return agents;
+  }
+
+  return agents.filter((agent) => !REVIEWER_SUBAGENT_NAMES.has(agent.name));
 }
 
 function titleCaseFromKebab(name: string): string {
@@ -1487,7 +1571,7 @@ function agentsMdTopicTemplateSource(
 function workflowSkillTemplateSource(
   id: string,
   target: WorkflowSkillTargetId,
-  skill: WorkflowSkillId,
+  skill: SkillId,
 ): TemplateSource {
   return {
     id,
@@ -1539,10 +1623,11 @@ function renderClaudeSettingsJson(): string {
 function getEnabledTargetIds(profile: AiProfile): CompilerTargetId[] {
   const targets: CompilerTargetId[] = ["agents-md"];
   const subagentsEnabled = getEnabledSubagents(profile).length > 0;
+  const tabnineSubagentsEnabled = getTabnineSubagents(profile).length > 0;
 
   if (profile.clients.tabnine.enabled) {
     targets.push("tabnine-guidelines", "tabnine-mcp-config");
-    if (subagentsEnabled) {
+    if (tabnineSubagentsEnabled) {
       targets.push("tabnine-subagents");
     }
   }
@@ -1596,7 +1681,7 @@ function validateTargets(
   }
 
   if (targets.includes("tabnine-subagents")) {
-    const writeAgents = getEnabledSubagents(profile).filter(
+    const writeAgents = getTabnineSubagents(profile).filter(
       (agent) => agent.toolScope === "workspace-write",
     );
     for (const agent of writeAgents) {
@@ -1734,7 +1819,7 @@ function getRequiredTemplateIds(
         (agent) => `targets/codex-subagents/${agent.name}@1`,
       );
     case "tabnine-subagents":
-      return getEnabledSubagents(profile)
+      return getTabnineSubagents(profile)
         .filter((agent) => agent.toolScope === "read-only")
         .map((agent) => `targets/tabnine-subagents/${agent.name}@1`);
     default:
@@ -1750,7 +1835,11 @@ function getRequiredAgentsMdTopicTemplateIds(profile: AiProfile): string[] {
   if (hasStack(profile, "frameworks", "react")) {
     ids.push("targets/agents-md/30-stack-typescript-react@1");
   }
-  if (profile.workflow.codeReview === true) {
+  if (
+    profile.workflow.codeReview === true &&
+    !profile.clients.codex.enabled &&
+    !profile.clients.claude.enabled
+  ) {
     ids.push("targets/agents-md/60-code-review@1");
   }
   if (profile.workflow.refactoring === true) {
@@ -1791,7 +1880,7 @@ function getRequiredTabnineGuidelineTemplateIds(profile: AiProfile): string[] {
   if (hasAnyStack(profile, "testing", ["playwright", "junit"])) {
     ids.push("targets/tabnine-guidelines/50-testing-playwright-junit@1");
   }
-  if (profile.workflow.codeReview === true) {
+  if (resolveSelectedSkills(profile).includes("review-change")) {
     ids.push("targets/tabnine-guidelines/60-code-review@1");
   }
   if (profile.workflow.refactoring === true) {
@@ -1811,9 +1900,9 @@ function getRequiredWorkflowSkillTemplateIds(
   profile: AiProfile,
   target: WorkflowSkillTargetId,
 ): string[] {
-  return WORKFLOW_SKILLS.filter(
-    (skill) => profile.workflow[skill.workflowFlag],
-  ).map((skill) => getWorkflowSkillTemplateId(target, skill.id));
+  return resolveSelectedSkills(profile).map((skill) =>
+    getWorkflowSkillTemplateId(target, skill),
+  );
 }
 
 function uniqueTargets(targets: CompilerTargetId[]): CompilerTargetId[] {

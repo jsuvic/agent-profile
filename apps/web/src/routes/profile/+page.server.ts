@@ -26,6 +26,7 @@ export type ProfileViewModel = {
   permissions: AiProfileEffectivePermissions;
   rawPermissions: AiProfile["permissions"];
   rawSafety: AiProfile["safety"];
+  rawCapabilities: AiProfile["capabilities"];
   hasSecretLikeContent: boolean;
   yaml: string;
   etag: string;
@@ -90,6 +91,7 @@ export async function load(): Promise<ProfilePageData> {
       permissions,
       rawPermissions: profile.permissions,
       rawSafety: profile.safety,
+      rawCapabilities: profile.capabilities,
       hasSecretLikeContent: yamlRedacted !== ctx.profileSource,
       yaml: yamlRedacted,
       etag: ctx.profileSource

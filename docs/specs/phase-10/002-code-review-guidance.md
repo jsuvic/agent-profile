@@ -78,16 +78,16 @@ contracts of their owning targets.
 
 Amendment to the `phase-02/001` Output Contract adding:
 
-| Output path                              | Template id                                   |
-| ---------------------------------------- | --------------------------------------------- |
-| `.tabnine/guidelines/60-code-review.md`  | `targets/tabnine-guidelines/60-code-review@1` |
+| Output path                             | Template id                                   |
+| --------------------------------------- | --------------------------------------------- |
+| `.tabnine/guidelines/60-code-review.md` | `targets/tabnine-guidelines/60-code-review@1` |
 
 Amendment to the `phase-01/004` Content Contract adding a conditional
 section:
 
-| Section title       | Insertion position                          | Gate                          |
-| ------------------- | ------------------------------------------- | ----------------------------- |
-| `## Code Review`    | immediately after `## Development Workflow` | `workflow.codeReview: true`   |
+| Section title    | Insertion position                          | Gate                        |
+| ---------------- | ------------------------------------------- | --------------------------- |
+| `## Code Review` | immediately after `## Development Workflow` | `workflow.codeReview: true` |
 
 No amendment to `phase-03/003`. `CLAUDE.md` golden output remains
 unchanged.
@@ -117,7 +117,7 @@ Both the Tabnine file and the `AGENTS.md` section cover, in stable order:
   file/function/component)
 - reference to the shared final-review block (in Tabnine, the existing
   `90-final-review.md`; in `AGENTS.md`, the existing `## Completion
-  Checklist`); do not duplicate the checklist body
+Checklist`); do not duplicate the checklist body
 
 The Tabnine file remains under Tabnine's recommended 500-line limit. The
 `AGENTS.md` section remains short and prose-style.
@@ -135,7 +135,7 @@ to each target.
 - The Tabnine file must not duplicate the final-review block from
   `90-final-review.md`.
 - The `AGENTS.md` section must not duplicate the `## Completion
-  Checklist`.
+Checklist`.
 - Outputs respect `effectivePermissions`.
 - `CLAUDE.md` is byte-identical across the phase boundary; the
   non-duplication invariant from `phase-03/003` is preserved.
@@ -197,3 +197,11 @@ to each target.
 - Tabnine file size under 500 lines
 - security contract matches the owning target on each surface
 - `CLAUDE.md` is not modified
+
+## Phase 12 Amendment (2026-07-02)
+
+`workflow.codeReview: true` is equivalent to selecting the `review` pack.
+Skill-capable targets render `review-change` from `CODE_REVIEW_TOPIC` and omit
+the standalone AGENTS.md review section. Tabnine continues to receive exactly
+one `60-code-review.md` umbrella guideline. This intentional UX change replaces
+duplicate always-loaded review prose with an invokable skill.

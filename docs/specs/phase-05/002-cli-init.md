@@ -180,3 +180,11 @@ signals from 005) + (guarded defaults from ADR 0002)` before producing a
 - profile validates
 - no secret files are read
 - write behavior is explicit and reviewable
+
+## Phase 12 Amendment (2026-07-02)
+
+Interactive init now selects a setup profile, skill packs, and optional
+Claude/Codex reviewer subagents. All setup profiles preselect `base` + `review`;
+reviewer subagents and other packs default off. The preview lists safety mode,
+packs, reviewer state, and resulting skill/subagent paths before the existing
+write confirmation.

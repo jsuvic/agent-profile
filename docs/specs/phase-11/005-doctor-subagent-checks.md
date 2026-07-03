@@ -184,16 +184,16 @@ settings because this phase does not write `.tabnine/agent/settings.json`.
 
 ## Severity Policy
 
-| Condition                                                                          | Severity  |
-| ---------------------------------------------------------------------------------- | --------- |
-| subagent looser than `effectivePermissions`                                        | `error`   |
-| secret-like material in subagent file                                              | `error`   |
-| Codex subagent `danger-full-access`                                                | `error`   |
-| Claude subagent `bypassPermissions`                                                | `error`   |
-| built-in name collision after normalization                                        | `warning` |
-| orphan generated subagent file                                                     | `warning` |
-| Tabnine subagent declares write/shell/browser/network tools                        | `warning` |
-| runtime enablement not verifiable (Tabnine `experimental.enableAgents`, etc.)      | `info`    |
+| Condition                                                                     | Severity  |
+| ----------------------------------------------------------------------------- | --------- |
+| subagent looser than `effectivePermissions`                                   | `error`   |
+| secret-like material in subagent file                                         | `error`   |
+| Codex subagent `danger-full-access`                                           | `error`   |
+| Claude subagent `bypassPermissions`                                           | `error`   |
+| built-in name collision after normalization                                   | `warning` |
+| orphan generated subagent file                                                | `warning` |
+| Tabnine subagent declares write/shell/browser/network tools                   | `warning` |
+| runtime enablement not verifiable (Tabnine `experimental.enableAgents`, etc.) | `info`    |
 
 Any future policy that downgrades severity must be explicit, versioned, and
 covered by tests.
@@ -270,3 +270,10 @@ covered by tests.
 - skill-check family is not absorbed
 - doctor does not start, write, or otherwise invoke subagents
 - findings do not leak file bytes
+
+## Phase 12 Amendment (2026-07-02)
+
+Reviewer subagents expanded from `reviewer-subagents` reuse these checks.
+Missing expected reviewer files are reported by generated-artifact drift,
+orphan generated reviewers by `LINT-SUBAGENT-006`, and any read-only/permission
+broadening by `LINT-SUBAGENT-001`. Reviewer definitions are never executed.

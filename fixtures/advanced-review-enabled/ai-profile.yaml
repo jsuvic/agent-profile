@@ -1,0 +1,44 @@
+version: 1
+profile:
+  name: advanced-review-enabled
+  description: Fixture exercising Phase 12 umbrella and specialist review skills.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: false
+  tdd: false
+  finalReview: false
+capabilities:
+  skills:
+    packs:
+      - review
+      - advanced-review
+permissions:
+  filesystem:
+    read: allow
+    write: ask
+  shell:
+    run: ask
+  secrets:
+    access: deny
+  dependencies:
+    install: ask
+  network:
+    external: ask
+  production:
+    access: deny

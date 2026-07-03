@@ -24,6 +24,8 @@ export {
   validateProfileValue,
 } from "./profile.js";
 export { containsSecretLikeLiteral } from "./security.js";
+export { REVIEWER_DEFINITIONS } from "./reviewer-definitions.js";
+export type { ReviewerDefinition } from "./reviewer-definitions.js";
 export { PRESET_VERIFICATION_KEYS } from "./preset/public-keys.js";
 export { verifyPresetToken } from "./preset/token.js";
 export type { PresetVerificationKey } from "./preset/public-keys.js";
@@ -46,9 +48,12 @@ export type {
   AiProfileEffectivePermissions,
   AiProfilePermissions,
   AiProfileSafety,
+  AiProfileSkillPackId,
+  AiProfileSkills,
   AiProfileStack,
   AiProfileSubagent,
   AiProfileSubagentEntry,
+  AiProfileSubagentPackId,
   AiProfileSubagentTemplateRef,
   AiProfileSubagents,
   NormalizedAiProfileSafety,
