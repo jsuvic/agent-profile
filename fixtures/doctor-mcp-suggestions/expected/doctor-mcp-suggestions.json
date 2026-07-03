@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "status": "pass",
+  "issues": [
+    {
+      "code": "LINT-PERM-006",
+      "severity": "info",
+      "path": "claude-runtime",
+      "expected": "verified CLI permission mode and merged user settings",
+      "actual": "not verifiable",
+      "message": "Claude CLI flags and user settings may override project settings.",
+      "guidance": "Verify the active Claude permission mode and settings scopes before trusting runtime posture."
+    },
+    {
+      "code": "LINT-PERM-006",
+      "severity": "info",
+      "path": "codex-runtime",
+      "expected": "verified runtime approval and sandbox flags",
+      "actual": "not verifiable",
+      "message": "Codex runtime flags or user configuration may override project config.",
+      "guidance": "Verify the active Codex approval policy and sandbox mode before trusting runtime posture."
+    },
+    {
+      "code": "MCP-SUGGEST-UNCOMPARABLE",
+      "severity": "info",
+      "path": "package.json/dependencies/express",
+      "expected": "exact stable semver version",
+      "actual": "range",
+      "message": "express version declaration is not comparable (range); no staleness claim is made.",
+      "guidance": "Pin an exact stable version to enable baseline comparison; APC makes no staleness claim for non-comparable declarations."
+    },
+    {
+      "code": "MCP-SUGGEST-NEW-FRAMEWORK",
+      "severity": "info",
+      "path": "package.json/dependencies/react",
+      "expected": "baseline 19.0.0 or older (as of 2026-01-01)",
+      "actual": "999.0.0",
+      "message": "react 999.0.0 is newer than APC's pinned baseline 19.0.0 (as of 2026-01-01); current docs may help.",
+      "guidance": "Consider curated MCP candidate ids: docs-current-frameworks. APC recommends only; install and configuration are deferred to the user."
+    },
+    {
+      "code": "LINT-PERM-006",
+      "severity": "info",
+      "path": "tabnine-runtime",
+      "expected": "verified IDE Tool Permissions state",
+      "actual": "not verifiable",
+      "message": "Tabnine IDE runtime tool permission state cannot be verified from project files.",
+      "guidance": "Manually verify Tool Permissions in Tabnine IDE settings: Auto-approve, Ask first, or Disable."
+    }
+  ]
+}

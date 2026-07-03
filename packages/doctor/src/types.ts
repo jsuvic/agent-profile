@@ -50,7 +50,9 @@ export type DoctorIssueCode =
   | "LINT-REGION-004"
   | "LINT-OWN-001"
   | "LINT-OWN-002"
-  | "LINT-GITIGNORE-002";
+  | "LINT-GITIGNORE-002"
+  | "MCP-SUGGEST-NEW-FRAMEWORK"
+  | "MCP-SUGGEST-UNCOMPARABLE";
 
 export type DoctorIssue = {
   code: DoctorIssueCode;
@@ -70,4 +72,7 @@ export type DoctorResult = {
 
 export type DoctorRequest = {
   rootDir?: string;
+  // Phase 19 (WS4): opt-in static, offline MCP recommendation scan.
+  // Informational only; never changes status or exit behavior.
+  mcpSuggestions?: boolean;
 };

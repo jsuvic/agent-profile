@@ -98,6 +98,10 @@ The workflow is:
 2. `compile --dry-run` previews the files that would be generated.
 3. `compile --write` writes generated files under the project root.
 4. `doctor` checks profile validity, drift, safety posture, and generated files.
+   With `--mcp-suggestions`, doctor also runs a fully offline, informational
+   scan that flags npm dependencies newer than APC's pinned knowledge baseline
+   and points to curated MCP candidate ids. It emits `info` findings only —
+   it never installs, configures, fetches, or changes the exit code.
 5. `ui` starts a local browser UI on loopback. The UI can inspect the project
    and edit `ai-profile.yaml` through a diff-gated save flow; generated
    artifacts are still written only by the CLI.
@@ -148,6 +152,7 @@ agent-profile compile --dry-run
 agent-profile compile --write
 agent-profile doctor
 agent-profile doctor --json
+agent-profile doctor --mcp-suggestions   # offline, informational MCP scan
 agent-profile ui
 agent-profile ui --root /path/to/project --port auto --open true
 ```

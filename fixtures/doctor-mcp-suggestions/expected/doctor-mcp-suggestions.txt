@@ -1,0 +1,32 @@
+Agent Profile Doctor
+status: pass
+
+[info] LINT-PERM-006 claude-runtime
+Claude CLI flags and user settings may override project settings.
+expected: verified CLI permission mode and merged user settings
+actual: not verifiable
+Verify the active Claude permission mode and settings scopes before trusting runtime posture.
+
+[info] LINT-PERM-006 codex-runtime
+Codex runtime flags or user configuration may override project config.
+expected: verified runtime approval and sandbox flags
+actual: not verifiable
+Verify the active Codex approval policy and sandbox mode before trusting runtime posture.
+
+[info] MCP-SUGGEST-UNCOMPARABLE package.json/dependencies/express
+express version declaration is not comparable (range); no staleness claim is made.
+expected: exact stable semver version
+actual: range
+Pin an exact stable version to enable baseline comparison; APC makes no staleness claim for non-comparable declarations.
+
+[info] MCP-SUGGEST-NEW-FRAMEWORK package.json/dependencies/react
+react 999.0.0 is newer than APC's pinned baseline 19.0.0 (as of 2026-01-01); current docs may help.
+expected: baseline 19.0.0 or older (as of 2026-01-01)
+actual: 999.0.0
+Consider curated MCP candidate ids: docs-current-frameworks. APC recommends only; install and configuration are deferred to the user.
+
+[info] LINT-PERM-006 tabnine-runtime
+Tabnine IDE runtime tool permission state cannot be verified from project files.
+expected: verified IDE Tool Permissions state
+actual: not verifiable
+Manually verify Tool Permissions in Tabnine IDE settings: Auto-approve, Ask first, or Disable.
