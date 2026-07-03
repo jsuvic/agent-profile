@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft
+Implemented. Landed with the re-rooted initial import `167f313` (2026-05-12).
 
 This document is the implementation-level synthesis of the four Phase 8 drafts:
 

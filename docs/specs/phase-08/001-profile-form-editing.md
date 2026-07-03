@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft for implementation review.
+Implemented. Landed with the re-rooted initial import `167f313` (2026-05-12).
 
 ## Problem
 

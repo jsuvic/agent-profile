@@ -2,10 +2,11 @@
 
 ## Status
 
-Draft. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16. Not
-approved. Implementation should not begin until each spec in this phase is
-Approved and the cross-phase amendments listed in `001-subagents-schema.md` are
-in.
+Implemented. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16.
+Implementation landed on 2026-05-17 in `dcf18bd` (PR #16); workspace-write
+Claude subagent tooling was repaired in `d2a9f79` (PR #22). Phase 13 subagent
+template references (PR #17) and the Phase 12 `reviewer-subagents` pack
+(PR #49) build on this platform.
 
 ## Purpose
 
