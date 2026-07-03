@@ -114,6 +114,7 @@ type ParsedDoctorArgs =
       ok: true;
       root: string;
       json: boolean;
+      mcpSuggestions: boolean;
       help: boolean;
     }
   | {
@@ -344,6 +345,7 @@ async function runDoctorCommand(
 
   const result = await runDoctor({
     rootDir: path.resolve(cwd, parsed.root),
+    mcpSuggestions: parsed.mcpSuggestions,
   });
 
   if (parsed.json) {
@@ -1127,6 +1129,7 @@ function toWizardImportReport(report: Phase14ImportReport): WizardImportReport {
 function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
   let root = ".";
   let json = false;
+  let mcpSuggestions = false;
   let help = false;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -1147,6 +1150,9 @@ function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
       case "--json":
         json = true;
         break;
+      case "--mcp-suggestions":
+        mcpSuggestions = true;
+        break;
       case "--help":
       case "-h":
         help = true;
@@ -1156,7 +1162,7 @@ function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
     }
   }
 
-  return { ok: true, root, json, help };
+  return { ok: true, root, json, mcpSuggestions, help };
 }
 
 function parseCompileArgs(args: string[]): ParsedCompileArgs {
@@ -2481,13 +2487,17 @@ function formatHelp(): string {
 
 Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
-  agent-profile doctor [--root <path>] [--json]
+  agent-profile doctor [--root <path>] [--json] [--mcp-suggestions]
   agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
   agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 
 Commands:
   compile   Preview or write generated agent artifacts.
   doctor    Run local profile, lockfile, and permission checks.
+            --mcp-suggestions adds an offline, informational scan that flags
+            dependencies newer than APC's pinned baseline and points to
+            curated MCP candidate ids. It never installs, configures, or
+            fetches anything and never changes the exit code.
   init      Create a starting ai-profile.yaml (interactive wizard with no args).
   ui        Start the local read-only UI.
 

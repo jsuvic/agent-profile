@@ -46,6 +46,11 @@ grouping:
 
 # WS4 - MCP Recommendation Scan (static, offline)
 
+> Promoted to `docs/specs/phase-19/001-mcp-recommendation-scan.md` (approved
+> 2026-07-03). The numbered spec is authoritative; it names the surface
+> `doctor --mcp-suggestions`, scopes v1 version comparison to npm, and owns the
+> shared `McpCandidate` catalog that WS3's `suggestedMcpCandidates` imports.
+
 ## Problem
 
 Projects using frameworks/runtimes newer than a client's likely knowledge could

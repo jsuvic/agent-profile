@@ -73,7 +73,18 @@ subagents-enabled/
     .codex/agents/code-reviewer.toml
     .codex/config.toml  (includes appended [agents] block)
     .tabnine/agent/agents/code-reviewer.md
+doctor-mcp-suggestions/
+  package.json  (phase-19 input: react newer than baseline, express range)
+  expected/  (golden CLI stdout, not compiler outputs)
+    doctor-mcp-suggestions.txt   (doctor --mcp-suggestions text output)
+    doctor-mcp-suggestions.json  (doctor --mcp-suggestions --json output)
 ```
+
+The `doctor-mcp-suggestions` fixture is a CLI stdout golden: the CLI tests
+build a minimal-valid project root, copy in the fixture `package.json`, and
+byte-compare full `doctor --mcp-suggestions` stdout (including the minimal
+fixture's `LINT-PERM-006` info issues in doctor ordering) against the
+`expected/` files.
 
 Planned first compiler fixture:
 

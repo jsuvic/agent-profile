@@ -36,6 +36,7 @@ import {
   type PermissionMode,
 } from "@agent-profile/core";
 
+import { scanMcpSuggestions } from "./mcpSuggestions.js";
 import type {
   DoctorIssue,
   DoctorIssueCode,
@@ -63,6 +64,14 @@ export async function runDoctor(
 ): Promise<DoctorResult> {
   const rootDir = path.resolve(request.rootDir ?? ".");
   const issues: DoctorIssue[] = [];
+
+  // Phase 19 (WS4): opt-in, informational-only scan. Runs before profile
+  // checks so suggestions survive early returns; without the flag the
+  // doctor output is byte-identical to the phase-04 contract.
+  if (request.mcpSuggestions) {
+    issues.push(...(await scanMcpSuggestions(rootDir)));
+  }
+
   const profileBytes = await readKnownFile(rootDir, PROFILE_PATH);
 
   if (!profileBytes.ok) {

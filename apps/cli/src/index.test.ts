@@ -37,6 +37,9 @@ const fixtureDir = fileURLToPath(
   new URL("../../../fixtures/minimal-valid/", import.meta.url),
 );
 const expectedDir = path.join(fixtureDir, "expected");
+const mcpSuggestionsFixtureDir = fileURLToPath(
+  new URL("../../../fixtures/doctor-mcp-suggestions/", import.meta.url),
+);
 const PRESET_NOW = Date.parse("2026-05-13T12:00:00.000Z") / 1000;
 const PRESET_TEST_OPTIONS = {
   presetNow: () => PRESET_NOW,
@@ -114,6 +117,77 @@ test("doctor root option requires a value", async () => {
 
   assert.equal(code, 2);
   assert.match(output.stderrText(), /--root requires a path/u);
+});
+
+test("doctor --mcp-suggestions matches the golden text fixture and exits 0", async () => {
+  const rootDir = await createMcpSuggestionsRoot();
+  const output = createOutput();
+  const code = await runCli(
+    ["doctor", "--root", rootDir, "--mcp-suggestions"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  // Phase-19 golden fixture: full stdout is byte-stable, including the
+  // minimal fixture's LINT-PERM-006 info issues in doctor ordering, one
+  // MCP-SUGGEST-UNCOMPARABLE (express range) and one
+  // MCP-SUGGEST-NEW-FRAMEWORK (react newer than baseline).
+  assert.equal(
+    output.stdoutText(),
+    await readFile(
+      path.join(mcpSuggestionsFixtureDir, "expected", "doctor-mcp-suggestions.txt"),
+      "utf8",
+    ),
+  );
+  // WS4-MCP-004: no URLs, install commands, or tokens in doctor output.
+  assert.doesNotMatch(output.stdoutText(), /:\/\/|npm i |npx /u);
+});
+
+test("doctor --mcp-suggestions --json matches the golden fixture and stays pass", async () => {
+  const rootDir = await createMcpSuggestionsRoot();
+  const output = createOutput();
+  const code = await runCli(
+    ["doctor", "--root", rootDir, "--json", "--mcp-suggestions"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  // Phase-19 golden fixture: byte-stable JSON output.
+  assert.equal(
+    output.stdoutText(),
+    await readFile(
+      path.join(
+        mcpSuggestionsFixtureDir,
+        "expected",
+        "doctor-mcp-suggestions.json",
+      ),
+      "utf8",
+    ),
+  );
+  const parsed = JSON.parse(output.stdoutText()) as {
+    ok: boolean;
+    status: string;
+    issues: Array<{ code: string; severity: string }>;
+  };
+
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.status, "pass");
+  const suggestion = parsed.issues.find(
+    (issue) => issue.code === "MCP-SUGGEST-NEW-FRAMEWORK",
+  );
+  assert.ok(suggestion);
+  assert.equal(suggestion.severity, "info");
+  // WS4-MCP-004: no URLs, install commands, or tokens in doctor output.
+  assert.doesNotMatch(output.stdoutText(), /:\/\/|npm i |npx /u);
+});
+
+test("doctor without --mcp-suggestions emits no MCP suggestion codes", async () => {
+  const rootDir = await createMcpSuggestionsRoot();
+  const output = createOutput();
+  const code = await runCli(["doctor", "--root", rootDir], { io: output });
+
+  assert.equal(code, 0);
+  assert.doesNotMatch(output.stdoutText(), /MCP-SUGGEST/u);
 });
 
 test("ui command propagates root and prints local-only startup output", async () => {
@@ -1633,6 +1707,15 @@ async function createFixtureRoot(): Promise<string> {
     "utf8",
   );
   await copyExpectedFiles(expectedDir, rootDir);
+  return rootDir;
+}
+
+async function createMcpSuggestionsRoot(): Promise<string> {
+  const rootDir = await createFixtureRoot();
+  await writeFile(
+    path.join(rootDir, "package.json"),
+    await readFile(path.join(mcpSuggestionsFixtureDir, "package.json")),
+  );
   return rootDir;
 }
 

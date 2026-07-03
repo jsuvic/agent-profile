@@ -1,0 +1,8 @@
+{
+  "name": "fixture",
+  "private": true,
+  "dependencies": {
+    "express": "^4.21.2",
+    "react": "999.0.0"
+  }
+}
