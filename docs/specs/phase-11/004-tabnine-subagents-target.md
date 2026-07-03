@@ -2,8 +2,9 @@
 
 ## Status
 
-Draft. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16. Not
-approved. Depends on `001-subagents-schema.md`.
+Implemented. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16.
+Landed on 2026-05-17 in `dcf18bd` (PR #16). Depends on
+`001-subagents-schema.md`.
 
 This is the riskiest of the three targets in this phase because Tabnine
 documents the feature as experimental and warns that custom subagents may

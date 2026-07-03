@@ -2,8 +2,9 @@
 
 ## Status
 
-Draft. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16. Not
-approved. Depends on `001-subagents-schema.md`.
+Implemented. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16.
+Landed on 2026-05-17 in `dcf18bd` (PR #16); workspace-write tool grants were
+repaired in `d2a9f79` (PR #22). Depends on `001-subagents-schema.md`.
 
 ## Problem
 
