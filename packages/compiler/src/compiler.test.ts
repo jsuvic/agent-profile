@@ -2972,6 +2972,39 @@ test("phase-12 reviewer-subagents pack expands through Claude and Codex only", (
   );
 });
 
+test("phase-12 tabnine keeps custom subagents with reviewer names when the pack is off", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            {
+              name: "security-reviewer",
+              description: "Custom security reviewer.",
+              purpose: "Review security-sensitive changes.",
+              prompt:
+                "Review the requested change for security issues and report findings.",
+              toolScope: "read-only",
+            },
+          ],
+        },
+      },
+    },
+  };
+
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.ok(
+    result.files.some(
+      (file) => file.path === ".tabnine/agent/agents/security-reviewer.md",
+    ),
+    "custom security-reviewer must render for Tabnine when the reviewer pack is off",
+  );
+});
+
 test("phase-12 reviewer-subagents golden fixture is byte-stable", async () => {
   const fixtureDir = fileURLToPath(
     new URL("../../../fixtures/reviewer-subagents-enabled/", import.meta.url),

@@ -1349,9 +1349,19 @@ const REVIEWER_SUBAGENT_NAMES: ReadonlySet<string> = new Set(
 );
 
 function getTabnineSubagents(profile: AiProfile): AiProfileSubagent[] {
-  return getEnabledSubagents(profile).filter(
-    (agent) => !REVIEWER_SUBAGENT_NAMES.has(agent.name),
-  );
+  const agents = getEnabledSubagents(profile);
+  const reviewerPackSelected =
+    profile.capabilities?.delegation?.subagents?.packs?.includes(
+      "reviewer-subagents",
+    ) === true;
+
+  // Reviewer names are reserved only while the pack is selected; without the
+  // pack, a user-defined agent with such a name is valid Tabnine input.
+  if (!reviewerPackSelected) {
+    return agents;
+  }
+
+  return agents.filter((agent) => !REVIEWER_SUBAGENT_NAMES.has(agent.name));
 }
 
 function titleCaseFromKebab(name: string): string {

@@ -6,12 +6,16 @@
   import { invalidateAll } from "$app/navigation";
   import type { ProfilePageData, ProfileViewModel } from "./+page.server";
   import {
-    buildWorkflowCandidate,
+    buildCandidateProfile,
+    parseSlugList,
+    permissionsChangedFrom,
     workflowDraftFromProfile,
     workflowFlagEnabled,
     workflowHasChanges,
+    PERMISSION_CONTROLS,
     WORKFLOW_CONTROLS,
     type EditableWorkflowKey,
+    type PermissionField,
   } from "$lib/profileEditor";
 
   let { data }: { data: ProfilePageData } = $props();
@@ -52,21 +56,6 @@
     dependenciesInstall: string;
     networkExternal: string;
   } & Record<EditableWorkflowKey, boolean>;
-
-  type PermissionField =
-    | "filesystemRead"
-    | "filesystemWrite"
-    | "shellRun"
-    | "dependenciesInstall"
-    | "networkExternal";
-
-  const PERMISSION_CONTROLS: { key: PermissionField; label: string }[] = [
-    { key: "filesystemRead", label: "filesystem.read" },
-    { key: "filesystemWrite", label: "filesystem.write" },
-    { key: "shellRun", label: "shell.run" },
-    { key: "dependenciesInstall", label: "dependencies.install" },
-    { key: "networkExternal", label: "network.external" },
-  ];
 
   let draft = $state<Draft>({
     name: "", description: "", languages: "", frameworks: "",
@@ -127,10 +116,6 @@
     validationErrors = {};
   }
 
-  function parseSlugList(raw: string): string[] {
-    return raw.split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
-  }
-
   const SLUG_RE = /^[a-z0-9][a-z0-9._-]*$/;
 
   function collectDraftErrors(): Record<string, string> {
@@ -185,83 +170,12 @@
       draft.safetyMode !== effective.safety.mode ||
       draft.requiresSandbox !== effective.safety.requiresSandbox ||
       workflowHasChanges(draft, effective.workflow) ||
-      permissionsChangedFrom(effective)
+      permissionsChangedFrom(draft, effective)
     );
   });
 
   let csrfToken = $derived(effective?.csrfToken ?? "");
   let baseEtag = $derived(effective?.etag ?? "");
-
-  function buildCandidateProfile() {
-    const langs = parseSlugList(draft.languages);
-    const fws = parseSlugList(draft.frameworks);
-    const pms = parseSlugList(draft.packageManagers);
-    const testing = parseSlugList(draft.testing);
-
-    const hasExplicitPerms = effective?.rawPermissions !== undefined;
-    const hasPermissionChanges = effective ? permissionsChangedFrom(effective) : false;
-
-    const candidate: Record<string, unknown> = {
-      version: 1,
-      profile: { name: draft.name.trim(), description: draft.description.trim() },
-      stack: { languages: langs, frameworks: fws, packageManagers: pms, testing },
-      clients: {
-        tabnine: { enabled: draft.tabnineEnabled },
-        codex: { enabled: draft.codexEnabled },
-        claude: { enabled: draft.claudeEnabled },
-      },
-      workflow: buildWorkflowCandidate(draft, effective?.workflow),
-    };
-
-    // Safety: only include if originally present
-    if (effective?.rawSafety !== undefined) {
-      candidate["safety"] = {
-        ...(draft.safetyMode !== "guarded" ? { mode: draft.safetyMode } : {}),
-        ...(draft.requiresSandbox ? { requiresSandbox: true } : {}),
-      };
-      // If we stripped to empty, keep the block with just mode
-      if (Object.keys(candidate["safety"] as object).length === 0) {
-        (candidate["safety"] as Record<string, unknown>)["mode"] = draft.safetyMode;
-      }
-    } else if (draft.safetyMode !== "guarded" || draft.requiresSandbox) {
-      candidate["safety"] = {
-        mode: draft.safetyMode,
-        ...(draft.requiresSandbox ? { requiresSandbox: true } : {}),
-      };
-    }
-
-    if (hasExplicitPerms || hasPermissionChanges) {
-      candidate["permissions"] = {
-        filesystem: { read: draft.filesystemRead, write: draft.filesystemWrite },
-        shell: { run: draft.shellRun },
-        secrets: { access: "deny" },
-        dependencies: { install: draft.dependenciesInstall },
-        network: { external: draft.networkExternal },
-        production: { access: "deny" },
-      };
-    }
-
-    return candidate;
-  }
-
-  function permissionsChangedFrom(v: ProfileViewModel): boolean {
-    return PERMISSION_CONTROLS.some(({ key }) => draft[key] !== initialPermissionValue(v, key));
-  }
-
-  function initialPermissionValue(v: ProfileViewModel, key: PermissionField): string {
-    switch (key) {
-      case "filesystemRead":
-        return v.rawPermissions?.filesystem?.read ?? v.permissions.filesystem.read;
-      case "filesystemWrite":
-        return v.rawPermissions?.filesystem?.write ?? v.permissions.filesystem.write;
-      case "shellRun":
-        return v.rawPermissions?.shell?.run ?? v.permissions.shell.run;
-      case "dependenciesInstall":
-        return v.rawPermissions?.dependencies?.install ?? v.permissions.dependencies.install;
-      case "networkExternal":
-        return v.rawPermissions?.network?.external ?? v.permissions.network.external;
-    }
-  }
 
   function applyServerValidationErrors(body: any) {
     const errors: Record<string, string> = {};
@@ -307,7 +221,7 @@
     saving = true;
     saveError = "";
     try {
-      const candidate = buildCandidateProfile();
+      const candidate = buildCandidateProfile(draft, effective);
       const resp = await fetch("/api/profile/plan", {
         method: "POST",
         headers: {
