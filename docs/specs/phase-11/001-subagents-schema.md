@@ -2,8 +2,9 @@
 
 ## Status
 
-Draft. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16. Not
-approved. Owns the schema-side contract for Phase 11.
+Implemented. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16.
+Landed on 2026-05-17 in `dcf18bd` (PR #16). Owns the schema-side contract for
+Phase 11.
 
 ## Problem
 

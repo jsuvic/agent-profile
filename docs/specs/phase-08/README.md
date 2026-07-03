@@ -2,8 +2,12 @@
 
 ## Status
 
-Draft for implementation review. Phase 8 is local editable UI for an existing
-`ai-profile.yaml`.
+Implemented. Phase 8 is local editable UI for an existing `ai-profile.yaml`.
+The guarded editing flow (plan/apply endpoints, CSRF, stale-etag detection,
+diff-before-write, secret-like rejection) is part of the re-rooted initial
+import `167f313` (2026-05-12) and is exercised by the web workspace tests. The
+editor was extended on 2026-07-03 in PR #49 to preserve the `capabilities`
+block on saves.
 
 ## Purpose
 

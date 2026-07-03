@@ -2,8 +2,9 @@
 
 ## Status
 
-Draft. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16. Not
-approved. Depends on `001-subagents-schema.md`, `002-claude-subagents-target.md`,
+Implemented. Lifted from `phase-later/002-subagents-targets.md` on 2026-05-16.
+Landed on 2026-05-17 in `dcf18bd` (PR #16). Depends on
+`001-subagents-schema.md`, `002-claude-subagents-target.md`,
 `003-codex-subagents-target.md`, and `004-tabnine-subagents-target.md`.
 
 ## Problem
