@@ -1,0 +1,130 @@
+{
+  "version": 2,
+  "profile": {
+    "path": "ai-profile.yaml",
+    "schemaVersion": 1,
+    "sha256": "fd2cfb1879a7ddd28808c0594e5cdda422b73d0ef3844fe7c2a657ca89139d2d"
+  },
+  "compiler": {
+    "name": "agent-profile",
+    "version": "0.1.0"
+  },
+  "templates": [
+    {
+      "id": "targets/agents-md@1",
+      "target": "agents-md",
+      "version": "1",
+      "sha256": "c52d14fb8b0885e360bb254002aeb236c48b8d6845125e2c95a967ddeff08d0a"
+    },
+    {
+      "id": "targets/claude-hooks/context-injection@1",
+      "target": "claude-settings",
+      "version": "1",
+      "sha256": "bd1630ace14c0ddd065981ec1f549b8ccfbffc22b134ab80c62543d1fba726d0"
+    },
+    {
+      "id": "targets/claude-hooks/final-review-reminder@1",
+      "target": "claude-settings",
+      "version": "1",
+      "sha256": "647b9819a11d9937916cd7e360de6777dc50346a92ffd1d364838b3155c4d850"
+    },
+    {
+      "id": "targets/claude-hooks/pre-compact-checkpoint@1",
+      "target": "claude-settings",
+      "version": "1",
+      "sha256": "76a486d11549f695f47aa5222ed86eb2bc34fedf6eeb38d9fbbcd29684a31f33"
+    },
+    {
+      "id": "targets/claude-mcp@1",
+      "target": "claude-mcp",
+      "version": "1",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    },
+    {
+      "id": "targets/claude-md@1",
+      "target": "claude-md",
+      "version": "1",
+      "sha256": "d504d42408f60436884ed08a55865c43aa0185274ad08e84c306c024ac80a969"
+    },
+    {
+      "id": "targets/claude-settings@1",
+      "target": "claude-settings",
+      "version": "1",
+      "sha256": "5d4ef8e2885f29959de09a6764e6b28af594d976f3251bfd99371fe0ecdb100d"
+    },
+    {
+      "id": "targets/codex-config@1",
+      "target": "codex-config",
+      "version": "1",
+      "sha256": "bc56f102dbd5552e5932703e7dd722c70ca8f6435d82302fc9f7139e0168361a"
+    },
+    {
+      "id": "targets/codex-hooks/context-injection@1",
+      "target": "codex-hooks",
+      "version": "1",
+      "sha256": "1e6ea1582d0523e4afce9d41a2ed8bb6efdb67e8c3b0e97f942d9915b5ac2b9e"
+    },
+    {
+      "id": "targets/codex-hooks/final-review-reminder@1",
+      "target": "codex-hooks",
+      "version": "1",
+      "sha256": "8985e62d53de95885382e420179bd196efe4d43e4a392b07c2aeafebfc0c500f"
+    },
+    {
+      "id": "targets/codex-hooks/pre-compact-checkpoint@1",
+      "target": "codex-hooks",
+      "version": "1",
+      "sha256": "0e5cf6b097d60ab6124824be795f7294e8a447fd0b7a269394690cbe4310d939"
+    },
+    {
+      "id": "targets/codex-hooks@1",
+      "target": "codex-hooks",
+      "version": "1",
+      "sha256": "ce69ad6b8a03f113204e9cc0c6054bd3be90661963503dade78fc27cd6b7a0de"
+    }
+  ],
+  "outputs": [
+    {
+      "path": ".claude/settings.json",
+      "target": "claude-settings",
+      "templateId": "targets/claude-settings@1",
+      "ownership": "generated-owned",
+      "sha256": "e76a8fe7534f0958b6bfdef29ff348960bc602721f5cfacef017d0977724970e"
+    },
+    {
+      "path": ".codex/config.toml",
+      "target": "codex-config",
+      "templateId": "targets/codex-config@1",
+      "ownership": "generated-owned",
+      "sha256": "bc56f102dbd5552e5932703e7dd722c70ca8f6435d82302fc9f7139e0168361a"
+    },
+    {
+      "path": ".codex/hooks.json",
+      "target": "codex-hooks",
+      "templateId": "targets/codex-hooks@1",
+      "ownership": "generated-owned",
+      "sha256": "ce69ad6b8a03f113204e9cc0c6054bd3be90661963503dade78fc27cd6b7a0de"
+    },
+    {
+      "path": ".mcp.json",
+      "target": "claude-mcp",
+      "templateId": "targets/claude-mcp@1",
+      "ownership": "generated-owned",
+      "sha256": "d8e397af03b5b032f21d0aa967086f0c78b33c87b76f2e9898ae0a144df7de02"
+    },
+    {
+      "path": "AGENTS.md",
+      "target": "agents-md",
+      "templateId": "targets/agents-md@1",
+      "ownership": "generated-owned",
+      "sha256": "8aa8dff2db240a4857ed1099b53762e006f5feb124df809aee386e2db0591c93"
+    },
+    {
+      "path": "CLAUDE.md",
+      "target": "claude-md",
+      "templateId": "targets/claude-md@1",
+      "ownership": "generated-owned",
+      "sha256": "d504d42408f60436884ed08a55865c43aa0185274ad08e84c306c024ac80a969"
+    }
+  ]
+}

@@ -14,7 +14,10 @@ import {
 } from "@agent-profile/core";
 import type { AiProfile } from "@agent-profile/core";
 
+import { withExecutionSentinel } from "../../core/test/fixtures/execution-sentinel.js";
 import {
+  ADVISORY_HOOK_TEMPLATES,
+  advisoryHookCommandViolatesForbiddenPatterns,
   collectExpectedFiles,
   compareGoldenFixture,
   compileProfile,
@@ -26,6 +29,8 @@ import {
   sha256Hex,
   validateLockfileText,
   validateLockfileValue,
+  VERIFIED_CLAUDE_HOOK_EVENTS,
+  VERIFIED_CODEX_HOOK_EVENTS,
 } from "./index.js";
 import type {
   CompilerTargetId,
@@ -3049,4 +3054,535 @@ test("phase-12 skills and reviewer subagents share neutral definitions", () => {
       );
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Phase 21 (WS5 slice 1): advisory, non-executing hooks
+// ---------------------------------------------------------------------------
+
+function phase21Profile(input: {
+  advisory?: ReadonlyArray<
+    "final-review-reminder" | "context-injection" | "pre-compact-checkpoint"
+  >;
+  enabled?: boolean;
+  clients?: { tabnine?: boolean; codex?: boolean; claude?: boolean };
+}): AiProfile {
+  const profile: AiProfile = {
+    version: 1,
+    profile: {
+      name: "phase-21",
+      description: "Phase 21 advisory hooks fixture.",
+    },
+    stack: {
+      languages: ["typescript"],
+      frameworks: [],
+      packageManagers: ["npm"],
+      testing: [],
+    },
+    clients: {
+      tabnine: { enabled: input.clients?.tabnine ?? false },
+      codex: { enabled: input.clients?.codex ?? false },
+      claude: { enabled: input.clients?.claude ?? true },
+    },
+    workflow: {
+      sdd: false,
+      tdd: false,
+      finalReview: false,
+    },
+  };
+
+  if (input.advisory !== undefined || input.enabled !== undefined) {
+    profile.capabilities = {
+      hooks: {
+        enabled: input.enabled ?? true,
+        advisory: [...(input.advisory ?? [])],
+      },
+    };
+  }
+
+  return profile;
+}
+
+function settingsJsonFrom(files: GeneratedFile[]): {
+  text: string;
+  value: Record<string, unknown>;
+} {
+  const file = files.find(
+    (candidate) => candidate.path === ".claude/settings.json",
+  );
+  assert.ok(file, ".claude/settings.json must be generated");
+  const text = Buffer.from(file.bytes).toString("utf8");
+  return { text, value: JSON.parse(text) as Record<string, unknown> };
+}
+
+test("phase-21 pinned advisory hook template table is a golden contract", () => {
+  assert.deepEqual(
+    ADVISORY_HOOK_TEMPLATES.map((template) => ({
+      role: template.role,
+      events: [...template.events],
+      command: template.command,
+      commandWindows: template.commandWindows,
+    })),
+    [
+      {
+        role: "final-review-reminder",
+        events: ["Stop", "SubagentStop"],
+        command:
+          'echo "Reminder: run the final-review skill before handing off."',
+        commandWindows:
+          'cmd /c "echo Reminder: run the final-review skill before handing off."',
+      },
+      {
+        role: "context-injection",
+        events: ["UserPromptSubmit"],
+        command: "git status --short --branch; exit 0",
+        commandWindows: 'cmd /c "git status --short --branch || exit 0"',
+      },
+      {
+        role: "pre-compact-checkpoint",
+        events: ["PreCompact"],
+        command:
+          'echo "Reminder: checkpoint in-progress work before compaction."',
+        commandWindows:
+          'cmd /c "echo Reminder: checkpoint in-progress work before compaction."',
+      },
+    ],
+  );
+
+  for (const template of ADVISORY_HOOK_TEMPLATES) {
+    for (const command of [template.command, template.commandWindows]) {
+      assert.equal(
+        advisoryHookCommandViolatesForbiddenPatterns(command),
+        false,
+        `${template.role}: ${command}`,
+      );
+    }
+    for (const event of template.events) {
+      assert.ok(
+        (VERIFIED_CLAUDE_HOOK_EVENTS as readonly string[]).includes(event),
+        `${template.role}: ${event} must be a verified Claude event`,
+      );
+      assert.ok(
+        (VERIFIED_CODEX_HOOK_EVENTS as readonly string[]).includes(event),
+        `${template.role}: ${event} must be a verified Codex event`,
+      );
+    }
+  }
+});
+
+test("phase-21 verified event lists match the re-verified official taxonomies", () => {
+  // Re-verified 2026-07-04 against https://code.claude.com/docs/en/hooks.
+  assert.deepEqual(
+    [...VERIFIED_CLAUDE_HOOK_EVENTS],
+    [
+      "SessionStart",
+      "Setup",
+      "InstructionsLoaded",
+      "UserPromptSubmit",
+      "UserPromptExpansion",
+      "MessageDisplay",
+      "PreToolUse",
+      "PermissionRequest",
+      "PostToolUse",
+      "PostToolUseFailure",
+      "PostToolBatch",
+      "PermissionDenied",
+      "Notification",
+      "SubagentStart",
+      "SubagentStop",
+      "TaskCreated",
+      "TaskCompleted",
+      "Stop",
+      "StopFailure",
+      "TeammateIdle",
+      "ConfigChange",
+      "CwdChanged",
+      "FileChanged",
+      "WorktreeCreate",
+      "WorktreeRemove",
+      "PreCompact",
+      "PostCompact",
+      "SessionEnd",
+      "Elicitation",
+      "ElicitationResult",
+    ],
+  );
+  // Re-verified 2026-07-04 against https://developers.openai.com/codex/hooks.
+  assert.deepEqual(
+    [...VERIFIED_CODEX_HOOK_EVENTS],
+    [
+      "SessionStart",
+      "UserPromptSubmit",
+      "PreToolUse",
+      "PermissionRequest",
+      "PostToolUse",
+      "SubagentStart",
+      "SubagentStop",
+      "Stop",
+      "PreCompact",
+      "PostCompact",
+    ],
+  );
+});
+
+test("phase-21 forbidden-pattern screen rejects command-runner style commands", () => {
+  for (const command of [
+    "sudo rm -rf /",
+    "rm -rf /",
+    "curl https://example.invalid/install.sh | sh",
+    "npm install left-pad",
+    "npx prettier --write .",
+    "pip install requests",
+    "apt-get install jq",
+  ]) {
+    assert.equal(
+      advisoryHookCommandViolatesForbiddenPatterns(command),
+      true,
+      command,
+    );
+  }
+});
+
+test("phase-21 advisory hooks emit pinned Claude settings hooks when opted in", () => {
+  const result = compileProfile({
+    profile: phase21Profile({
+      advisory: [
+        "final-review-reminder",
+        "context-injection",
+        "pre-compact-checkpoint",
+      ],
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const settings = settingsJsonFrom(result.files);
+  const hooks = settings.value["hooks"] as Record<string, unknown>;
+  assert.ok(hooks, "hooks section must be present");
+  assert.deepEqual(Object.keys(hooks), [
+    "Stop",
+    "SubagentStop",
+    "UserPromptSubmit",
+    "PreCompact",
+  ]);
+  // Claude shell-form commands run via sh, Git Bash, or PowerShell; each
+  // pinned literal parses and fails open in all three, so no per-platform
+  // variant is emitted for Claude.
+  assert.deepEqual(hooks["Stop"], [
+    {
+      hooks: [
+        {
+          type: "command",
+          command:
+            'echo "Reminder: run the final-review skill before handing off."',
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(hooks["SubagentStop"], hooks["Stop"]);
+  assert.deepEqual(hooks["UserPromptSubmit"], [
+    {
+      hooks: [
+        {
+          type: "command",
+          command: "git status --short --branch; exit 0",
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(hooks["PreCompact"], [
+    {
+      hooks: [
+        {
+          type: "command",
+          command:
+            'echo "Reminder: checkpoint in-progress work before compaction."',
+        },
+      ],
+    },
+  ]);
+
+  // Permissions and sandbox stay byte-compatible with the baseline surface.
+  assert.deepEqual(settings.value["permissions"], {
+    defaultMode: "default",
+    allow: [],
+    ask: ["Bash", "Edit", "Write", "WebFetch"],
+    deny: [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./**/secrets/**)",
+    ],
+    disableBypassPermissionsMode: "disable",
+    disableAutoMode: "disable",
+  });
+
+  const templateIds = result.templates.map((template) => template.id);
+  for (const role of [
+    "final-review-reminder",
+    "context-injection",
+    "pre-compact-checkpoint",
+  ]) {
+    assert.ok(
+      templateIds.includes(`targets/claude-hooks/${role}@1`),
+      `lockfile-tracked template for ${role}`,
+    );
+  }
+});
+
+test("phase-21 advisory hooks emit only the selected roles", () => {
+  const result = compileProfile({
+    profile: phase21Profile({ advisory: ["context-injection"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const settings = settingsJsonFrom(result.files);
+  const hooks = settings.value["hooks"] as Record<string, unknown>;
+  assert.deepEqual(Object.keys(hooks), ["UserPromptSubmit"]);
+
+  const templateIds = result.templates.map((template) => template.id);
+  assert.ok(templateIds.includes("targets/claude-hooks/context-injection@1"));
+  assert.equal(
+    templateIds.some(
+      (id) =>
+        id === "targets/claude-hooks/final-review-reminder@1" ||
+        id === "targets/claude-hooks/pre-compact-checkpoint@1",
+    ),
+    false,
+  );
+});
+
+test("phase-21 profiles without hooks stay byte-identical to the baseline", async () => {
+  const withoutHooks = compileProfile({
+    profile: phase21Profile({ clients: { codex: true, claude: true } }),
+  });
+  assert.equal(withoutHooks.ok, true);
+  if (!withoutHooks.ok) return;
+
+  const settings = settingsJsonFrom(withoutHooks.files);
+  assert.equal("hooks" in settings.value, false);
+  assert.equal(
+    withoutHooks.files.some((file) => file.path === ".codex/hooks.json"),
+    false,
+    "no codex hooks artifact without opt-in",
+  );
+  assert.equal(
+    withoutHooks.templates.some(
+      (template) =>
+        template.id.startsWith("targets/claude-hooks/") ||
+        template.id.startsWith("targets/codex-hooks"),
+    ),
+    false,
+  );
+  assert.equal(withoutHooks.notes, undefined);
+
+  const baseline = await readFile(
+    fileURLToPath(
+      new URL(
+        "../../../fixtures/minimal-valid/expected/.claude/settings.json",
+        import.meta.url,
+      ),
+    ),
+    "utf8",
+  );
+  assert.equal(settings.text, baseline);
+
+  const enabledButEmpty = compileProfile({
+    profile: phase21Profile({ enabled: true, advisory: [] }),
+  });
+  assert.equal(enabledButEmpty.ok, true);
+  if (!enabledButEmpty.ok) return;
+  assert.equal(settingsJsonFrom(enabledButEmpty.files).text, baseline);
+});
+
+test("phase-21 advisory role order in the profile does not change output", () => {
+  const first = compileProfile({
+    profile: phase21Profile({
+      advisory: ["pre-compact-checkpoint", "final-review-reminder"],
+    }),
+  });
+  const second = compileProfile({
+    profile: phase21Profile({
+      advisory: ["final-review-reminder", "pre-compact-checkpoint"],
+    }),
+  });
+
+  assert.equal(first.ok && second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.equal(
+    settingsJsonFrom(first.files).text,
+    settingsJsonFrom(second.files).text,
+  );
+});
+
+test("phase-21 codex advisory hooks emit a pinned .codex/hooks.json with Windows overrides", () => {
+  const result = compileProfile({
+    profile: phase21Profile({
+      advisory: [
+        "final-review-reminder",
+        "context-injection",
+        "pre-compact-checkpoint",
+      ],
+      clients: { codex: true, claude: true },
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const file = result.files.find(
+    (candidate) => candidate.path === ".codex/hooks.json",
+  );
+  assert.ok(file, ".codex/hooks.json must be generated");
+  const value = JSON.parse(Buffer.from(file.bytes).toString("utf8")) as {
+    hooks: Record<string, unknown>;
+  };
+  assert.deepEqual(Object.keys(value.hooks), [
+    "Stop",
+    "SubagentStop",
+    "UserPromptSubmit",
+    "PreCompact",
+  ]);
+  assert.deepEqual(value.hooks["UserPromptSubmit"], [
+    {
+      hooks: [
+        {
+          type: "command",
+          command: "git status --short --branch; exit 0",
+          commandWindows: 'cmd /c "git status --short --branch || exit 0"',
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(value.hooks["Stop"], [
+    {
+      hooks: [
+        {
+          type: "command",
+          command:
+            'echo "Reminder: run the final-review skill before handing off."',
+          commandWindows:
+            'cmd /c "echo Reminder: run the final-review skill before handing off."',
+        },
+      ],
+    },
+  ]);
+
+  // APC generates the hooks.json representation only; the generated
+  // config.toml never gains an inline [hooks] table.
+  const codexConfig = result.files.find(
+    (candidate) => candidate.path === ".codex/config.toml",
+  );
+  assert.ok(codexConfig);
+  assert.equal(
+    Buffer.from(codexConfig.bytes).toString("utf8").includes("hook"),
+    false,
+  );
+
+  const templateIds = result.templates.map((template) => template.id);
+  assert.ok(templateIds.includes("targets/codex-hooks@1"));
+  for (const role of [
+    "final-review-reminder",
+    "context-injection",
+    "pre-compact-checkpoint",
+  ]) {
+    assert.ok(
+      templateIds.includes(`targets/codex-hooks/${role}@1`),
+      `lockfile-tracked codex template for ${role}`,
+    );
+  }
+});
+
+test("phase-21 codex hooks emit only the selected roles", () => {
+  const result = compileProfile({
+    profile: phase21Profile({
+      advisory: ["context-injection"],
+      clients: { codex: true, claude: false },
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const file = result.files.find(
+    (candidate) => candidate.path === ".codex/hooks.json",
+  );
+  assert.ok(file);
+  const value = JSON.parse(Buffer.from(file.bytes).toString("utf8")) as {
+    hooks: Record<string, unknown>;
+  };
+  assert.deepEqual(Object.keys(value.hooks), ["UserPromptSubmit"]);
+
+  const templateIds = result.templates.map((template) => template.id);
+  assert.ok(templateIds.includes("targets/codex-hooks/context-injection@1"));
+  assert.equal(
+    templateIds.some(
+      (id) =>
+        id === "targets/codex-hooks/final-review-reminder@1" ||
+        id === "targets/codex-hooks/pre-compact-checkpoint@1",
+    ),
+    false,
+  );
+});
+
+test("phase-21 tabnine hook intent is reported, never silent; codex has no note", () => {
+  const result = compileProfile({
+    profile: phase21Profile({
+      advisory: ["final-review-reminder"],
+      clients: { tabnine: true, codex: true, claude: true },
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.ok(result.notes, "notes must be reported");
+  assert.deepEqual(
+    result.notes.map((note) => note.code),
+    ["hooks_target_not_generated"],
+  );
+  assert.ok(result.notes[0]?.message.includes("Tabnine"), "tabnine note");
+  assert.equal(
+    result.notes.some((note) => note.message.includes("Codex")),
+    false,
+    "codex is generated, so it must not be reported as not-generated",
+  );
+  assert.equal(
+    result.files.some(
+      (file) => file.path.startsWith(".tabnine/") && file.path.includes("hook"),
+    ),
+    false,
+  );
+});
+
+test("phase-21 compile spawns no child process when hooks are present", async () => {
+  const result = await withExecutionSentinel(() =>
+    compileProfile({
+      profile: phase21Profile({
+        advisory: [
+          "final-review-reminder",
+          "context-injection",
+          "pre-compact-checkpoint",
+        ],
+        clients: { tabnine: true, codex: true, claude: true },
+      }),
+    }),
+  );
+
+  assert.equal(result.ok, true);
+});
+
+test("phase-21 advisory-hooks golden fixture is byte-stable", async () => {
+  const fixtureDir = fileURLToPath(
+    new URL("../../../fixtures/advisory-hooks-enabled/", import.meta.url),
+  );
+  const result = await compareGoldenFixture(fixtureDir);
+  assert.equal(
+    result.ok,
+    true,
+    result.ok ? "" : JSON.stringify(result.failures, null, 2),
+  );
 });

@@ -51,6 +51,9 @@ export type DoctorIssueCode =
   | "LINT-OWN-001"
   | "LINT-OWN-002"
   | "LINT-GITIGNORE-002"
+  | "LINT-HOOK-003"
+  | "LINT-HOOK-005"
+  | "LINT-HOOK-008"
   | "MCP-SUGGEST-NEW-FRAMEWORK"
   | "MCP-SUGGEST-UNCOMPARABLE";
 

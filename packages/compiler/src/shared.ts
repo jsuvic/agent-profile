@@ -18,6 +18,7 @@ export function getDefaultTargetIds(): CompilerTargetId[] {
     "tabnine-mcp-config",
     "tabnine-subagents",
     "codex-config",
+    "codex-hooks",
     "codex-workflow-skills",
     "codex-subagents",
     "claude-settings",

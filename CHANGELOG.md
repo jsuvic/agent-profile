@@ -4,6 +4,24 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Add Phase 21 advisory hooks (WS5 slice 1, implementing
+  `docs/specs/phase-21/001-advisory-hooks.md`): a neutral `capabilities.hooks`
+  intent with a closed advisory role enum (`final-review-reminder`,
+  `context-injection`, `pre-compact-checkpoint`), off by default. Selected
+  roles emit pinned, read-only, non-project commands into the generated
+  `.claude/settings.json` hooks surface and a generated project-local
+  `.codex/hooks.json` (with the documented `commandWindows` Windows override
+  pinned per handler). Claude commands are single literals that parse and
+  fail open in every documented Claude hook shell (sh, Git Bash, Windows
+  PowerShell fallback). Tabnine hook generation stays disabled with an
+  explicit compile note (support unknown). Both per-target event lists were
+  re-verified against the official hooks docs on 2026-07-04. Doctor gains
+  non-executing structural checks `LINT-HOOK-003` (event outside the
+  verified per-target list), `LINT-HOOK-005` (hook surface where APC does
+  not generate hooks, e.g. inline `[hooks]` in the generated config.toml),
+  and `LINT-HOOK-008` (artifact handler differs from the pinned template).
+  The init wizard gains an optional `Advisory hooks` capability checkbox.
+  APC never executes hooks at compile, validation, or doctor time.
 - Add conservative Flutter/Dart stack detection from root `pubspec.yaml`
   (Phase 12, implementing
   `docs/specs/phase-later/018-flutter-dart-stack-detection.md`). Detects

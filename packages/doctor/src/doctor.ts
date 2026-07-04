@@ -8,6 +8,7 @@ import path from "node:path";
 import {
   compileProfile,
   createLockfileFile,
+  getAdvisoryHookTemplate,
   parseMixedFile,
   safeOutputPath,
   sha256Hex,
@@ -17,6 +18,8 @@ import {
   hasAllRegionMarkers,
   hasLegacyGeneratedMarker,
   REGION_PRECEDENCE_TEXT,
+  VERIFIED_CLAUDE_HOOK_EVENTS,
+  VERIFIED_CODEX_HOOK_EVENTS,
   type AiProfileLockV2,
   type AnyAiProfileLock,
   type GeneratedFile,
@@ -28,6 +31,7 @@ import {
   containsSecretLikeLiteral,
   deriveEffectivePermissions,
   getEnabledSubagents,
+  getSelectedAdvisoryHookRoles,
   isSubagentBuiltinNameCollision,
   normalizeSafety,
   parseProfileYaml,
@@ -174,8 +178,227 @@ export async function runDoctor(
     lockfileV2,
     issues,
   );
+  await checkAdvisoryHookArtifacts(rootDir, profileResult.profile, issues);
 
   return toResult(issues);
+}
+
+// Phase 21 (WS5-I3): structural advisory-hook checks. Doctor performs string
+// and structure comparison only; it never runs a hook command (not even a
+// `--version`-style probe).
+const VERIFIED_CLAUDE_HOOK_EVENT_SET: ReadonlySet<string> = new Set(
+  VERIFIED_CLAUDE_HOOK_EVENTS,
+);
+const VERIFIED_CODEX_HOOK_EVENT_SET: ReadonlySet<string> = new Set(
+  VERIFIED_CODEX_HOOK_EVENTS,
+);
+
+async function checkAdvisoryHookArtifacts(
+  rootDir: string,
+  profile: AiProfile,
+  issues: DoctorIssue[],
+): Promise<void> {
+  const selectedRoles = getSelectedAdvisoryHookRoles(profile);
+
+  if (profile.clients.claude.enabled) {
+    await checkHooksArtifact({
+      rootDir,
+      issues,
+      path: ".claude/settings.json",
+      selectedRoles,
+      verifiedEvents: VERIFIED_CLAUDE_HOOK_EVENT_SET,
+      target: "claude",
+      // Claude hooks live inside the wider settings document.
+      extractHooks: (parsed) =>
+        isJsonRecord(parsed) && isJsonRecord(parsed["hooks"])
+          ? parsed["hooks"]
+          : undefined,
+      toPinnedHandler: (template) => ({
+        type: "command",
+        command: template.command,
+      }),
+    });
+  }
+
+  if (profile.clients.codex.enabled) {
+    await checkCodexConfigHookSurface(rootDir, issues);
+
+    // The generated .codex/hooks.json exists only for selected roles; a
+    // hooks.json in a no-intent profile is user-authored and covered by
+    // Codex's own trust-review flow, not by APC.
+    if (selectedRoles.length > 0) {
+      await checkHooksArtifact({
+        rootDir,
+        issues,
+        path: ".codex/hooks.json",
+        selectedRoles,
+        verifiedEvents: VERIFIED_CODEX_HOOK_EVENT_SET,
+        target: "codex",
+        extractHooks: (parsed) =>
+          isJsonRecord(parsed) && isJsonRecord(parsed["hooks"])
+            ? parsed["hooks"]
+            : undefined,
+        toPinnedHandler: (template) => ({
+          type: "command",
+          command: template.command,
+          commandWindows: template.commandWindows,
+        }),
+      });
+    }
+  }
+}
+
+type HooksArtifactCheck = {
+  rootDir: string;
+  issues: DoctorIssue[];
+  path: string;
+  selectedRoles: ReturnType<typeof getSelectedAdvisoryHookRoles>;
+  verifiedEvents: ReadonlySet<string>;
+  target: "claude" | "codex";
+  extractHooks: (parsed: unknown) => Record<string, unknown> | undefined;
+  toPinnedHandler: (
+    template: ReturnType<typeof getAdvisoryHookTemplate>,
+  ) => Record<string, string>;
+};
+
+async function checkHooksArtifact(input: HooksArtifactCheck): Promise<void> {
+  const file = await readKnownFile(input.rootDir, input.path);
+
+  if (!file.ok) {
+    return;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decodeUtf8(file.bytes));
+  } catch {
+    // Unparseable artifacts are already reported through lockfile drift.
+    return;
+  }
+
+  const hooks = input.extractHooks(parsed);
+
+  if (!hooks) {
+    return;
+  }
+
+  const pinnedByEvent = new Map<string, Record<string, string>[]>();
+  for (const role of input.selectedRoles) {
+    const template = getAdvisoryHookTemplate(role);
+    for (const event of template.events) {
+      const handlers = pinnedByEvent.get(event) ?? [];
+      handlers.push(input.toPinnedHandler(template));
+      pinnedByEvent.set(event, handlers);
+    }
+  }
+
+  for (const [event, entries] of Object.entries(hooks)) {
+    if (!input.verifiedEvents.has(event)) {
+      input.issues.push(
+        issue(
+          "LINT-HOOK-003",
+          "error",
+          input.path,
+          `hook event from the verified ${input.target} event list`,
+          event,
+          `${input.path} declares a hook for unverified event ${event}.`,
+          "Remove the unverified hook event; new events require re-verified official docs and an approved spec.",
+        ),
+      );
+    }
+
+    const pinned = pinnedByEvent.get(event) ?? [];
+    for (const violation of collectNonPinnedHookHandlers(entries, pinned)) {
+      input.issues.push(
+        issue(
+          "LINT-HOOK-008",
+          "error",
+          input.path,
+          "pinned advisory hook command for a selected role",
+          violation,
+          `${input.path} contains a hook entry for ${event} that does not match the pinned advisory template.`,
+          `Regenerate ${input.path} from ai-profile.yaml; slice 1 emits only pinned advisory commands for selected roles.`,
+        ),
+      );
+    }
+  }
+}
+
+function collectNonPinnedHookHandlers(
+  entries: unknown,
+  pinnedHandlers: ReadonlyArray<Record<string, string>>,
+): string[] {
+  if (!Array.isArray(entries)) {
+    return ["non-array hook event value"];
+  }
+
+  const violations: string[] = [];
+
+  for (const entry of entries) {
+    if (!isJsonRecord(entry) || !Array.isArray(entry["hooks"])) {
+      violations.push("malformed hook entry");
+      continue;
+    }
+
+    for (const item of entry["hooks"]) {
+      const matchesPinned =
+        isJsonRecord(item) &&
+        pinnedHandlers.some((handler) => handlerEquals(item, handler));
+      if (!matchesPinned) {
+        violations.push(
+          isJsonRecord(item) && typeof item["command"] === "string"
+            ? "non-pinned hook command"
+            : "malformed hook entry",
+        );
+      }
+    }
+  }
+
+  return violations;
+}
+
+function handlerEquals(
+  item: Record<string, unknown>,
+  pinned: Record<string, string>,
+): boolean {
+  const pinnedKeys = Object.keys(pinned);
+  const itemKeys = Object.keys(item);
+
+  return (
+    itemKeys.length === pinnedKeys.length &&
+    pinnedKeys.every((key) => item[key] === pinned[key])
+  );
+}
+
+async function checkCodexConfigHookSurface(
+  rootDir: string,
+  issues: DoctorIssue[],
+): Promise<void> {
+  const file = await readKnownFile(rootDir, ".codex/config.toml");
+
+  if (!file.ok) {
+    return;
+  }
+
+  const text = decodeUtf8(file.bytes);
+
+  if (/^\s*\[+\s*hooks\b|^\s*hooks\s*[.=]/mu.test(text)) {
+    issues.push(
+      issue(
+        "LINT-HOOK-005",
+        "error",
+        ".codex/config.toml",
+        "no hook surface outside the generated .codex/hooks.json",
+        "inline hooks section present",
+        ".codex/config.toml contains an inline hooks surface; APC generates Codex hooks only in .codex/hooks.json.",
+        "Remove the inline hooks table from the generated config.toml; declare hook intent through capabilities.hooks instead.",
+      ),
+    );
+  }
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function checkUnknownLanguageFallback(

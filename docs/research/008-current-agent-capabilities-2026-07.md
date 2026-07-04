@@ -41,6 +41,36 @@ surface at that scope without claiming the client runtime is enforceable.
   notes establish the features, but not a stable project-local format and
   safety contract suitable for APC generation.
 
+## Phase 21 Decision (advisory hooks, re-verified 2026-07-04)
+
+- Generate project-local advisory hooks for Claude inside the generated
+  `.claude/settings.json`. The verified Claude event list (from
+  [Claude hooks reference](https://code.claude.com/docs/en/hooks),
+  2026-07-04) is: `SessionStart`, `Setup`, `InstructionsLoaded`,
+  `UserPromptSubmit`, `UserPromptExpansion`, `MessageDisplay`, `PreToolUse`,
+  `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`,
+  `PermissionDenied`, `Notification`, `SubagentStart`, `SubagentStop`,
+  `TaskCreated`, `TaskCompleted`, `Stop`, `StopFailure`, `TeammateIdle`,
+  `ConfigChange`, `CwdChanged`, `FileChanged`, `WorktreeCreate`,
+  `WorktreeRemove`, `PreCompact`, `PostCompact`, `SessionEnd`,
+  `Elicitation`, `ElicitationResult`. Shell-form hook commands run via
+  `sh -c` on macOS/Linux, Git Bash on Windows, or PowerShell on Windows when
+  Git Bash is not installed; pinned commands must parse in all three.
+- Generate project-local advisory hooks for Codex in `.codex/hooks.json`
+  (Codex discovers `hooks.json` or inline `[hooks]` config.toml tables next
+  to active config layers; one representation per layer is recommended). The
+  verified Codex event list (from
+  [Codex hooks documentation](https://developers.openai.com/codex/hooks),
+  2026-07-04) is: `SessionStart`, `UserPromptSubmit`, `PreToolUse`,
+  `PermissionRequest`, `PostToolUse`, `SubagentStart`, `SubagentStop`,
+  `Stop`, `PreCompact`, `PostCompact`. Handlers support the documented
+  `commandWindows` Windows-only override, which APC pins alongside the POSIX
+  `command`. Project-local Codex hooks load only when the project `.codex/`
+  layer is trusted, and non-managed command hooks must be reviewed and
+  trusted (`/hooks`) before they run.
+- Tabnine hook generation stays disabled (`unknown` support); `compile`
+  reports a not-supported note.
+
 ## Verification Notes
 
 - Official product documentation and official release notes are the only proof

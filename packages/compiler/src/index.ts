@@ -49,6 +49,25 @@ export {
   renderClaudeMd,
 } from "./compiler.js";
 export {
+  ADVISORY_HOOK_TEMPLATES,
+  advisoryHookCommandViolatesForbiddenPatterns,
+  buildClaudeAdvisoryHooksValue,
+  getAdvisoryHookNotes,
+  getAdvisoryHookTemplate,
+  getAdvisoryHookTemplateId,
+  getCodexHookTemplateId,
+  renderAdvisoryHookTemplateSource,
+  renderCodexHooksJson,
+  renderCodexHookTemplateSource,
+  VERIFIED_CLAUDE_HOOK_EVENTS,
+  VERIFIED_CODEX_HOOK_EVENTS,
+} from "./hooks.js";
+export type {
+  AdvisoryHookTemplate,
+  ClaudeHookEvent,
+  CodexHookEvent,
+} from "./hooks.js";
+export {
   getCapabilityArtifactPaths,
   resolveSelectedSkills,
   resolveSkillPacks,
@@ -74,6 +93,8 @@ export type {
   CompilerTargetId,
   CompileIssue,
   CompileIssueCode,
+  CompileNote,
+  CompileNoteCode,
   CompileRequest,
   CompileResult,
   GeneratedFile,

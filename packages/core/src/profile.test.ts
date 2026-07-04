@@ -14,6 +14,7 @@ import {
   containsSecretLikeLiteral,
   deriveEffectivePermissions,
   getRemoteRefs,
+  getSelectedAdvisoryHookRoles,
   normalizeSafety,
   parseProfileYaml,
   readProfileFile,
@@ -873,6 +874,166 @@ describe("subagentDrivenDevelopment workflow gate", () => {
       validateProfileValue(profileWithWorkflowGate("yes")).ok,
       false,
     );
+  });
+});
+
+describe("advisory hooks schema (phase 21)", () => {
+  function profileWithHooks(
+    block: Record<string, unknown> | undefined,
+  ): Record<string, unknown> {
+    const base = profileWith({}) as Record<string, unknown>;
+    if (block === undefined) {
+      delete base["capabilities"];
+    } else {
+      base["capabilities"] = { hooks: block };
+    }
+    return base;
+  }
+
+  it("accepts hooks enabled with every advisory role", () => {
+    const result = validateProfileValue(
+      profileWithHooks({
+        enabled: true,
+        advisory: [
+          "final-review-reminder",
+          "context-injection",
+          "pre-compact-checkpoint",
+        ],
+      }),
+    );
+    assert.equal(result.ok, true);
+  });
+
+  it("accepts hooks enabled with an empty advisory list", () => {
+    assert.equal(
+      validateProfileValue(profileWithHooks({ enabled: true, advisory: [] }))
+        .ok,
+      true,
+    );
+    assert.equal(
+      validateProfileValue(profileWithHooks({ enabled: true })).ok,
+      true,
+    );
+  });
+
+  it("accepts hooks disabled with an empty or absent advisory list", () => {
+    assert.equal(
+      validateProfileValue(profileWithHooks({ enabled: false })).ok,
+      true,
+    );
+    assert.equal(
+      validateProfileValue(profileWithHooks({ enabled: false, advisory: [] }))
+        .ok,
+      true,
+    );
+  });
+
+  it("rejects unknown advisory role ids with a focused path", () => {
+    const result = validateProfileValue(
+      profileWithHooks({ enabled: true, advisory: ["format-on-write"] }),
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(getIssuePaths(result), ["/capabilities/hooks/advisory/0"]);
+  });
+
+  it("rejects duplicate advisory role ids", () => {
+    const result = validateProfileValue(
+      profileWithHooks({
+        enabled: true,
+        advisory: ["context-injection", "context-injection"],
+      }),
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(getIssuePaths(result), ["/capabilities/hooks/advisory"]);
+  });
+
+  it("rejects non-empty advisory when the master switch is off", () => {
+    const result = validateProfileValue(
+      profileWithHooks({
+        enabled: false,
+        advisory: ["final-review-reminder"],
+      }),
+    );
+
+    assert.equal(result.ok, false);
+  });
+
+  it("requires the enabled master switch", () => {
+    const result = validateProfileValue(
+      profileWithHooks({ advisory: ["final-review-reminder"] }),
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(getIssuePaths(result), ["/capabilities/hooks/enabled"]);
+  });
+
+  it("rejects unknown hook block properties", () => {
+    const result = validateProfileValue(
+      profileWithHooks({
+        enabled: true,
+        advisory: [],
+        command: "rm -rf /",
+      }),
+    );
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(getIssuePaths(result), ["/capabilities/hooks/command"]);
+  });
+
+  it("selects advisory roles in canonical order regardless of input order", () => {
+    const result = validateProfileValue(
+      profileWithHooks({
+        enabled: true,
+        advisory: [
+          "pre-compact-checkpoint",
+          "final-review-reminder",
+          "context-injection",
+        ],
+      }),
+    );
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(getSelectedAdvisoryHookRoles(result.profile), [
+      "final-review-reminder",
+      "context-injection",
+      "pre-compact-checkpoint",
+    ]);
+  });
+
+  it("selects no advisory roles when the block is absent or disabled", () => {
+    const absent = validateProfileValue(profileWithHooks(undefined));
+    assert.equal(absent.ok, true);
+    if (absent.ok) {
+      assert.deepEqual(getSelectedAdvisoryHookRoles(absent.profile), []);
+    }
+
+    const disabled = validateProfileValue(profileWithHooks({ enabled: false }));
+    assert.equal(disabled.ok, true);
+    if (disabled.ok) {
+      assert.deepEqual(getSelectedAdvisoryHookRoles(disabled.profile), []);
+    }
+  });
+
+  it("round-trips the hooks block through renderProfileYaml", () => {
+    const value = profileWithHooks({
+      enabled: true,
+      advisory: ["final-review-reminder", "context-injection"],
+    });
+    const first = validateProfileValue(value);
+    assert.equal(first.ok, true);
+    if (!first.ok) return;
+
+    const text = renderProfileYaml(first.profile);
+    const second = parseProfileYaml(text);
+    assert.equal(second.ok, true);
+    if (!second.ok) return;
+    assert.deepEqual(second.profile.capabilities?.hooks, {
+      enabled: true,
+      advisory: ["final-review-reminder", "context-injection"],
+    });
   });
 });
 

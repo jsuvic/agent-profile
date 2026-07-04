@@ -2,15 +2,18 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import {
+  ADVISORY_HOOK_ROLE_IDS,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_MAX_DEPTH,
   deriveEffectivePermissions,
   getEnabledSubagents,
+  getSelectedAdvisoryHookRoles,
   getSubagentDefaults,
   getSubagentTemplateRefs,
   REVIEWER_DEFINITIONS,
   SUBAGENT_TEMPLATE_NAMES,
   type AiProfile,
+  type AiProfileAdvisoryHookRoleId,
   type AiProfileEffectivePermissions,
   type AiProfileSubagent,
   type PermissionMode,
@@ -46,6 +49,15 @@ import {
   renderReviewChangeSkill,
   renderSpecialistReviewSkill,
 } from "./phase12-skill-content.js";
+import {
+  buildClaudeAdvisoryHooksValue,
+  getAdvisoryHookNotes,
+  getAdvisoryHookTemplateId,
+  getCodexHookTemplateId,
+  renderAdvisoryHookTemplateSource,
+  renderCodexHooksJson,
+  renderCodexHookTemplateSource,
+} from "./hooks.js";
 import { resolveSelectedSkills, type SkillId } from "./skill-selection.js";
 
 type TemplateSource = {
@@ -146,6 +158,13 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     version: "1",
     source: renderCodexConfigToml(),
   },
+  {
+    id: "targets/codex-hooks@1",
+    target: "codex-hooks",
+    version: "1",
+    source: renderCodexHooksJson(ADVISORY_HOOK_ROLE_IDS),
+  },
+  ...ADVISORY_HOOK_ROLE_IDS.map((role) => codexHookTemplateSource(role)),
   workflowSkillTemplateSource(
     "targets/codex-workflow-skills/grill-change@1",
     "codex-workflow-skills",
@@ -212,6 +231,7 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     version: "1",
     source: renderClaudeSettingsJson(),
   },
+  ...ADVISORY_HOOK_ROLE_IDS.map((role) => advisoryHookTemplateSource(role)),
   {
     id: "targets/claude-mcp@1",
     target: "claude-mcp",
@@ -321,6 +341,7 @@ export function compileProfile(request: CompileRequest): CompileResult {
     targets,
     request.profile,
   );
+  const notes = getAdvisoryHookNotes(request.profile);
 
   return {
     ok: true,
@@ -328,6 +349,7 @@ export function compileProfile(request: CompileRequest): CompileResult {
     templates: templates
       .filter((template) => requiredTemplateIds.has(template.id))
       .sort(compareTemplates),
+    ...(notes.length > 0 ? { notes } : {}),
   };
 }
 
@@ -554,6 +576,20 @@ function renderTarget(
           renderCodexConfigToml(profile),
         ),
       ];
+    case "codex-hooks": {
+      const roles = getSelectedAdvisoryHookRoles(profile);
+      if (roles.length === 0) {
+        return [];
+      }
+      return [
+        createGeneratedTextFile(
+          ".codex/hooks.json",
+          "codex-hooks",
+          "targets/codex-hooks@1",
+          renderCodexHooksJson(roles),
+        ),
+      ];
+    }
     case "codex-subagents":
       return renderCodexSubagentFiles(profile);
     case "claude-subagents":
@@ -572,7 +608,7 @@ function renderTarget(
           ".claude/settings.json",
           "claude-settings",
           "targets/claude-settings@1",
-          renderClaudeSettingsJson(),
+          renderClaudeSettingsJson(profile),
         ),
       ];
     case "claude-mcp":
@@ -1568,6 +1604,28 @@ function agentsMdTopicTemplateSource(
   };
 }
 
+function advisoryHookTemplateSource(
+  role: AiProfileAdvisoryHookRoleId,
+): TemplateSource {
+  return {
+    id: getAdvisoryHookTemplateId(role),
+    target: "claude-settings",
+    version: "1",
+    source: renderAdvisoryHookTemplateSource(role),
+  };
+}
+
+function codexHookTemplateSource(
+  role: AiProfileAdvisoryHookRoleId,
+): TemplateSource {
+  return {
+    id: getCodexHookTemplateId(role),
+    target: "codex-hooks",
+    version: "1",
+    source: renderCodexHookTemplateSource(role),
+  };
+}
+
 function workflowSkillTemplateSource(
   id: string,
   target: WorkflowSkillTargetId,
@@ -1597,8 +1655,8 @@ function hasAnyStack(
   return values.some((value) => hasStack(profile, field, value));
 }
 
-function renderClaudeSettingsJson(): string {
-  return `{
+function renderClaudeSettingsJson(profile?: AiProfile): string {
+  const base = `{
   "permissions": {
     "defaultMode": "default",
     "allow": [],
@@ -1618,6 +1676,23 @@ function renderClaudeSettingsJson(): string {
     "autoAllowBashIfSandboxed": false
   }
 }`;
+
+  const roles = profile ? getSelectedAdvisoryHookRoles(profile) : [];
+
+  if (roles.length === 0) {
+    return base;
+  }
+
+  const hooksJson = JSON.stringify(
+    buildClaudeAdvisoryHooksValue(roles),
+    null,
+    2,
+  )
+    .split("\n")
+    .map((line, index) => (index === 0 ? line : `  ${line}`))
+    .join("\n");
+
+  return base.replace(/\n\}$/u, `,\n  "hooks": ${hooksJson}\n}`);
 }
 
 function getEnabledTargetIds(profile: AiProfile): CompilerTargetId[] {
@@ -1634,6 +1709,9 @@ function getEnabledTargetIds(profile: AiProfile): CompilerTargetId[] {
 
   if (profile.clients.codex.enabled) {
     targets.push("codex-config", "codex-workflow-skills");
+    if (getSelectedAdvisoryHookRoles(profile).length > 0) {
+      targets.push("codex-hooks");
+    }
     if (subagentsEnabled) {
       targets.push("codex-subagents");
     }
@@ -1822,6 +1900,20 @@ function getRequiredTemplateIds(
       return getTabnineSubagents(profile)
         .filter((agent) => agent.toolScope === "read-only")
         .map((agent) => `targets/tabnine-subagents/${agent.name}@1`);
+    case "claude-settings":
+      return [
+        "targets/claude-settings@1",
+        ...getSelectedAdvisoryHookRoles(profile).map((role) =>
+          getAdvisoryHookTemplateId(role),
+        ),
+      ];
+    case "codex-hooks":
+      return [
+        "targets/codex-hooks@1",
+        ...getSelectedAdvisoryHookRoles(profile).map((role) =>
+          getCodexHookTemplateId(role),
+        ),
+      ];
     default:
       return TEMPLATE_SOURCES.filter(
         (template) => template.target === target,

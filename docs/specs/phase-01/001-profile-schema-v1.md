@@ -490,3 +490,14 @@ skills.
 non-empty `agents` array or a non-empty `packs` array is required, so pack-only
 reviewer profiles validate. All affected objects retain
 `additionalProperties: false`.
+
+## Phase 21 Amendment (2026-07-04)
+
+`capabilities.hooks` is live per
+`docs/specs/phase-21/001-advisory-hooks.md`: a required boolean `enabled`
+master switch plus an optional unique `advisory` array drawn from the closed
+role enum `final-review-reminder`, `context-injection`, and
+`pre-compact-checkpoint`. Non-empty `advisory` with `enabled: false` is a
+validation error. Roles are neutral intent only — command strings are pinned
+in the compiler and never appear in the profile. The block retains
+`additionalProperties: false`.

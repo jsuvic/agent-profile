@@ -4,6 +4,15 @@
 
 Draft for a later phase. Not MVP.
 
+Partially superseded: the neutral `capabilities.hooks` intent surface and the
+advisory (non-executing) roles are owned by
+`docs/specs/phase-21/001-advisory-hooks.md` (implemented). The illustrative
+raw-command `hooks:` profile shape below is historical; raw commands never
+appear in the profile. The command-runner slice (WS5-S2: format-on-write,
+lint-on-write, safety-gate-shell, full `LINT-HOOK-*` catalogue) remains this
+draft's scope, extends the same `capabilities.hooks` shape, and stays behind
+its threat-model human gate.
+
 ## Problem
 
 Some AI coding clients expose hook or automation surfaces, but the supported
@@ -53,7 +62,13 @@ project-local hook artifacts for targets that officially support them.
 
 Per-target hook events documented at the time of implementation must be
 re-verified before generation begins. The shapes below are an audit of
-current public docs.
+public docs at drafting time; the Phase 21 implementation re-verified both
+taxonomies on 2026-07-04 — the authoritative per-target event lists now live
+in `docs/research/008-current-agent-capabilities-2026-07.md` (Phase 21
+Decision) and in the compiler's pinned lists
+(`packages/compiler/src/hooks.ts`), which include newer events such as
+`PermissionRequest`, `PostToolUseFailure`, `SubagentStart`, and
+`PostCompact`, plus the verified Codex event list.
 
 Claude Code events (re-verify against `https://code.claude.com/docs/en/hooks`
 at implementation time):

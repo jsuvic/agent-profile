@@ -43,6 +43,7 @@ type PromptCall =
       kind: "selectCapabilities";
       defaults: ReadonlyArray<string>;
       reviewerSubagentsAvailable: boolean;
+      advisoryHooksAvailable: boolean;
     }
   | {
       kind: "confirmGitignore";
@@ -68,6 +69,7 @@ function scriptedPrompts(options: {
     "base" | "review" | "advanced-review" | "automation" | "mcp-recommendations"
   >;
   reviewerSubagents?: boolean;
+  advisoryHooks?: boolean;
 }): ScriptedPrompts {
   const calls: PromptCall[] = [];
   let manualLanguageIndex = 0;
@@ -100,16 +102,22 @@ function scriptedPrompts(options: {
       calls.push({ kind: "selectSetupProfile", default: def });
       return options.setupProfile ?? def;
     },
-    async selectCapabilities({ defaults, reviewerSubagentsAvailable }) {
+    async selectCapabilities({
+      defaults,
+      reviewerSubagentsAvailable,
+      advisoryHooksAvailable,
+    }) {
       calls.push({
         kind: "selectCapabilities",
         defaults,
         reviewerSubagentsAvailable,
+        advisoryHooksAvailable,
       });
       return {
         skillPacks: options.skillPacks ?? defaults,
         reviewerSubagents:
           reviewerSubagentsAvailable && options.reviewerSubagents === true,
+        advisoryHooks: advisoryHooksAvailable && options.advisoryHooks === true,
       };
     },
     async confirmGitignore({ default: def, entries }) {
@@ -259,28 +267,64 @@ test("phase-12 capability selection parses numbers and gates reviewer subagents"
   assert.deepEqual(parseWizardCapabilitySelection("1,3,4,5", true), {
     skillPacks: ["base", "advanced-review", "mcp-recommendations"],
     reviewerSubagents: true,
+    advisoryHooks: false,
   });
   assert.deepEqual(
     parseWizardCapabilitySelection("base,reviewer-subagents", false),
-    { skillPacks: ["base"], reviewerSubagents: false },
+    { skillPacks: ["base"], reviewerSubagents: false, advisoryHooks: false },
   );
   assert.deepEqual(parseWizardCapabilitySelection("", true), {
     skillPacks: ["base", "review"],
     reviewerSubagents: false,
+    advisoryHooks: false,
   });
   assert.deepEqual(
     parseWizardCapabilitySelection("", true, ["advanced-review"]),
     {
       skillPacks: ["advanced-review"],
       reviewerSubagents: false,
+      advisoryHooks: false,
     },
   );
   assert.match(
     formatWizardCapabilityQuestion({
       defaults: ["base", "review"],
       reviewerSubagentsAvailable: false,
+      advisoryHooksAvailable: false,
     }),
     /\[blocked\] Plugins \/ global memory \/ auto-install/u,
+  );
+});
+
+test("phase-21 capability selection parses and gates the advisory hooks checkbox", () => {
+  assert.deepEqual(
+    parseWizardCapabilitySelection("1,6", true, ["base", "review"], true),
+    { skillPacks: ["base"], reviewerSubagents: false, advisoryHooks: true },
+  );
+  assert.deepEqual(
+    parseWizardCapabilitySelection(
+      "advisory-hooks",
+      false,
+      ["base", "review"],
+      false,
+    ),
+    { skillPacks: [], reviewerSubagents: false, advisoryHooks: false },
+  );
+  assert.match(
+    formatWizardCapabilityQuestion({
+      defaults: ["base", "review"],
+      reviewerSubagentsAvailable: true,
+      advisoryHooksAvailable: true,
+    }),
+    /6\) \[optional\] Advisory hooks/u,
+  );
+  assert.match(
+    formatWizardCapabilityQuestion({
+      defaults: ["base", "review"],
+      reviewerSubagentsAvailable: false,
+      advisoryHooksAvailable: false,
+    }),
+    /6\) \[unavailable\] Advisory hooks/u,
   );
 });
 
@@ -766,6 +810,68 @@ test("phase-12 wizard writes setup profile, skill packs, and reviewer subagents"
     output.stdoutText(),
     /generate \.agents\/skills\/request-to-spec-issues\/SKILL\.md/u,
   );
+});
+
+test("phase-21 wizard writes advisory hooks intent and pinned Claude hook artifacts", async () => {
+  const rootDir = await createTsRoot("phase21-hooks");
+  const output = createOutput();
+  const prompts = scriptedPrompts({
+    strategy: "preserve",
+    clients: ["claude"],
+    advisoryHooks: true,
+    gitignore: false,
+    confirm: true,
+  });
+
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+
+  assert.equal(code, 0);
+  const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
+  assert.match(
+    profile,
+    /hooks:\n    enabled: true\n    advisory:\n      - final-review-reminder\n      - context-injection\n      - pre-compact-checkpoint/u,
+  );
+  const settings = JSON.parse(
+    await readFile(path.join(rootDir, ".claude", "settings.json"), "utf8"),
+  ) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(settings["hooks"] as Record<string, unknown>), [
+    "Stop",
+    "SubagentStop",
+    "UserPromptSubmit",
+    "PreCompact",
+  ]);
+  assert.match(output.stdoutText(), /Advisory hooks: enabled/u);
+});
+
+test("phase-21 wizard leaves the profile hook-free when the checkbox is off", async () => {
+  const rootDir = await createTsRoot("phase21-no-hooks");
+  const output = createOutput();
+  const prompts = scriptedPrompts({
+    strategy: "preserve",
+    clients: ["claude"],
+    gitignore: false,
+    confirm: true,
+  });
+
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+
+  assert.equal(code, 0);
+  const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
+  assert.doesNotMatch(profile, /hooks:/u);
+  const settings = await readFile(
+    path.join(rootDir, ".claude", "settings.json"),
+    "utf8",
+  );
+  assert.doesNotMatch(settings, /"hooks"/u);
+  assert.match(output.stdoutText(), /Advisory hooks: disabled/u);
 });
 
 test("foreign subagent conflict appears in wizard output before final confirmation", async () => {

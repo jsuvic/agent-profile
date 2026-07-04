@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 export {
+  ADVISORY_HOOK_ROLE_IDS,
   assertNoRemoteRefs,
   compileProfileSchema,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
@@ -10,6 +11,7 @@ export {
   expandSubagentEntry,
   getEnabledSubagents,
   getRemoteRefs,
+  getSelectedAdvisoryHookRoles,
   getSubagentDefaults,
   getSubagentTemplate,
   getSubagentTemplateRefs,
@@ -42,10 +44,12 @@ export type {
 } from "./preset/token.js";
 export type {
   AiProfile,
+  AiProfileAdvisoryHookRoleId,
   AiProfileCapabilities,
   AiProfileClient,
   AiProfileClients,
   AiProfileEffectivePermissions,
+  AiProfileHooks,
   AiProfilePermissions,
   AiProfileSafety,
   AiProfileSkillPackId,

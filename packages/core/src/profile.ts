@@ -138,6 +138,36 @@ export type AiProfileSkills = {
   packs?: AiProfileSkillPackId[];
 };
 
+// Phase 21 (WS5 slice 1): advisory, non-executing hook roles only. Command
+// strings never appear in the profile; roles map to templates pinned in the
+// compiler.
+export type AiProfileAdvisoryHookRoleId =
+  "final-review-reminder" | "context-injection" | "pre-compact-checkpoint";
+
+export const ADVISORY_HOOK_ROLE_IDS: readonly AiProfileAdvisoryHookRoleId[] = [
+  "final-review-reminder",
+  "context-injection",
+  "pre-compact-checkpoint",
+];
+
+export type AiProfileHooks = {
+  enabled: boolean;
+  advisory?: AiProfileAdvisoryHookRoleId[];
+};
+
+export function getSelectedAdvisoryHookRoles(
+  profile: Pick<AiProfile, "capabilities">,
+): AiProfileAdvisoryHookRoleId[] {
+  const block = profile.capabilities?.hooks;
+
+  if (!block || block.enabled !== true) {
+    return [];
+  }
+
+  const selected = new Set(block.advisory ?? []);
+  return ADVISORY_HOOK_ROLE_IDS.filter((role) => selected.has(role));
+}
+
 export function isSubagentTemplateRef(
   entry: AiProfileSubagentEntry,
 ): entry is AiProfileSubagentTemplateRef {
@@ -333,6 +363,7 @@ export type AiProfileCapabilities = {
   delegation?: {
     subagents?: AiProfileSubagents;
   };
+  hooks?: AiProfileHooks;
 };
 
 export type NormalizedSubagentDefaults = {
@@ -798,6 +829,16 @@ function buildCapabilitiesDoc(
     if (Object.keys(delegation).length > 0) {
       doc["delegation"] = delegation;
     }
+  }
+
+  if (capabilities.hooks !== undefined) {
+    const hooks: Record<string, unknown> = {
+      enabled: capabilities.hooks.enabled,
+    };
+    if (capabilities.hooks.advisory !== undefined) {
+      hooks["advisory"] = capabilities.hooks.advisory;
+    }
+    doc["hooks"] = hooks;
   }
 
   return doc;

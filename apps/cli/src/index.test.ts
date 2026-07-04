@@ -349,6 +349,80 @@ test("compile dry-run previews generated files without writing", async () => {
   });
 });
 
+test("compile reports advisory hook notes for targets without verified hook generation", async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-hooks-"));
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    `version: 1
+profile:
+  name: hooks-notes
+  description: Phase 21 hook notes test.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+workflow:
+  sdd: false
+  tdd: false
+  finalReview: false
+capabilities:
+  hooks:
+    enabled: true
+    advisory:
+      - final-review-reminder
+`,
+    "utf8",
+  );
+  await writeFile(path.join(rootDir, ".gitignore"), ".env\n.env.*\n", "utf8");
+  const output = createOutput();
+  const code = await runCli(["compile", "--root", rootDir, "--write"], {
+    io: output,
+  });
+
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /not generated for Tabnine/u);
+  assert.doesNotMatch(output.stdoutText(), /not generated for Codex/u);
+
+  const settings = JSON.parse(
+    await readFile(path.join(rootDir, ".claude/settings.json"), "utf8"),
+  ) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(settings["hooks"] as Record<string, unknown>), [
+    "Stop",
+    "SubagentStop",
+  ]);
+  const codexHooks = JSON.parse(
+    await readFile(path.join(rootDir, ".codex/hooks.json"), "utf8"),
+  ) as { hooks: Record<string, unknown> };
+  assert.deepEqual(Object.keys(codexHooks.hooks), ["Stop", "SubagentStop"]);
+  assert.equal(
+    (await readFile(path.join(rootDir, ".codex/config.toml"), "utf8")).includes(
+      "hook",
+    ),
+    false,
+  );
+});
+
+test("compile stays silent about hooks when the profile has no hook intent", async () => {
+  const rootDir = await createProfileOnlyRoot();
+  const output = createOutput();
+  const code = await runCli(["compile", "--root", rootDir, "--dry-run"], {
+    io: output,
+  });
+
+  assert.equal(code, 0);
+  assert.doesNotMatch(output.stdoutText(), /hooks/iu);
+});
+
 test("compile write creates generated outputs and lockfile idempotently", async () => {
   const rootDir = await createProfileOnlyRoot();
   const output = createOutput();

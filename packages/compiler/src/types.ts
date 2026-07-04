@@ -10,6 +10,7 @@ export type CompilerTargetId =
   | "tabnine-mcp-config"
   | "tabnine-subagents"
   | "codex-config"
+  | "codex-hooks"
   | "codex-workflow-skills"
   | "codex-subagents"
   | "claude-settings"
@@ -62,11 +63,24 @@ export type CompileIssue = {
   message: string;
 };
 
+// Phase 21: informational, non-failing compile reports. Used for the
+// "never silence" contract when hook intent cannot be generated for a target.
+export type CompileNoteCode = "hooks_target_not_generated";
+
+export type CompileNote = {
+  code: CompileNoteCode;
+  path: string;
+  expected: string;
+  actual: string;
+  message: string;
+};
+
 export type CompileResult =
   | {
       ok: true;
       files: GeneratedFile[];
       templates: TemplateDescriptor[];
+      notes?: CompileNote[];
     }
   | {
       ok: false;
