@@ -138,7 +138,10 @@ detection list rather than invoked with weaker flags.
       size cap, and allowlist enforced in the fixed validator order).
 - [ ] Echo sentinel confirmed (no raw assistant text in any output,
       including adapter stderr, which is captured and discarded) - closes
-      when the WS3-I2/I3 sentinel tests are green.
+      when the WS3-I2/I3 sentinel tests are green. Partial as of 2026-07-04:
+      the WS3-I2 validation-layer echo sentinel is green
+      (`apps/cli/src/assist-validator.test.ts`); the adapter stderr sentinel
+      remains open until WS3-I3.
 - [ ] Per-tool flags pinned and reviewed against current client docs - closes
       at WS3-I3.
 - [ ] Consent notice wording approved - closes when the WS3-I3 implementation
