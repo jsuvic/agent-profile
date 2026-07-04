@@ -15,6 +15,8 @@
 // only a JSON pointer, a reason, and a value type - never the raw value
 // (ASSIST-SEC-007).
 
+import { createHash } from "node:crypto";
+
 import type {
   AiProfileSkillPackId,
   AiProfileSubagentPackId,
@@ -100,11 +102,13 @@ export function validateAssistOutput(stdout: string): AssistValidationResult {
       continue;
     }
     const value = record[key];
+    const identifierSafe = SAFE_UNKNOWN_KEY_PATTERN.test(key);
     ignored.push({
-      pointer: `/${escapePointerToken(key)}`,
-      reason: isForbiddenField(key, value)
-        ? "forbidden-content"
-        : "unknown-field",
+      pointer: `/${identifierSafe ? key : redactedPointerToken(key)}`,
+      reason:
+        !identifierSafe || isForbiddenField(key, value)
+          ? "forbidden-content"
+          : "unknown-field",
       valueType: describeValueType(value),
     });
   }
@@ -305,6 +309,19 @@ function looksForbidden(value: string): boolean {
     value.includes("@@ ") ||
     value.includes("+++ ")
   );
+}
+
+// Unknown field NAMES are assistant-controlled text (ASSIST-SEC-007). A key
+// is echoed into the pointer only when it looks like a plain schema-style
+// identifier (lowercase start, alphanumeric, short) - the shape of a typo'd
+// or hallucinated field name. Anything else (URLs, paths, prompts,
+// secret-shaped tokens) is replaced with a stable digest placeholder so raw
+// assistant text never reaches terminal, files, or logs.
+const SAFE_UNKNOWN_KEY_PATTERN = /^[a-z][a-zA-Z0-9]{0,31}$/u;
+
+function redactedPointerToken(key: string): string {
+  const digest = createHash("sha256").update(key, "utf8").digest("hex");
+  return `redacted-${digest.slice(0, 8)}`;
 }
 
 function describeValueType(value: unknown): AssistValueType {

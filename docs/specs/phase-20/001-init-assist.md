@@ -187,6 +187,15 @@ Degrade conditions (whole-run): invalid JSON, non-object root, over size cap,
 missing or non-`1` `version`, or no valid recommendation remaining after
 stripping.
 
+Pointer redaction (added 2026-07-04 from PR #56 review): unknown field names
+are themselves assistant-controlled text, so ASSIST-SEC-007 applies to them.
+An unknown key is echoed into the ignored-entry pointer only when it matches
+a conservative identifier shape (lowercase start, alphanumeric, at most 32
+characters - the shape of a typo'd field name). Any other key (URLs, paths,
+prompts, secret-shaped tokens) is reported as `forbidden-content` with a
+stable `redacted-<sha256-prefix>` pointer token instead, so raw key text
+never reaches terminal, files, or logs.
+
 ## Invocation Adapters
 
 Per-tool read-only invocations, pinned at implementation time and recorded in
