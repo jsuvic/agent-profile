@@ -97,7 +97,15 @@ model, in tension with "no source-code upload".
 - Position: the upload, if any, is performed by the user's chosen tool under
   the user's existing account and explicit per-run opt-in. APC uploads
   nothing, and the consent notice (ASSIST-SEC-010) makes the boundary
-  explicit before invocation. Declining runs normal init.
+  explicit before invocation. The gate defaults to decline; assist proceeds
+  only on explicit affirmative confirmation, and declining runs normal init.
+- Adapters must select the most restrictive documented read-only/sandboxed
+  mode; if a client documents a verified local/offline mode, the adapter must
+  prefer it over a hosted-backed mode.
+- Raised again in external review (Codex, PR #55): a hard block on
+  hosted-backed clients was considered and rejected because it removes the
+  feature's core value for the two primary clients; the accepted control is
+  the default-decline consent gate plus most-restrictive-mode selection.
 
 ### T7 - Recommendation steering (malicious but schema-valid output)
 
@@ -128,8 +136,9 @@ detection list rather than invoked with weaker flags.
 - [x] Closed schema confirmed as the only ingestion surface (2026-07-04
       review: `AssistRecommendationV1` is the sole ingestion path; version,
       size cap, and allowlist enforced in the fixed validator order).
-- [ ] Echo sentinel confirmed (no raw assistant text in any output) - closes
-      when the WS3-I2 sentinel test is green.
+- [ ] Echo sentinel confirmed (no raw assistant text in any output,
+      including adapter stderr, which is captured and discarded) - closes
+      when the WS3-I2/I3 sentinel tests are green.
 - [ ] Per-tool flags pinned and reviewed against current client docs - closes
       at WS3-I3.
 - [ ] Consent notice wording approved - closes when the WS3-I3 implementation

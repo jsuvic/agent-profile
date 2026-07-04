@@ -155,9 +155,13 @@ the threat model:
 - `tabnine -p` non-interactive JSON mode.
 
 Adapters must: pass a fixed instruction requesting JSON matching
-`AssistRecommendationV1` only; set a wall-clock timeout; capture stdout only;
-treat a non-zero exit, timeout, or empty output as degrade. APC never grants
-the assisting CLI write, shell, or install permissions.
+`AssistRecommendationV1` only; select the most restrictive documented
+read-only/sandboxed mode the client offers; set a wall-clock timeout; capture
+stdout for parsing and capture stderr separately, discarding it without
+rendering, persisting, or logging it (assistant diagnostics can carry raw
+text or reflected secrets; only APC's deterministic degrade message is ever
+shown); treat a non-zero exit, timeout, or empty stdout as degrade. APC never
+grants the assisting CLI write, shell, or install permissions.
 
 ## Hardening Rules (binding)
 
@@ -179,8 +183,10 @@ Reconstructed as `ASSIST-SEC-001..010`; approving this spec fixes their text.
   strip -> strict validate -> map -> normal validation) is fixed and may not
   be reordered or short-circuited.
 - ASSIST-SEC-007: ignored recommendations are reported by JSON pointer +
-  reason + value type only; raw assistant text is never echoed to terminal,
-  files, or logs (prompt-injection sink prevention).
+  reason + value type only; raw assistant text - from stdout or stderr - is
+  never echoed to terminal, files, or logs (prompt-injection sink
+  prevention). Adapter stderr is captured and discarded, never inherited by
+  the terminal.
 - ASSIST-SEC-008: all writes route through the normal diff -> approve ->
   single atomic write path; assist cannot bypass ai-profile validation or
   doctor.
@@ -202,7 +208,15 @@ Reconstructed as `ASSIST-SEC-001..010`; approving this spec fixes their text.
   (phase-12/002), and `capabilities.delegation.subagents.packs`
   (phase-12/008). Display-only fields never touch the profile.
 - The consent notice is shown before every invocation; it names the chosen
-  client and states that APC uploads nothing itself.
+  client, states that APC uploads nothing itself, warns that the client may
+  send repository-derived content to its hosted model, and defaults to
+  decline - assist proceeds only on explicit affirmative confirmation.
+- Boundary clarification: the product's no-source-upload contract governs
+  APC's own behavior; APC transmits nothing. A user-chosen client reading the
+  repository under the user's own account is outside that boundary and is
+  permitted only through the default-decline consent gate above. An adapter
+  may only invoke modes documented as read-only for the repository; if a
+  client offers a verified local/offline mode, the adapter must prefer it.
 - `init` without `--assist` is byte-identical to phase-12/007 behavior.
 - ASSIST-SEC-001..010 above.
 
@@ -246,7 +260,12 @@ Reconstructed as `ASSIST-SEC-001..010`; approving this spec fixes their text.
   leaves the tree untouched.
 - Execution sentinel: no child process other than the version probes and the
   single chosen adapter invocation.
+- Stderr sentinel: an adapter fixture writing assistant-style text and
+  secret-shaped strings to stderr -> none of it reaches terminal output,
+  files, or logs; only the deterministic degrade message appears.
 - Adapter behavior: non-zero exit / timeout / empty stdout -> degrade.
+- Consent gate: default answer declines and runs normal init; the adapter is
+  invoked only after explicit affirmative confirmation.
 - Mapping: validated pack ids land in `capabilities.skills.packs` /
   `...subagents.packs`; resulting draft passes normal ai-profile validation.
 - Golden: assist report fixture byte-stable; no-flag init byte-identical to
