@@ -20,8 +20,8 @@ actual: range
 Pin an exact stable version to enable baseline comparison; APC makes no staleness claim for non-comparable declarations.
 
 [info] MCP-SUGGEST-NEW-FRAMEWORK package.json/dependencies/react
-react 999.0.0 is newer than APC's pinned baseline 19.0.0 (as of 2026-01-01); current docs may help.
-expected: baseline 19.0.0 or older (as of 2026-01-01)
+react 999.0.0 is newer than APC's pinned baseline 19.2.7 (as of 2026-07-04); current docs may help.
+expected: baseline 19.2.7 or older (as of 2026-07-04)
 actual: 999.0.0
 Consider curated MCP candidate ids: docs-current-frameworks. APC recommends only; install and configuration are deferred to the user.
 

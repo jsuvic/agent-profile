@@ -93,18 +93,18 @@ export const MCP_CANDIDATE_CATALOG: readonly McpCandidate[] = [
 // built against, not any live registry state. Only `npm` entries are
 // version-compared in Phase 19 v1; other ecosystems are ignored by the
 // detection rule until a later slice adds per-ecosystem comparators.
-const BASELINE_KNOWN_AS_OF = "2026-01-01";
+const BASELINE_KNOWN_AS_OF = "2026-07-04";
 
 export const KNOWLEDGE_BASELINES: readonly KnowledgeBaseline[] = [
-  baseline("react", "19.0.0"),
-  baseline("react-dom", "19.0.0"),
-  baseline("next", "15.1.0"),
-  baseline("vue", "3.5.13"),
-  baseline("@angular/core", "19.0.0"),
-  baseline("svelte", "5.15.0"),
-  baseline("typescript", "5.7.2"),
-  baseline("vite", "6.0.0"),
-  baseline("express", "4.21.2"),
+  baseline("react", "19.2.7"),
+  baseline("react-dom", "19.2.7"),
+  baseline("next", "16.2.10"),
+  baseline("vue", "3.5.39"),
+  baseline("@angular/core", "22.0.5"),
+  baseline("svelte", "5.56.4"),
+  baseline("typescript", "6.0.3"),
+  baseline("vite", "8.1.3"),
+  baseline("express", "5.2.1"),
 ];
 
 function baseline(packageName: string, knownVersion: string): KnowledgeBaseline {

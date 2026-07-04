@@ -17,6 +17,7 @@
     "doctor": "npm run build --workspace @agent-profile/cli --if-present && node apps/cli/dist/index.js doctor",
     "build:marketing": "npm run build:marketing --workspace @agent-profile/web",
     "verify:pack": "node scripts/verify-pack-files.mjs",
+    "verify:baseline-age": "node scripts/check-baseline-age.mjs",
     "version:set": "node scripts/sync-versions.mjs",
     "version:sync": "node scripts/sync-versions.mjs",
     "format": "prettier --write .",
