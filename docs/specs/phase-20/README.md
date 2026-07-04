@@ -18,6 +18,16 @@ approval: the invocation adapters (WS3-I3) may not land, and the mapping
 (WS3-I4) may not be reviewed, before the `002` sign-off checklist is complete.
 WS3-I1, WS3-I2, and WS3-I5 are cleared for implementation now.
 
+Progress 2026-07-04: WS3-I1 (schema + catalog wiring) and WS3-I2 (two-pass
+validator) landed in `apps/cli/src/assist-schema.ts` and
+`apps/cli/src/assist-validator.ts`. Spec 001 was amended the same day to fix
+the `StackSlug`, `KnownAgentFileId`, and `RiskCode` vocabularies the approval
+had referenced without enumerating; its Issue Plan now carries the deferred
+TODOs for WS3-I3 (stderr/execution sentinels, flag pinning), WS3-I4
+(write-path sentinel, display-only isolation), and WS3-I5 (degrade-report
+shape decision, golden fixture). WS3-I4 is unblocked for implementation;
+its review still waits on the `002` sign-off.
+
 ## Review Order
 
 1. `001-init-assist.md`

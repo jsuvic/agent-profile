@@ -15,6 +15,12 @@ pinned and the `002-init-assist-threat-model.md` sign-off checklist is
 completed. All other issues (WS3-I1, WS3-I2, WS3-I5) are cleared for
 implementation.
 
+Amended on 2026-07-04, after WS3-I1/I2 landed: the approved text referenced
+`StackSlug`, `KnownAgentFileId`, and `RiskCode` without enumerating them. The
+Enum Vocabularies section below fixes those three closed lists as implemented
+at WS3-I1, so later slices (especially the WS3-I5 golden assist report) freeze
+against reviewed values.
+
 ## Problem
 
 Users want AI help importing and merging an existing agent setup, but letting
@@ -110,6 +116,43 @@ type AssistRecommendationV1 = {
 - Unknown fields are stripped and reported, not fatal.
 - Hard size cap: 64 KiB of CLI stdout; over cap -> degrade.
 
+## Enum Vocabularies (fixed 2026-07-04)
+
+The three vocabularies the schema references but the original approval did not
+enumerate. Source of truth in code: `apps/cli/src/assist-schema.ts` (exported
+as `AssistStackSlug`, `AssistKnownAgentFileId`, `AssistRiskCode`). Adding,
+renaming, or removing a value is a reviewed source change that must update
+this section and the code in the same change; after WS3-I5 lands it also
+requires regenerating the golden assist report fixture.
+
+`StackSlug` - exactly the vocabulary `@agent-profile/scanner` stack detection
+can emit (languages, frameworks, package managers, testing). The assistant
+can only claim stacks APC itself can detect:
+
+```
+typescript, javascript, java, dart,
+react, sveltekit, vite, flutter, riverpod, go-router, drift, firebase,
+rive, lottie, dotlottie, spring-boot,
+npm, pnpm, yarn, maven, gradle, pub,
+playwright, flutter-test, junit
+```
+
+`KnownAgentFileId` - artifact ids mirroring the scanner's supported import
+paths (`SUPPORTED_CONFIG_PATHS` plus the Tabnine guidelines directory), never
+repository paths:
+
+```
+agents-md, claude-md, tabnine-mcp-servers, tabnine-guidelines,
+codex-config, claude-settings, mcp-json
+```
+
+`RiskCode` - display-only risk labels for the assist summary:
+
+```
+mixed-agent-instructions, generated-marker-present, secret-like-content,
+new-framework-version, unpinned-dependencies, no-test-setup
+```
+
 ## Mapping
 
 Validated fields either pre-fill wizard selections or are display-only in the
@@ -143,6 +186,15 @@ Fixed order, binding:
 Degrade conditions (whole-run): invalid JSON, non-object root, over size cap,
 missing or non-`1` `version`, or no valid recommendation remaining after
 stripping.
+
+Pointer redaction (added 2026-07-04 from PR #56 review): unknown field names
+are themselves assistant-controlled text, so ASSIST-SEC-007 applies to them.
+An unknown key is echoed into the ignored-entry pointer only when it matches
+a conservative identifier shape (lowercase start, alphanumeric, at most 32
+characters - the shape of a typo'd field name). Any other key (URLs, paths,
+prompts, secret-shaped tokens) is reported as `forbidden-content` with a
+stable `redacted-<sha256-prefix>` pointer token instead, so raw key text
+never reaches terminal, files, or logs.
 
 ## Invocation Adapters
 
@@ -280,15 +332,28 @@ adapters (WS3-I3) behind the threat-model gate, then mapping and report
 
 ## Issue Plan
 
-- WS3-I1: `AssistRecommendationV1` schema + shared catalog wiring. `ready`
-  (phase-19 catalog, phase-12/002 packs, phase-12/007 init all landed).
-- WS3-I2: two-pass validator with ASSIST-SEC-003..007. `sequenced` after
-  WS3-I1.
-- WS3-I3: client detection + read-only invocation adapters. `parallel-safe`
-  with WS3-I2; `blocked` on `002-init-assist-threat-model.md` sign-off.
+- WS3-I1: `AssistRecommendationV1` schema + shared catalog wiring. `done`
+  2026-07-04 (`apps/cli/src/assist-schema.ts`; enum vocabularies fixed above).
+- WS3-I2: two-pass validator with ASSIST-SEC-003..007. `done` 2026-07-04
+  (`apps/cli/src/assist-validator.ts`; validator table and validation-layer
+  echo sentinel green).
+- WS3-I3: client detection + read-only invocation adapters. `blocked` on
+  `002-init-assist-threat-model.md` sign-off.
+  - TODO: stderr sentinel and execution sentinel tests land here (they need a
+    real adapter surface; do not stub them earlier).
+  - TODO: pin the per-tool read-only flags into `002` and propose the literal
+    consent-notice wording, closing the matching sign-off checklist items.
 - WS3-I4: recommendation -> draft mapping + normal validation. `sequenced`
-  after WS3-I2; review `blocked` on the threat-model sign-off.
+  after WS3-I2 (now unblocked for implementation); review `blocked` on the
+  threat-model sign-off.
+  - TODO: write-path sentinel and display-only isolation tests land here.
 - WS3-I5: assist report + degrade-to-normal. `sequenced` after WS3-I4.
+  - TODO: decide whether a degrade result also surfaces the ignored entries
+    collected before the degrade decision. The WS3-I2 validator returns only
+    the degrade reason today; extending it is additive. Either way the report
+    stays pointer + reason + value type only (ASSIST-SEC-007/009).
+  - TODO: golden assist report fixture freezes the Enum Vocabularies section;
+    any later vocabulary change regenerates it.
 - WS3-I6 (human gate): `002-init-assist-threat-model.md` sign-off.
 
 ## Documentation Updates
