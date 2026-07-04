@@ -66,9 +66,11 @@ Make baseline review a mechanical part of the release path:
 - `node scripts/check-baseline-age.mjs` exits 0 when every `knownAsOf` is
   within 6 calendar months of the build date, and exits 1 with a message
   naming the stale date(s) otherwise.
-- `AGENT_PROFILE_BUILD_DATE=2026-06-30 node scripts/check-baseline-age.mjs`
-  passes against `knownAsOf: 2026-01-01`;
-  `AGENT_PROFILE_BUILD_DATE=2026-07-02` fails against the same date.
+- With the current `knownAsOf: 2026-07-04` (reviewed against the npm registry
+  on 2026-07-04): `AGENT_PROFILE_BUILD_DATE=2027-01-04
+  node scripts/check-baseline-age.mjs` passes (expiry day itself is allowed);
+  `AGENT_PROFILE_BUILD_DATE=2027-01-05` fails. Re-pin these example dates
+  whenever the baseline is bumped so the check stays reproducible.
 - `docs/release.md` pre-publish checklist requires baseline review and runs
   the script; `release-verify.yml` runs it as a step.
 - `npm test`, `npm run check`, and `verify.yml` are unchanged.
