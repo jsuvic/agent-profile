@@ -72,12 +72,24 @@ if (dates.length === 0) {
   );
 }
 
+// Add calendar months with day clamping: a month-end knownAsOf must not
+// overflow into the following month (e.g. 2026-08-31 + 6 months clamps to
+// 2027-02-28, not 2027-03-03), or the gate would allow builds past the
+// calendar-month window the spec promises.
+function addMonthsClamped(date, months) {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + months;
+  const day = date.getUTCDate();
+  const lastDayOfTargetMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+
+  return new Date(Date.UTC(year, month, Math.min(day, lastDayOfTargetMonth)));
+}
+
 const staleDates = [];
 
 for (const value of [...new Set(dates)].sort()) {
   const knownAsOf = parseUtcDate(value, `knownAsOf in ${BASELINE_MODULE}`);
-  const expiry = new Date(knownAsOf.getTime());
-  expiry.setUTCMonth(expiry.getUTCMonth() + MAX_AGE_MONTHS);
+  const expiry = addMonthsClamped(knownAsOf, MAX_AGE_MONTHS);
 
   if (buildDate.getTime() > expiry.getTime()) {
     staleDates.push(value);
