@@ -2,10 +2,20 @@
 
 ## Status
 
-Draft candidates. **Not approved.** Produced by `request-to-spec-issues` from the
-grill agreement record for `docs/plans/001-agent-capability-direction.md`, after
-the WS0-WS2 slice was spec-written under `docs/specs/phase-12/`. These are the
-follow-on slices; each becomes its own numbered phase on approval.
+All candidates promoted; this plan is now historical. Produced by
+`request-to-spec-issues` from the grill agreement record for
+`docs/plans/001-agent-capability-direction.md`, after the WS0-WS2 slice was
+spec-written under `docs/specs/phase-12/`. The numbered specs are
+authoritative:
+
+- WS4 -> `docs/specs/phase-19/` (approved 2026-07-03, implemented)
+- WS3 -> `docs/specs/phase-20/` (approved 2026-07-04; WS3-I3/I4 gated on the
+  threat-model flag-pinning sign-off)
+- WS5 slice 1 -> `docs/specs/phase-21/` (approved 2026-07-04; WS5-S2
+  command-runners stay `phase-later/001` behind a human gate)
+- WS6 -> `docs/specs/phase-22/` (approved 2026-07-04)
+- WS7 -> `docs/specs/phase-23/` (approved 2026-07-04; WS7b/WS7c need their
+  own specs)
 
 ## Shared Intent
 
@@ -145,6 +155,14 @@ Versions pinned by the release process, never fetched dynamically.
 
 # WS3 - init --assist (read-only AI-CLI analysis)
 
+> Promoted to `docs/specs/phase-20/001-init-assist.md` (approved 2026-07-04)
+> with the WS3-I6 threat model as
+> `docs/specs/phase-20/002-init-assist-threat-model.md`. The numbered spec is
+> authoritative: it fixes the `ASSIST-SEC-001..010` text (which the grill
+> record referenced but no repository document had recorded), maps
+> recommendations to wizard pre-selections only, and keeps WS3-I3/I4 gated on
+> the threat model's flag-pinning sign-off.
+
 ## Problem
 
 Users want AI help importing/merging existing setup, but letting an external AI
@@ -220,6 +238,13 @@ degrade to normal init and report that no recommendation was applied.
 
 # WS5 - Hooks (advisory slice first)
 
+> Slice 1 promoted to `docs/specs/phase-21/001-advisory-hooks.md` (approved
+> 2026-07-04). The numbered spec is authoritative: it pins advisory commands
+> to a compiler template table (read-only, non-project, fail-open), gates
+> Codex emission on capability-matrix confirmation, and adds `LINT-HOOK-008`
+> tamper detection. WS5-S2 command-runners remain `phase-later/001` behind
+> their threat-model human gate.
+
 ## Problem
 
 Hooks add automation but command-runner hooks carry cross-platform execution and
@@ -275,6 +300,12 @@ each); defer command-runners to a hardened second slice.
 
 # WS6 - Loop Workflows (instruction-only skills)
 
+> Promoted to `docs/specs/phase-22/001-automation-loop-skills.md` (approved
+> 2026-07-04). The numbered spec is authoritative: it fixes the closed
+> five-skill set, the three structurally-checked body sections, the
+> phase-12/002 mapping-table amendment for `automation`, and the
+> conditional-pointer rule for cross-references.
+
 ## Problem
 
 Loop workflows are valuable but any APC-driven iteration is background/hosted
@@ -321,6 +352,12 @@ iteration. APC emits text and never executes or iterates.
 ---
 
 # WS7 - Memory (document-only first slice)
+
+> Promoted to `docs/specs/phase-23/001-memory-guidance.md` (approved
+> 2026-07-04). The numbered spec is authoritative: it gates the topic behind
+> a new `workflow.memoryGuidance` boolean (following the existing
+> guidance-topic pattern), fixes the verbatim secret-rule text, and records
+> WS7b/WS7c as later slices requiring their own specs.
 
 ## Problem
 
