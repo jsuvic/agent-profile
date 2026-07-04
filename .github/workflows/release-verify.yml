@@ -44,6 +44,9 @@ jobs:
       - name: Verify npm pack output
         run: npm run verify:pack
 
+      - name: Verify MCP knowledge baseline age
+        run: npm run verify:baseline-age
+
       - name: Audit production dependencies
         run: npm audit --omit=dev
 
