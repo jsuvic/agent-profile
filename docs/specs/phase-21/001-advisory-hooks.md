@@ -16,6 +16,11 @@ Implemented 2026-07-04. Implementation notes:
   config layer, per the Codex docs). Codex handlers pin the documented
   `commandWindows` Windows-only override next to the POSIX `command`, so
   both platform variants live in one deterministic artifact.
+- Codex output semantics are event-specific: `Stop`/`SubagentStop` require
+  JSON stdout on exit 0 and `PreCompact` ignores plain stdout, so the Codex
+  reminder commands echo a `{"systemMessage": ...}` payload;
+  `UserPromptSubmit` treats plain stdout as developer context, so the git
+  context command stays plain text.
 - Claude commands are single pinned literals that parse and fail open in
   every shell Claude documents for hook commands (`sh`, Git Bash, and the
   Windows PowerShell fallback), so Claude needs no per-platform variant.

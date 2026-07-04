@@ -5,8 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"Reminder: run the final-review skill before handing off.\"",
-            "commandWindows": "cmd /c \"echo Reminder: run the final-review skill before handing off.\""
+            "command": "echo '{\"systemMessage\":\"Reminder: run the final-review skill before handing off.\"}'",
+            "commandWindows": "cmd /c echo {\"systemMessage\":\"Reminder: run the final-review skill before handing off.\"}"
           }
         ]
       }
@@ -16,8 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"Reminder: run the final-review skill before handing off.\"",
-            "commandWindows": "cmd /c \"echo Reminder: run the final-review skill before handing off.\""
+            "command": "echo '{\"systemMessage\":\"Reminder: run the final-review skill before handing off.\"}'",
+            "commandWindows": "cmd /c echo {\"systemMessage\":\"Reminder: run the final-review skill before handing off.\"}"
           }
         ]
       }
@@ -38,8 +38,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"Reminder: checkpoint in-progress work before compaction.\"",
-            "commandWindows": "cmd /c \"echo Reminder: checkpoint in-progress work before compaction.\""
+            "command": "echo '{\"systemMessage\":\"Reminder: checkpoint in-progress work before compaction.\"}'",
+            "commandWindows": "cmd /c echo {\"systemMessage\":\"Reminder: checkpoint in-progress work before compaction.\"}"
           }
         ]
       }

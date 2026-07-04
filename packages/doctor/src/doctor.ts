@@ -215,7 +215,7 @@ async function checkAdvisoryHookArtifacts(
           : undefined,
       toPinnedHandler: (template) => ({
         type: "command",
-        command: template.command,
+        command: template.claudeCommand,
       }),
     });
   }
@@ -240,8 +240,8 @@ async function checkAdvisoryHookArtifacts(
             : undefined,
         toPinnedHandler: (template) => ({
           type: "command",
-          command: template.command,
-          commandWindows: template.commandWindows,
+          command: template.codexCommand,
+          commandWindows: template.codexCommandWindows,
         }),
       });
     }
@@ -380,9 +380,7 @@ async function checkCodexConfigHookSurface(
     return;
   }
 
-  const text = decodeUtf8(file.bytes);
-
-  if (/^\s*\[+\s*hooks\b|^\s*hooks\s*[.=]/mu.test(text)) {
+  if (codexConfigDeclaresInlineHooks(decodeUtf8(file.bytes))) {
     issues.push(
       issue(
         "LINT-HOOK-005",
@@ -395,6 +393,37 @@ async function checkCodexConfigHookSurface(
       ),
     );
   }
+}
+
+/**
+ * Detect an inline hook surface in config.toml: a `[hooks]` / `[hooks.*]` /
+ * `[[hooks.*]]` table header, or a root-level `hooks` key. A `hooks` key
+ * inside another table (for example the documented `[features]`
+ * `hooks = false` feature flag) is not a hook definition and must not be
+ * flagged.
+ */
+function codexConfigDeclaresInlineHooks(text: string): boolean {
+  let inRootTable = true;
+
+  for (const rawLine of text.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    const header = /^\[\[?\s*([^\]\s]+)\s*\]?\]/u.exec(line);
+
+    if (header) {
+      const tablePath = header[1] ?? "";
+      if (tablePath === "hooks" || tablePath.startsWith("hooks.")) {
+        return true;
+      }
+      inRootTable = false;
+      continue;
+    }
+
+    if (inRootTable && /^hooks\s*[.=]/u.test(line)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isJsonRecord(value: unknown): value is Record<string, unknown> {

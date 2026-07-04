@@ -3120,37 +3120,52 @@ test("phase-21 pinned advisory hook template table is a golden contract", () => 
     ADVISORY_HOOK_TEMPLATES.map((template) => ({
       role: template.role,
       events: [...template.events],
-      command: template.command,
-      commandWindows: template.commandWindows,
+      claudeCommand: template.claudeCommand,
+      codexCommand: template.codexCommand,
+      codexCommandWindows: template.codexCommandWindows,
     })),
     [
       {
         role: "final-review-reminder",
         events: ["Stop", "SubagentStop"],
-        command:
+        claudeCommand:
           'echo "Reminder: run the final-review skill before handing off."',
-        commandWindows:
-          'cmd /c "echo Reminder: run the final-review skill before handing off."',
+        // Codex Stop/SubagentStop require JSON stdout on exit 0; plain text
+        // is invalid for those events.
+        codexCommand:
+          'echo \'{"systemMessage":"Reminder: run the final-review skill before handing off."}\'',
+        codexCommandWindows:
+          'cmd /c echo {"systemMessage":"Reminder: run the final-review skill before handing off."}',
       },
       {
         role: "context-injection",
         events: ["UserPromptSubmit"],
-        command: "git status --short --branch; exit 0",
-        commandWindows: 'cmd /c "git status --short --branch || exit 0"',
+        claudeCommand: "git status --short --branch; exit 0",
+        // Codex UserPromptSubmit adds plain stdout as developer context.
+        codexCommand: "git status --short --branch; exit 0",
+        codexCommandWindows: 'cmd /c "git status --short --branch || exit 0"',
       },
       {
         role: "pre-compact-checkpoint",
         events: ["PreCompact"],
-        command:
+        claudeCommand:
           'echo "Reminder: checkpoint in-progress work before compaction."',
-        commandWindows:
-          'cmd /c "echo Reminder: checkpoint in-progress work before compaction."',
+        // Codex PreCompact ignores plain stdout; the systemMessage common
+        // output field surfaces the reminder.
+        codexCommand:
+          'echo \'{"systemMessage":"Reminder: checkpoint in-progress work before compaction."}\'',
+        codexCommandWindows:
+          'cmd /c echo {"systemMessage":"Reminder: checkpoint in-progress work before compaction."}',
       },
     ],
   );
 
   for (const template of ADVISORY_HOOK_TEMPLATES) {
-    for (const command of [template.command, template.commandWindows]) {
+    for (const command of [
+      template.claudeCommand,
+      template.codexCommand,
+      template.codexCommandWindows,
+    ]) {
       assert.equal(
         advisoryHookCommandViolatesForbiddenPatterns(command),
         false,
@@ -3167,6 +3182,28 @@ test("phase-21 pinned advisory hook template table is a golden contract", () => 
         `${template.role}: ${event} must be a verified Codex event`,
       );
     }
+  }
+});
+
+test("phase-21 codex reminder commands echo valid systemMessage JSON on both platforms", () => {
+  for (const template of ADVISORY_HOOK_TEMPLATES) {
+    if (template.role === "context-injection") continue;
+
+    // POSIX form: echo '<json>'.
+    const posixMatch = template.codexCommand.match(/^echo '(.+)'$/u);
+    assert.ok(posixMatch?.[1], `${template.role}: posix echo shape`);
+    const posixPayload = JSON.parse(posixMatch[1]) as Record<string, unknown>;
+    assert.equal(typeof posixPayload["systemMessage"], "string");
+
+    // Windows form: cmd /c echo <json>; cmd echoes the tail verbatim.
+    const windowsMatch =
+      template.codexCommandWindows.match(/^cmd \/c echo (.+)$/u);
+    assert.ok(windowsMatch?.[1], `${template.role}: windows echo shape`);
+    const windowsPayload = JSON.parse(windowsMatch[1]) as Record<
+      string,
+      unknown
+    >;
+    assert.deepEqual(windowsPayload, posixPayload);
   }
 });
 
@@ -3463,9 +3500,9 @@ test("phase-21 codex advisory hooks emit a pinned .codex/hooks.json with Windows
         {
           type: "command",
           command:
-            'echo "Reminder: run the final-review skill before handing off."',
+            'echo \'{"systemMessage":"Reminder: run the final-review skill before handing off."}\'',
           commandWindows:
-            'cmd /c "echo Reminder: run the final-review skill before handing off."',
+            'cmd /c echo {"systemMessage":"Reminder: run the final-review skill before handing off."}',
         },
       ],
     },

@@ -337,8 +337,12 @@ Targets:
   `.codex/hooks.json` (the hooks representation Codex documents alongside
   inline `config.toml` tables; APC uses one representation per layer). Each
   handler pins both `command` (POSIX) and the documented `commandWindows`
-  Windows override in the same deterministic artifact. Codex requires
-  project hooks to be reviewed and trusted (`/hooks`) before they run.
+  Windows override in the same deterministic artifact. Codex output
+  semantics differ per event: `Stop`/`SubagentStop` require JSON stdout and
+  `PreCompact` ignores plain stdout, so the reminder roles echo a
+  `{"systemMessage": ...}` payload; `UserPromptSubmit` adds plain stdout as
+  developer context, so the git command stays plain. Codex requires project
+  hooks to be reviewed and trusted (`/hooks`) before they run.
 - **Tabnine** — not generated; hook support is not confirmed-official.
   `compile` reports a note when hooks are enabled on a Tabnine-including
   profile.

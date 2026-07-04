@@ -13,7 +13,11 @@ All notable changes to Agent Profile Compiler will be documented in this file.
   `.codex/hooks.json` (with the documented `commandWindows` Windows override
   pinned per handler). Claude commands are single literals that parse and
   fail open in every documented Claude hook shell (sh, Git Bash, Windows
-  PowerShell fallback). Tabnine hook generation stays disabled with an
+  PowerShell fallback). Codex reminder handlers emit the documented
+  `{"systemMessage": ...}` JSON payload because Codex `Stop`/`SubagentStop`
+  require JSON stdout and `PreCompact` ignores plain stdout; the doctor
+  inline-hooks check ignores the documented `[features]` `hooks = false`
+  feature flag. Tabnine hook generation stays disabled with an
   explicit compile note (support unknown). Both per-target event lists were
   re-verified against the official hooks docs on 2026-07-04. Doctor gains
   non-executing structural checks `LINT-HOOK-003` (event outside the

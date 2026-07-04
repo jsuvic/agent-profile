@@ -71,14 +71,20 @@ export type AdvisoryHookTemplate = {
   role: AiProfileAdvisoryHookRoleId;
   // Slice-1 advisory events are verified for both Claude and Codex.
   events: readonly (ClaudeHookEvent & CodexHookEvent)[];
-  // Pinned literal for every shell the clients document for hook commands:
-  // sh, Git Bash, and PowerShell (Claude's Windows fallback). `;` sequencing
-  // and double-quoted strings parse identically in all three, so one string
+  // Pinned literal for every shell Claude documents for hook commands: sh,
+  // Git Bash, and PowerShell (Claude's Windows fallback). `;` sequencing and
+  // double-quoted strings parse identically in all three, so one string
   // covers them; `||` is avoided because Windows PowerShell rejects it.
-  command: string;
-  // Pinned Windows override for Codex's documented `commandWindows` field.
-  // Wrapped in `cmd /c "..."` so it parses under both cmd.exe and PowerShell.
-  commandWindows: string;
+  claudeCommand: string;
+  // Pinned POSIX literal for Codex. Output semantics differ per Codex event:
+  // Stop/SubagentStop require JSON stdout on exit 0 and PreCompact ignores
+  // plain stdout, so reminder roles echo a {"systemMessage": ...} payload;
+  // UserPromptSubmit adds plain stdout as developer context.
+  codexCommand: string;
+  // Pinned literal for Codex's documented `commandWindows` Windows-only
+  // override, targeting cmd.exe (cmd `echo` prints its tail verbatim, so the
+  // JSON payload survives without quoting).
+  codexCommandWindows: string;
 };
 
 // The pinned template table. Runtime behavior is advisory only: a fixed
@@ -88,24 +94,31 @@ export const ADVISORY_HOOK_TEMPLATES: readonly AdvisoryHookTemplate[] = [
   {
     role: "final-review-reminder",
     events: ["Stop", "SubagentStop"],
-    command: 'echo "Reminder: run the final-review skill before handing off."',
-    commandWindows:
-      'cmd /c "echo Reminder: run the final-review skill before handing off."',
+    claudeCommand:
+      'echo "Reminder: run the final-review skill before handing off."',
+    codexCommand:
+      'echo \'{"systemMessage":"Reminder: run the final-review skill before handing off."}\'',
+    codexCommandWindows:
+      'cmd /c echo {"systemMessage":"Reminder: run the final-review skill before handing off."}',
   },
   {
     role: "context-injection",
     events: ["UserPromptSubmit"],
     // Fail open: `exit 0` runs even when git is unavailable, so the hook
     // exits successfully with no context and never blocks the client.
-    command: "git status --short --branch; exit 0",
-    commandWindows: 'cmd /c "git status --short --branch || exit 0"',
+    claudeCommand: "git status --short --branch; exit 0",
+    codexCommand: "git status --short --branch; exit 0",
+    codexCommandWindows: 'cmd /c "git status --short --branch || exit 0"',
   },
   {
     role: "pre-compact-checkpoint",
     events: ["PreCompact"],
-    command: 'echo "Reminder: checkpoint in-progress work before compaction."',
-    commandWindows:
-      'cmd /c "echo Reminder: checkpoint in-progress work before compaction."',
+    claudeCommand:
+      'echo "Reminder: checkpoint in-progress work before compaction."',
+    codexCommand:
+      'echo \'{"systemMessage":"Reminder: checkpoint in-progress work before compaction."}\'',
+    codexCommandWindows:
+      'cmd /c echo {"systemMessage":"Reminder: checkpoint in-progress work before compaction."}',
   },
 ];
 
@@ -166,7 +179,7 @@ export function renderAdvisoryHookTemplateSource(
     {
       role: template.role,
       events: template.events,
-      command: template.command,
+      command: template.claudeCommand,
     },
     null,
     2,
@@ -181,8 +194,8 @@ export function renderCodexHookTemplateSource(
     {
       role: template.role,
       events: template.events,
-      command: template.command,
-      commandWindows: template.commandWindows,
+      command: template.codexCommand,
+      commandWindows: template.codexCommandWindows,
     },
     null,
     2,
@@ -230,7 +243,7 @@ export function buildClaudeAdvisoryHooksValue(
 ): Record<string, HookEntry<ClaudeHookHandler>[]> {
   return buildHooksValue(roles, (template) => ({
     type: "command",
-    command: template.command,
+    command: template.claudeCommand,
   }));
 }
 
@@ -244,8 +257,8 @@ export function renderCodexHooksJson(
 ): string {
   const hooks = buildHooksValue<CodexHookHandler>(roles, (template) => ({
     type: "command",
-    command: template.command,
-    commandWindows: template.commandWindows,
+    command: template.codexCommand,
+    commandWindows: template.codexCommandWindows,
   }));
 
   return `${JSON.stringify({ hooks }, null, 2)}\n`;

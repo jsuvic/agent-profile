@@ -68,19 +68,19 @@
       "id": "targets/codex-hooks/final-review-reminder@1",
       "target": "codex-hooks",
       "version": "1",
-      "sha256": "8985e62d53de95885382e420179bd196efe4d43e4a392b07c2aeafebfc0c500f"
+      "sha256": "1c11d1ad40784425e338883caa984d27d6f0bc95477b996550a94bd0b8179f55"
     },
     {
       "id": "targets/codex-hooks/pre-compact-checkpoint@1",
       "target": "codex-hooks",
       "version": "1",
-      "sha256": "0e5cf6b097d60ab6124824be795f7294e8a447fd0b7a269394690cbe4310d939"
+      "sha256": "3a8659a09e3d7b97dde0cef5b770c7dac2e1e97c250b49663b0db886fcadd859"
     },
     {
       "id": "targets/codex-hooks@1",
       "target": "codex-hooks",
       "version": "1",
-      "sha256": "ce69ad6b8a03f113204e9cc0c6054bd3be90661963503dade78fc27cd6b7a0de"
+      "sha256": "e4215a776e28eeff36d4efa59f3306e88cc8501e369e50e68ee6979bd3ea403b"
     }
   ],
   "outputs": [
@@ -103,7 +103,7 @@
       "target": "codex-hooks",
       "templateId": "targets/codex-hooks@1",
       "ownership": "generated-owned",
-      "sha256": "ce69ad6b8a03f113204e9cc0c6054bd3be90661963503dade78fc27cd6b7a0de"
+      "sha256": "e4215a776e28eeff36d4efa59f3306e88cc8501e369e50e68ee6979bd3ea403b"
     },
     {
       "path": ".mcp.json",

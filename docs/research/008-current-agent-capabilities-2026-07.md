@@ -65,9 +65,15 @@ surface at that scope without claiming the client runtime is enforceable.
   `PermissionRequest`, `PostToolUse`, `SubagentStart`, `SubagentStop`,
   `Stop`, `PreCompact`, `PostCompact`. Handlers support the documented
   `commandWindows` Windows-only override, which APC pins alongside the POSIX
-  `command`. Project-local Codex hooks load only when the project `.codex/`
-  layer is trusted, and non-managed command hooks must be reviewed and
-  trusted (`/hooks`) before they run.
+  `command`. Output semantics are event-specific: `Stop` and `SubagentStop`
+  expect JSON on stdout when exiting 0 (plain text is invalid), `PreCompact`
+  ignores plain stdout but supports the common `systemMessage` output field,
+  and `UserPromptSubmit` adds plain stdout as developer context — APC's
+  reminder roles therefore echo a `{"systemMessage": ...}` payload for
+  Codex. The `[features]` `hooks = false` key is the documented feature
+  flag, not a hook surface. Project-local Codex hooks load only when the
+  project `.codex/` layer is trusted, and non-managed command hooks must be
+  reviewed and trusted (`/hooks`) before they run.
 - Tabnine hook generation stays disabled (`unknown` support); `compile`
   reports a not-supported note.
 

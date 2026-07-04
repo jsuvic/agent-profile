@@ -136,6 +136,44 @@ test("doctor flags a hook surface outside APC generation with LINT-HOOK-005", as
   assert.equal(finding.path, ".codex/config.toml");
 });
 
+test("doctor does not flag the codex hooks feature flag under [features]", async () => {
+  // `[features] hooks = false` is the documented way to disable Codex hooks;
+  // it is a feature flag, not a hook surface, and must not trip LINT-HOOK-005.
+  const rootDir = await createHooksProject();
+  const codexConfigPath = path.join(rootDir, ".codex/config.toml");
+  const codexConfig = await readFile(codexConfigPath, "utf8");
+  await writeFile(
+    codexConfigPath,
+    `${codexConfig}\n[features]\nhooks = false\n`,
+    "utf8",
+  );
+
+  const result = await runDoctor({ rootDir });
+
+  assert.equal(
+    result.issues.some((issue) => issue.code === "LINT-HOOK-005"),
+    false,
+  );
+});
+
+test("doctor flags root-level and dotted codex hook tables with LINT-HOOK-005", async () => {
+  const rootDir = await createHooksProject();
+  const codexConfigPath = path.join(rootDir, ".codex/config.toml");
+  const codexConfig = await readFile(codexConfigPath, "utf8");
+  await writeFile(
+    codexConfigPath,
+    `${codexConfig}\n[[hooks.PreToolUse]]\nmatcher = "Bash"\n`,
+    "utf8",
+  );
+
+  const result = await runDoctor({ rootDir });
+
+  assert.ok(
+    result.issues.some((issue) => issue.code === "LINT-HOOK-005"),
+    "dotted hooks table must trigger LINT-HOOK-005",
+  );
+});
+
 test("doctor flags a tampered codex hook command with LINT-HOOK-008", async () => {
   const rootDir = await createHooksProject();
   const hooksPath = path.join(rootDir, ".codex/hooks.json");
