@@ -75,7 +75,10 @@ capabilities:
 - `review` -> `review-change`
 - `advanced-review` -> `security-review`, `readability-review`, `test-review`,
   `architecture-review`
-- `automation` -> (none in Phase 12; reserved)
+- `automation` -> `loop-implement-test-fix`, `loop-review-patch-retest`,
+  `loop-security-patch-retest`, `loop-docs-update`, `loop-sdd-cycle`
+  (loop skill content added by `phase-22/001-automation-loop-skills.md`;
+  reserved here in Phase 12)
 - `mcp-recommendations` -> `mcp-fit-check`
 
 Skill bodies and per-target emission are owned by `003`-`005`. This spec owns

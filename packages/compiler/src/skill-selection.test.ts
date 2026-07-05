@@ -58,7 +58,7 @@ describe("resolveSelectedSkills", () => {
     );
   });
 
-  it("resolves pack-only skills and keeps automation reserved", () => {
+  it("resolves pack-only skills including automation loop skills", () => {
     assert.deepEqual(
       resolveSelectedSkills(
         profile({
@@ -80,6 +80,11 @@ describe("resolveSelectedSkills", () => {
         "readability-review",
         "test-review",
         "architecture-review",
+        "loop-implement-test-fix",
+        "loop-review-patch-retest",
+        "loop-security-patch-retest",
+        "loop-docs-update",
+        "loop-sdd-cycle",
         "mcp-fit-check",
       ],
     );

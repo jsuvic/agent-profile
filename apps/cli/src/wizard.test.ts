@@ -328,6 +328,30 @@ test("phase-21 capability selection parses and gates the advisory hooks checkbox
   );
 });
 
+test("phase-22 capability selection parses the automation loop skills checkbox", () => {
+  assert.deepEqual(parseWizardCapabilitySelection("7", true), {
+    skillPacks: ["automation"],
+    reviewerSubagents: false,
+    advisoryHooks: false,
+  });
+  assert.deepEqual(
+    parseWizardCapabilitySelection("base,automation", false),
+    {
+      skillPacks: ["base", "automation"],
+      reviewerSubagents: false,
+      advisoryHooks: false,
+    },
+  );
+  assert.match(
+    formatWizardCapabilityQuestion({
+      defaults: ["base", "review"],
+      reviewerSubagentsAvailable: true,
+      advisoryHooksAvailable: true,
+    }),
+    /7\) \[optional\] Automation loop skills/u,
+  );
+});
+
 test("parseManualLanguageSlugs enforces count, length, and whole-entry validation", () => {
   assert.deepEqual(parseManualLanguageSlugs(" Java, JAVASCRIPT, java "), {
     ok: true,

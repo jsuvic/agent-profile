@@ -69,10 +69,12 @@ export type {
 } from "./hooks.js";
 export {
   getCapabilityArtifactPaths,
+  isLoopSkillId,
+  LOOP_SKILL_IDS,
   resolveSelectedSkills,
   resolveSkillPacks,
 } from "./skill-selection.js";
-export type { SkillId } from "./skill-selection.js";
+export type { LoopSkillId, SkillId } from "./skill-selection.js";
 export {
   applyWritePlan,
   computeFileEtag,

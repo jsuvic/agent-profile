@@ -17,6 +17,7 @@ import {
   hasAnyRegionMarker,
   hasAllRegionMarkers,
   hasLegacyGeneratedMarker,
+  isLoopSkillId,
   REGION_PRECEDENCE_TEXT,
   VERIFIED_CLAUDE_HOOK_EVENTS,
   VERIFIED_CODEX_HOOK_EVENTS,
@@ -143,6 +144,7 @@ export async function runDoctor(
   await checkGeneratedArtifactSecurity(rootDir, compileResult.files, issues);
   await checkSkillFiles(rootDir, issues);
   await checkSkillPackArtifacts(rootDir, compileResult.files, issues);
+  await checkLoopSkillStructure(rootDir, compileResult.files, issues);
   await checkSemanticWarnings(rootDir, compileResult.files, issues);
   await checkGitignoreSecretHygiene(rootDir, issues);
 
@@ -728,6 +730,113 @@ async function checkSkillPackArtifacts(
           "Regenerate project artifacts after reviewing the selected skill packs.",
         ),
       );
+    }
+  }
+}
+
+// Phase 22 (WS6-I2): non-executing structural check that each generated
+// automation loop skill carries the three binding, hard-coded sections. The
+// bound, stop conditions, and approval gate must live in the emitted text; this
+// inspects strings only and never runs anything.
+const REQUIRED_LOOP_SECTIONS = [
+  "Max Iterations",
+  "Stop Conditions",
+  "Approval Gate",
+] as const;
+
+function loopSkillNameFromPath(skillPath: string): string | undefined {
+  const match = skillPath.match(
+    /^(?:\.agents|\.claude)\/skills\/([a-z0-9][a-z0-9-]*)\/SKILL\.md$/u,
+  );
+  return match?.[1];
+}
+
+function extractMarkdownSection(
+  text: string,
+  heading: string,
+): string | undefined {
+  const lines = text.split("\n");
+  const headingLine = `## ${heading}`;
+  const start = lines.findIndex((line) => line.trim() === headingLine);
+  if (start === -1) return undefined;
+
+  const body: string[] = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (/^#{1,6}\s/u.test(line)) break;
+    body.push(line);
+  }
+  return body.join("\n").trim();
+}
+
+async function checkLoopSkillStructure(
+  rootDir: string,
+  generatedFiles: GeneratedFile[],
+  issues: DoctorIssue[],
+): Promise<void> {
+  const loopPaths = generatedFiles
+    .filter(
+      (file) =>
+        file.target === "codex-workflow-skills" ||
+        file.target === "claude-workflow-skills",
+    )
+    .map((file) => file.path)
+    .filter((skillPath) => {
+      const name = loopSkillNameFromPath(skillPath);
+      return name !== undefined && isLoopSkillId(name);
+    });
+
+  for (const skillPath of loopPaths) {
+    const file = await readKnownFile(rootDir, skillPath);
+    if (!file.ok) continue;
+    const text = decodeUtf8(file.bytes);
+
+    for (const heading of REQUIRED_LOOP_SECTIONS) {
+      const body = extractMarkdownSection(text, heading);
+
+      if (body === undefined) {
+        issues.push(
+          issue(
+            "LINT-SKILL-LOOP-001",
+            "error",
+            skillPath,
+            `## ${heading} section present`,
+            "missing",
+            `${skillPath} is a loop skill but is missing the "## ${heading}" section.`,
+            "Regenerate the automation loop skills; every loop skill must contain the Max Iterations, Stop Conditions, and Approval Gate sections.",
+          ),
+        );
+        continue;
+      }
+
+      if (body === "") {
+        issues.push(
+          issue(
+            "LINT-SKILL-LOOP-001",
+            "error",
+            skillPath,
+            `non-empty "## ${heading}" section`,
+            "empty",
+            `${skillPath} has an empty "## ${heading}" section.`,
+            "Regenerate the automation loop skills so each required section has content.",
+          ),
+        );
+        continue;
+      }
+
+      if (heading === "Max Iterations" && !/\d/u.test(body)) {
+        issues.push(
+          issue(
+            "LINT-SKILL-LOOP-001",
+            "error",
+            skillPath,
+            "hard-coded integer iteration bound",
+            "no integer bound",
+            `${skillPath} does not state a hard-coded integer iteration bound in "## Max Iterations".`,
+            "Regenerate the automation loop skills so the iteration bound is a hard-coded integer.",
+          ),
+        );
+      }
     }
   }
 }

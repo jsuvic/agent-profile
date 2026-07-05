@@ -15,6 +15,7 @@ import {
 } from "@agent-profile/compiler";
 import { parseProfileYaml } from "@agent-profile/core";
 
+import { withExecutionSentinel } from "../../core/test/fixtures/execution-sentinel.js";
 import { runDoctor } from "./index.js";
 import type { DoctorIssueCode, DoctorResult } from "./index.js";
 
@@ -988,4 +989,78 @@ test("phase-12 doctor validates reviewer-subagent pack artifacts", async () => {
     "utf8",
   );
   assertHasIssue(await runDoctor({ rootDir: broadRoot }), "LINT-SUBAGENT-001");
+});
+
+test("phase-22 doctor passes structural checks on well-formed loop skills", async () => {
+  const rootDir = await createProjectFromFixture("automation-pack-enabled");
+  const result = await runDoctor({ rootDir });
+
+  assert.deepEqual(
+    result.issues.filter((finding) => finding.code === "LINT-SKILL-LOOP-001"),
+    [],
+    JSON.stringify(result.issues, null, 2),
+  );
+});
+
+test("phase-22 doctor flags a loop skill missing the Stop Conditions section", async () => {
+  const rootDir = await createProjectFromFixture("automation-pack-enabled");
+  const skillPath = path.join(
+    rootDir,
+    ".claude/skills/loop-implement-test-fix/SKILL.md",
+  );
+  const body = await readFile(skillPath, "utf8");
+  await writeFile(
+    skillPath,
+    body.replace(/## Stop Conditions[\s\S]*?(?=## Approval Gate)/u, ""),
+    "utf8",
+  );
+
+  assertHasIssue(await runDoctor({ rootDir }), "LINT-SKILL-LOOP-001");
+});
+
+test("phase-22 doctor flags a loop skill with an empty Approval Gate section", async () => {
+  const rootDir = await createProjectFromFixture("automation-pack-enabled");
+  const skillPath = path.join(
+    rootDir,
+    ".agents/skills/loop-sdd-cycle/SKILL.md",
+  );
+  const body = await readFile(skillPath, "utf8");
+  await writeFile(
+    skillPath,
+    body.replace(/## Approval Gate[\s\S]*?(?=## Safety)/u, "## Approval Gate\n\n"),
+    "utf8",
+  );
+
+  assertHasIssue(await runDoctor({ rootDir }), "LINT-SKILL-LOOP-001");
+});
+
+test("phase-22 doctor flags a loop skill without an integer iteration bound", async () => {
+  const rootDir = await createProjectFromFixture("automation-pack-enabled");
+  const skillPath = path.join(
+    rootDir,
+    ".claude/skills/loop-docs-update/SKILL.md",
+  );
+  const body = await readFile(skillPath, "utf8");
+  await writeFile(
+    skillPath,
+    body.replace(
+      /## Max Iterations[\s\S]*?(?=## Stop Conditions)/u,
+      "## Max Iterations\n\nThe loop runs a bounded number of iterations.\n\n",
+    ),
+    "utf8",
+  );
+
+  assertHasIssue(await runDoctor({ rootDir }), "LINT-SKILL-LOOP-001");
+});
+
+test("phase-22 doctor performs the loop structural check without executing anything", async () => {
+  const rootDir = await createProjectFromFixture("automation-pack-enabled");
+  const result = await withExecutionSentinel(() => runDoctor({ rootDir }));
+
+  assert.equal(
+    result.issues.filter((finding) => finding.code === "LINT-SKILL-LOOP-001")
+      .length,
+    0,
+    JSON.stringify(result.issues, null, 2),
+  );
 });

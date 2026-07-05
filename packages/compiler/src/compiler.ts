@@ -39,6 +39,7 @@ import {
 import type {
   CompilerTargetId,
   CompileIssue,
+  CompileNote,
   CompileRequest,
   CompileResult,
   GeneratedFile,
@@ -49,6 +50,10 @@ import {
   renderReviewChangeSkill,
   renderSpecialistReviewSkill,
 } from "./phase12-skill-content.js";
+import {
+  automationTabnineNote,
+  renderLoopSkillContent,
+} from "./loop-skill-content.js";
 import {
   buildClaudeAdvisoryHooksValue,
   getAdvisoryHookNotes,
@@ -221,6 +226,31 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     "architecture-review",
   ),
   workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/loop-implement-test-fix@1",
+    "codex-workflow-skills",
+    "loop-implement-test-fix",
+  ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/loop-review-patch-retest@1",
+    "codex-workflow-skills",
+    "loop-review-patch-retest",
+  ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/loop-security-patch-retest@1",
+    "codex-workflow-skills",
+    "loop-security-patch-retest",
+  ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/loop-docs-update@1",
+    "codex-workflow-skills",
+    "loop-docs-update",
+  ),
+  workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/loop-sdd-cycle@1",
+    "codex-workflow-skills",
+    "loop-sdd-cycle",
+  ),
+  workflowSkillTemplateSource(
     "targets/codex-workflow-skills/mcp-fit-check@1",
     "codex-workflow-skills",
     "mcp-fit-check",
@@ -300,6 +330,31 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     "architecture-review",
   ),
   workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/loop-implement-test-fix@1",
+    "claude-workflow-skills",
+    "loop-implement-test-fix",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/loop-review-patch-retest@1",
+    "claude-workflow-skills",
+    "loop-review-patch-retest",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/loop-security-patch-retest@1",
+    "claude-workflow-skills",
+    "loop-security-patch-retest",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/loop-docs-update@1",
+    "claude-workflow-skills",
+    "loop-docs-update",
+  ),
+  workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/loop-sdd-cycle@1",
+    "claude-workflow-skills",
+    "loop-sdd-cycle",
+  ),
+  workflowSkillTemplateSource(
     "targets/claude-workflow-skills/mcp-fit-check@1",
     "claude-workflow-skills",
     "mcp-fit-check",
@@ -341,7 +396,10 @@ export function compileProfile(request: CompileRequest): CompileResult {
     targets,
     request.profile,
   );
-  const notes = getAdvisoryHookNotes(request.profile);
+  const notes = [
+    ...getAdvisoryHookNotes(request.profile),
+    ...getAutomationPackNotes(request.profile),
+  ];
 
   return {
     ok: true,
@@ -351,6 +409,22 @@ export function compileProfile(request: CompileRequest): CompileResult {
       .sort(compareTemplates),
     ...(notes.length > 0 ? { notes } : {}),
   };
+}
+
+/**
+ * Not-supported notes for the automation pack on a Tabnine-including target set
+ * (never silence). Loop skills emit only for Claude and Codex; a profile that
+ * selects `automation` with Tabnine enabled gets an explicit informational
+ * note instead of silent omission.
+ */
+function getAutomationPackNotes(profile: AiProfile): CompileNote[] {
+  const packs = profile.capabilities?.skills?.packs ?? [];
+
+  if (!packs.includes("automation") || !profile.clients.tabnine.enabled) {
+    return [];
+  }
+
+  return [automationTabnineNote("/capabilities/skills/packs")];
 }
 
 function mergeTemplates(
@@ -1145,6 +1219,17 @@ Final handoff must list what changed, tests run, contract impact, security impac
       const rendered = renderSpecialistReviewSkill(skill);
       if (rendered === undefined) {
         throw new Error(`Missing specialist review content for ${skill}.`);
+      }
+      return rendered;
+    }
+    case "loop-implement-test-fix":
+    case "loop-review-patch-retest":
+    case "loop-security-patch-retest":
+    case "loop-docs-update":
+    case "loop-sdd-cycle": {
+      const rendered = renderLoopSkillContent(skill, selectedSkills);
+      if (rendered === undefined) {
+        throw new Error(`Missing loop skill content for ${skill}.`);
       }
       return rendered;
     }

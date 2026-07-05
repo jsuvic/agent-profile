@@ -27,7 +27,8 @@ lockfile-tracked artifacts, diff-before-write, and doctor validation.
 
 - Pack ids: `base`, `review`, `advanced-review`, `automation`,
   `mcp-recommendations`. `automation` is reserved here (loop skills land in a
-  later slice); no loop skills are generated in Phase 12.
+  later slice); no loop skills are generated in Phase 12. The loop skill
+  content was added later by `phase-22/001-automation-loop-skills.md`.
 - `review-change` supersedes the `codeReview` guidance topic on skill-capable
   clients (Claude, Codex). Tabnine keeps guideline `60-code-review`, rebound to
   the `review` pack.

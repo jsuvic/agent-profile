@@ -63,9 +63,12 @@ export type CompileIssue = {
   message: string;
 };
 
-// Phase 21: informational, non-failing compile reports. Used for the
-// "never silence" contract when hook intent cannot be generated for a target.
-export type CompileNoteCode = "hooks_target_not_generated";
+// Phase 21/22: informational, non-failing compile reports. Used for the
+// "never silence" contract when an intent cannot be generated for a target
+// (advisory hooks or automation loop skills on Tabnine).
+export type CompileNoteCode =
+  | "hooks_target_not_generated"
+  | "automation_target_not_generated";
 
 export type CompileNote = {
   code: CompileNoteCode;

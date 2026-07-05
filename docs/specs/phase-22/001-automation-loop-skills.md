@@ -139,7 +139,9 @@ amendment + skill bodies (WS6-I1), then the doctor structural check (WS6-I2).
 ## Issue Plan
 
 - WS6-I1: loop skill definitions + `automation` mapping amendment + emission
-  (Claude/Codex, Tabnine note). `ready` (phase-12/002 pack schema landed).
+  (Claude/Codex, Tabnine note), plus the `automation` capability checkbox in
+  the phase-12/007 wizard named in the User Flow. `ready` (phase-12/002 pack
+  schema landed).
 - WS6-I2: doctor structural check for the three required sections.
   `sequenced` after WS6-I1.
 
