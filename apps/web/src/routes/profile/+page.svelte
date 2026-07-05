@@ -64,6 +64,7 @@
     safetyMode: "guarded", requiresSandbox: false,
     sdd: true, tdd: true, finalReview: false,
     codeReview: false, refactoring: false, documentation: false,
+    memoryGuidance: false,
     filesystemRead: "allow", filesystemWrite: "ask",
     shellRun: "ask", dependenciesInstall: "ask", networkExternal: "ask",
   });
