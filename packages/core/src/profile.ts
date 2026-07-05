@@ -390,6 +390,7 @@ export type AiProfile = {
     codeReview?: boolean;
     refactoring?: boolean;
     documentation?: boolean;
+    memoryGuidance?: boolean;
     subagentDrivenDevelopment?: boolean;
   };
   capabilities?: AiProfileCapabilities;
@@ -757,6 +758,8 @@ export function renderProfileYaml(profile: AiProfile): string {
     workflow["refactoring"] = profile.workflow.refactoring;
   if (profile.workflow.documentation !== undefined)
     workflow["documentation"] = profile.workflow.documentation;
+  if (profile.workflow.memoryGuidance !== undefined)
+    workflow["memoryGuidance"] = profile.workflow.memoryGuidance;
   if (profile.workflow.subagentDrivenDevelopment !== undefined)
     workflow["subagentDrivenDevelopment"] =
       profile.workflow.subagentDrivenDevelopment;

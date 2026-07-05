@@ -4,6 +4,11 @@
 
 Draft for a later phase. Not MVP.
 
+The document-only memory-guidance slice landed in
+`docs/specs/phase-23/001-memory-guidance.md` (`workflow.memoryGuidance`). This
+draft remains the executing/reference follow-on for secret and external-memory
+integration and is unaffected by that slice.
+
 ## Problem
 
 Real projects depend on secrets (API keys, tokens, database URLs) and on

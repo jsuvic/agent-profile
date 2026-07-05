@@ -97,6 +97,9 @@
         "documentation": {
           "type": "boolean"
         },
+        "memoryGuidance": {
+          "type": "boolean"
+        },
         "subagentDrivenDevelopment": {
           "type": "boolean"
         }

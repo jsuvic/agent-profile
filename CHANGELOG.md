@@ -4,6 +4,25 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Add Phase 23 memory guidance (WS7, implementing
+  `docs/specs/phase-23/001-memory-guidance.md`): a document-only memory guidance
+  topic gated by a new additive `workflow.memoryGuidance` boolean (off by
+  default), following the existing guidance-topic pattern
+  (`workflow.codeReview` / `refactoring` / `documentation`). When enabled,
+  compile emits a `## Memory Guidance` section into `AGENTS.md` (inherited by
+  `CLAUDE.md` through the normal import) and a
+  `.tabnine/guidelines/85-memory-guidance.md` guideline. Every rendering carries
+  the verbatim rule "Never store secrets, tokens, credentials, private keys,
+  production access, personal/customer data, or one-time debugging context in
+  memory.", documents where each enabled client persists durable instructions
+  (Claude `CLAUDE.md`/auto-memory, Codex `AGENTS.md`/Memories, Tabnine
+  guidelines with its memory contract explicitly marked unverified), and states
+  that memory is for durable decisions rather than volatile session state. v1
+  documents memory; it generates no memory content file (`MEMORY.md`, remembered
+  facts), no memory directory, and no memory behavior setting. Flag off or absent
+  keeps compile output byte-identical to baseline. Adds a byte-stable
+  `memory-guidance-enabled` golden fixture and the `memory guidance` checkbox to
+  the web profile editor.
 - Add Phase 22 automation loop skills (WS6, implementing
   `docs/specs/phase-22/001-automation-loop-skills.md`): the `automation` skill
   pack reserved by Phase 12 now generates five instruction-only loop skills

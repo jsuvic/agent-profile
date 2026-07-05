@@ -13,6 +13,7 @@ export const WORKFLOW_CONTROLS = [
   { key: "codeReview", label: "code review" },
   { key: "refactoring", label: "refactoring" },
   { key: "documentation", label: "documentation" },
+  { key: "memoryGuidance", label: "memory guidance" },
 ] as const satisfies readonly {
   key: keyof AiProfile["workflow"];
   label: string;
@@ -31,6 +32,7 @@ export function workflowDraftFromProfile(
     codeReview: workflow.codeReview === true,
     refactoring: workflow.refactoring === true,
     documentation: workflow.documentation === true,
+    memoryGuidance: workflow.memoryGuidance === true,
   };
 }
 
@@ -76,6 +78,12 @@ export function buildWorkflowCandidate(
     workflow,
     "documentation",
     draft.documentation,
+    currentWorkflow,
+  );
+  maybeSetOptionalWorkflowFlag(
+    workflow,
+    "memoryGuidance",
+    draft.memoryGuidance,
     currentWorkflow,
   );
 

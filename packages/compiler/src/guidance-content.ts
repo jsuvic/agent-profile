@@ -234,6 +234,41 @@ export const DOCUMENTATION_TOPIC: GuidanceTopic = {
     "See the `## Completion Checklist` section for shared review steps.",
 };
 
+export const MEMORY_GUIDANCE_TOPIC: GuidanceTopic = {
+  tabnineTitle: "Memory Guidance",
+  agentsMdTitle: "Memory Guidance",
+  intro:
+    "Use these rules to decide what belongs in agent memory and where each enabled client persists it.",
+  subsections: [
+    {
+      heading: "Where Memory Lives",
+      bullets: [
+        "Claude Code keeps durable project instructions in `CLAUDE.md` and its auto-memory surface.",
+        "Codex keeps durable project instructions in `AGENTS.md` and its Memories surface.",
+        "Tabnine uses project guidelines for durable instructions; no project-local memory contract is verified, so treat Tabnine memory as unverified rather than assumed.",
+        "Precedence between these surfaces is target-specific; do not assume one client's ordering applies to another.",
+      ],
+    },
+    {
+      heading: "Never Store In Memory",
+      bullets: [
+        "Never store secrets, tokens, credentials, private keys, production access, personal/customer data, or one-time debugging context in memory.",
+      ],
+    },
+    {
+      heading: "Keep Memory Durable",
+      bullets: [
+        "Store durable decisions and conventions, not session-specific or volatile state.",
+        "Delete a wrong memory instead of adding a second memory to correct around it.",
+      ],
+    },
+  ],
+  tabnineChecklistReference:
+    "See `90-final-review.md` for the shared final-review checklist.",
+  agentsMdChecklistReference:
+    "See the `## Completion Checklist` section for shared review steps.",
+};
+
 export function renderTopicAsTabnineGuideline(topic: GuidanceTopic): string {
   const sections = topic.subsections
     .map(

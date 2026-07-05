@@ -956,6 +956,216 @@ test("phase-10 conditional Tabnine and AGENTS.md outputs gate on profile flags",
   assert.equal(disabledText.includes("## Documentation"), false);
 });
 
+const MEMORY_GUIDANCE_VERBATIM_RULE =
+  "Never store secrets, tokens, credentials, private keys, production access, personal/customer data, or one-time debugging context in memory.";
+
+const MEMORY_GUIDANCE_TEMPLATE_IDS = [
+  "targets/agents-md/85-memory-guidance@1",
+  "targets/tabnine-guidelines/85-memory-guidance@1",
+];
+
+test("phase-23 memoryGuidance emits AGENTS.md section and Tabnine guideline with verbatim rule", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const profile: AiProfile = {
+    ...profileResult.profile,
+    workflow: {
+      ...profileResult.profile.workflow,
+      memoryGuidance: true,
+    },
+  };
+
+  const result = compileProfile({
+    profile,
+    targets: ["agents-md", "tabnine-guidelines"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) {
+    return;
+  }
+
+  const agentsMd = result.files.find((file) => file.path === "AGENTS.md");
+  assert.ok(agentsMd);
+  const agentsText = Buffer.from(agentsMd.bytes).toString("utf8");
+  assert.equal(agentsText.includes("## Memory Guidance"), true);
+  assert.equal(agentsText.includes(MEMORY_GUIDANCE_VERBATIM_RULE), true);
+  assertGeneratedTopicText(
+    extractMarkdownSection(agentsText, "## Memory Guidance"),
+    "AGENTS.md ## Memory Guidance",
+    { requireSingleTrailingNewline: false },
+  );
+
+  const guideline = result.files.find(
+    (file) => file.path === ".tabnine/guidelines/85-memory-guidance.md",
+  );
+  assert.ok(guideline);
+  const guidelineText = Buffer.from(guideline.bytes).toString("utf8");
+  assert.equal(guidelineText.includes(MEMORY_GUIDANCE_VERBATIM_RULE), true);
+  assertGeneratedTopicText(guidelineText, "85-memory-guidance.md");
+
+  // The verbatim rule survives whitespace normalization: no silent rewording.
+  const normalize = (text: string): string => text.replace(/\s+/gu, " ").trim();
+  assert.equal(
+    normalize(agentsText).includes(normalize(MEMORY_GUIDANCE_VERBATIM_RULE)),
+    true,
+  );
+  assert.equal(
+    normalize(guidelineText).includes(normalize(MEMORY_GUIDANCE_VERBATIM_RULE)),
+    true,
+  );
+});
+
+test("phase-23 memoryGuidance off is byte-identical to baseline output", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const targets: CompilerTargetId[] = ["agents-md", "tabnine-guidelines"];
+  const baseline = compileProfile({ profile: profileResult.profile, targets });
+  const explicitOff = compileProfile({
+    profile: {
+      ...profileResult.profile,
+      workflow: { ...profileResult.profile.workflow, memoryGuidance: false },
+    },
+    targets,
+  });
+  assert.equal(baseline.ok, true);
+  assert.equal(explicitOff.ok, true);
+  if (!baseline.ok || !explicitOff.ok) {
+    return;
+  }
+
+  assert.deepEqual(
+    explicitOff.files.map((file) => file.path),
+    baseline.files.map((file) => file.path),
+  );
+  for (const file of explicitOff.files) {
+    const baselineMatch: GeneratedFile | undefined = baseline.files.find(
+      (item) => item.path === file.path,
+    );
+    assert.ok(baselineMatch);
+    assert.equal(file.sha256, baselineMatch.sha256, file.path);
+  }
+});
+
+test("phase-23 memoryGuidance adds only the guidance artifacts", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) {
+    return;
+  }
+
+  // Full compile across every default target so the sentinel also proves that
+  // client settings artifacts (e.g. .claude/settings.json), CLAUDE.md, Codex
+  // config, and skills are untouched by the flag.
+  const baseline = compileProfile({ profile: profileResult.profile });
+  const enabled = compileProfile({
+    profile: {
+      ...profileResult.profile,
+      workflow: { ...profileResult.profile.workflow, memoryGuidance: true },
+    },
+  });
+  assert.equal(baseline.ok, true);
+  assert.equal(enabled.ok, true);
+  if (!baseline.ok || !enabled.ok) {
+    return;
+  }
+
+  const baselinePaths = new Set(baseline.files.map((file) => file.path));
+  const added = enabled.files
+    .map((file) => file.path)
+    .filter((path) => !baselinePaths.has(path));
+
+  // Only the Tabnine guideline is a new file; the AGENTS.md section extends an
+  // existing artifact. No memory content file, directory, or settings key.
+  assert.deepEqual(added, [".tabnine/guidelines/85-memory-guidance.md"]);
+  for (const path of enabled.files.map((file) => file.path)) {
+    assert.equal(path.includes("MEMORY.md"), false, path);
+    assert.equal(path.startsWith("memory/"), false, path);
+    assert.equal(path.includes("/memory/"), false, path);
+  }
+
+  // Every shared artifact is byte-identical; AGENTS.md is the only in-place
+  // change, and it differs only by the appended Memory Guidance section.
+  const baselineByPath = new Map(
+    baseline.files.map((file) => [file.path, file]),
+  );
+  for (const file of enabled.files) {
+    if (file.path === ".tabnine/guidelines/85-memory-guidance.md") {
+      continue;
+    }
+    const baselineFile: GeneratedFile | undefined = baselineByPath.get(
+      file.path,
+    );
+    assert.ok(baselineFile, file.path);
+    if (file.path === "AGENTS.md") {
+      const baselineText = Buffer.from(baselineFile.bytes).toString("utf8");
+      const enabledText = Buffer.from(file.bytes).toString("utf8");
+      assert.equal(enabledText.includes("## Memory Guidance"), true);
+      assert.equal(baselineText.includes("## Memory Guidance"), false);
+      // Excising the single contiguous Memory Guidance block (heading through
+      // the next section) restores the baseline byte-for-byte, proving nothing
+      // else in AGENTS.md moved.
+      const start = enabledText.indexOf("\n## Memory Guidance");
+      const end = enabledText.indexOf("\n## Permissions", start);
+      assert.notEqual(start, -1, file.path);
+      assert.notEqual(end, -1, file.path);
+      const stripped = enabledText.slice(0, start) + enabledText.slice(end);
+      assert.equal(stripped, baselineText, file.path);
+      continue;
+    }
+    assert.equal(file.sha256, baselineFile.sha256, file.path);
+  }
+});
+
+test("phase-23 memoryGuidance templates are lockfile-gated on the flag", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const targets: CompilerTargetId[] = ["agents-md", "tabnine-guidelines"];
+  const disabled = compileProfile({ profile: profileResult.profile, targets });
+  const enabled = compileProfile({
+    profile: {
+      ...profileResult.profile,
+      workflow: { ...profileResult.profile.workflow, memoryGuidance: true },
+    },
+    targets,
+  });
+  assert.equal(disabled.ok, true);
+  assert.equal(enabled.ok, true);
+  if (!disabled.ok || !enabled.ok) {
+    return;
+  }
+
+  const disabledIds = disabled.templates.map((template) => template.id);
+  const enabledIds = enabled.templates.map((template) => template.id);
+  for (const templateId of MEMORY_GUIDANCE_TEMPLATE_IDS) {
+    assert.equal(disabledIds.includes(templateId), false, templateId);
+    assert.equal(enabledIds.includes(templateId), true, templateId);
+  }
+});
+
+test("phase-23 memory-guidance-enabled fixture matches generated output", async () => {
+  const fixtureDir = fileURLToPath(
+    new URL("../../../fixtures/memory-guidance-enabled/", import.meta.url),
+  );
+  const result = await compareGoldenFixture(fixtureDir);
+  assert.equal(
+    result.ok,
+    true,
+    result.ok ? "" : JSON.stringify(result.failures, null, 2),
+  );
+});
+
 test("phase-10 templates are lockfile-gated with their profile conditions", async () => {
   const profileResult = await readProfileFile(minimalProfileFilePath);
   assert.equal(profileResult.ok, true);

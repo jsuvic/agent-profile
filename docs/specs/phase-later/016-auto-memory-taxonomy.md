@@ -9,6 +9,11 @@ Routed from `docs/research/007-agent-best-practices-review.md` (dimension 4,
 which covers *references to* external memory backends; this spec covers
 *locally generated memory files* with a typed schema.
 
+The document-only memory-guidance slice landed in
+`docs/specs/phase-23/001-memory-guidance.md` (`workflow.memoryGuidance`,
+WS7-I1). This spec remains the memory-content scaffolding follow-on (WS7c) and
+still requires its own approval before any memory file is generated.
+
 ## Problem
 
 Several Anthropic surfaces (Cowork mode, Claude Code memory) and several
