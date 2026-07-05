@@ -33,6 +33,7 @@ function candidateDraft(): ProfileCandidateDraft {
     codeReview: false,
     refactoring: false,
     documentation: false,
+    memoryGuidance: false,
     filesystemRead: "allow",
     filesystemWrite: "ask",
     shellRun: "ask",
@@ -133,4 +134,36 @@ test("profile editor workflow candidate emits newly enabled phase-10 flags", () 
     ...workflow,
     codeReview: true,
   });
+});
+
+test("profile editor workflow candidate emits newly enabled memoryGuidance", () => {
+  const workflow = {
+    sdd: true,
+    tdd: true,
+    finalReview: false,
+  };
+  const draft = workflowDraftFromProfile(workflow);
+  draft.memoryGuidance = true;
+
+  const candidate = buildWorkflowCandidate(draft, workflow);
+
+  assert.deepEqual(candidate, {
+    ...workflow,
+    memoryGuidance: true,
+  });
+});
+
+test("profile editor workflow candidate does not materialize absent memoryGuidance", () => {
+  const workflow = {
+    sdd: true,
+    tdd: true,
+    finalReview: false,
+  };
+
+  const candidate = buildWorkflowCandidate(
+    workflowDraftFromProfile(workflow),
+    workflow,
+  );
+
+  assert.equal("memoryGuidance" in candidate, false);
 });

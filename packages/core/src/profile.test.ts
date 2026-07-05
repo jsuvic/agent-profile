@@ -877,6 +877,44 @@ describe("subagentDrivenDevelopment workflow gate", () => {
   });
 });
 
+describe("memoryGuidance workflow gate (phase 23)", () => {
+  function profileWithMemoryGuidance(value: unknown): Record<string, unknown> {
+    const base = profileWith({}) as Record<string, unknown>;
+    (base["workflow"] as Record<string, unknown>)["memoryGuidance"] = value;
+    return base;
+  }
+
+  it("accepts memoryGuidance as a boolean", () => {
+    assert.equal(
+      validateProfileValue(profileWithMemoryGuidance(true)).ok,
+      true,
+    );
+    assert.equal(
+      validateProfileValue(profileWithMemoryGuidance(false)).ok,
+      true,
+    );
+  });
+
+  it("rejects non-boolean memoryGuidance", () => {
+    assert.equal(
+      validateProfileValue(profileWithMemoryGuidance("yes")).ok,
+      false,
+    );
+  });
+
+  it("round-trips memoryGuidance through YAML serialization", () => {
+    const base = profileWith({}) as Record<string, unknown>;
+    (base["workflow"] as Record<string, unknown>)["memoryGuidance"] = true;
+    const result = validateProfileValue(base);
+    assert.equal(result.ok, true);
+    if (!result.ok) {
+      return;
+    }
+    const yaml = renderProfileYaml(result.profile);
+    assert.match(yaml, /memoryGuidance: true/u);
+  });
+});
+
 describe("advisory hooks schema (phase 21)", () => {
   function profileWithHooks(
     block: Record<string, unknown> | undefined,

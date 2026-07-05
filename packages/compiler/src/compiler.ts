@@ -30,6 +30,7 @@ import {
 import {
   CODE_REVIEW_TOPIC,
   DOCUMENTATION_TOPIC,
+  MEMORY_GUIDANCE_TOPIC,
   REACT_STACK_TOPIC,
   REFACTORING_TOPIC,
   type GuidanceTopic,
@@ -97,6 +98,10 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     "targets/agents-md/80-documentation@1",
     DOCUMENTATION_TOPIC,
   ),
+  agentsMdTopicTemplateSource(
+    "targets/agents-md/85-memory-guidance@1",
+    MEMORY_GUIDANCE_TOPIC,
+  ),
   {
     id: "targets/lockfile@1",
     target: "lockfile",
@@ -146,6 +151,10 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
   guidelineTemplateSource(
     "targets/tabnine-guidelines/80-documentation@1",
     renderDocumentationGuideline,
+  ),
+  guidelineTemplateSource(
+    "targets/tabnine-guidelines/85-memory-guidance@1",
+    renderMemoryGuidanceGuideline,
   ),
   guidelineTemplateSource(
     "targets/tabnine-guidelines/90-final-review@1",
@@ -517,6 +526,10 @@ export function renderAgentsMd(profile: AiProfile): string {
     profile.workflow.documentation === true
       ? `\n${renderTopicAsAgentsMdSection(DOCUMENTATION_TOPIC)}`
       : "";
+  const memoryGuidanceSection =
+    profile.workflow.memoryGuidance === true
+      ? `\n${renderTopicAsAgentsMdSection(MEMORY_GUIDANCE_TOPIC)}`
+      : "";
 
   return normalizeGeneratedText(`# AGENTS.md
 
@@ -546,7 +559,7 @@ ${enabledClients}
 - SDD: ${renderRequired(profile.workflow.sdd)}
 - TDD: ${renderRequired(profile.workflow.tdd)}
 - Final implementation review: ${renderRequired(profile.workflow.finalReview)}
-${codeReviewSection}${refactoringSection}${documentationSection}
+${codeReviewSection}${refactoringSection}${documentationSection}${memoryGuidanceSection}
 ## Permissions
 
 | Permission         | Mode  |
@@ -835,6 +848,17 @@ function renderTabnineGuidelines(profile: AiProfile): GeneratedFile[] {
         common.target,
         "targets/tabnine-guidelines/80-documentation@1",
         renderDocumentationGuideline(),
+      ),
+    );
+  }
+
+  if (profile.workflow.memoryGuidance === true) {
+    files.push(
+      createGeneratedTextFile(
+        ".tabnine/guidelines/85-memory-guidance.md",
+        common.target,
+        "targets/tabnine-guidelines/85-memory-guidance@1",
+        renderMemoryGuidanceGuideline(),
       ),
     );
   }
@@ -1336,6 +1360,10 @@ function renderRefactoringGuideline(): string {
 
 function renderDocumentationGuideline(): string {
   return renderTopicAsTabnineGuideline(DOCUMENTATION_TOPIC);
+}
+
+function renderMemoryGuidanceGuideline(): string {
+  return renderTopicAsTabnineGuideline(MEMORY_GUIDANCE_TOPIC);
 }
 
 function renderTypeScriptSvelteGuideline(): string {
@@ -2025,6 +2053,9 @@ function getRequiredAgentsMdTopicTemplateIds(profile: AiProfile): string[] {
   if (profile.workflow.documentation === true) {
     ids.push("targets/agents-md/80-documentation@1");
   }
+  if (profile.workflow.memoryGuidance === true) {
+    ids.push("targets/agents-md/85-memory-guidance@1");
+  }
 
   return ids;
 }
@@ -2065,6 +2096,9 @@ function getRequiredTabnineGuidelineTemplateIds(profile: AiProfile): string[] {
   }
   if (profile.workflow.documentation === true) {
     ids.push("targets/tabnine-guidelines/80-documentation@1");
+  }
+  if (profile.workflow.memoryGuidance === true) {
+    ids.push("targets/tabnine-guidelines/85-memory-guidance@1");
   }
   if (profile.workflow.finalReview) {
     ids.push("targets/tabnine-guidelines/90-final-review@1");

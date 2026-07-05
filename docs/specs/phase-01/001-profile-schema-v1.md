@@ -224,14 +224,15 @@ Claude permission mode strings.
 
 ### `workflow`
 
-| Field           | Type    | Required | Contract                                                            |
-| --------------- | ------- | -------- | ------------------------------------------------------------------- |
-| `sdd`           | boolean | yes      | whether spec-driven development is required                         |
-| `tdd`           | boolean | yes      | whether test-driven development is required                         |
-| `finalReview`   | boolean | yes      | whether final implementation review is needed                       |
-| `codeReview`    | boolean | no       | gate for phase-10 code-review guidance on Tabnine and `AGENTS.md`   |
-| `refactoring`   | boolean | no       | gate for phase-10 refactoring guidance on Tabnine and `AGENTS.md`   |
-| `documentation` | boolean | no       | gate for phase-10 documentation guidance on Tabnine and `AGENTS.md` |
+| Field            | Type    | Required | Contract                                                            |
+| ---------------- | ------- | -------- | ------------------------------------------------------------------- |
+| `sdd`            | boolean | yes      | whether spec-driven development is required                         |
+| `tdd`            | boolean | yes      | whether test-driven development is required                         |
+| `finalReview`    | boolean | yes      | whether final implementation review is needed                       |
+| `codeReview`     | boolean | no       | gate for phase-10 code-review guidance on Tabnine and `AGENTS.md`   |
+| `refactoring`    | boolean | no       | gate for phase-10 refactoring guidance on Tabnine and `AGENTS.md`   |
+| `documentation`  | boolean | no       | gate for phase-10 documentation guidance on Tabnine and `AGENTS.md` |
+| `memoryGuidance` | boolean | no       | gate for phase-23 memory-guidance topic on Tabnine and `AGENTS.md`  |
 
 ### `permissions`
 
