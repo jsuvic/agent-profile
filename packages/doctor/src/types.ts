@@ -31,6 +31,7 @@ export type DoctorIssueCode =
   | "LINT-SKILL-REF-001"
   | "LINT-SKILL-PACK-001"
   | "LINT-SKILL-PACK-002"
+  | "LINT-SKILL-LOOP-001"
   | "LINT-SEM-001"
   | "LINT-SEM-002"
   | "LINT-SEM-003"

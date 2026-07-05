@@ -252,6 +252,7 @@ const CAPABILITY_OPTIONS = [
   { id: "reviewer-subagents", kind: "subagent" },
   { id: "mcp-recommendations", kind: "skill" },
   { id: "advisory-hooks", kind: "hooks" },
+  { id: "automation", kind: "skill" },
 ] as const;
 
 export function parseWizardCapabilitySelection(
@@ -270,7 +271,7 @@ export function parseWizardCapabilitySelection(
           .filter((item) => item !== "");
   const selected = new Set<string>();
   for (const token of tokens) {
-    if (/^[1-6]$/u.test(token)) {
+    if (/^[1-7]$/u.test(token)) {
       const option = CAPABILITY_OPTIONS[Number.parseInt(token, 10) - 1];
       if (option) selected.add(option.id);
     } else if (CAPABILITY_OPTIONS.some((option) => option.id === token)) {
@@ -342,6 +343,7 @@ export function formatWizardCapabilityQuestion(input: {
     input.advisoryHooksAvailable
       ? "  6) [optional] Advisory hooks (Claude/Codex reminders and read-only git context)"
       : "  6) [unavailable] Advisory hooks (requires Claude or Codex)",
+    "  7) [optional] Automation loop skills (bounded, gated iteration guides)",
     "  [blocked] Plugins / global memory / auto-install",
   ];
   return (

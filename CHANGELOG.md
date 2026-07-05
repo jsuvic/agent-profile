@@ -4,6 +4,28 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Add Phase 22 automation loop skills (WS6, implementing
+  `docs/specs/phase-22/001-automation-loop-skills.md`): the `automation` skill
+  pack reserved by Phase 12 now generates five instruction-only loop skills
+  (`loop-implement-test-fix`, `loop-review-patch-retest`,
+  `loop-security-patch-retest`, `loop-docs-update`, `loop-sdd-cycle`) for
+  Claude (`.claude/skills/<name>/SKILL.md`) and Codex
+  (`.agents/skills/<name>/SKILL.md`). Every loop skill body carries three
+  binding, structurally-checkable sections — `## Max Iterations` (hard-coded
+  bound of 3), `## Stop Conditions` (green / no diff / same failure twice), and
+  `## Approval Gate` (human approval before any write or destructive step) — so
+  the bound, stop conditions, and gate live in the generated text rather than
+  the agent's discretion. Cross-references to other generated skills
+  (`sdd-change`, `tdd-change`, `final-review`, `review-change`,
+  `security-review`) appear only when the referenced skill is generated for the
+  same target; otherwise the step is inlined, so no pack combination produces a
+  dangling reference. Tabnine gets no loop artifacts plus an explicit
+  informational compile note (`automation_target_not_generated`). Doctor gains
+  the non-executing structural check `LINT-SKILL-LOOP-001`, which verifies the
+  three required sections are present, non-empty, and (for `## Max Iterations`)
+  contain a hard-coded integer bound. The init wizard gains an optional
+  `Automation loop skills` capability checkbox. APC emits text only and gains
+  no execution, launch, scheduling, or iteration path.
 - Add Phase 21 advisory hooks (WS5 slice 1, implementing
   `docs/specs/phase-21/001-advisory-hooks.md`): a neutral `capabilities.hooks`
   intent with a closed advisory role enum (`final-review-reminder`,

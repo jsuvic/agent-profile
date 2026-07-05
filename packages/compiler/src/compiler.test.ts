@@ -3623,3 +3623,212 @@ test("phase-21 advisory-hooks golden fixture is byte-stable", async () => {
     result.ok ? "" : JSON.stringify(result.failures, null, 2),
   );
 });
+
+const LOOP_SKILL_NAMES = [
+  "loop-implement-test-fix",
+  "loop-review-patch-retest",
+  "loop-security-patch-retest",
+  "loop-docs-update",
+  "loop-sdd-cycle",
+] as const;
+
+test("phase-22 automation pack emits the five loop skills for Claude and Codex only", () => {
+  const result = compileProfile({
+    profile: phase12Profile({ packs: ["automation"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const name of LOOP_SKILL_NAMES) {
+    assert.ok(
+      result.files.some(
+        (file) => file.path === `.claude/skills/${name}/SKILL.md`,
+      ),
+      `claude ${name}`,
+    );
+    assert.ok(
+      result.files.some(
+        (file) => file.path === `.agents/skills/${name}/SKILL.md`,
+      ),
+      `codex ${name}`,
+    );
+    assert.equal(
+      result.files.some((file) => file.path.includes(`tabnine/${name}`)),
+      false,
+      `tabnine ${name}`,
+    );
+  }
+});
+
+test("phase-22 automation pack reports an informational Tabnine note", () => {
+  const result = compileProfile({
+    profile: phase12Profile({ packs: ["automation"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const note = result.notes?.find(
+    (candidate) => candidate.code === "automation_target_not_generated",
+  );
+  assert.ok(note, "expected automation Tabnine note");
+  assert.match(note.message, /Tabnine/u);
+  assert.equal(note.path, "/capabilities/skills/packs");
+});
+
+test("phase-22 automation pack emits no Tabnine note when Tabnine is disabled", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: ["automation"] }),
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+  };
+  const result = compileProfile({ profile });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(
+    result.notes?.some(
+      (candidate) => candidate.code === "automation_target_not_generated",
+    ) ?? false,
+    false,
+  );
+});
+
+test("phase-22 each loop skill body contains the three bounding sections", () => {
+  const result = compileProfile({
+    profile: phase12Profile({ packs: ["automation"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const loopFiles = result.files.filter((file) =>
+    LOOP_SKILL_NAMES.some((name) => file.path.endsWith(`/${name}/SKILL.md`)),
+  );
+  assert.equal(loopFiles.length, LOOP_SKILL_NAMES.length * 2);
+
+  for (const file of loopFiles) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.match(body, /## Max Iterations/u, file.path);
+    assert.match(body, /## Stop Conditions/u, file.path);
+    assert.match(body, /## Approval Gate/u, file.path);
+    // Hard-coded integer bound present.
+    assert.match(body, /at most \d+ iterations/u, file.path);
+    // Instruction-only: no tool grants or shell/execution semantics.
+    assert.doesNotMatch(body, /allowed-tools|tools:\s|```(?:bash|sh)/u, file.path);
+  }
+});
+
+test("phase-22 loop cross-references are inline when the referenced skill is absent", () => {
+  const result = compileProfile({
+    profile: phase12Profile({ packs: ["automation"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const sddCycle = result.files.find(
+    (file) => file.path === ".claude/skills/loop-sdd-cycle/SKILL.md",
+  );
+  assert.ok(sddCycle);
+  const body = Buffer.from(sddCycle.bytes).toString("utf8");
+  assert.doesNotMatch(body, /run `sdd-change`/u);
+  assert.doesNotMatch(body, /run `tdd-change`/u);
+  assert.doesNotMatch(body, /run `final-review`/u);
+});
+
+test("phase-22 loop cross-references point only to co-generated skills", () => {
+  const result = compileProfile({
+    profile: phase12Profile({ packs: ["automation", "base", "review"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const emittedSkillPaths = new Set(
+    result.files
+      .filter(
+        (file) =>
+          file.target === "claude-workflow-skills" ||
+          file.target === "codex-workflow-skills",
+      )
+      .map((file) => file.path),
+  );
+
+  const sddCycle = result.files.find(
+    (file) => file.path === ".claude/skills/loop-sdd-cycle/SKILL.md",
+  );
+  assert.ok(sddCycle);
+  const body = Buffer.from(sddCycle.bytes).toString("utf8");
+  assert.match(body, /run `sdd-change`/u);
+
+  // Every `run `<skill>`` pointer in any loop skill must resolve to a skill
+  // generated for the same target (no dangling reference).
+  for (const file of result.files) {
+    if (!LOOP_SKILL_NAMES.some((name) => file.path.endsWith(`/${name}/SKILL.md`))) {
+      continue;
+    }
+    const root = file.path.startsWith(".claude/skills")
+      ? ".claude/skills"
+      : ".agents/skills";
+    const text = Buffer.from(file.bytes).toString("utf8");
+    for (const match of text.matchAll(/\brun `([a-z0-9][a-z0-9-]*)`/gu)) {
+      const referenced = match[1];
+      assert.ok(
+        emittedSkillPaths.has(`${root}/${referenced}/SKILL.md`),
+        `${file.path} references non-generated ${referenced}`,
+      );
+    }
+  }
+});
+
+test("phase-22 automation output is deterministic across compiles", () => {
+  const profile = phase12Profile({ packs: ["automation", "base", "review"] });
+  const first = compileProfile({ profile });
+  const second = compileProfile({ profile });
+  assert.equal(first.ok && second.ok, true);
+  if (!first.ok || !second.ok) return;
+  assert.deepEqual(
+    first.files.map((file) => Buffer.from(file.bytes).toString("utf8")),
+    second.files.map((file) => Buffer.from(file.bytes).toString("utf8")),
+  );
+});
+
+test("phase-22 automation compile spawns no child process", async () => {
+  const result = await withExecutionSentinel(() =>
+    compileProfile({
+      profile: phase12Profile({ packs: ["automation", "base", "review"] }),
+    }),
+  );
+
+  assert.equal(result.ok, true);
+});
+
+test("phase-22 automation off leaves the skill output unchanged", () => {
+  const withPack = compileProfile({
+    profile: phase12Profile({ packs: ["base"] }),
+  });
+  const withoutPack = compileProfile({
+    profile: phase12Profile({ packs: ["base"] }),
+  });
+  assert.equal(withPack.ok && withoutPack.ok, true);
+  if (!withPack.ok || !withoutPack.ok) return;
+  assert.equal(
+    withPack.files.some((file) => file.path.includes("/loop-")),
+    false,
+  );
+});
+
+test("phase-22 automation-pack golden fixture is byte-stable", async () => {
+  const fixtureDir = fileURLToPath(
+    new URL("../../../fixtures/automation-pack-enabled/", import.meta.url),
+  );
+  const result = await compareGoldenFixture(fixtureDir);
+  assert.equal(
+    result.ok,
+    true,
+    result.ok ? "" : JSON.stringify(result.failures, null, 2),
+  );
+});

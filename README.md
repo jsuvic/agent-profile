@@ -223,6 +223,48 @@ The UI never writes without showing a plan first, never reads or previews
 `.env*` files, and surfaces a post-write doctor result inline — failed
 doctor checks are reported, not auto-reverted.
 
+## Capability Packs
+
+Skills are selected through `capabilities.skills.packs` in `ai-profile.yaml`
+(or the `init` wizard's capability step). Each pack resolves to a fixed,
+deterministic set of instruction-only skills emitted for skills-capable
+clients (Claude under `.claude/skills/<name>/SKILL.md`, Codex under
+`.agents/skills/<name>/SKILL.md`):
+
+| Pack                 | Generates                                                      |
+| -------------------- | ------------------------------------------------------------- |
+| `base`               | `sdd-change`, `tdd-change`, `final-review`                    |
+| `review`             | `review-change`                                               |
+| `advanced-review`    | `security-review`, `readability-review`, `test-review`, `architecture-review` |
+| `automation`         | five loop skills (see below)                                  |
+| `mcp-recommendations`| `mcp-fit-check`                                               |
+
+### Automation loop skills
+
+The `automation` pack generates five instruction-only loop skills:
+`loop-implement-test-fix`, `loop-review-patch-retest`,
+`loop-security-patch-retest`, `loop-docs-update`, and `loop-sdd-cycle`.
+
+A loop skill **documents** a bounded, gated iteration discipline; it does not
+run one. The compiler emits text only — it never executes, launches,
+schedules, or iterates anything. Every generated loop skill body carries three
+sections so the discipline lives in the text rather than the agent's
+discretion:
+
+- **Max Iterations** — a hard-coded integer bound; the loop stops
+  unconditionally when it is reached and reports the unfinished state.
+- **Stop Conditions** — tests/checks green, an iteration with no diff, or the
+  same failure repeating across two consecutive iterations.
+- **Approval Gate** — human approval is required before any write or
+  destructive step; the loop never self-approves.
+
+Loop skills only cross-reference another skill (for example `loop-sdd-cycle`
+pointing to `sdd-change`) when that skill is generated for the same target;
+otherwise the step is described inline, so no pack combination produces a
+dangling reference. Tabnine receives no loop artifacts and an explicit
+informational compile note. `doctor` structurally verifies the three required
+sections without executing anything.
+
 ## How It Works
 
 1. Read `ai-profile.yaml` from the project root.

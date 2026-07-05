@@ -19,6 +19,11 @@ export type SkillId =
   | "readability-review"
   | "test-review"
   | "architecture-review"
+  | "loop-implement-test-fix"
+  | "loop-review-patch-retest"
+  | "loop-security-patch-retest"
+  | "loop-docs-update"
+  | "loop-sdd-cycle"
   | "mcp-fit-check";
 
 const SKILL_ORDER: readonly SkillId[] = [
@@ -33,8 +38,29 @@ const SKILL_ORDER: readonly SkillId[] = [
   "readability-review",
   "test-review",
   "architecture-review",
+  "loop-implement-test-fix",
+  "loop-review-patch-retest",
+  "loop-security-patch-retest",
+  "loop-docs-update",
+  "loop-sdd-cycle",
   "mcp-fit-check",
 ];
+
+// Phase 22 (WS6): the closed automation loop skill set. Adding a loop skill is
+// a reviewed source change to this list and the PACK_SKILLS.automation mapping.
+export const LOOP_SKILL_IDS = [
+  "loop-implement-test-fix",
+  "loop-review-patch-retest",
+  "loop-security-patch-retest",
+  "loop-docs-update",
+  "loop-sdd-cycle",
+] as const satisfies readonly SkillId[];
+
+export type LoopSkillId = (typeof LOOP_SKILL_IDS)[number];
+
+export function isLoopSkillId(skill: string): skill is LoopSkillId {
+  return (LOOP_SKILL_IDS as readonly string[]).includes(skill);
+}
 
 const PACK_SKILLS: Record<AiProfileSkillPackId, readonly SkillId[]> = {
   base: ["sdd-change", "tdd-change", "final-review"],
@@ -45,7 +71,13 @@ const PACK_SKILLS: Record<AiProfileSkillPackId, readonly SkillId[]> = {
     "test-review",
     "architecture-review",
   ],
-  automation: [],
+  automation: [
+    "loop-implement-test-fix",
+    "loop-review-patch-retest",
+    "loop-security-patch-retest",
+    "loop-docs-update",
+    "loop-sdd-cycle",
+  ],
   "mcp-recommendations": ["mcp-fit-check"],
 };
 
