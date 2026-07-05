@@ -5,6 +5,26 @@
 Approved on 2026-07-04. Synthesized from the WS5 candidate in
 `docs/plans/003-ws3-ws7-spec-synthesis.md`.
 
+Implemented 2026-07-04. Implementation notes:
+
+- Both per-target event taxonomies were re-verified against the official
+  hooks docs on 2026-07-04; the verified lists are recorded in
+  `docs/research/008-current-agent-capabilities-2026-07.md` (Phase 21
+  Decision) and pinned in `packages/compiler/src/hooks.ts`.
+- Codex hook support is `confirmed-official`, so Codex advisory hooks are
+  generated into a project-local `.codex/hooks.json` (one representation per
+  config layer, per the Codex docs). Codex handlers pin the documented
+  `commandWindows` Windows-only override next to the POSIX `command`, so
+  both platform variants live in one deterministic artifact.
+- Codex output semantics are event-specific: `Stop`/`SubagentStop` require
+  JSON stdout on exit 0 and `PreCompact` ignores plain stdout, so the Codex
+  reminder commands echo a `{"systemMessage": ...}` payload;
+  `UserPromptSubmit` treats plain stdout as developer context, so the git
+  context command stays plain text.
+- Claude commands are single pinned literals that parse and fail open in
+  every shell Claude documents for hook commands (`sh`, Git Bash, and the
+  Windows PowerShell fallback), so Claude needs no per-platform variant.
+
 This is slice 1 only. Command-runner hooks (format-on-write, lint-on-write,
 safety-gate-shell) remain the `phase-later/001-hooks-targets.md` draft (WS5-S2)
 behind their own threat-model human gate.

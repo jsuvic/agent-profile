@@ -29,6 +29,7 @@ export type WizardSetupProfileId =
 export type WizardCapabilitySelection = {
   skillPacks: ReadonlyArray<AiProfileSkillPackId>;
   reviewerSubagents: boolean;
+  advisoryHooks: boolean;
 };
 
 export const DEFAULT_WIZARD_SKILL_PACKS: readonly AiProfileSkillPackId[] = [
@@ -114,6 +115,7 @@ export type WizardOutcome = {
   safetyMode: SafetyMode;
   skillPacks: ReadonlyArray<AiProfileSkillPackId>;
   reviewerSubagents: boolean;
+  advisoryHooks: boolean;
 };
 
 export type StrategyPrompt = (options: {
@@ -145,6 +147,7 @@ export type SetupProfilePrompt = (options: {
 export type CapabilityPrompt = (options: {
   defaults: ReadonlyArray<AiProfileSkillPackId>;
   reviewerSubagentsAvailable: boolean;
+  advisoryHooksAvailable: boolean;
 }) => Promise<WizardCapabilitySelection>;
 
 export type CliPrompts = {
@@ -248,12 +251,14 @@ const CAPABILITY_OPTIONS = [
   { id: "advanced-review", kind: "skill" },
   { id: "reviewer-subagents", kind: "subagent" },
   { id: "mcp-recommendations", kind: "skill" },
+  { id: "advisory-hooks", kind: "hooks" },
 ] as const;
 
 export function parseWizardCapabilitySelection(
   raw: string,
   reviewerSubagentsAvailable: boolean,
   defaults: ReadonlyArray<AiProfileSkillPackId> = DEFAULT_WIZARD_SKILL_PACKS,
+  advisoryHooksAvailable = false,
 ): WizardCapabilitySelection {
   const normalized = raw.trim().toLowerCase();
   const tokens =
@@ -265,7 +270,7 @@ export function parseWizardCapabilitySelection(
           .filter((item) => item !== "");
   const selected = new Set<string>();
   for (const token of tokens) {
-    if (/^[1-5]$/u.test(token)) {
+    if (/^[1-6]$/u.test(token)) {
       const option = CAPABILITY_OPTIONS[Number.parseInt(token, 10) - 1];
       if (option) selected.add(option.id);
     } else if (CAPABILITY_OPTIONS.some((option) => option.id === token)) {
@@ -280,6 +285,7 @@ export function parseWizardCapabilitySelection(
     skillPacks,
     reviewerSubagents:
       reviewerSubagentsAvailable && selected.has("reviewer-subagents"),
+    advisoryHooks: advisoryHooksAvailable && selected.has("advisory-hooks"),
   };
 }
 
@@ -323,6 +329,7 @@ export function formatWizardSetupProfileQuestion(
 export function formatWizardCapabilityQuestion(input: {
   defaults: ReadonlyArray<AiProfileSkillPackId>;
   reviewerSubagentsAvailable: boolean;
+  advisoryHooksAvailable: boolean;
 }): string {
   const rows = [
     `  1) [recommended] Base instructions${input.defaults.includes("base") ? " (default)" : ""}`,
@@ -332,6 +339,9 @@ export function formatWizardCapabilityQuestion(input: {
       ? "  4) [optional] Claude/Codex reviewer subagents"
       : "  4) [unavailable] Claude/Codex reviewer subagents (requires Claude or Codex)",
     "  5) [optional] MCP recommendations",
+    input.advisoryHooksAvailable
+      ? "  6) [optional] Advisory hooks (Claude/Codex reminders and read-only git context)"
+      : "  6) [unavailable] Advisory hooks (requires Claude or Codex)",
     "  [blocked] Plugins / global memory / auto-install",
   ];
   return (
@@ -656,6 +666,9 @@ export function formatWizardPlan(
     lines.push(
       `Reviewer subagents: ${outcome.reviewerSubagents ? "enabled" : "disabled"}`,
     );
+    lines.push(
+      `Advisory hooks: ${outcome.advisoryHooks ? "enabled" : "disabled"}`,
+    );
   }
   lines.push(`Update .gitignore: ${outcome.updateGitignore ? "yes" : "no"}`);
   lines.push("");
@@ -723,16 +736,19 @@ export async function runInitWizard(input: {
   let capabilities: WizardCapabilitySelection = {
     skillPacks: DEFAULT_WIZARD_SKILL_PACKS,
     reviewerSubagents: false,
+    advisoryHooks: false,
   };
   if (!context.hasExistingProfile) {
     setupProfile = await input.prompts.selectSetupProfile({
       default: "guarded-corporate",
     });
+    const hookCapableClientSelected =
+      normalizedClients.includes("codex") ||
+      normalizedClients.includes("claude");
     capabilities = await input.prompts.selectCapabilities({
       defaults: DEFAULT_WIZARD_SKILL_PACKS,
-      reviewerSubagentsAvailable:
-        normalizedClients.includes("codex") ||
-        normalizedClients.includes("claude"),
+      reviewerSubagentsAvailable: hookCapableClientSelected,
+      advisoryHooksAvailable: hookCapableClientSelected,
     });
   }
 
@@ -755,6 +771,7 @@ export async function runInitWizard(input: {
     safetyMode: safetyModeForSetupProfile(setupProfile),
     skillPacks: capabilities.skillPacks,
     reviewerSubagents: capabilities.reviewerSubagents,
+    advisoryHooks: capabilities.advisoryHooks,
   };
 
   input.io.stdout(formatWizardPlan(context, outcomeDraft));
@@ -821,7 +838,11 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
       );
       return parseWizardSetupProfile(raw);
     },
-    async selectCapabilities({ defaults, reviewerSubagentsAvailable }) {
+    async selectCapabilities({
+      defaults,
+      reviewerSubagentsAvailable,
+      advisoryHooksAvailable,
+    }) {
       const defaultNumbers = [
         defaults.includes("base") ? "1" : "",
         defaults.includes("review") ? "2" : "",
@@ -832,6 +853,7 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
         formatWizardCapabilityQuestion({
           defaults,
           reviewerSubagentsAvailable,
+          advisoryHooksAvailable,
         }),
         defaultNumbers.join(","),
       );
@@ -839,6 +861,7 @@ export function createDefaultPrompts(io: CliIo): CliPrompts {
         raw,
         reviewerSubagentsAvailable,
         defaults,
+        advisoryHooksAvailable,
       );
     },
     async confirmGitignore({ default: def, entries }) {

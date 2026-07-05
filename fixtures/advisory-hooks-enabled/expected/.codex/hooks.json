@@ -1,0 +1,48 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\":\"Reminder: run the final-review skill before handing off.\"}'",
+            "commandWindows": "cmd /c echo {\"systemMessage\":\"Reminder: run the final-review skill before handing off.\"}"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\":\"Reminder: run the final-review skill before handing off.\"}'",
+            "commandWindows": "cmd /c echo {\"systemMessage\":\"Reminder: run the final-review skill before handing off.\"}"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git status --short --branch; exit 0",
+            "commandWindows": "cmd /c \"git status --short --branch || exit 0\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\":\"Reminder: checkpoint in-progress work before compaction.\"}'",
+            "commandWindows": "cmd /c echo {\"systemMessage\":\"Reminder: checkpoint in-progress work before compaction.\"}"
+          }
+        ]
+      }
+    ]
+  }
+}

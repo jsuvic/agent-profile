@@ -539,6 +539,15 @@ async function runCompile(
   }
 
   io.stdout(formatWritePlan("Agent Profile Compile", parsed.write, plan));
+
+  if (compileResult.notes && compileResult.notes.length > 0) {
+    io.stdout(
+      `\nNotes:\n${compileResult.notes
+        .map((note) => `- ${note.message}`)
+        .join("\n")}\n`,
+    );
+  }
+
   return 0;
 }
 
@@ -628,6 +637,7 @@ async function runInit(
   let wizardSafetyMode: SafetyMode | undefined;
   let wizardSkillPacks: ReadonlyArray<AiProfileSkillPackId> | undefined;
   let wizardReviewerSubagents = false;
+  let wizardAdvisoryHooks = false;
   if (isWizardEligibleArgs(args) && presetPayload === undefined) {
     const dispatch = await dispatchInitWizard({
       args: parsed,
@@ -649,6 +659,7 @@ async function runInit(
       wizardSafetyMode = dispatch.safetyMode;
       wizardSkillPacks = dispatch.skillPacks;
       wizardReviewerSubagents = dispatch.reviewerSubagents;
+      wizardAdvisoryHooks = dispatch.advisoryHooks;
     }
   }
 
@@ -779,6 +790,7 @@ async function runInit(
             safetyMode: wizardSafetyMode,
             skillPacks: wizardSkillPacks,
             reviewerSubagents: wizardReviewerSubagents,
+            advisoryHooks: wizardAdvisoryHooks,
           },
         }),
   });
@@ -989,6 +1001,7 @@ type DispatchInitWizardResult =
       safetyMode: SafetyMode;
       skillPacks: ReadonlyArray<AiProfileSkillPackId>;
       reviewerSubagents: boolean;
+      advisoryHooks: boolean;
     }
   | { kind: "declined" };
 
@@ -1099,6 +1112,7 @@ async function dispatchInitWizard(
     safetyMode: outcome.safetyMode,
     skillPacks: outcome.skillPacks,
     reviewerSubagents: outcome.reviewerSubagents,
+    advisoryHooks: outcome.advisoryHooks,
   };
 }
 
@@ -1624,6 +1638,7 @@ function renderInitialProfile(input: {
     safetyMode: SafetyMode;
     skillPacks: ReadonlyArray<AiProfileSkillPackId>;
     reviewerSubagents: boolean;
+    advisoryHooks: boolean;
   };
 }): string {
   const safety = input.preferences?.safety ?? {
@@ -1695,6 +1710,7 @@ function initPermissionsForSafety(mode: SafetyMode) {
 function renderInitialCapabilities(input: {
   skillPacks: ReadonlyArray<AiProfileSkillPackId>;
   reviewerSubagents: boolean;
+  advisoryHooks: boolean;
 }): string {
   const packs =
     input.skillPacks.length === 0
@@ -1703,7 +1719,12 @@ function renderInitialCapabilities(input: {
   const subagents = input.reviewerSubagents
     ? `  delegation:\n    subagents:\n      enabled: true\n      packs:\n        - reviewer-subagents\n`
     : "";
-  return `capabilities:\n  skills:\n${packs}${subagents}`;
+  // The wizard's single hooks checkbox opts into all three advisory roles;
+  // roles can be trimmed later by editing ai-profile.yaml.
+  const hooks = input.advisoryHooks
+    ? `  hooks:\n    enabled: true\n    advisory:\n      - final-review-reminder\n      - context-injection\n      - pre-compact-checkpoint\n`
+    : "";
+  return `capabilities:\n  skills:\n${packs}${subagents}${hooks}`;
 }
 
 type InitReport = {

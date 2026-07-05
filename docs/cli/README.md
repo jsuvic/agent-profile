@@ -297,3 +297,63 @@ successful `compile --write`. The migration is deterministic and idempotent.
 Older `agent-profile` binaries that only know v1 will reject v2 lockfiles;
 this forward-incompatibility is documented in
 [`docs/release-notes/phase-14.md`](../release-notes/phase-14.md).
+
+## Advisory Hooks (Phase 21)
+
+`capabilities.hooks` opts into advisory, non-executing hooks. Hooks are off
+by default: without the block (or with `enabled: false`) no hook artifact is
+generated and output stays byte-identical to the previous baseline.
+
+```yaml
+capabilities:
+  hooks:
+    enabled: true
+    advisory:
+      - final-review-reminder
+      - context-injection
+      - pre-compact-checkpoint
+```
+
+Each role is opted into individually from a closed enum; `enabled: false`
+with a non-empty `advisory` list is a validation error. Roles map to command
+strings pinned inside the compiler (the template table) — raw commands never
+appear in the profile, and slice 1 cannot express a hook that runs a project
+binary, writes, installs, or touches the network.
+
+| Role | Event(s) | Pinned runtime behavior |
+| --- | --- | --- |
+| `final-review-reminder` | `Stop`, `SubagentStop` | fixed reminder to run `final-review` before handing off |
+| `context-injection` | `UserPromptSubmit` | read-only `git status --short --branch` (fail-open when git is unavailable) |
+| `pre-compact-checkpoint` | `PreCompact` | fixed reminder to checkpoint in-progress work before compaction |
+
+Targets:
+
+- **Claude** — hooks are written into the generated `.claude/settings.json`
+  hooks surface (project-local, lockfile-tracked). Each pinned command is a
+  single literal that parses and fails open in every shell Claude documents
+  for hooks (`sh`, Git Bash, and the Windows PowerShell fallback), so no
+  per-platform variant is needed.
+- **Codex** — hooks are written into a generated project-local
+  `.codex/hooks.json` (the hooks representation Codex documents alongside
+  inline `config.toml` tables; APC uses one representation per layer). Each
+  handler pins both `command` (POSIX) and the documented `commandWindows`
+  Windows override in the same deterministic artifact. Codex output
+  semantics differ per event: `Stop`/`SubagentStop` require JSON stdout and
+  `PreCompact` ignores plain stdout, so the reminder roles echo a
+  `{"systemMessage": ...}` payload; `UserPromptSubmit` adds plain stdout as
+  developer context, so the git command stays plain. Codex requires project
+  hooks to be reviewed and trusted (`/hooks`) before they run.
+- **Tabnine** — not generated; hook support is not confirmed-official.
+  `compile` reports a note when hooks are enabled on a Tabnine-including
+  profile.
+
+The compiler never executes hooks at compile, validation, or doctor time.
+`doctor` validates advisory hook artifacts structurally: `LINT-HOOK-003`
+flags events outside the verified per-target event lists, `LINT-HOOK-005`
+flags a hook surface where APC does not generate hooks (for example an
+inline `[hooks]` table in the generated `config.toml`), and `LINT-HOOK-008`
+flags a hook handler that differs from the pinned template for its role.
+
+The init wizard exposes a single optional `Advisory hooks` capability
+checkbox (available when Claude or Codex is selected) that enables all three
+roles in the generated profile.

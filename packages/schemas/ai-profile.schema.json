@@ -134,6 +134,9 @@
               "$ref": "#/definitions/subagents"
             }
           }
+        },
+        "hooks": {
+          "$ref": "#/definitions/hooks"
         }
       }
     },
@@ -240,6 +243,44 @@
       "uniqueItems": true,
       "items": {
         "$ref": "#/definitions/slug"
+      }
+    },
+    "hooks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "advisory": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "final-review-reminder",
+              "context-injection",
+              "pre-compact-checkpoint"
+            ]
+          }
+        }
+      },
+      "if": {
+        "properties": {
+          "enabled": {
+            "const": false
+          }
+        },
+        "required": ["enabled"]
+      },
+      "then": {
+        "properties": {
+          "advisory": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
       }
     },
     "subagents": {

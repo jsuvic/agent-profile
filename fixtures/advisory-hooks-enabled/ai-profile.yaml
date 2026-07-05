@@ -1,0 +1,46 @@
+version: 1
+profile:
+  name: advisory-hooks-enabled
+  description: Fixture exercising the Phase 21 advisory hook roles for Claude and Codex.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: false
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: guarded
+  requiresSandbox: false
+permissions:
+  filesystem:
+    read: allow
+    write: ask
+  shell:
+    run: ask
+  secrets:
+    access: deny
+  dependencies:
+    install: ask
+  network:
+    external: ask
+  production:
+    access: deny
+workflow:
+  sdd: false
+  tdd: false
+  finalReview: false
+capabilities:
+  hooks:
+    enabled: true
+    advisory:
+      - final-review-reminder
+      - context-injection
+      - pre-compact-checkpoint
