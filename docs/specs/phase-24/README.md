@@ -18,3 +18,22 @@ and the `disable-model-invocation` skill invocation policy.
 - `issues/005-doctor-informational-notes.md` (I5)
 
 Task states are tracked in the root `TASKS.md` ledger.
+
+## Doctor Notes For Runtime Artifacts
+
+APC never generates, tracks, or executes against `TASKS.md`, `CONTEXT.md`, or
+ADRs (D1). To help without owning them, doctor emits `info`-severity notes only:
+
+- `LINT-LEDGER-001` - a `TASKS.md` ledger row uses a state outside the closed
+  set `ready | blocked | sequenced | parallel-safe | human-gate | in-progress | done`.
+- `LINT-LEDGER-002` - a `TASKS.md` ledger row does not link to an issue brief.
+- `LINT-CONTEXT-001` - `CONTEXT.md` contains non-glossary content (a fenced code
+  block or a decision/implementation/architecture heading).
+
+Absence of either file is silent, doctor never parses issue-brief contents, and
+these notes never change doctor's status or exit code.
+
+## Capability Evidence
+
+`disable-model-invocation` and subagent-chain support are pinned in
+`docs/research/009-disable-model-invocation-support.md`.

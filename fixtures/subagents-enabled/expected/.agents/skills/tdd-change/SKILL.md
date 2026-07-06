@@ -19,11 +19,25 @@ description: Use when changing behavior where a focused failing test or golden f
 
 ## Testing Anti-Patterns
 
+- Do not write a tautological test: expected values must come from an independent source, never recomputed the way the code under test computes them.
 - Do not assert on mock elements or mock call counts when a real behavior assertion is possible.
 - Do not add production methods, flags, or exports that exist only for tests.
 - Do not mock a dependency until you understand the side effects the test needs.
 - Keep test doubles structurally complete enough to match the real data shape consumed by the code.
 - If mock setup is larger than the behavior under test, consider a narrower integration test or a simpler production boundary.
+
+## Mock Boundary
+
+- Mock only unmanaged external dependencies, such as network, clock, or filesystem you do not own.
+- Prefer a fake over a stub, and a stub over a mock or spy.
+- Use a spy only where outbound communication is itself the tested contract.
+- Never introduce an abstraction that exists only for a test.
+
+## Seam Discipline
+
+- Read `CONTEXT.md` when it exists; test names and interface names must match its glossary terms.
+- Test only at the seam declared in the issue brief; do not re-decide the seam inside the loop.
+- If implementation shows the declared seam is wrong, stop and report `BLOCKED` with the reason. Never silently move or redesign the seam.
 
 ## Output
 

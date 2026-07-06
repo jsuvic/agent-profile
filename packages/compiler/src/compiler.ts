@@ -64,7 +64,12 @@ import {
   renderCodexHooksJson,
   renderCodexHookTemplateSource,
 } from "./hooks.js";
-import { resolveSelectedSkills, type SkillId } from "./skill-selection.js";
+import {
+  disablesModelInvocation,
+  emitsImplementNext,
+  resolveSelectedSkills,
+  type SkillId,
+} from "./skill-selection.js";
 
 type TemplateSource = {
   id: string;
@@ -210,6 +215,11 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     "subagent-driven-change",
   ),
   workflowSkillTemplateSource(
+    "targets/codex-workflow-skills/implement-next@1",
+    "codex-workflow-skills",
+    "implement-next",
+  ),
+  workflowSkillTemplateSource(
     "targets/codex-workflow-skills/review-change@1",
     "codex-workflow-skills",
     "review-change",
@@ -314,6 +324,11 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     "subagent-driven-change",
   ),
   workflowSkillTemplateSource(
+    "targets/claude-workflow-skills/implement-next@1",
+    "claude-workflow-skills",
+    "implement-next",
+  ),
+  workflowSkillTemplateSource(
     "targets/claude-workflow-skills/review-change@1",
     "claude-workflow-skills",
     "review-change",
@@ -408,6 +423,7 @@ export function compileProfile(request: CompileRequest): CompileResult {
   const notes = [
     ...getAdvisoryHookNotes(request.profile),
     ...getAutomationPackNotes(request.profile),
+    ...getImplementNextNotes(request.profile),
   ];
 
   return {
@@ -434,6 +450,30 @@ function getAutomationPackNotes(profile: AiProfile): CompileNote[] {
   }
 
   return [automationTabnineNote("/capabilities/skills/packs")];
+}
+
+/**
+ * Phase 24 (I4): `implement-next` never silences a missing-capability target.
+ * When its prerequisites are met but Tabnine is enabled, emit an informational
+ * note (mirroring the WS6 automation-pack pattern): Tabnine is not
+ * `confirmed-official` for the subagent chain the dispatcher drives, so the
+ * skill is generated for Claude and Codex only.
+ */
+function getImplementNextNotes(profile: AiProfile): CompileNote[] {
+  if (!emitsImplementNext(profile.workflow) || !profile.clients.tabnine.enabled) {
+    return [];
+  }
+
+  return [
+    {
+      code: "implement_next_target_not_generated",
+      path: "/workflow/subagentDrivenDevelopment",
+      expected: "skills-capable client with a confirmed-official subagent chain (Claude or Codex)",
+      actual: "Tabnine has no implement-next dispatcher surface",
+      message:
+        "implement-next is not generated for Tabnine: the ledger dispatcher targets skills-capable clients with a confirmed-official subagent chain (Claude and Codex) only.",
+    },
+  ];
 }
 
 function mergeTemplates(
@@ -889,9 +929,36 @@ function renderWorkflowSkillFiles(
       `${rootPath}/${skill}/SKILL.md`,
       target,
       getWorkflowSkillTemplateId(target, skill),
-      renderWorkflowSkill(skill, selectedSet),
+      applyModelInvocationPolicy(
+        renderWorkflowSkill(skill, selectedSet),
+        skill,
+        target,
+      ),
     ),
   );
+}
+
+/**
+ * Phase 24 (I1): inject the `disable-model-invocation: true` frontmatter line
+ * for entry-point skills on targets that verifiably support it (see
+ * `disablesModelInvocation`). The flag is appended as the last frontmatter key,
+ * just before the closing `---`, keeping `name`/`description` first.
+ */
+function applyModelInvocationPolicy(
+  source: string,
+  skill: SkillId,
+  target: WorkflowSkillTargetId,
+): string {
+  if (!disablesModelInvocation(skill, target)) {
+    return source;
+  }
+  const lines = source.split("\n");
+  const closeIndex = lines.indexOf("---", 1);
+  if (closeIndex === -1) {
+    return source;
+  }
+  lines.splice(closeIndex, 0, "disable-model-invocation: true");
+  return lines.join("\n");
 }
 
 function getWorkflowSkillTemplateId(
@@ -941,6 +1008,20 @@ Question: \`<one decision or missing fact>\`
 Recommended answer: \`<the default direction you would choose>\`
 Why: \`<short reason based on product intent, safety, contracts, or repo evidence>\`
 
+## Design-it-Twice
+
+For a hard-to-reverse choice, present it as a Design-it-Twice question: sketch two genuinely different paths before recommending one.
+
+Path A: \`<approach>\` - interface: \`<the shape callers see>\`; risks: \`<what could go wrong>\`.
+Path B: \`<a genuinely different approach>\` - interface: \`<the shape callers see>\`; risks: \`<what could go wrong>\`.
+Recommendation: \`<the path you would choose and why>\`.
+
+Do not offer two variations of the same path. Reserve this form for choices that are expensive to change later; a routine choice needs one recommended answer, not two paths.
+
+## ADR Candidates
+
+Capture a decision as an ADR candidate when it is hard to reverse, surprising without context, or carries real trade-offs. Record the decision, the alternatives considered, and the reason as an agreement-record note only. Do not write an ADR file during the grill; synthesis persists it after approval.
+
 ## Decision Checks
 
 Before ending the grill, confirm:
@@ -966,6 +1047,7 @@ When the user agrees the grill is complete, return:
 - Decisions made
 - Durable terms and hard-to-reverse decisions
 - Decision rules for implementation tradeoffs
+- ADR candidates that meet the threshold
 - Open questions or risks
 - Confirmation that post-grill synthesis can run next
 
@@ -1045,6 +1127,31 @@ Include these sections:
 \`TDD Strategy\` complements \`Tests\`; it must not replace the required \`Tests\`
 section from \`docs/specs/SPEC_TEMPLATE.md\`.
 
+## Seam & Interface Design
+
+Decide the test seam and mock boundary now, under this human gate, so the TDD loop runs without new architecture decisions.
+
+Classify each slice:
+
+- computation: pure input to output; the seam is the function's return value.
+- orchestration: coordinates other units; the seam is the observable effect at the boundary it drives.
+- deterministic generator: input profile to emitted artifacts; the seam is the generated output compared as a fixture.
+
+Seam rules:
+
+- Pick the highest boundary that keeps tests fast and deterministic; prefer fewer, higher seams over many low ones.
+- Prefer an existing seam over inventing a new one.
+- Declare the allowed mock boundary as unmanaged dependencies only, such as network, clock, or filesystem you do not own; never mock the code under test.
+- Sizing rule: one slice = one seam = one observable outcome = one RED.
+
+Human-gate checklist to confirm before writing briefs:
+
+1. Is the seam at the highest fast, deterministic boundary?
+2. Is the unit under test treated as a black box?
+3. Do inputs and outputs cross an explicit interface?
+4. Are the names drawn from the glossary?
+5. Does an abstraction exist only for the test?
+
 ## Issue Brief Format
 
 Each issue brief must include:
@@ -1057,6 +1164,8 @@ Each issue brief must include:
 - Acceptance criteria
 - Expected RED proof
 - Expected GREEN proof
+- Seam under test
+- Allowed mock boundary
 - Test command guidance
 - Likely file ownership
 - Dependencies
@@ -1076,6 +1185,15 @@ Use these states:
 - \`parallel-safe\`
 - \`sequenced\`
 - \`human-gate\`
+
+## Persisted Artifacts
+
+After the user approves the synthesis, persist workflow state in one write step. All writes go through the client's write-approval flow.
+
+- \`TASKS.md\`: an index-only ledger. Each row links to a brief and carries one state from the closed set \`ready | blocked | sequenced | parallel-safe | human-gate | in-progress | done\`. Keep task content in the briefs, not the ledger.
+- \`docs/specs/<spec-dir>/issues/NNN-slug.md\`: one brief per slice, using the Issue Brief Format above.
+- \`CONTEXT.md\`: a glossary only, created lazily when the first durable term appears. Each definition is at most two sentences; add an \`Avoid:\` line for terms that must not be used. No implementation details or decisions.
+- ADRs: record a decision that meets all three criteria - hard to reverse, surprising without context, real trade-offs. Write to the existing project ADR directory if present, otherwise \`docs/adr/\`.
 
 ## Output
 
@@ -1145,11 +1263,25 @@ description: Use when changing behavior where a focused failing test or golden f
 
 ## Testing Anti-Patterns
 
+- Do not write a tautological test: expected values must come from an independent source, never recomputed the way the code under test computes them.
 - Do not assert on mock elements or mock call counts when a real behavior assertion is possible.
 - Do not add production methods, flags, or exports that exist only for tests.
 - Do not mock a dependency until you understand the side effects the test needs.
 - Keep test doubles structurally complete enough to match the real data shape consumed by the code.
 - If mock setup is larger than the behavior under test, consider a narrower integration test or a simpler production boundary.
+
+## Mock Boundary
+
+- Mock only unmanaged external dependencies, such as network, clock, or filesystem you do not own.
+- Prefer a fake over a stub, and a stub over a mock or spy.
+- Use a spy only where outbound communication is itself the tested contract.
+- Never introduce an abstraction that exists only for a test.
+
+## Seam Discipline
+
+- Read \`CONTEXT.md\` when it exists; test names and interface names must match its glossary terms.
+- Test only at the seam declared in the issue brief; do not re-decide the seam inside the loop.
+- If implementation shows the declared seam is wrong, stop and report \`BLOCKED\` with the reason. Never silently move or redesign the seam.
 
 ## Output
 
@@ -1233,6 +1365,58 @@ Code-quality reviewer status values: \`ACCEPTABLE\`, \`ISSUES_FOUND\`, \`NEEDS_C
 ## Output
 
 Final handoff must list what changed, tests run, contract impact, security impact, remaining risks or TODOs, and whether the spec acceptance criteria are fully met.
+`;
+    case "implement-next":
+      return `---
+name: implement-next
+description: Use after synthesis to dispatch the next ready task from the TASKS.md ledger through one subagent-driven implementation cycle, one task per invocation.
+---
+
+<!-- Generated by Agent Profile Compiler. Do not edit by hand. -->
+
+# Implement Next
+
+## Purpose
+
+Advance exactly one ready task from the \`TASKS.md\` ledger through a single implementation cycle, using its persisted issue brief as context. One invocation advances at most one task; it never iterates. Repeat the command for the next task.
+
+## Preconditions
+
+- \`TASKS.md\` exists and is an index-only ledger whose rows link to issue briefs.
+- If \`TASKS.md\` is missing or contains no \`ready\` task, stop and report the ledger state; do not invent work.
+
+## Flow
+
+1. Read \`TASKS.md\` and select the first task in state \`ready\`.
+   - Stop at a \`human-gate\` task and explain the approval it needs; do not proceed past it.
+   - Skip \`blocked\` and \`sequenced\` tasks; they are not ready.
+   - If no \`ready\` task exists, stop and report.
+2. Mark the selected task \`in-progress\` in \`TASKS.md\` through the client's write-approval flow.
+3. Load the linked issue brief and run \`subagent-driven-change\` with the brief as Fresh Context: \`implementer\`, then \`spec-reviewer\`, then \`code-quality-reviewer\`.
+4. When reviews pass and the required tests run green, mark the task \`done\` and stop. The next task requires a new invocation.
+
+## Failure Path
+
+Stop and report \`BLOCKED\` when any of these holds:
+
+- \`implementer\` returns \`BLOCKED\` or \`NEEDS_CONTEXT\`,
+- a review finding cannot be resolved within the brief's scope,
+- GREEN is unreachable within the brief's declared seam.
+
+On failure, mark the task \`blocked\` in \`TASKS.md\` with a one-line reason; if the declared seam was wrong, include why it failed. Then stop. Do not touch the next task, do not edit the brief, and do not continue to another task. A human decides whether to edit the brief, re-grill, or split the task, and flips the state back to \`ready\`.
+
+## Output
+
+Report the selected task, the state transitions applied, the subagent results, the tests run, and the final state (\`done\` or \`blocked\` with its one-line reason).
+
+## Safety
+
+- Do not upload source code.
+- Do not read or print secrets.
+- Do not iterate across tasks; one invocation advances at most one task.
+- Do not self-approve; all writes, commits, and destructive steps go through the client's write-approval flow.
+- Do not edit issue briefs or advance a task that failed.
+- Do not propose \`bypassPermissions\`, tool pre-approval, dependency auto-installation, hosted execution, or remote MCP behavior.
 `;
     case "review-change":
       return renderReviewChangeSkill(selectedSkills);
@@ -1748,7 +1932,7 @@ function workflowSkillTemplateSource(
     id,
     target,
     version: "1",
-    source: renderWorkflowSkill(skill),
+    source: applyModelInvocationPolicy(renderWorkflowSkill(skill), skill, target),
   };
 }
 

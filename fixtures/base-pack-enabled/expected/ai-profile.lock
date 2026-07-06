@@ -50,7 +50,7 @@
       "id": "targets/claude-workflow-skills/tdd-change@2",
       "target": "claude-workflow-skills",
       "version": "1",
-      "sha256": "a42dbafdfe8e24a29ed67d5c8d9204bcf9aab4708d4d87a23ea2007201e8eae5"
+      "sha256": "871dce54837187461c16132ed8681dc547b2d7e3d5fb9f4947f5cc55d90d08fe"
     },
     {
       "id": "targets/codex-config@1",
@@ -74,7 +74,7 @@
       "id": "targets/codex-workflow-skills/tdd-change@2",
       "target": "codex-workflow-skills",
       "version": "1",
-      "sha256": "a42dbafdfe8e24a29ed67d5c8d9204bcf9aab4708d4d87a23ea2007201e8eae5"
+      "sha256": "871dce54837187461c16132ed8681dc547b2d7e3d5fb9f4947f5cc55d90d08fe"
     },
     {
       "id": "targets/tabnine-guidelines/00-general-agent-behavior@1",
@@ -109,7 +109,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/tdd-change@2",
       "ownership": "generated-owned",
-      "sha256": "a42dbafdfe8e24a29ed67d5c8d9204bcf9aab4708d4d87a23ea2007201e8eae5"
+      "sha256": "871dce54837187461c16132ed8681dc547b2d7e3d5fb9f4947f5cc55d90d08fe"
     },
     {
       "path": ".claude/settings.json",
@@ -137,7 +137,7 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/tdd-change@2",
       "ownership": "generated-owned",
-      "sha256": "a42dbafdfe8e24a29ed67d5c8d9204bcf9aab4708d4d87a23ea2007201e8eae5"
+      "sha256": "871dce54837187461c16132ed8681dc547b2d7e3d5fb9f4947f5cc55d90d08fe"
     },
     {
       "path": ".codex/config.toml",

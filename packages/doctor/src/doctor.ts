@@ -181,8 +181,158 @@ export async function runDoctor(
     issues,
   );
   await checkAdvisoryHookArtifacts(rootDir, profileResult.profile, issues);
+  await checkRuntimeArtifactStructure(rootDir, issues);
 
   return toResult(issues);
+}
+
+// Phase 24 (I5, D1): informational-only structural notes for runtime workflow
+// artifacts APC never generates or owns (`TASKS.md`, `CONTEXT.md`). Absence is
+// silent; a malformed structure is reported at `info` severity only, so exit
+// codes are unaffected. Doctor reads the files and never parses issue-brief
+// contents.
+const LEDGER_STATES: ReadonlySet<string> = new Set([
+  "ready",
+  "blocked",
+  "sequenced",
+  "parallel-safe",
+  "human-gate",
+  "in-progress",
+  "done",
+]);
+
+async function checkRuntimeArtifactStructure(
+  rootDir: string,
+  issues: DoctorIssue[],
+): Promise<void> {
+  await checkTaskLedgerStructure(rootDir, issues);
+  await checkContextGlossaryStructure(rootDir, issues);
+}
+
+async function checkTaskLedgerStructure(
+  rootDir: string,
+  issues: DoctorIssue[],
+): Promise<void> {
+  const file = await readKnownFile(rootDir, "TASKS.md");
+  if (!file.ok) {
+    return;
+  }
+
+  const lines = decodeUtf8(file.bytes).split("\n");
+  let inTableBody = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!trimmed.startsWith("|")) {
+      inTableBody = false;
+      continue;
+    }
+
+    if (isTableSeparatorRow(trimmed)) {
+      // Rows after a separator are ledger data rows; the row before it is the
+      // header, which is skipped while inTableBody is still false.
+      inTableBody = true;
+      continue;
+    }
+
+    if (!inTableBody) {
+      continue;
+    }
+
+    const cells = tableCells(trimmed);
+    const hasKnownState = cells.some((cell) =>
+      LEDGER_STATES.has(firstToken(cell.replace(/`/gu, ""))),
+    );
+    const hasBriefLink = /\[[^\]]+\]\([^)]+\)/u.test(trimmed);
+
+    if (!hasKnownState) {
+      issues.push(
+        issue(
+          "LINT-LEDGER-001",
+          "info",
+          "TASKS.md",
+          "ledger row state in the closed set `ready | blocked | sequenced | parallel-safe | human-gate | in-progress | done`",
+          `unrecognized state in row: ${trimmed}`,
+          "A TASKS.md ledger row uses a state outside the closed set.",
+          "APC does not own TASKS.md; if this is a task row, set its state to a known value.",
+        ),
+      );
+    }
+
+    if (!hasBriefLink) {
+      issues.push(
+        issue(
+          "LINT-LEDGER-002",
+          "info",
+          "TASKS.md",
+          "each ledger row links to an issue brief",
+          `no brief link in row: ${trimmed}`,
+          "A TASKS.md ledger row does not link to an issue brief.",
+          "APC does not own TASKS.md; if this is a task row, add a markdown link to its brief.",
+        ),
+      );
+    }
+  }
+}
+
+async function checkContextGlossaryStructure(
+  rootDir: string,
+  issues: DoctorIssue[],
+): Promise<void> {
+  const file = await readKnownFile(rootDir, "CONTEXT.md");
+  if (!file.ok) {
+    return;
+  }
+
+  const marker = findNonGlossaryMarker(decodeUtf8(file.bytes));
+  if (marker === undefined) {
+    return;
+  }
+
+  issues.push(
+    issue(
+      "LINT-CONTEXT-001",
+      "info",
+      "CONTEXT.md",
+      "glossary-only content (term definitions and `Avoid:` lines)",
+      marker,
+      "CONTEXT.md appears to contain non-glossary content; it is meant to be a glossary only.",
+      "APC does not own CONTEXT.md; move implementation details or decisions out of the glossary.",
+    ),
+  );
+}
+
+function findNonGlossaryMarker(text: string): string | undefined {
+  if (/^```/mu.test(text)) {
+    return "fenced code block";
+  }
+
+  const heading = text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) =>
+      /^#{1,6}\s+(decision|implementation|architecture|rationale|adr|design)\b/iu.test(
+        line,
+      ),
+    );
+
+  return heading === undefined ? undefined : `non-glossary heading: ${heading}`;
+}
+
+function isTableSeparatorRow(row: string): boolean {
+  return /^\|?[\s:|-]+\|?$/u.test(row) && row.includes("-");
+}
+
+function tableCells(row: string): string[] {
+  const withoutEdges = row
+    .replace(/^\|/u, "")
+    .replace(/\|$/u, "");
+  return withoutEdges.split("|").map((cell) => cell.trim());
+}
+
+function firstToken(value: string): string {
+  return value.trim().split(/\s+/u)[0] ?? "";
 }
 
 // Phase 21 (WS5-I3): structural advisory-hook checks. Doctor performs string
