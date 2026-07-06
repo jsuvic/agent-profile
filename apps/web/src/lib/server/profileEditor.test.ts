@@ -34,6 +34,7 @@ function candidateDraft(): ProfileCandidateDraft {
     refactoring: false,
     documentation: false,
     memoryGuidance: false,
+    loggingGuidance: false,
     filesystemRead: "allow",
     filesystemWrite: "ask",
     shellRun: "ask",
@@ -166,4 +167,36 @@ test("profile editor workflow candidate does not materialize absent memoryGuidan
   );
 
   assert.equal("memoryGuidance" in candidate, false);
+});
+
+test("profile editor workflow candidate emits newly enabled loggingGuidance", () => {
+  const workflow = {
+    sdd: true,
+    tdd: true,
+    finalReview: false,
+  };
+  const draft = workflowDraftFromProfile(workflow);
+  draft.loggingGuidance = true;
+
+  const candidate = buildWorkflowCandidate(draft, workflow);
+
+  assert.deepEqual(candidate, {
+    ...workflow,
+    loggingGuidance: true,
+  });
+});
+
+test("profile editor workflow candidate does not materialize absent loggingGuidance", () => {
+  const workflow = {
+    sdd: true,
+    tdd: true,
+    finalReview: false,
+  };
+
+  const candidate = buildWorkflowCandidate(
+    workflowDraftFromProfile(workflow),
+    workflow,
+  );
+
+  assert.equal("loggingGuidance" in candidate, false);
 });

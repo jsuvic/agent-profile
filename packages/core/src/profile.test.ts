@@ -915,6 +915,44 @@ describe("memoryGuidance workflow gate (phase 23)", () => {
   });
 });
 
+describe("loggingGuidance workflow gate (phase 25)", () => {
+  function profileWithLoggingGuidance(value: unknown): Record<string, unknown> {
+    const base = profileWith({}) as Record<string, unknown>;
+    (base["workflow"] as Record<string, unknown>)["loggingGuidance"] = value;
+    return base;
+  }
+
+  it("accepts loggingGuidance as a boolean", () => {
+    assert.equal(
+      validateProfileValue(profileWithLoggingGuidance(true)).ok,
+      true,
+    );
+    assert.equal(
+      validateProfileValue(profileWithLoggingGuidance(false)).ok,
+      true,
+    );
+  });
+
+  it("rejects non-boolean loggingGuidance", () => {
+    assert.equal(
+      validateProfileValue(profileWithLoggingGuidance("yes")).ok,
+      false,
+    );
+  });
+
+  it("round-trips loggingGuidance through YAML serialization", () => {
+    const base = profileWith({}) as Record<string, unknown>;
+    (base["workflow"] as Record<string, unknown>)["loggingGuidance"] = true;
+    const result = validateProfileValue(base);
+    assert.equal(result.ok, true);
+    if (!result.ok) {
+      return;
+    }
+    const yaml = renderProfileYaml(result.profile);
+    assert.match(yaml, /loggingGuidance: true/u);
+  });
+});
+
 describe("advisory hooks schema (phase 21)", () => {
   function profileWithHooks(
     block: Record<string, unknown> | undefined,
