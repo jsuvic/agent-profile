@@ -68,9 +68,14 @@ export type {
   CodexHookEvent,
 } from "./hooks.js";
 export {
+  DISABLE_MODEL_INVOCATION_TARGETS,
+  disablesModelInvocation,
+  emitsImplementNext,
   getCapabilityArtifactPaths,
   isLoopSkillId,
+  isModelInvocationEntryPoint,
   LOOP_SKILL_IDS,
+  MODEL_INVOCATION_ENTRY_POINTS,
   resolveSelectedSkills,
   resolveSkillPacks,
 } from "./skill-selection.js";

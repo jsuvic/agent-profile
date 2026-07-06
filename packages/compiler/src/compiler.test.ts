@@ -23,8 +23,11 @@ import {
   compileProfile,
   createGeneratedTextFile,
   createLockfileFile,
+  DISABLE_MODEL_INVOCATION_TARGETS,
+  disablesModelInvocation,
   expectedPathToOutputPath,
   getDefaultTemplates,
+  isModelInvocationEntryPoint,
   safeOutputPath,
   sha256Hex,
   validateLockfileText,
@@ -36,6 +39,7 @@ import type {
   CompilerTargetId,
   GeneratedFile,
   LockfileValidationResult,
+  SkillId,
 } from "./index.js";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -2560,13 +2564,28 @@ test("phase-18 grill-change skill bytes remain byte-identical after request-to-s
     "claude grill-change bytes drifted from post-phase-17 fixture",
   );
 
+  // Phase 24 (I1): Claude and Codex grill-change now diverge by exactly one
+  // frontmatter line - the `disable-model-invocation` flag, which Codex
+  // SKILL.md does not support. Removing that line from the Claude output must
+  // yield byte-identical bytes to Codex.
+  const codexText = Buffer.from(codexActual.bytes).toString("utf8");
+  const claudeText = Buffer.from(claudeActual.bytes).toString("utf8");
   assert.equal(
-    Buffer.from(codexActual.bytes).equals(Buffer.from(claudeActual.bytes)),
+    claudeText.includes("disable-model-invocation: true"),
     true,
-    "codex and claude grill-change bytes diverged",
+    "claude grill-change must carry the entry-point flag",
+  );
+  assert.equal(
+    codexText.includes("disable-model-invocation"),
+    false,
+    "codex grill-change must omit the unsupported flag",
+  );
+  assert.equal(
+    claudeText.replace("disable-model-invocation: true\n", ""),
+    codexText,
+    "claude and codex grill-change must differ only by the flag line",
   );
 
-  const codexText = Buffer.from(codexActual.bytes).toString("utf8");
   assert.equal(
     codexText.includes("request-to-spec-issues"),
     false,
@@ -4041,4 +4060,610 @@ test("phase-22 automation-pack golden fixture is byte-stable", async () => {
     true,
     result.ok ? "" : JSON.stringify(result.failures, null, 2),
   );
+});
+
+test("phase-24 I2 grill-change emits Design-it-Twice protocol and ADR-candidate capture while staying read-only", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const files = result.files.filter((f) =>
+    f.path.endsWith("/grill-change/SKILL.md"),
+  );
+  assert.equal(files.length, 2);
+
+  for (const file of files) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+
+    assert.equal(text.includes("## Design-it-Twice"), true, file.path);
+    assert.equal(
+      text.includes("two genuinely different paths"),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("interface"), true, file.path);
+    assert.equal(text.includes("Recommendation"), true, file.path);
+
+    assert.equal(text.includes("## ADR Candidates"), true, file.path);
+    assert.equal(
+      text.includes(
+        "hard to reverse, surprising without context, or carries real trade-offs",
+      ),
+      true,
+      file.path,
+    );
+
+    // Read-only during the grill must be preserved.
+    assert.equal(
+      text.includes("Do not write an ADR file during the grill"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes(
+        "Do not write files, create issues, commit changes, or run implementation commands during the grill.",
+      ),
+      true,
+      file.path,
+    );
+
+    // Grill must not reference the synthesis skill by name.
+    assert.equal(text.includes("request-to-spec-issues"), false, file.path);
+
+    assert.equal(text.includes("\r"), false, file.path);
+    assert.equal(text.endsWith("\n"), true, file.path);
+    assert.equal(text.split("\n").length < 300, true, file.path);
+  }
+});
+
+test("phase-24 I2 request-to-spec-issues emits Seam & Interface Design, brief seam fields, and ledger/glossary/ADR write instructions", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const files = result.files.filter((f) =>
+    f.path.endsWith("/request-to-spec-issues/SKILL.md"),
+  );
+  assert.equal(files.length, 2);
+
+  for (const file of files) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+
+    // Seam & Interface Design section.
+    assert.equal(text.includes("## Seam & Interface Design"), true, file.path);
+    assert.equal(text.includes("computation"), true, file.path);
+    assert.equal(text.includes("orchestration"), true, file.path);
+    assert.equal(text.includes("deterministic generator"), true, file.path);
+    assert.equal(
+      text.includes(
+        "highest boundary that keeps tests fast and deterministic",
+      ),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("Prefer an existing seam"), true, file.path);
+    assert.equal(
+      text.includes("unmanaged dependencies only"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes(
+        "one slice = one seam = one observable outcome = one RED",
+      ),
+      true,
+      file.path,
+    );
+
+    // 5-question human-gate checklist.
+    assert.equal(
+      text.includes("highest fast, deterministic boundary"),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("black box"), true, file.path);
+    assert.equal(text.includes("explicit interface"), true, file.path);
+    assert.equal(text.includes("glossary"), true, file.path);
+    assert.equal(
+      text.includes("abstraction exist only for the test"),
+      true,
+      file.path,
+    );
+
+    // New brief fields.
+    assert.equal(text.includes("Seam under test"), true, file.path);
+    assert.equal(text.includes("Allowed mock boundary"), true, file.path);
+
+    // Persisted-artifact write instructions.
+    assert.equal(text.includes("## Persisted Artifacts"), true, file.path);
+    assert.equal(text.includes("index-only ledger"), true, file.path);
+    assert.equal(
+      text.includes(
+        "ready | blocked | sequenced | parallel-safe | human-gate | in-progress | done",
+      ),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("docs/specs/<spec-dir>/issues/NNN-slug.md"),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("CONTEXT.md"), true, file.path);
+    assert.equal(text.includes("glossary only"), true, file.path);
+    assert.equal(text.includes("at most two sentences"), true, file.path);
+    assert.equal(text.includes("`Avoid:`"), true, file.path);
+
+    // ADR three-criteria threshold and directory rule.
+    assert.equal(
+      text.includes(
+        "hard to reverse, surprising without context, real trade-offs",
+      ),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("docs/adr/"), true, file.path);
+
+    assert.equal(text.includes("\r"), false, file.path);
+    assert.equal(text.endsWith("\n"), true, file.path);
+    assert.equal(text.split("\n").length < 300, true, file.path);
+  }
+});
+
+test("phase-24 I3 tdd-change emits tautological anti-pattern, boundary-only mocking, glossary read, and seam escape hatch while preserving the loop", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const files = result.files.filter((f) =>
+    f.path.endsWith("/tdd-change/SKILL.md"),
+  );
+  assert.equal(files.length, 2);
+
+  for (const file of files) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+
+    // Tautological-test anti-pattern.
+    assert.equal(text.includes("tautological"), true, file.path);
+    assert.equal(
+      text.includes(
+        "expected values must come from an independent source",
+      ),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("never recomputed the way the code under test computes"),
+      true,
+      file.path,
+    );
+
+    // Boundary-only mocking.
+    assert.equal(text.includes("## Mock Boundary"), true, file.path);
+    assert.equal(
+      text.includes("Mock only unmanaged external dependencies"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Prefer a fake over a stub, and a stub over a mock or spy"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("outbound communication is itself the tested contract"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("abstraction that exists only for a test"),
+      true,
+      file.path,
+    );
+
+    // Glossary-read rule.
+    assert.equal(text.includes("CONTEXT.md"), true, file.path);
+    assert.equal(
+      text.includes("must match its glossary terms"),
+      true,
+      file.path,
+    );
+
+    // Seam enforcement + escape hatch.
+    assert.equal(
+      text.includes("Test only at the seam declared in the issue brief"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("report `BLOCKED` with the reason"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Never silently move or redesign the seam"),
+      true,
+      file.path,
+    );
+
+    // Preserved rules (unchanged).
+    assert.equal(
+      text.includes("confirm RED: the test fails for the expected reason"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes(
+        "Do not update golden files only to hide an unexplained behavior change.",
+      ),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Refactor only after GREEN, then rerun the focused"),
+      true,
+      file.path,
+    );
+
+    assert.equal(text.includes("\r"), false, file.path);
+    assert.equal(text.endsWith("\n"), true, file.path);
+    assert.equal(text.split("\n").length < 300, true, file.path);
+  }
+});
+
+test("phase-24 I1 skill-invocation policy is a closed table over entry points x target support", () => {
+  const entryPoints: SkillId[] = [
+    "grill-change",
+    "request-to-spec-issues",
+    "loop-implement-test-fix",
+    "loop-review-patch-retest",
+    "loop-security-patch-retest",
+    "loop-docs-update",
+    "loop-sdd-cycle",
+  ];
+  const guardrails: SkillId[] = [
+    "sdd-change",
+    "tdd-change",
+    "final-review",
+    "subagent-driven-change",
+  ];
+
+  // Entry point x supported target (Claude) -> flag.
+  for (const skill of entryPoints) {
+    assert.equal(
+      disablesModelInvocation(skill, "claude-workflow-skills"),
+      true,
+      `${skill} on claude should disable model invocation`,
+    );
+    // Entry point x unverified target (Codex) -> flag omitted.
+    assert.equal(
+      disablesModelInvocation(skill, "codex-workflow-skills"),
+      false,
+      `${skill} on codex should omit the flag`,
+    );
+    assert.equal(isModelInvocationEntryPoint(skill), true, skill);
+  }
+
+  // Guardrail x any target -> never flagged.
+  for (const skill of guardrails) {
+    assert.equal(
+      disablesModelInvocation(skill, "claude-workflow-skills"),
+      false,
+      `${skill} guardrail must never disable model invocation`,
+    );
+    assert.equal(
+      disablesModelInvocation(skill, "codex-workflow-skills"),
+      false,
+      `${skill} guardrail must never disable model invocation`,
+    );
+    assert.equal(isModelInvocationEntryPoint(skill), false, skill);
+  }
+
+  // Only Claude is a verified-support target for now.
+  assert.deepEqual(
+    [...DISABLE_MODEL_INVOCATION_TARGETS],
+    ["claude-workflow-skills"],
+  );
+});
+
+test("phase-24 I1 emits disable-model-invocation for Claude entry points, omits it for Codex and guardrails", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  // Add the automation pack so the WS6 loop skills are emitted alongside the
+  // sdd/tdd/finalReview guardrails and the grill/synthesis entry points.
+  const profile: AiProfile = {
+    ...profileResult.profile,
+    capabilities: {
+      ...profileResult.profile.capabilities,
+      skills: { packs: ["automation"] },
+    },
+  };
+
+  const result = compileProfile({
+    profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const flagLine = "disable-model-invocation: true";
+  const entryPointSkills = [
+    "grill-change",
+    "request-to-spec-issues",
+    "loop-implement-test-fix",
+    "loop-sdd-cycle",
+  ];
+  // subagent-driven-change is covered by the table-driven policy test; the
+  // minimal profile does not emit it.
+  const guardrailSkills = ["sdd-change", "tdd-change", "final-review"];
+
+  const bytesFor = (path: string): string => {
+    const file = result.files.find((f) => f.path === path);
+    assert.ok(file, `missing ${path}`);
+    return Buffer.from(file.bytes).toString("utf8");
+  };
+
+  for (const skill of entryPointSkills) {
+    const claude = bytesFor(`.claude/skills/${skill}/SKILL.md`);
+    const codex = bytesFor(`.agents/skills/${skill}/SKILL.md`);
+
+    // Flag lives inside frontmatter for Claude.
+    const frontmatter = claude.split("---")[1] ?? "";
+    assert.equal(
+      frontmatter.includes(flagLine),
+      true,
+      `${skill}: claude frontmatter must carry the flag`,
+    );
+    // Codex omits it entirely (SKILL.md supports only name/description).
+    assert.equal(
+      codex.includes(flagLine),
+      false,
+      `${skill}: codex must omit the flag`,
+    );
+  }
+
+  for (const skill of guardrailSkills) {
+    for (const root of [".claude/skills", ".agents/skills"]) {
+      const text = bytesFor(`${root}/${skill}/SKILL.md`);
+      assert.equal(
+        text.includes(flagLine),
+        false,
+        `${root}/${skill}: guardrail must never carry the flag`,
+      );
+    }
+  }
+});
+
+function implementNextProfile(profileBase: AiProfile): AiProfile {
+  return {
+    ...profileBase,
+    workflow: {
+      ...profileBase.workflow,
+      sdd: true,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      ...profileBase.capabilities,
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
+  };
+}
+
+test("phase-24 I4 emits implement-next body for Claude and Codex with the entry-point flag on Claude only", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: implementNextProfile(profileResult.profile),
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const files = result.files.filter((f) =>
+    f.path.endsWith("/implement-next/SKILL.md"),
+  );
+  assert.deepEqual(
+    files.map((f) => f.path).sort(),
+    [
+      ".agents/skills/implement-next/SKILL.md",
+      ".claude/skills/implement-next/SKILL.md",
+    ],
+  );
+
+  for (const file of files) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+
+    assert.equal(text.includes("name: implement-next"), true, file.path);
+    assert.match(
+      text,
+      /description: Use after synthesis to dispatch the next ready task/u,
+    );
+    assert.equal(text.includes("# Implement Next"), true, file.path);
+    // Reads the ledger, takes the first ready task.
+    assert.equal(
+      text.includes("select the first task in state `ready`"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Stop at a `human-gate` task"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Skip `blocked` and `sequenced` tasks"),
+      true,
+      file.path,
+    );
+    // State transitions.
+    assert.equal(text.includes("Mark the selected task `in-progress`"), true);
+    assert.equal(text.includes("mark the task `done` and stop"), true);
+    // Runs subagent-driven-change with the brief as Fresh Context (no dangling).
+    assert.equal(
+      text.includes("run `subagent-driven-change` with the brief as Fresh Context"),
+      true,
+      file.path,
+    );
+    // Failure path (D7): BLOCKED with reason, never continue / edit brief.
+    assert.equal(text.includes("Stop and report `BLOCKED`"), true, file.path);
+    assert.equal(
+      text.includes("mark the task `blocked` in `TASKS.md` with a one-line reason"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Do not touch the next task, do not edit the brief"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Do not iterate across tasks"),
+      true,
+      file.path,
+    );
+
+    assert.equal(text.includes("\r"), false, file.path);
+    assert.equal(text.endsWith("\n"), true, file.path);
+    assert.equal(text.split("\n").length < 300, true, file.path);
+  }
+
+  const claude = Buffer.from(
+    files.find((f) => f.path.startsWith(".claude/"))!.bytes,
+  ).toString("utf8");
+  const codex = Buffer.from(
+    files.find((f) => f.path.startsWith(".agents/"))!.bytes,
+  ).toString("utf8");
+  assert.equal(
+    claude.split("---")[1]?.includes("disable-model-invocation: true"),
+    true,
+    "claude implement-next must carry the entry-point flag",
+  );
+  assert.equal(
+    codex.includes("disable-model-invocation"),
+    false,
+    "codex implement-next must omit the flag",
+  );
+});
+
+test("phase-24 I4 implement-next is omitted without both prerequisites and never dangles", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  // Minimal profile has sdd true but no subagentDrivenDevelopment -> omitted.
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const file of result.files) {
+    assert.equal(
+      file.path.endsWith("/implement-next/SKILL.md"),
+      false,
+      file.path,
+    );
+  }
+  for (const template of result.templates) {
+    assert.equal(template.id.endsWith("/implement-next@1"), false, template.id);
+  }
+});
+
+test("phase-24 I4 emits an informational note (never silence) for Tabnine when implement-next prerequisites are met", () => {
+  const profile: AiProfile = {
+    version: 1,
+    profile: { name: "i4", description: "implement-next note." },
+    stack: {
+      languages: ["typescript"],
+      frameworks: [],
+      packageManagers: ["npm"],
+      testing: [],
+    },
+    clients: {
+      tabnine: { enabled: true },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      sdd: true,
+      tdd: true,
+      finalReview: true,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
+  };
+
+  // Explicit targets avoid the unrelated experimental tabnine-subagents
+  // workspace-write constraint; the note is profile-based like the WS6 note.
+  const result = compileProfile({
+    profile,
+    targets: [
+      "claude-workflow-skills",
+      "codex-workflow-skills",
+      "tabnine-guidelines",
+    ],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const note = (result.notes ?? []).find(
+    (n) => n.code === "implement_next_target_not_generated",
+  );
+  assert.ok(note, "expected an implement-next not-generated note for Tabnine");
+  assert.match(note.message, /implement-next is not generated for Tabnine/u);
+  // Tabnine emits no implement-next artifact.
+  for (const file of result.files) {
+    assert.equal(
+      file.path.startsWith(".tabnine/") &&
+        file.path.includes("implement-next"),
+      false,
+      file.path,
+    );
+  }
 });

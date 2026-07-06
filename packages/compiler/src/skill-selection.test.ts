@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import type { AiProfile, AiProfileSkillPackId } from "@agent-profile/core";
 
 import {
+  emitsImplementNext,
   getCapabilityArtifactPaths,
   resolveSelectedSkills,
 } from "./skill-selection.js";
@@ -109,6 +110,89 @@ describe("resolveSelectedSkills", () => {
       resolveSelectedSkills(input),
       resolveSelectedSkills(input),
     );
+  });
+});
+
+describe("implement-next emission rule (phase-24 I4)", () => {
+  const cases: Array<{
+    name: string;
+    workflow: Partial<AiProfile["workflow"]>;
+    packs?: AiProfileSkillPackId[];
+    expected: boolean;
+  }> = [
+    {
+      name: "sdd + subagentDrivenDevelopment -> emitted",
+      workflow: { sdd: true, subagentDrivenDevelopment: true },
+      expected: true,
+    },
+    {
+      name: "sdd only (no subagent chain) -> omitted",
+      workflow: { sdd: true, subagentDrivenDevelopment: false },
+      expected: false,
+    },
+    {
+      name: "subagentDrivenDevelopment only (no brief format) -> omitted",
+      workflow: { sdd: false, subagentDrivenDevelopment: true },
+      expected: false,
+    },
+    {
+      name: "neither prerequisite -> omitted",
+      workflow: { sdd: false },
+      expected: false,
+    },
+    {
+      name: "packs without workflow flags -> omitted",
+      workflow: { sdd: false },
+      packs: ["base", "automation", "review"],
+      expected: false,
+    },
+  ];
+
+  for (const testCase of cases) {
+    it(testCase.name, () => {
+      const built = profile({
+        workflow: testCase.workflow,
+        packs: testCase.packs,
+      });
+      assert.equal(
+        emitsImplementNext(built.workflow),
+        testCase.expected,
+        "emitsImplementNext predicate",
+      );
+      assert.equal(
+        resolveSelectedSkills(built).includes("implement-next"),
+        testCase.expected,
+        "resolveSelectedSkills membership",
+      );
+    });
+  }
+
+  it("never leaves a dangling subagent-driven-change reference", () => {
+    // Whenever implement-next is selected, its referenced skill must also be.
+    for (const packs of [
+      undefined,
+      ["base"] as AiProfileSkillPackId[],
+      ["automation"] as AiProfileSkillPackId[],
+      ["base", "review", "advanced-review", "automation"] as AiProfileSkillPackId[],
+    ]) {
+      const skills = resolveSelectedSkills(
+        profile({
+          workflow: { sdd: true, subagentDrivenDevelopment: true },
+          packs,
+        }),
+      );
+      assert.equal(skills.includes("implement-next"), true);
+      assert.equal(
+        skills.includes("subagent-driven-change"),
+        true,
+        "implement-next requires subagent-driven-change to be co-emitted",
+      );
+      assert.equal(
+        skills.includes("request-to-spec-issues"),
+        true,
+        "implement-next requires request-to-spec-issues to be co-emitted",
+      );
+    }
   });
 });
 

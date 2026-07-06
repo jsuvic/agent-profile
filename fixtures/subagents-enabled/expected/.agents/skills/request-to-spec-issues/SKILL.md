@@ -65,6 +65,31 @@ Include these sections:
 `TDD Strategy` complements `Tests`; it must not replace the required `Tests`
 section from `docs/specs/SPEC_TEMPLATE.md`.
 
+## Seam & Interface Design
+
+Decide the test seam and mock boundary now, under this human gate, so the TDD loop runs without new architecture decisions.
+
+Classify each slice:
+
+- computation: pure input to output; the seam is the function's return value.
+- orchestration: coordinates other units; the seam is the observable effect at the boundary it drives.
+- deterministic generator: input profile to emitted artifacts; the seam is the generated output compared as a fixture.
+
+Seam rules:
+
+- Pick the highest boundary that keeps tests fast and deterministic; prefer fewer, higher seams over many low ones.
+- Prefer an existing seam over inventing a new one.
+- Declare the allowed mock boundary as unmanaged dependencies only, such as network, clock, or filesystem you do not own; never mock the code under test.
+- Sizing rule: one slice = one seam = one observable outcome = one RED.
+
+Human-gate checklist to confirm before writing briefs:
+
+1. Is the seam at the highest fast, deterministic boundary?
+2. Is the unit under test treated as a black box?
+3. Do inputs and outputs cross an explicit interface?
+4. Are the names drawn from the glossary?
+5. Does an abstraction exist only for the test?
+
 ## Issue Brief Format
 
 Each issue brief must include:
@@ -77,6 +102,8 @@ Each issue brief must include:
 - Acceptance criteria
 - Expected RED proof
 - Expected GREEN proof
+- Seam under test
+- Allowed mock boundary
 - Test command guidance
 - Likely file ownership
 - Dependencies
@@ -96,6 +123,15 @@ Use these states:
 - `parallel-safe`
 - `sequenced`
 - `human-gate`
+
+## Persisted Artifacts
+
+After the user approves the synthesis, persist workflow state in one write step. All writes go through the client's write-approval flow.
+
+- `TASKS.md`: an index-only ledger. Each row links to a brief and carries one state from the closed set `ready | blocked | sequenced | parallel-safe | human-gate | in-progress | done`. Keep task content in the briefs, not the ledger.
+- `docs/specs/<spec-dir>/issues/NNN-slug.md`: one brief per slice, using the Issue Brief Format above.
+- `CONTEXT.md`: a glossary only, created lazily when the first durable term appears. Each definition is at most two sentences; add an `Avoid:` line for terms that must not be used. No implementation details or decisions.
+- ADRs: record a decision that meets all three criteria - hard to reverse, surprising without context, real trade-offs. Write to the existing project ADR directory if present, otherwise `docs/adr/`.
 
 ## Output
 

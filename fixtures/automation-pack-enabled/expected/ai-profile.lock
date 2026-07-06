@@ -44,31 +44,31 @@
       "id": "targets/claude-workflow-skills/loop-docs-update@1",
       "target": "claude-workflow-skills",
       "version": "1",
-      "sha256": "cc12d926340ca729361bb868ab33604538c7b097b9c7599136593c7b666cf9ed"
+      "sha256": "937dc8e52c859388c55b02b1005c54dda6ecca1c98d9069e515cc7175515b828"
     },
     {
       "id": "targets/claude-workflow-skills/loop-implement-test-fix@1",
       "target": "claude-workflow-skills",
       "version": "1",
-      "sha256": "5061dd558ca35285337c26059d4594380282ab9cf44eabf0c32b368fea668800"
+      "sha256": "cfc27f8a9652bfca84f5986e77aed4d6dca9c18b601dae6c5fa26d57ac6e7e2d"
     },
     {
       "id": "targets/claude-workflow-skills/loop-review-patch-retest@1",
       "target": "claude-workflow-skills",
       "version": "1",
-      "sha256": "a1875e076d23b02245298e5cb84419ba16ea5d2b7b0a5dd2516f22233d190843"
+      "sha256": "9292b74471a7a7d2b9d24ebeb040b0c5f0c5e48de4c2e2c8b1aa49b6c7ed276d"
     },
     {
       "id": "targets/claude-workflow-skills/loop-sdd-cycle@1",
       "target": "claude-workflow-skills",
       "version": "1",
-      "sha256": "ac9557b1dd88671def4b2c142643fea95af7575c6a9640b4d025106dcaf818d7"
+      "sha256": "4215d3bde026d27c90cedf5e53d8e85b5e2b63812113ea05a13bbb7bc17eb185"
     },
     {
       "id": "targets/claude-workflow-skills/loop-security-patch-retest@1",
       "target": "claude-workflow-skills",
       "version": "1",
-      "sha256": "48b274f68e2567d031a187f649b8501a4a84a0de15c4ae310b443f0311861ae5"
+      "sha256": "6c0db387b1601e7ef41b792cce081014e41d58cb8fdb37aca46759e583543efc"
     },
     {
       "id": "targets/claude-workflow-skills/review-change@1",
@@ -86,7 +86,7 @@
       "id": "targets/claude-workflow-skills/tdd-change@2",
       "target": "claude-workflow-skills",
       "version": "1",
-      "sha256": "a42dbafdfe8e24a29ed67d5c8d9204bcf9aab4708d4d87a23ea2007201e8eae5"
+      "sha256": "871dce54837187461c16132ed8681dc547b2d7e3d5fb9f4947f5cc55d90d08fe"
     },
     {
       "id": "targets/codex-config@1",
@@ -146,7 +146,7 @@
       "id": "targets/codex-workflow-skills/tdd-change@2",
       "target": "codex-workflow-skills",
       "version": "1",
-      "sha256": "a42dbafdfe8e24a29ed67d5c8d9204bcf9aab4708d4d87a23ea2007201e8eae5"
+      "sha256": "871dce54837187461c16132ed8681dc547b2d7e3d5fb9f4947f5cc55d90d08fe"
     },
     {
       "id": "targets/tabnine-guidelines/00-general-agent-behavior@1",
@@ -229,7 +229,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/tdd-change@2",
       "ownership": "generated-owned",
-      "sha256": "a42dbafdfe8e24a29ed67d5c8d9204bcf9aab4708d4d87a23ea2007201e8eae5"
+      "sha256": "871dce54837187461c16132ed8681dc547b2d7e3d5fb9f4947f5cc55d90d08fe"
     },
     {
       "path": ".claude/settings.json",
@@ -250,35 +250,35 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/loop-docs-update@1",
       "ownership": "generated-owned",
-      "sha256": "cc12d926340ca729361bb868ab33604538c7b097b9c7599136593c7b666cf9ed"
+      "sha256": "937dc8e52c859388c55b02b1005c54dda6ecca1c98d9069e515cc7175515b828"
     },
     {
       "path": ".claude/skills/loop-implement-test-fix/SKILL.md",
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/loop-implement-test-fix@1",
       "ownership": "generated-owned",
-      "sha256": "9204736d89ea133c0d3f7dd2619b9265fccac531e4b82daa356718b29f9d67fc"
+      "sha256": "9a58268e012612ea3431910f63aeba4d554767f167d0c0227689845eaceff2b2"
     },
     {
       "path": ".claude/skills/loop-review-patch-retest/SKILL.md",
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/loop-review-patch-retest@1",
       "ownership": "generated-owned",
-      "sha256": "c0e080e59f3b0a729355e222fac141f2913d616ef141efce5ccd21512b1ef7d6"
+      "sha256": "b8cd4de763f3e9d29241c6e74e8ca22a5222f25214234b25091f8762c3de0d5f"
     },
     {
       "path": ".claude/skills/loop-sdd-cycle/SKILL.md",
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/loop-sdd-cycle@1",
       "ownership": "generated-owned",
-      "sha256": "7a4f9ed2e7f71caa3e523d2002c7013fd042b0840c14c92908ccba1e5209e531"
+      "sha256": "0b9e764be347c40d718b91223055ba758778a927e5e75f251f17445d1e994216"
     },
     {
       "path": ".claude/skills/loop-security-patch-retest/SKILL.md",
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/loop-security-patch-retest@1",
       "ownership": "generated-owned",
-      "sha256": "48b274f68e2567d031a187f649b8501a4a84a0de15c4ae310b443f0311861ae5"
+      "sha256": "6c0db387b1601e7ef41b792cce081014e41d58cb8fdb37aca46759e583543efc"
     },
     {
       "path": ".claude/skills/review-change/SKILL.md",
@@ -299,7 +299,7 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/tdd-change@2",
       "ownership": "generated-owned",
-      "sha256": "a42dbafdfe8e24a29ed67d5c8d9204bcf9aab4708d4d87a23ea2007201e8eae5"
+      "sha256": "871dce54837187461c16132ed8681dc547b2d7e3d5fb9f4947f5cc55d90d08fe"
     },
     {
       "path": ".codex/config.toml",

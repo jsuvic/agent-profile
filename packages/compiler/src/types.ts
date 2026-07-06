@@ -68,7 +68,8 @@ export type CompileIssue = {
 // (advisory hooks or automation loop skills on Tabnine).
 export type CompileNoteCode =
   | "hooks_target_not_generated"
-  | "automation_target_not_generated";
+  | "automation_target_not_generated"
+  | "implement_next_target_not_generated";
 
 export type CompileNote = {
   code: CompileNoteCode;

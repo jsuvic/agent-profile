@@ -17,7 +17,7 @@ import { parseProfileYaml } from "@agent-profile/core";
 
 import { withExecutionSentinel } from "../../core/test/fixtures/execution-sentinel.js";
 import { runDoctor } from "./index.js";
-import type { DoctorIssueCode, DoctorResult } from "./index.js";
+import type { DoctorIssue, DoctorIssueCode, DoctorResult } from "./index.js";
 
 const minimalProfilePath = fileURLToPath(
   new URL("../../../fixtures/minimal-valid/ai-profile.yaml", import.meta.url),
@@ -1063,4 +1063,103 @@ test("phase-22 doctor performs the loop structural check without executing anyth
     0,
     JSON.stringify(result.issues, null, 2),
   );
+});
+
+const WELL_FORMED_TASKS_MD = `# Task Ledger
+
+Index only - task content lives in the linked issue briefs.
+States: \`ready | blocked | sequenced | parallel-safe | human-gate | in-progress | done\`
+
+## phase-x
+
+| Id | Task | State | Brief |
+| --- | --- | --- | --- |
+| I1 | First | done | [001-first.md](docs/specs/phase-x/issues/001-first.md) |
+| I2 | Second | ready | [002-second.md](docs/specs/phase-x/issues/002-second.md) |
+`;
+
+function ledgerNotes(result: DoctorResult, code: DoctorIssueCode): DoctorIssue[] {
+  return result.issues.filter((finding) => finding.code === code);
+}
+
+test("phase-24 I5 doctor stays silent when TASKS.md and CONTEXT.md are absent", async () => {
+  const rootDir = await createGeneratedProject();
+  const result = await runDoctor({ rootDir });
+
+  assert.equal(ledgerNotes(result, "LINT-LEDGER-001").length, 0);
+  assert.equal(ledgerNotes(result, "LINT-LEDGER-002").length, 0);
+  assert.equal(ledgerNotes(result, "LINT-CONTEXT-001").length, 0);
+});
+
+test("phase-24 I5 doctor stays silent on a well-formed TASKS.md and CONTEXT.md", async () => {
+  const rootDir = await createGeneratedProject();
+  await writeProjectFile(rootDir, "TASKS.md", WELL_FORMED_TASKS_MD);
+  await writeProjectFile(
+    rootDir,
+    "CONTEXT.md",
+    "# Glossary\n\nSeam: the boundary a test observes.\nAvoid: mock.\n",
+  );
+
+  const result = await runDoctor({ rootDir });
+
+  assert.equal(ledgerNotes(result, "LINT-LEDGER-001").length, 0);
+  assert.equal(ledgerNotes(result, "LINT-LEDGER-002").length, 0);
+  assert.equal(ledgerNotes(result, "LINT-CONTEXT-001").length, 0);
+  // Exit behavior unchanged: no new error/warning.
+  assert.equal(result.status, "pass");
+  assert.equal(result.ok, true);
+});
+
+test("phase-24 I5 doctor emits an informational note for an unknown ledger state", async () => {
+  const rootDir = await createGeneratedProject();
+  await writeProjectFile(
+    rootDir,
+    "TASKS.md",
+    `${WELL_FORMED_TASKS_MD}| I3 | Third | shipping | [003-third.md](docs/specs/phase-x/issues/003-third.md) |\n`,
+  );
+
+  const result = await runDoctor({ rootDir });
+  const notes = ledgerNotes(result, "LINT-LEDGER-001");
+
+  assert.equal(notes.length, 1, JSON.stringify(result.issues, null, 2));
+  assert.equal(notes[0].severity, "info");
+  assert.equal(notes[0].path, "TASKS.md");
+  // Informational: exit behavior is unaffected.
+  assert.equal(result.status, "pass");
+  assert.equal(result.ok, true);
+});
+
+test("phase-24 I5 doctor emits an informational note for a ledger row missing a brief link", async () => {
+  const rootDir = await createGeneratedProject();
+  await writeProjectFile(
+    rootDir,
+    "TASKS.md",
+    `${WELL_FORMED_TASKS_MD}| I3 | Third | ready | none yet |\n`,
+  );
+
+  const result = await runDoctor({ rootDir });
+  const notes = ledgerNotes(result, "LINT-LEDGER-002");
+
+  assert.equal(notes.length, 1, JSON.stringify(result.issues, null, 2));
+  assert.equal(notes[0].severity, "info");
+  assert.equal(result.status, "pass");
+  assert.equal(result.ok, true);
+});
+
+test("phase-24 I5 doctor emits an informational note for non-glossary CONTEXT.md content", async () => {
+  const rootDir = await createGeneratedProject();
+  await writeProjectFile(
+    rootDir,
+    "CONTEXT.md",
+    "# Glossary\n\n## Decision\n\nWe chose X over Y because of Z.\n",
+  );
+
+  const result = await runDoctor({ rootDir });
+  const notes = ledgerNotes(result, "LINT-CONTEXT-001");
+
+  assert.equal(notes.length, 1, JSON.stringify(result.issues, null, 2));
+  assert.equal(notes[0].severity, "info");
+  assert.equal(notes[0].path, "CONTEXT.md");
+  assert.equal(result.status, "pass");
+  assert.equal(result.ok, true);
 });
