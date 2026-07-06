@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 /**
- * Target-neutral guidance content for the four phase-10 conditional topics.
+ * Target-neutral guidance-topic data for the conditional guidance topics.
  *
  * Each topic is defined once here. Tabnine and AGENTS.md renderers consume the
  * same data so the two surfaces never drift. Renderers wrap the data with the
@@ -260,6 +260,66 @@ export const MEMORY_GUIDANCE_TOPIC: GuidanceTopic = {
       bullets: [
         "Store durable decisions and conventions, not session-specific or volatile state.",
         "Delete a wrong memory instead of adding a second memory to correct around it.",
+      ],
+    },
+  ],
+  tabnineChecklistReference:
+    "See `90-final-review.md` for the shared final-review checklist.",
+  agentsMdChecklistReference:
+    "See the `## Completion Checklist` section for shared review steps.",
+};
+
+export const LOGGING_GUIDANCE_TOPIC: GuidanceTopic = {
+  tabnineTitle: "Logging Guidance",
+  agentsMdTitle: "Logging Guidance",
+  intro:
+    "Use these rules to decide what to log, how to name it, and how to keep diagnostics safe and separate from product output.",
+  subsections: [
+    {
+      heading: "Debug vs Observability",
+      bullets: [
+        "Separate throwaway debug output from durable observability: debug prints exist only to diagnose a failure in progress.",
+        "Remove debug output before marking work done; leftover debug prints are a defect, not a feature.",
+        "Prefer a narrower failing test over debug prints to isolate a problem.",
+      ],
+    },
+    {
+      heading: "Project Convention Precedence",
+      bullets: [
+        "Follow the project's existing logging convention when one exists; do not invent an ad hoc format alongside it.",
+        "When no convention exists, propose one as an ADR candidate before adopting it; never invent a convention ad hoc.",
+      ],
+    },
+    {
+      heading: "Stable Event Codes",
+      bullets: [
+        "Attach a stable event code to each new error path instead of free text.",
+        "Keep codes stable so support and tooling can rely on them; free-text messages are not a substitute.",
+      ],
+    },
+    {
+      heading: "Redaction Rule",
+      bullets: [
+        "Never log secrets, tokens, credentials, environment variable values, user file contents, or personal or production data. Log by allowlist: only values explicitly known to be safe.",
+      ],
+    },
+    {
+      heading: "Channel Separation",
+      bullets: [
+        "Keep diagnostics on the diagnostic channel so they never contaminate machine or product output (stderr vs stdout, or the platform equivalent).",
+      ],
+    },
+    {
+      heading: "Logs and Tests",
+      bullets: [
+        "Treat support-relied logs as observable behavior that deserves tests.",
+        "Never assert on incidental debug logs.",
+      ],
+    },
+    {
+      heading: "Priority Order",
+      bullets: [
+        "When these rules conflict, apply them in this order: redaction > convention > codes (redaction beats project convention beats event codes).",
       ],
     },
   ],

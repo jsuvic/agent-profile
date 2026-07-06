@@ -30,6 +30,7 @@ import {
 import {
   CODE_REVIEW_TOPIC,
   DOCUMENTATION_TOPIC,
+  LOGGING_GUIDANCE_TOPIC,
   MEMORY_GUIDANCE_TOPIC,
   REACT_STACK_TOPIC,
   REFACTORING_TOPIC,
@@ -107,6 +108,10 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     "targets/agents-md/85-memory-guidance@1",
     MEMORY_GUIDANCE_TOPIC,
   ),
+  agentsMdTopicTemplateSource(
+    "targets/agents-md/86-logging-guidance@1",
+    LOGGING_GUIDANCE_TOPIC,
+  ),
   {
     id: "targets/lockfile@1",
     target: "lockfile",
@@ -160,6 +165,10 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
   guidelineTemplateSource(
     "targets/tabnine-guidelines/85-memory-guidance@1",
     renderMemoryGuidanceGuideline,
+  ),
+  guidelineTemplateSource(
+    "targets/tabnine-guidelines/86-logging-guidance@1",
+    renderLoggingGuidanceGuideline,
   ),
   guidelineTemplateSource(
     "targets/tabnine-guidelines/90-final-review@1",
@@ -460,7 +469,10 @@ function getAutomationPackNotes(profile: AiProfile): CompileNote[] {
  * skill is generated for Claude and Codex only.
  */
 function getImplementNextNotes(profile: AiProfile): CompileNote[] {
-  if (!emitsImplementNext(profile.workflow) || !profile.clients.tabnine.enabled) {
+  if (
+    !emitsImplementNext(profile.workflow) ||
+    !profile.clients.tabnine.enabled
+  ) {
     return [];
   }
 
@@ -468,7 +480,8 @@ function getImplementNextNotes(profile: AiProfile): CompileNote[] {
     {
       code: "implement_next_target_not_generated",
       path: "/workflow/subagentDrivenDevelopment",
-      expected: "skills-capable client with a confirmed-official subagent chain (Claude or Codex)",
+      expected:
+        "skills-capable client with a confirmed-official subagent chain (Claude or Codex)",
       actual: "Tabnine has no implement-next dispatcher surface",
       message:
         "implement-next is not generated for Tabnine: the ledger dispatcher targets skills-capable clients with a confirmed-official subagent chain (Claude and Codex) only.",
@@ -570,6 +583,10 @@ export function renderAgentsMd(profile: AiProfile): string {
     profile.workflow.memoryGuidance === true
       ? `\n${renderTopicAsAgentsMdSection(MEMORY_GUIDANCE_TOPIC)}`
       : "";
+  const loggingGuidanceSection =
+    profile.workflow.loggingGuidance === true
+      ? `\n${renderTopicAsAgentsMdSection(LOGGING_GUIDANCE_TOPIC)}`
+      : "";
 
   return normalizeGeneratedText(`# AGENTS.md
 
@@ -599,7 +616,7 @@ ${enabledClients}
 - SDD: ${renderRequired(profile.workflow.sdd)}
 - TDD: ${renderRequired(profile.workflow.tdd)}
 - Final implementation review: ${renderRequired(profile.workflow.finalReview)}
-${codeReviewSection}${refactoringSection}${documentationSection}${memoryGuidanceSection}
+${codeReviewSection}${refactoringSection}${documentationSection}${memoryGuidanceSection}${loggingGuidanceSection}
 ## Permissions
 
 | Permission         | Mode  |
@@ -903,6 +920,17 @@ function renderTabnineGuidelines(profile: AiProfile): GeneratedFile[] {
     );
   }
 
+  if (profile.workflow.loggingGuidance === true) {
+    files.push(
+      createGeneratedTextFile(
+        ".tabnine/guidelines/86-logging-guidance.md",
+        common.target,
+        "targets/tabnine-guidelines/86-logging-guidance@1",
+        renderLoggingGuidanceGuideline(),
+      ),
+    );
+  }
+
   if (profile.workflow.finalReview) {
     files.push(
       createGeneratedTextFile(
@@ -924,13 +952,18 @@ function renderWorkflowSkillFiles(
 ): GeneratedFile[] {
   const selected = resolveSelectedSkills(profile);
   const selectedSet = new Set(selected);
+  const loggingOn = profile.workflow.loggingGuidance === true;
   return selected.map((skill) =>
     createGeneratedTextFile(
       `${rootPath}/${skill}/SKILL.md`,
       target,
       getWorkflowSkillTemplateId(target, skill),
       applyModelInvocationPolicy(
-        renderWorkflowSkill(skill, selectedSet),
+        applyLoggingEnforcementToSkill(
+          renderWorkflowSkill(skill, selectedSet),
+          skill,
+          loggingOn,
+        ),
         skill,
         target,
       ),
@@ -1550,6 +1583,102 @@ function renderMemoryGuidanceGuideline(): string {
   return renderTopicAsTabnineGuideline(MEMORY_GUIDANCE_TOPIC);
 }
 
+function renderLoggingGuidanceGuideline(): string {
+  return renderTopicAsTabnineGuideline(LOGGING_GUIDANCE_TOPIC);
+}
+
+/**
+ * Phase 25 (I2): flag-conditional logging-enforcement text. These lines
+ * REFERENCE the Logging Guidance convention (emitted into AGENTS.md/CLAUDE.md
+ * by I1); they never restate the verbatim redaction rule (single source of
+ * truth, ADR 0008). They are injected at emission time, gated on
+ * `workflow.loggingGuidance`, mirroring `applyModelInvocationPolicy`. Tabnine
+ * is documentation-only (ADR 0007) and never receives these lines.
+ */
+const LOGGING_ENFORCEMENT_BY_AGENT: Record<string, string> = {
+  implementer:
+    "Follow the project's logging convention (the Logging Guidance section in AGENTS.md). If debug or diagnostic output you added is still present when you would otherwise report DONE, report DONE_WITH_CONCERNS and name the leftover output instead.",
+  "code-quality-reviewer":
+    "Check logging discipline in the change: stray print/console output left in production code, new error paths lacking a stable event code, and any log that violates the redaction rule in the project's Logging Guidance convention. Reference that rule; do not restate it.",
+};
+
+const LOGGING_ENFORCEMENT_FINAL_REVIEW =
+  "Confirm debug output added during the change was removed and any new error paths carry a stable event code, per the project's Logging Guidance convention.";
+
+/**
+ * Append the flag-conditional logging-enforcement paragraph to the emitted
+ * prompt for the agents in `LOGGING_ENFORCEMENT_BY_AGENT`. Returns the prompt
+ * unchanged for any other agent or when the flag is off. The appended text is
+ * plain prose with no `"""`, so the Codex renderer's triple-quote guard is
+ * preserved.
+ */
+function applyLoggingEnforcementToPrompt(
+  prompt: string,
+  agentName: string,
+  loggingOn: boolean,
+): string {
+  if (!loggingOn) {
+    return prompt;
+  }
+  const enforcement = LOGGING_ENFORCEMENT_BY_AGENT[agentName];
+  if (enforcement === undefined) {
+    return prompt;
+  }
+  return `${prompt.trimEnd()}\n\n${enforcement}`;
+}
+
+/**
+ * Insert the flag-conditional logging checklist item into the `final-review`
+ * skill's `## Instructions` numbered list, just before the following section.
+ * Returns the source unchanged for any other skill or when the flag is off.
+ *
+ * Assumes the Instructions list is flat and monotonically numbered (1..N with
+ * no nesting); the appended item is numbered N+1. A template change that
+ * breaks this assumption shifts the emitted bytes and fails the golden
+ * fixtures, so it cannot ship silently.
+ */
+function applyLoggingEnforcementToSkill(
+  source: string,
+  skill: SkillId,
+  loggingOn: boolean,
+): string {
+  if (!loggingOn || skill !== "final-review") {
+    return source;
+  }
+  const lines = source.split("\n");
+  const instructionsIndex = lines.indexOf("## Instructions");
+  if (instructionsIndex === -1) {
+    return source;
+  }
+  // Find the last numbered list item within the Instructions section, i.e. the
+  // last `N. ` line before the next `## ` heading.
+  let lastItemIndex = -1;
+  for (let i = instructionsIndex + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line !== undefined && line.startsWith("## ")) {
+      break;
+    }
+    if (line !== undefined && /^\d+\.\s/u.test(line)) {
+      lastItemIndex = i;
+    }
+  }
+  if (lastItemIndex === -1) {
+    return source;
+  }
+  const lastItem = lines[lastItemIndex];
+  const match = lastItem?.match(/^(\d+)\.\s/u);
+  if (!match || match[1] === undefined) {
+    return source;
+  }
+  const nextNumber = Number.parseInt(match[1], 10) + 1;
+  lines.splice(
+    lastItemIndex + 1,
+    0,
+    `${nextNumber}. ${LOGGING_ENFORCEMENT_FINAL_REVIEW}`,
+  );
+  return lines.join("\n");
+}
+
 function renderTypeScriptSvelteGuideline(): string {
   return `<!-- Generated by Agent Profile Compiler. Do not edit by hand. -->
 
@@ -1637,13 +1766,14 @@ max_depth = ${defaults.maxDepth}
 function renderClaudeSubagentFiles(profile: AiProfile): GeneratedFile[] {
   const agents = getEnabledSubagents(profile);
   const effective = deriveEffectivePermissions(profile);
+  const loggingOn = profile.workflow.loggingGuidance === true;
 
   return agents.map((agent) =>
     createGeneratedTextFile(
       `.claude/agents/${agent.name}.md`,
       "claude-subagents",
       `targets/claude-subagents/${agent.name}@1`,
-      renderClaudeSubagent(agent, effective),
+      renderClaudeSubagent(withLoggingEnforcement(agent, loggingOn), effective),
     ),
   );
 }
@@ -1651,15 +1781,36 @@ function renderClaudeSubagentFiles(profile: AiProfile): GeneratedFile[] {
 function renderCodexSubagentFiles(profile: AiProfile): GeneratedFile[] {
   const agents = getEnabledSubagents(profile);
   const effective = deriveEffectivePermissions(profile);
+  const loggingOn = profile.workflow.loggingGuidance === true;
 
   return agents.map((agent) =>
     createGeneratedTextFile(
       `.codex/agents/${agent.name}.toml`,
       "codex-subagents",
       `targets/codex-subagents/${agent.name}@1`,
-      renderCodexSubagent(agent, effective),
+      renderCodexSubagent(withLoggingEnforcement(agent, loggingOn), effective),
     ),
   );
+}
+
+/**
+ * Return `agent` with the flag-conditional logging-enforcement paragraph
+ * appended to its prompt when applicable. The transform touches only the
+ * emitted prompt; the canonical template prompt is left unchanged.
+ */
+function withLoggingEnforcement(
+  agent: AiProfileSubagent,
+  loggingOn: boolean,
+): AiProfileSubagent {
+  const prompt = applyLoggingEnforcementToPrompt(
+    agent.prompt,
+    agent.name,
+    loggingOn,
+  );
+  if (prompt === agent.prompt) {
+    return agent;
+  }
+  return { ...agent, prompt };
 }
 
 function renderTabnineSubagentFiles(profile: AiProfile): GeneratedFile[] {
@@ -1932,7 +2083,11 @@ function workflowSkillTemplateSource(
     id,
     target,
     version: "1",
-    source: applyModelInvocationPolicy(renderWorkflowSkill(skill), skill, target),
+    source: applyModelInvocationPolicy(
+      renderWorkflowSkill(skill),
+      skill,
+      target,
+    ),
   };
 }
 
@@ -2240,6 +2395,9 @@ function getRequiredAgentsMdTopicTemplateIds(profile: AiProfile): string[] {
   if (profile.workflow.memoryGuidance === true) {
     ids.push("targets/agents-md/85-memory-guidance@1");
   }
+  if (profile.workflow.loggingGuidance === true) {
+    ids.push("targets/agents-md/86-logging-guidance@1");
+  }
 
   return ids;
 }
@@ -2283,6 +2441,9 @@ function getRequiredTabnineGuidelineTemplateIds(profile: AiProfile): string[] {
   }
   if (profile.workflow.memoryGuidance === true) {
     ids.push("targets/tabnine-guidelines/85-memory-guidance@1");
+  }
+  if (profile.workflow.loggingGuidance === true) {
+    ids.push("targets/tabnine-guidelines/86-logging-guidance@1");
   }
   if (profile.workflow.finalReview) {
     ids.push("targets/tabnine-guidelines/90-final-review@1");

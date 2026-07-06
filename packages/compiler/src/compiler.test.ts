@@ -1170,6 +1170,637 @@ test("phase-23 memory-guidance-enabled fixture matches generated output", async 
   );
 });
 
+const LOGGING_GUIDANCE_VERBATIM_RULE =
+  "Never log secrets, tokens, credentials, environment variable values, user file contents, or personal or production data. Log by allowlist: only values explicitly known to be safe.";
+
+const LOGGING_GUIDANCE_PRIORITY_ORDER = "redaction > convention > codes";
+
+const LOGGING_GUIDANCE_TEMPLATE_IDS = [
+  "targets/agents-md/86-logging-guidance@1",
+  "targets/tabnine-guidelines/86-logging-guidance@1",
+];
+
+test("phase-25 loggingGuidance emits AGENTS.md section and Tabnine guideline with verbatim rule", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const profile: AiProfile = {
+    ...profileResult.profile,
+    workflow: {
+      ...profileResult.profile.workflow,
+      loggingGuidance: true,
+    },
+  };
+
+  const result = compileProfile({
+    profile,
+    targets: ["agents-md", "tabnine-guidelines"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) {
+    return;
+  }
+
+  const agentsMd = result.files.find((file) => file.path === "AGENTS.md");
+  assert.ok(agentsMd);
+  const agentsText = Buffer.from(agentsMd.bytes).toString("utf8");
+  assert.equal(agentsText.includes("## Logging Guidance"), true);
+  assert.equal(agentsText.includes(LOGGING_GUIDANCE_VERBATIM_RULE), true);
+  assert.equal(agentsText.includes(LOGGING_GUIDANCE_PRIORITY_ORDER), true);
+  assertGeneratedTopicText(
+    extractMarkdownSection(agentsText, "## Logging Guidance"),
+    "AGENTS.md ## Logging Guidance",
+    { requireSingleTrailingNewline: false },
+  );
+
+  const guideline = result.files.find(
+    (file) => file.path === ".tabnine/guidelines/86-logging-guidance.md",
+  );
+  assert.ok(guideline);
+  const guidelineText = Buffer.from(guideline.bytes).toString("utf8");
+  assert.equal(guidelineText.includes(LOGGING_GUIDANCE_VERBATIM_RULE), true);
+  assert.equal(guidelineText.includes(LOGGING_GUIDANCE_PRIORITY_ORDER), true);
+  assertGeneratedTopicText(guidelineText, "86-logging-guidance.md");
+
+  // The verbatim rule survives whitespace normalization: no silent rewording.
+  const normalize = (text: string): string => text.replace(/\s+/gu, " ").trim();
+  assert.equal(
+    normalize(agentsText).includes(normalize(LOGGING_GUIDANCE_VERBATIM_RULE)),
+    true,
+  );
+  assert.equal(
+    normalize(guidelineText).includes(
+      normalize(LOGGING_GUIDANCE_VERBATIM_RULE),
+    ),
+    true,
+  );
+});
+
+test("phase-25 loggingGuidance off is byte-identical to baseline output", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const targets: CompilerTargetId[] = ["agents-md", "tabnine-guidelines"];
+  const baseline = compileProfile({ profile: profileResult.profile, targets });
+  const explicitOff = compileProfile({
+    profile: {
+      ...profileResult.profile,
+      workflow: { ...profileResult.profile.workflow, loggingGuidance: false },
+    },
+    targets,
+  });
+  assert.equal(baseline.ok, true);
+  assert.equal(explicitOff.ok, true);
+  if (!baseline.ok || !explicitOff.ok) {
+    return;
+  }
+
+  assert.deepEqual(
+    explicitOff.files.map((file) => file.path),
+    baseline.files.map((file) => file.path),
+  );
+  for (const file of explicitOff.files) {
+    const baselineMatch: GeneratedFile | undefined = baseline.files.find(
+      (item) => item.path === file.path,
+    );
+    assert.ok(baselineMatch);
+    assert.equal(file.sha256, baselineMatch.sha256, file.path);
+  }
+});
+
+test("phase-25 loggingGuidance adds only the guidance artifacts", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) {
+    return;
+  }
+
+  // Full compile across every default target so the sentinel also proves that
+  // client settings artifacts (e.g. .claude/settings.json), CLAUDE.md, Codex
+  // config, and skills are untouched by the flag.
+  const baseline = compileProfile({ profile: profileResult.profile });
+  const enabled = compileProfile({
+    profile: {
+      ...profileResult.profile,
+      workflow: { ...profileResult.profile.workflow, loggingGuidance: true },
+    },
+  });
+  assert.equal(baseline.ok, true);
+  assert.equal(enabled.ok, true);
+  if (!baseline.ok || !enabled.ok) {
+    return;
+  }
+
+  const baselinePaths = new Set(baseline.files.map((file) => file.path));
+  const added = enabled.files
+    .map((file) => file.path)
+    .filter((path) => !baselinePaths.has(path));
+
+  // Only the Tabnine guideline is a new file; the AGENTS.md section extends an
+  // existing artifact. No logging code file, directory, or settings key.
+  assert.deepEqual(added, [".tabnine/guidelines/86-logging-guidance.md"]);
+  for (const path of enabled.files.map((file) => file.path)) {
+    assert.equal(path.includes("logger"), false, path);
+    assert.equal(path.startsWith("logging/"), false, path);
+    assert.equal(path.includes("/logging/"), false, path);
+  }
+
+  // loggingGuidance extends exactly two existing surfaces in place: the
+  // AGENTS.md topic section (I1) and the final-review skill enforcement item
+  // (I2, injected wherever final-review is emitted — here for Codex and
+  // Claude). Every other shared artifact stays byte-identical, including the
+  // Tabnine final-review guideline, which is documentation-only (ADR 0007).
+  const FINAL_REVIEW_ENFORCEMENT_ITEM =
+    "Confirm debug output added during the change was removed and any new error paths carry a stable event code, per the project's Logging Guidance convention.";
+  const baselineByPath = new Map(
+    baseline.files.map((file) => [file.path, file]),
+  );
+  for (const file of enabled.files) {
+    if (file.path === ".tabnine/guidelines/86-logging-guidance.md") {
+      continue;
+    }
+    const baselineFile: GeneratedFile | undefined = baselineByPath.get(
+      file.path,
+    );
+    assert.ok(baselineFile, file.path);
+    const baselineText = Buffer.from(baselineFile.bytes).toString("utf8");
+    const enabledText = Buffer.from(file.bytes).toString("utf8");
+    if (file.path === "AGENTS.md") {
+      assert.equal(enabledText.includes("## Logging Guidance"), true);
+      assert.equal(baselineText.includes("## Logging Guidance"), false);
+      // Excising the single contiguous Logging Guidance block (heading through
+      // the next section) restores the baseline byte-for-byte, proving nothing
+      // else in AGENTS.md moved.
+      const start = enabledText.indexOf("\n## Logging Guidance");
+      const end = enabledText.indexOf("\n## Permissions", start);
+      assert.notEqual(start, -1, file.path);
+      assert.notEqual(end, -1, file.path);
+      const stripped = enabledText.slice(0, start) + enabledText.slice(end);
+      assert.equal(stripped, baselineText, file.path);
+      continue;
+    }
+    if (file.path.endsWith("/final-review/SKILL.md")) {
+      // I2 injects exactly one numbered checklist item that references the
+      // convention. Removing that single line restores the baseline, proving
+      // nothing else in the skill body moved.
+      assert.equal(
+        enabledText.includes(FINAL_REVIEW_ENFORCEMENT_ITEM),
+        true,
+        file.path,
+      );
+      assert.equal(
+        baselineText.includes(FINAL_REVIEW_ENFORCEMENT_ITEM),
+        false,
+        file.path,
+      );
+      const idx = enabledText.indexOf(FINAL_REVIEW_ENFORCEMENT_ITEM);
+      const lineStart = enabledText.lastIndexOf("\n", idx - 1);
+      const lineEnd = idx + FINAL_REVIEW_ENFORCEMENT_ITEM.length;
+      const stripped =
+        enabledText.slice(0, lineStart) + enabledText.slice(lineEnd);
+      assert.equal(stripped, baselineText, file.path);
+      continue;
+    }
+    assert.equal(file.sha256, baselineFile.sha256, file.path);
+  }
+});
+
+test("phase-25 loggingGuidance templates are lockfile-gated on the flag", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) {
+    return;
+  }
+
+  const targets: CompilerTargetId[] = ["agents-md", "tabnine-guidelines"];
+  const disabled = compileProfile({ profile: profileResult.profile, targets });
+  const enabled = compileProfile({
+    profile: {
+      ...profileResult.profile,
+      workflow: { ...profileResult.profile.workflow, loggingGuidance: true },
+    },
+    targets,
+  });
+  assert.equal(disabled.ok, true);
+  assert.equal(enabled.ok, true);
+  if (!disabled.ok || !enabled.ok) {
+    return;
+  }
+
+  const disabledIds = disabled.templates.map((template) => template.id);
+  const enabledIds = enabled.templates.map((template) => template.id);
+  for (const templateId of LOGGING_GUIDANCE_TEMPLATE_IDS) {
+    assert.equal(disabledIds.includes(templateId), false, templateId);
+    assert.equal(enabledIds.includes(templateId), true, templateId);
+  }
+});
+
+test("phase-25 logging-guidance-enabled fixture matches generated output", async () => {
+  const fixtureDir = fileURLToPath(
+    new URL("../../../fixtures/logging-guidance-enabled/", import.meta.url),
+  );
+  const result = await compareGoldenFixture(fixtureDir);
+  assert.equal(
+    result.ok,
+    true,
+    result.ok ? "" : JSON.stringify(result.failures, null, 2),
+  );
+});
+
+// --- Phase 25 I2: conditional logging-enforcement lines ---
+
+const LOGGING_ENFORCEMENT_IMPLEMENTER_LINE =
+  "Follow the project's logging convention (the Logging Guidance section in AGENTS.md). If debug or diagnostic output you added is still present when you would otherwise report DONE, report DONE_WITH_CONCERNS and name the leftover output instead.";
+
+const LOGGING_ENFORCEMENT_CODE_QUALITY_REVIEWER_LINE =
+  "Check logging discipline in the change: stray print/console output left in production code, new error paths lacking a stable event code, and any log that violates the redaction rule in the project's Logging Guidance convention. Reference that rule; do not restate it.";
+
+const LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE =
+  "Confirm debug output added during the change was removed and any new error paths carry a stable event code, per the project's Logging Guidance convention.";
+
+// Codex + Claude only. Enabling Tabnine here is intentionally NOT supported:
+// the `implementer` template is workspace-write, and a workspace-write Tabnine
+// subagent fails compile validation (`unsafe_generated_content`). Tabnine's
+// documentation-only share (ADR 0007) is exercised by
+// `tabnineDocsOnlyLoggingProfile` below, without the subagent templates.
+function loggingEnforcementProfile(
+  profileBase: AiProfile,
+  overrides: { loggingGuidance: boolean },
+): AiProfile {
+  return {
+    ...profileBase,
+    clients: {
+      ...profileBase.clients,
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...profileBase.workflow,
+      sdd: true,
+      tdd: true,
+      finalReview: true,
+      subagentDrivenDevelopment: true,
+      loggingGuidance: overrides.loggingGuidance,
+    },
+    capabilities: {
+      ...profileBase.capabilities,
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
+  };
+}
+
+// Tabnine enabled with the logging flag on but NO subagent templates, so the
+// compile is valid. This is Tabnine's full share: the guidance topic guideline
+// plus the final-review guideline, neither of which carries enforcement lines.
+function tabnineDocsOnlyLoggingProfile(
+  profileBase: AiProfile,
+  loggingGuidance: boolean,
+): AiProfile {
+  return {
+    ...profileBase,
+    clients: {
+      ...profileBase.clients,
+      tabnine: { enabled: true },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...profileBase.workflow,
+      sdd: true,
+      tdd: true,
+      finalReview: true,
+      loggingGuidance,
+    },
+  };
+}
+
+test("phase-25 I2 emits enforcement lines in Codex and Claude implementer, code-quality-reviewer, and final-review", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: loggingEnforcementProfile(profileResult.profile, {
+      loggingGuidance: true,
+    }),
+    targets: [
+      "codex-subagents",
+      "claude-subagents",
+      "codex-workflow-skills",
+      "claude-workflow-skills",
+    ],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const bytesFor = (path: string): string => {
+    const file = result.files.find((f) => f.path === path);
+    assert.ok(file, `missing ${path}`);
+    return Buffer.from(file.bytes).toString("utf8");
+  };
+
+  // implementer (Codex + Claude).
+  assert.equal(
+    bytesFor(".claude/agents/implementer.md").includes(
+      LOGGING_ENFORCEMENT_IMPLEMENTER_LINE,
+    ),
+    true,
+  );
+  assert.equal(
+    bytesFor(".codex/agents/implementer.toml").includes(
+      LOGGING_ENFORCEMENT_IMPLEMENTER_LINE,
+    ),
+    true,
+  );
+
+  // code-quality-reviewer (Codex + Claude).
+  assert.equal(
+    bytesFor(".claude/agents/code-quality-reviewer.md").includes(
+      LOGGING_ENFORCEMENT_CODE_QUALITY_REVIEWER_LINE,
+    ),
+    true,
+  );
+  assert.equal(
+    bytesFor(".codex/agents/code-quality-reviewer.toml").includes(
+      LOGGING_ENFORCEMENT_CODE_QUALITY_REVIEWER_LINE,
+    ),
+    true,
+  );
+
+  // final-review skill (Codex + Claude).
+  const claudeFinal = bytesFor(".claude/skills/final-review/SKILL.md");
+  const codexFinal = bytesFor(".agents/skills/final-review/SKILL.md");
+  assert.equal(claudeFinal.includes(LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE), true);
+  assert.equal(codexFinal.includes(LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE), true);
+  // The item is a numbered checklist entry inside ## Instructions, before ## Output.
+  for (const text of [claudeFinal, codexFinal]) {
+    const instructionsStart = text.indexOf("## Instructions");
+    const outputStart = text.indexOf("## Output");
+    const lineIndex = text.indexOf(LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE);
+    assert.ok(instructionsStart !== -1);
+    assert.ok(outputStart !== -1);
+    assert.ok(lineIndex > instructionsStart && lineIndex < outputStart);
+    assert.match(text, /\n7\. Confirm debug output added during the change/u);
+  }
+
+  // The reviewer line references the redaction rule but never restates the
+  // verbatim rule (single source of truth, ADR 0008).
+  for (const path of [
+    ".claude/agents/code-quality-reviewer.md",
+    ".codex/agents/code-quality-reviewer.toml",
+  ]) {
+    assert.equal(
+      bytesFor(path).includes(LOGGING_GUIDANCE_VERBATIM_RULE),
+      false,
+      path,
+    );
+  }
+});
+
+test("phase-25 I2 leaves spec-reviewer subagent and tdd-change skill byte-identical to flag-off", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const targets: CompilerTargetId[] = [
+    "codex-subagents",
+    "claude-subagents",
+    "codex-workflow-skills",
+    "claude-workflow-skills",
+  ];
+  const off = compileProfile({
+    profile: loggingEnforcementProfile(profileResult.profile, {
+      loggingGuidance: false,
+    }),
+    targets,
+  });
+  const on = compileProfile({
+    profile: loggingEnforcementProfile(profileResult.profile, {
+      loggingGuidance: true,
+    }),
+    targets,
+  });
+  assert.equal(off.ok, true);
+  assert.equal(on.ok, true);
+  if (!off.ok || !on.ok) return;
+
+  const untouched = [
+    ".claude/agents/spec-reviewer.md",
+    ".codex/agents/spec-reviewer.toml",
+    ".claude/skills/tdd-change/SKILL.md",
+    ".agents/skills/tdd-change/SKILL.md",
+  ];
+  const onByPath = new Map(on.files.map((file) => [file.path, file]));
+  const offByPath = new Map(off.files.map((file) => [file.path, file]));
+  for (const path of untouched) {
+    const onFile = onByPath.get(path);
+    const offFile = offByPath.get(path);
+    assert.ok(onFile, path);
+    assert.ok(offFile, path);
+    assert.equal(onFile.sha256, offFile.sha256, path);
+  }
+});
+
+test("phase-25 I2 adversarial sweep: enforcement only on Codex/Claude, never Tabnine, no dangling reference", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const allEnforcementLines = [
+    LOGGING_ENFORCEMENT_IMPLEMENTER_LINE,
+    LOGGING_ENFORCEMENT_CODE_QUALITY_REVIEWER_LINE,
+    LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE,
+  ];
+
+  // Matrix A: Codex + Claude subagent + final-review profile (Tabnine off,
+  // because the workspace-write `implementer` template cannot be a valid
+  // Tabnine subagent). Enforcement lines appear iff the flag is on, and only
+  // on the referencing artifacts; nothing dangles.
+  for (const loggingGuidance of [false, true]) {
+    const result = compileProfile({
+      profile: loggingEnforcementProfile(profileResult.profile, {
+        loggingGuidance,
+      }),
+    });
+    assert.equal(result.ok, true, `logging=${loggingGuidance}`);
+    if (!result.ok) continue;
+
+    const byPath = new Map(
+      result.files.map((file) => [
+        file.path,
+        Buffer.from(file.bytes).toString("utf8"),
+      ]),
+    );
+    const label = `logging=${loggingGuidance}`;
+
+    const codexClaudeExpect: Array<[string, string]> = [
+      [".claude/agents/implementer.md", LOGGING_ENFORCEMENT_IMPLEMENTER_LINE],
+      [".codex/agents/implementer.toml", LOGGING_ENFORCEMENT_IMPLEMENTER_LINE],
+      [
+        ".claude/agents/code-quality-reviewer.md",
+        LOGGING_ENFORCEMENT_CODE_QUALITY_REVIEWER_LINE,
+      ],
+      [
+        ".codex/agents/code-quality-reviewer.toml",
+        LOGGING_ENFORCEMENT_CODE_QUALITY_REVIEWER_LINE,
+      ],
+      [
+        ".claude/skills/final-review/SKILL.md",
+        LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE,
+      ],
+      [
+        ".agents/skills/final-review/SKILL.md",
+        LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE,
+      ],
+    ];
+    for (const [path, line] of codexClaudeExpect) {
+      const text = byPath.get(path);
+      assert.ok(text !== undefined, `${label}: missing ${path}`);
+      assert.equal(
+        text.includes(line),
+        loggingGuidance,
+        `${label}: ${path} enforcement presence`,
+      );
+    }
+
+    // spec-reviewer and tdd-change never carry any enforcement line.
+    for (const path of [
+      ".claude/agents/spec-reviewer.md",
+      ".codex/agents/spec-reviewer.toml",
+      ".claude/skills/tdd-change/SKILL.md",
+      ".agents/skills/tdd-change/SKILL.md",
+    ]) {
+      const text = byPath.get(path);
+      assert.ok(text !== undefined, `${label}: missing ${path}`);
+      for (const line of allEnforcementLines) {
+        assert.equal(
+          text.includes(line),
+          false,
+          `${label}: ${path} must not carry enforcement`,
+        );
+      }
+    }
+
+    // No dangling reference: any file that mentions the "Logging Guidance
+    // section in AGENTS.md" must be emitted alongside an AGENTS.md that
+    // actually contains that section.
+    const agentsMd = byPath.get("AGENTS.md");
+    const hasLoggingSection =
+      agentsMd !== undefined && agentsMd.includes("## Logging Guidance");
+    for (const [path, text] of byPath) {
+      if (text.includes("Logging Guidance section in AGENTS.md")) {
+        assert.equal(
+          hasLoggingSection,
+          true,
+          `${label}: ${path} references AGENTS.md Logging Guidance but section is absent`,
+        );
+      }
+    }
+  }
+
+  // Matrix B: Tabnine documentation-only (ADR 0007). Tabnine is enabled with
+  // the flag on but no subagent templates. Its guideline surfaces (guidance
+  // topic + final-review) NEVER carry an enforcement line.
+  for (const loggingGuidance of [false, true]) {
+    const result = compileProfile({
+      profile: tabnineDocsOnlyLoggingProfile(
+        profileResult.profile,
+        loggingGuidance,
+      ),
+    });
+    assert.equal(result.ok, true, `tabnine-docs logging=${loggingGuidance}`);
+    if (!result.ok) continue;
+
+    for (const file of result.files) {
+      if (!file.path.startsWith(".tabnine/")) continue;
+      const text = Buffer.from(file.bytes).toString("utf8");
+      for (const line of allEnforcementLines) {
+        assert.equal(
+          text.includes(line),
+          false,
+          `tabnine-docs logging=${loggingGuidance}: ${file.path} must not carry enforcement`,
+        );
+      }
+    }
+
+    // When the flag is on, Tabnine still receives its full share: the logging
+    // guidance guideline and the final-review guideline are present.
+    if (loggingGuidance) {
+      const tabninePaths = new Set(result.files.map((file) => file.path));
+      assert.equal(
+        tabninePaths.has(".tabnine/guidelines/86-logging-guidance.md"),
+        true,
+      );
+      assert.equal(
+        tabninePaths.has(".tabnine/guidelines/90-final-review.md"),
+        true,
+      );
+    }
+  }
+});
+
+test("phase-25 I2 loggingGuidance off is byte-identical to baseline for a subagent+finalReview profile", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const baseProfile: AiProfile = loggingEnforcementProfile(
+    profileResult.profile,
+    { loggingGuidance: false },
+  );
+  // Baseline: the flag key absent entirely.
+  const baselineWorkflow = { ...baseProfile.workflow };
+  delete (baselineWorkflow as { loggingGuidance?: boolean }).loggingGuidance;
+  const baseline = compileProfile({
+    profile: { ...baseProfile, workflow: baselineWorkflow },
+  });
+  const explicitOff = compileProfile({ profile: baseProfile });
+  assert.equal(baseline.ok, true);
+  assert.equal(explicitOff.ok, true);
+  if (!baseline.ok || !explicitOff.ok) return;
+
+  assert.deepEqual(
+    explicitOff.files.map((file) => file.path),
+    baseline.files.map((file) => file.path),
+  );
+  const baselineByPath = new Map(
+    baseline.files.map((file) => [file.path, file]),
+  );
+  for (const file of explicitOff.files) {
+    const baselineMatch = baselineByPath.get(file.path);
+    assert.ok(baselineMatch, file.path);
+    assert.equal(file.sha256, baselineMatch.sha256, file.path);
+  }
+});
+
+test("phase-25 I2 logging-enforcement-enabled fixture matches generated output", async () => {
+  const fixtureDir = fileURLToPath(
+    new URL("../../../fixtures/logging-enforcement-enabled/", import.meta.url),
+  );
+  const result = await compareGoldenFixture(fixtureDir);
+  assert.equal(
+    result.ok,
+    true,
+    result.ok ? "" : JSON.stringify(result.failures, null, 2),
+  );
+});
+
 test("phase-10 templates are lockfile-gated with their profile conditions", async () => {
   const profileResult = await readProfileFile(minimalProfileFilePath);
   assert.equal(profileResult.ok, true);

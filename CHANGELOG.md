@@ -4,6 +4,31 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Add Phase 25 logging guidance (implementing
+  `docs/specs/phase-25/001-logging-guidance.md`): a stack-agnostic logging
+  convention gated by a new additive `workflow.loggingGuidance` boolean (off by
+  default), following the existing guidance-topic pattern. When enabled, compile
+  emits a `## Logging Guidance` section into `AGENTS.md` (inherited by
+  `CLAUDE.md`) and a `.tabnine/guidelines/86-logging-guidance.md` guideline
+  carrying six binding elements — debug/observability split with
+  removal-before-done, project-convention precedence with an ADR-candidate
+  fallback, stable event codes on new error paths, the verbatim redaction rule
+  fixed by ADR 0008 ("Never log secrets, tokens, credentials, environment
+  variable values, user file contents, or personal or production data. Log by
+  allowlist: only values explicitly known to be safe."), channel separation
+  (stderr vs stdout), and test coverage for support-relied logs — plus the
+  explicit priority order redaction > convention > codes. The flag also injects
+  enforcement lines at emission time into the Codex/Claude `implementer` and
+  `code-quality-reviewer` subagent prompts (leftover debug output downgrades
+  `DONE` to `DONE_WITH_CONCERNS`) and one checklist item into the
+  `final-review` skill; Tabnine is documentation-only (ADR 0007), and
+  `spec-reviewer` / `tdd-change` stay byte-identical. Enforcement text
+  references the convention and never restates the redaction rule (single
+  source of truth). Flag off or absent keeps compile output byte-identical to
+  baseline. Adds byte-stable `logging-guidance-enabled` and
+  `logging-enforcement-enabled` golden fixtures and the `logging guidance`
+  checkbox to the web profile editor. Document-and-instruction only; no
+  application code, telemetry, or log-shipping guidance is generated.
 - Add Phase 23 memory guidance (WS7, implementing
   `docs/specs/phase-23/001-memory-guidance.md`): a document-only memory guidance
   topic gated by a new additive `workflow.memoryGuidance` boolean (off by
