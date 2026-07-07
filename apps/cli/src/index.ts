@@ -188,6 +188,18 @@ const DEFAULT_UI_HOST: LoopbackHost = "127.0.0.1";
 // next to the dev defaults but is rarely claimed.
 const DEFAULT_UI_PORT = 5174;
 const require = createRequire(import.meta.url);
+// CLI version stamped into the interactive logo. Read at runtime from the
+// package manifest (one level up from both src/index.ts and dist/index.js) so
+// it never drifts from the published version.
+const CLI_VERSION: string = ((): string => {
+  try {
+    return (
+      (require("../package.json") as { version?: string }).version ?? "0.0.0"
+    );
+  } catch {
+    return "0.0.0";
+  }
+})();
 const CLIENT_IDS = ["tabnine", "codex", "claude"] as const;
 
 type ClientId = (typeof CLIENT_IDS)[number];
@@ -1079,7 +1091,10 @@ async function dispatchInitWizard(
   } else {
     const controller = new AbortController();
     const { createClackPrompts } = await import("./wizard-clack.js");
-    prompts = await createClackPrompts({ signal: controller.signal });
+    prompts = await createClackPrompts({
+      signal: controller.signal,
+      version: CLI_VERSION,
+    });
   }
 
   let outcome: Awaited<ReturnType<typeof runInitWizard>>;
