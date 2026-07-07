@@ -240,6 +240,74 @@ test("enterManualLanguages wires parseManualLanguageSlugs into validate", async 
   await assertion;
 });
 
+// --- Framing: logo, intro/outro, notes ---------------------------------------
+
+test("framing.begin prints the logo and opens the intro over injected output", async () => {
+  const { output, prompts } = await harness();
+  assert.ok(prompts.framing);
+  prompts.framing.begin();
+  // The logo renders (name is present in both the logotype caption and the
+  // ASCII wordmark fallback), regardless of the terminal's unicode support.
+  assert.match(output.text(), /agent-profile/u);
+});
+
+test("framing.showPlan renders colored +/~/= plan markers as a note", async () => {
+  const previous = process.env.NO_COLOR;
+  process.env.NO_COLOR = "1";
+  try {
+    const { output, prompts } = await harness();
+    assert.ok(prompts.framing);
+    prompts.framing.showPlan(
+      [
+        "== Create setup plan ==",
+        "- create ai-profile.yaml",
+        "- preserve AGENTS.md",
+        "",
+        "Strategy: Preserve existing files",
+        "",
+      ].join("\n"),
+    );
+    const rendered = output.text();
+    assert.match(rendered, /\+ create ai-profile\.yaml/u);
+    assert.match(rendered, /= preserve AGENTS\.md/u);
+    // The plan title becomes the note heading, not a marked body line.
+    assert.doesNotMatch(rendered, /== Create setup plan ==/u);
+  } finally {
+    if (previous === undefined) delete process.env.NO_COLOR;
+    else process.env.NO_COLOR = previous;
+  }
+});
+
+test("framing.showDetected notes the summary and lifts warnings to log.warn", async () => {
+  const { output, prompts } = await harness();
+  assert.ok(prompts.framing);
+  prompts.framing.showDetected(
+    [
+      "Agent Profile Init",
+      "",
+      "== Detected ==",
+      "- languages: typescript",
+      "",
+      "Warnings:",
+      "  - legacy marker detected",
+      "",
+    ].join("\n"),
+    ["legacy marker detected"],
+  );
+  const rendered = output.text();
+  assert.match(rendered, /languages: typescript/u);
+  assert.match(rendered, /legacy marker detected/u);
+  // The redundant intro header is not repeated inside the note.
+  assert.doesNotMatch(rendered, /Agent Profile Init/u);
+});
+
+test("framing.end prints the preview outro when the plan is declined", async () => {
+  const { output, prompts } = await harness();
+  assert.ok(prompts.framing);
+  prompts.framing.end(false);
+  assert.match(output.text(), /no files written/iu);
+});
+
 // --- Cancel maps to WizardCancelled at the adapter seam ----------------------
 
 for (const kind of ["select", "confirm", "text"] as const) {
@@ -317,13 +385,20 @@ async function createFreshRoot(): Promise<string> {
   await writeFile(
     path.join(rootDir, "package.json"),
     JSON.stringify(
-      { devDependencies: { typescript: "latest" }, packageManager: "npm@11.0.0" },
+      {
+        devDependencies: { typescript: "latest" },
+        packageManager: "npm@11.0.0",
+      },
       null,
       2,
     ),
   );
   await writeFile(path.join(rootDir, "tsconfig.json"), "{}\n", "utf8");
   return rootDir;
+}
+
+async function createNoLanguageRoot(): Promise<string> {
+  return mkdtemp(path.join(tmpdir(), "agent-profile-clack-cancel-empty-"));
 }
 
 const CANCELLABLE_STEPS: ReadonlyArray<keyof CliPrompts> = [
@@ -340,6 +415,36 @@ for (const step of CANCELLABLE_STEPS) {
     const rootDir = await createFreshRoot();
     const output = createOutput();
     const prompts = fakePrompts({
+      [step]: () => {
+        throw new WizardCancelled();
+      },
+    });
+    const code = await runCli(["init", "--root", rootDir], {
+      io: output,
+      nonInteractive: false,
+      prompts,
+    });
+    assert.equal(code, 0);
+    assert.match(output.stdoutText(), /Cancelled - no files written\./u);
+    assert.equal(
+      existsSync(path.join(rootDir, "ai-profile.yaml")),
+      false,
+      "cancelling must not write ai-profile.yaml",
+    );
+  });
+}
+
+for (const step of [
+  "confirmManualLanguages",
+  "enterManualLanguages",
+] as const) {
+  test(`cancel at ${step} exits 0, prints the cancel line, and writes nothing`, async () => {
+    const rootDir = await createNoLanguageRoot();
+    const output = createOutput();
+    const prompts = fakePrompts({
+      ...(step === "enterManualLanguages"
+        ? { confirmManualLanguages: async () => true }
+        : {}),
       [step]: () => {
         throw new WizardCancelled();
       },
@@ -399,7 +504,9 @@ register(process.env.PROBE_URL, import.meta.url);
 async function runSentinelChild(
   mode: "non-interactive" | "load",
 ): Promise<{ status: number | null; loadLog: string; stderr: string }> {
-  const scratch = await mkdtemp(path.join(tmpdir(), "agent-profile-clack-sentinel-"));
+  const scratch = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-clack-sentinel-"),
+  );
   const cliRoot = await createFreshRoot();
   const probePath = path.join(scratch, "probe.mjs");
   const mainPath = path.join(scratch, "main.mjs");
@@ -458,7 +565,9 @@ test("runtime sentinel probe actually detects the clack module when loaded", asy
 // lazy `import("./wizard-clack.js")`. This guards that the clack import stays a
 // real runtime import in the bundle and is not hoisted to startup.
 test("packaged bundle never evaluates clack in a non-interactive run", async () => {
-  const bundlePath = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+  const bundlePath = fileURLToPath(
+    new URL("../dist/index.js", import.meta.url),
+  );
   assert.ok(
     existsSync(bundlePath),
     "dist/index.js must be built (run `npm run test --workspace @agent-profile/cli`)",

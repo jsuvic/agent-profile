@@ -4,6 +4,23 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Add Phase 26 WS1-I2 interactive CLI presentation (implementing
+  `docs/specs/phase-26/001-clack-cli-presentation.md`, issue
+  `002-logo-framing-style.md`): a pure `formatLogo(command, version, unicode)`
+  in `apps/cli/src/branding.ts` — terminal color is applied separately against
+  the actual output stream — with a two-line half-block "APC" logotype and the
+  "one profile, three agents" tagline for `init`, a single-line glyph wordmark
+  for repeat-run commands, and a documented ASCII fallback (`*`, `-`
+  separators) when unicode is unsupported. The interactive `init` wizard now
+  frames the run with a logo, `intro`/`outro`, the detected-stack summary and
+  recommendation as a clack `note`, and the write plan as a `note` whose action
+  lines are colored `+`/`~`/`=` via `node:util` `styleText` (no color
+  dependency); recommendation warnings surface via `log.warn`. Interactive
+  question wording was aligned to the message style guide (sentence case,
+  verb-first, no exclamation marks). Color, the logo, and all framing appear
+  only on the interactive TTY: `NO_COLOR` and non-TTY streams strip color, and
+  non-interactive, `--json`, `--quiet`, and generated-file surfaces stay
+  byte-identical.
 - Add Phase 25 logging guidance (implementing
   `docs/specs/phase-25/001-logging-guidance.md`): a stack-agnostic logging
   convention gated by a new additive `workflow.loggingGuidance` boolean (off by

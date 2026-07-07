@@ -161,6 +161,28 @@ export type CapabilityPrompt = (options: {
   advisoryHooksAvailable: boolean;
 }) => Promise<WizardCapabilitySelection>;
 
+/**
+ * Optional presentation framing for the interactive wizard. Rendering-only: a
+ * `CliPrompts` implementation that provides `framing` (the clack adapter) draws
+ * the logo, intro/outro bars, and the detected/plan notes; an implementation
+ * that omits it (the readline-era text path, scripted test doubles) falls back
+ * to plain `io.stdout` output. `runInitWizard`'s behavior for the plain path is
+ * unchanged, so existing wizard tests pass without modification.
+ */
+export type WizardFraming = {
+  /** Print the logo and open the intro frame. Called once before any prompt. */
+  begin: () => void;
+  /**
+   * Render the detected-stack summary and recommendation as a note, surfacing
+   * the recommendation `warnings` separately (e.g. via `log.warn`).
+   */
+  showDetected: (summary: string, warnings: ReadonlyArray<string>) => void;
+  /** Render the write plan as a note with colored `+`/`~`/`=` lines. */
+  showPlan: (plan: string) => void;
+  /** Close the frame with a next-steps outro line. */
+  end: (confirmed: boolean) => void;
+};
+
 export type CliPrompts = {
   confirmManualLanguages: ManualLanguagesConfirmPrompt;
   enterManualLanguages: ManualLanguagesEntryPrompt;
@@ -170,6 +192,8 @@ export type CliPrompts = {
   selectCapabilities: CapabilityPrompt;
   confirmGitignore: GitignorePrompt;
   confirmWritePlan: ConfirmPrompt;
+  /** Present only in the interactive clack adapter; absent in the text path. */
+  framing?: WizardFraming;
 };
 
 export type ManualLanguageParseResult =
@@ -701,7 +725,14 @@ export async function runInitWizard(input: {
 }): Promise<WizardOutcome> {
   const recommendation =
     input.recommendation ?? recommendStrategy(input.context.report);
-  input.io.stdout(formatWizardIntro(input.context, recommendation));
+  const framing = input.prompts.framing;
+  const intro = formatWizardIntro(input.context, recommendation);
+  if (framing) {
+    framing.begin();
+    framing.showDetected(intro, recommendation.warnings);
+  } else {
+    input.io.stdout(intro);
+  }
 
   const languages = await resolveWizardLanguages(input);
   if (languages.length === 1 && languages[0] === "unknown") {
@@ -787,11 +818,18 @@ export async function runInitWizard(input: {
     advisoryHooks: capabilities.advisoryHooks,
   };
 
-  input.io.stdout(formatWizardPlan(context, outcomeDraft));
+  const plan = formatWizardPlan(context, outcomeDraft);
+  if (framing) {
+    framing.showPlan(plan);
+  } else {
+    input.io.stdout(plan);
+  }
 
   const confirmed = await input.prompts.confirmWritePlan({ default: false });
 
-  if (!confirmed) {
+  if (framing) {
+    framing.end(confirmed);
+  } else if (!confirmed) {
     input.io.stdout(formatWizardDeclined());
   }
 

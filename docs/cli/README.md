@@ -76,7 +76,7 @@ requires a separate approved spec.
 All write-capable commands must default to dry-run and use diff-before-write
 before mutating repository files.
 
-## Init Wizard (Phase 15)
+## Init Wizard (Phase 26)
 
 Plain `agent-profile init` opens a friendly interactive wizard that maps the
 user's answers to the Phase 14 import and write flags. The wizard runs only
@@ -84,19 +84,30 @@ when the command is invoked without behavior flags (`--import`, `--strategy`,
 `--write`, `--client`, `--no-client`, `--profile`, `--preset`,
 `--update-gitignore`, `--json`, `--quiet`, `--dry-run`).
 
-Screens, in order:
+The interactive presentation uses arrow-key selects, space-toggle
+multiselects, inline validation, and clack's default keyboard instructions.
+Press Enter to accept the highlighted choice. Screens appear in this order:
 
-1. Detected stack, existing instruction files, local runtime files, generated
-   client config, and any foreign skills/subagents.
-2. Strategy choice (default tracks the recommendation table below).
-3. Client selection (defaults to clients detected from existing files; select
-   multiple clients with comma-separated numbers or names, for example `2,3` or
-   `codex,claude`).
-4. `.gitignore` recommendation prompt (only shown when at least one
-   recommended line is missing).
-5. Write plan summary, under a visible `Write plan` section.
-6. Run mode choice. `Dry run preview` is the default; choose
-   `Write files now (--write)` to apply the plan locally.
+1. Branded opening frame and a detected-stack note covering existing
+   instruction files, local runtime files, generated client config, and any
+   foreign skills or subagents.
+2. Optional bounded manual-language entry when no language is detected.
+3. Strategy choice (default tracks the recommendation table below).
+4. Client multiselect for a new profile (detected clients are preselected).
+5. Safety and permission setup profile.
+6. Capability-pack grouped multiselect. Unavailable options are omitted and
+   explained by one warning.
+7. `.gitignore` recommendation prompt, shown only when at least one recommended
+   line is missing.
+8. Framed write-plan note with `+`, `~`, and `=` action markers.
+9. Preview-or-write choice. `Preview only - write nothing` is first and remains
+   the default; choose `Create setup now` to apply the plan locally.
+
+Pressing Ctrl+C at any prompt prints `Cancelled - no files written.`, exits with
+code 0, and writes nothing. Set `NO_COLOR=1` to disable terminal color. Legacy
+terminals without unicode support use the ASCII `*` logo fallback. The logo,
+color, and framing never appear in piped, CI, `--non-interactive`, `--json`, or
+`--quiet` output.
 
 The wizard never bypasses Phase 14 ownership, region, path-safety, or conflict
 checks: choosing `Add generated regions` produces the same bytes as
@@ -107,17 +118,17 @@ In non-interactive environments — `stdin`/`stdout` is not a TTY, `CI=true`,
 or `--non-interactive` is present — `init` behaves as
 `init --import --strategy preserve --dry-run` and writes nothing. The wizard
 does not introduce `--yes`: a write always requires the explicit Phase 14
-flags or selecting `Write files now (--write)` in the wizard.
+flags or selecting `Create setup now` in the wizard.
 
 Recommendation rules:
 
-| Detected state                                  | Recommendation                            |
-| ----------------------------------------------- | ----------------------------------------- |
-| unmarked supported root instruction file exists | `Add generated regions`                   |
-| only valid mixed root instruction files exist   | `Preserve existing files`                 |
-| no agent files exist                            | `Preserve existing files`                 |
-| legacy generated marker without lockfile exists | `Preserve existing files` plus warning    |
-| foreign skill or subagent path conflict exists  | `Preserve existing files` plus conflict   |
+| Detected state                                  | Recommendation                          |
+| ----------------------------------------------- | --------------------------------------- |
+| unmarked supported root instruction file exists | `Add generated regions`                 |
+| only valid mixed root instruction files exist   | `Preserve existing files`               |
+| no agent files exist                            | `Preserve existing files`               |
+| legacy generated marker without lockfile exists | `Preserve existing files` plus warning  |
+| foreign skill or subagent path conflict exists  | `Preserve existing files` plus conflict |
 
 ## Init Clients
 
@@ -320,11 +331,11 @@ strings pinned inside the compiler (the template table) — raw commands never
 appear in the profile, and slice 1 cannot express a hook that runs a project
 binary, writes, installs, or touches the network.
 
-| Role | Event(s) | Pinned runtime behavior |
-| --- | --- | --- |
-| `final-review-reminder` | `Stop`, `SubagentStop` | fixed reminder to run `final-review` before handing off |
-| `context-injection` | `UserPromptSubmit` | read-only `git status --short --branch` (fail-open when git is unavailable) |
-| `pre-compact-checkpoint` | `PreCompact` | fixed reminder to checkpoint in-progress work before compaction |
+| Role                     | Event(s)               | Pinned runtime behavior                                                     |
+| ------------------------ | ---------------------- | --------------------------------------------------------------------------- |
+| `final-review-reminder`  | `Stop`, `SubagentStop` | fixed reminder to run `final-review` before handing off                     |
+| `context-injection`      | `UserPromptSubmit`     | read-only `git status --short --branch` (fail-open when git is unavailable) |
+| `pre-compact-checkpoint` | `PreCompact`           | fixed reminder to checkpoint in-progress work before compaction             |
 
 Targets:
 

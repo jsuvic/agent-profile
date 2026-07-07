@@ -89,7 +89,7 @@ The workflow is:
 
 1. `init` opens an interactive wizard that detects the stack and existing
    agent files, recommends a safe import strategy, and writes only after the
-   final `Write this plan?` confirmation. In non-interactive environments
+   final preview-or-write selection. In non-interactive environments
    (no TTY, `CI=true`, or `--non-interactive`) `init` reports a dry-run
    `--import --strategy preserve` plan and writes nothing. Power users can
    bypass the wizard with explicit flags such as
@@ -108,6 +108,14 @@ The workflow is:
 
 Write-capable commands require an explicit `--write`. Dry-run is the default
 review path.
+
+In an interactive terminal, the init wizard uses arrow-key selects and
+space-toggle multiselects; press Enter to accept the highlighted choice. The
+detected stack and write plan are presented as framed notes, and `Preview only`
+remains the final default. Pressing Ctrl+C at any prompt exits successfully with
+`Cancelled - no files written.` and does not write files. Set `NO_COLOR=1` to
+disable terminal color. Piped, CI, `--non-interactive`, `--json`, and `--quiet`
+output remains unchanged and never renders the logo or interactive framing.
 
 `init` is intentionally conservative. As a temporary first-run workaround, it
 checks allowlisted metadata at the repository root and candidate project roots
@@ -211,13 +219,13 @@ agent-profile ui [--root <path>] [--port auto|<number>] [--open true|false]
 
 Per-file row actions in the Migration view:
 
-| Action                    | When it appears                                   |
-| ------------------------- | ------------------------------------------------- |
-| `Preserve`                | always (for non-refused rows)                     |
-| `Add regions`             | unmarked supported root file (AGENTS.md/CLAUDE.md)|
-| `Update generated region` | file already has region markers                   |
+| Action                    | When it appears                                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `Preserve`                | always (for non-refused rows)                                                                                       |
+| `Add regions`             | unmarked supported root file (AGENTS.md/CLAUDE.md)                                                                  |
+| `Update generated region` | file already has region markers                                                                                     |
 | `Replace generated-owned` | only for `generated-owned` non-root files; needs a per-row second confirmation, then `confirmReplace:true` on apply |
-| `Skip`                    | always                                            |
+| `Skip`                    | always                                                                                                              |
 
 The UI never writes without showing a plan first, never reads or previews
 `.env*` files, and surfaces a post-write doctor result inline — failed
@@ -231,13 +239,13 @@ deterministic set of instruction-only skills emitted for skills-capable
 clients (Claude under `.claude/skills/<name>/SKILL.md`, Codex under
 `.agents/skills/<name>/SKILL.md`):
 
-| Pack                 | Generates                                                      |
-| -------------------- | ------------------------------------------------------------- |
-| `base`               | `sdd-change`, `tdd-change`, `final-review`                    |
-| `review`             | `review-change`                                               |
-| `advanced-review`    | `security-review`, `readability-review`, `test-review`, `architecture-review` |
-| `automation`         | five loop skills (see below)                                  |
-| `mcp-recommendations`| `mcp-fit-check`                                               |
+| Pack                  | Generates                                                                     |
+| --------------------- | ----------------------------------------------------------------------------- |
+| `base`                | `sdd-change`, `tdd-change`, `final-review`                                    |
+| `review`              | `review-change`                                                               |
+| `advanced-review`     | `security-review`, `readability-review`, `test-review`, `architecture-review` |
+| `automation`          | five loop skills (see below)                                                  |
+| `mcp-recommendations` | `mcp-fit-check`                                                               |
 
 ### Automation loop skills
 

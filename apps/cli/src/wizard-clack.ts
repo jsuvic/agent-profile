@@ -7,6 +7,12 @@ import type { Readable, Writable } from "node:stream";
 import type { AiProfileSkillPackId } from "@agent-profile/core";
 
 import {
+  accent,
+  colorizeLogo,
+  colorizePlanLine,
+  formatLogo,
+} from "./branding.js";
+import {
   parseWizardCapabilitySelection,
   parseManualLanguageSlugs,
   WizardCancelled,
@@ -20,13 +26,34 @@ import {
 /**
  * Streams and cancellation signal shared by every prompt. In production these
  * default to the process streams; tests inject in-memory streams and drive the
- * adapter deterministically.
+ * adapter deterministically. `version` is stamped into the init logo.
  */
 export type ClackPromptOptions = {
   input?: Readable;
   output?: Writable;
   signal?: AbortSignal;
+  version?: string;
 };
+
+/**
+ * Whether the terminal can render the logo's half-block glyphs. Mirrors the
+ * signal `@clack/prompts` uses for its own symbol fallback (the
+ * `is-unicode-supported` heuristic): assume yes everywhere except the legacy
+ * Windows console and the Linux text console.
+ */
+function isUnicodeSupported(): boolean {
+  if (process.platform !== "win32") {
+    return process.env.TERM !== "linux";
+  }
+  return (
+    Boolean(process.env.WT_SESSION) ||
+    Boolean(process.env.TERMINUS_SUBLIME) ||
+    process.env.ConEmuTask === "{cmd::Cmder}" ||
+    process.env.TERM_PROGRAM === "vscode" ||
+    process.env.TERM === "xterm-256color" ||
+    process.env.TERM === "alacritty"
+  );
+}
 
 const CLIENT_LABELS: Record<WizardClientId, string> = {
   tabnine: "Tabnine",
@@ -86,14 +113,27 @@ export async function createClackPrompts(
   // evaluate at process startup — breaking the "non-interactive never loads
   // clack" contract for the shipped binary. A dynamic import of the external
   // package stays a real runtime `import()`.
-  const { confirm, groupMultiselect, isCancel, log, multiselect, select, text } =
-    await import("@clack/prompts");
+  const {
+    confirm,
+    groupMultiselect,
+    intro,
+    isCancel,
+    log,
+    multiselect,
+    note,
+    outro,
+    select,
+    text,
+  } = await import("@clack/prompts");
 
   const io = {
     input: options.input ?? process.stdin,
     output: options.output ?? process.stdout,
     ...(options.signal ? { signal: options.signal } : {}),
   };
+
+  const version = options.version ?? "0.0.0";
+  const unicode = isUnicodeSupported();
 
   /** Reject a clack cancel (Ctrl+C / abort) as the binding cancel signal. */
   const unwrap = <Value>(value: Value | symbol): Value => {
@@ -104,10 +144,51 @@ export async function createClackPrompts(
   };
 
   return {
+    framing: {
+      begin() {
+        // The logo prints once, at the top of the interactive init flow only.
+        io.output.write(
+          `${colorizeLogo(formatLogo("init", version, unicode), unicode, io.output)}\n`,
+        );
+        intro(accent("agent-profile init", io.output), { output: io.output });
+      },
+      showDetected(summary, warnings) {
+        // `formatWizardIntro` stays the single source of the detected text; the
+        // note renders its body. The "Agent Profile Init" header (the intro bar
+        // shows it) and the trailing "Warnings:" block (lifted to log.warn) are
+        // dropped from the note so nothing is presented twice.
+        const body = summary
+          .split("\nWarnings:\n")[0]
+          .replace(/^Agent Profile Init\n+/u, "")
+          .trimEnd();
+        note(body, "Detected", { output: io.output });
+        for (const warning of warnings) {
+          log.warn(warning, { output: io.output });
+        }
+      },
+      showPlan(plan) {
+        // Drop the "== Create setup plan ==" title (it becomes the note title)
+        // and color each action line via the pure `formatPlanLine` formatter.
+        const body = plan.replace(/^== Create setup plan ==\n/u, "").trimEnd();
+        note(body, "Create setup plan", {
+          format: (line) => colorizePlanLine(line, io.output),
+          output: io.output,
+        });
+      },
+      end(confirmed) {
+        outro(
+          confirmed
+            ? "Setup ready - writing files."
+            : "Preview only - no files written.",
+          { output: io.output },
+        );
+      },
+    },
+
     async selectStrategy({ default: def, recommendation }) {
       const value = await select<WizardStrategy>({
         ...io,
-        message: "How should existing agent instruction files be handled?",
+        message: "Choose how to handle existing agent instruction files",
         initialValue: def,
         options: [
           {
@@ -132,7 +213,7 @@ export async function createClackPrompts(
     async selectClients({ defaults }) {
       const value = await multiselect<WizardClientId>({
         ...io,
-        message: "Which clients should this setup create files for?",
+        message: "Select the clients to generate files for",
         required: false,
         initialValues: [...defaults],
         options: WIZARD_CLIENT_IDS.map((id) => ({
@@ -148,7 +229,7 @@ export async function createClackPrompts(
     async selectSetupProfile({ default: def }) {
       const value = await select<WizardSetupProfileId>({
         ...io,
-        message: "Choose the safety and permission posture.",
+        message: "Choose the safety and permission posture",
         initialValue: def,
         options: SETUP_PROFILE_OPTIONS.map((option) => ({ ...option })),
       });
@@ -184,7 +265,7 @@ export async function createClackPrompts(
 
       const value = await groupMultiselect<string>({
         ...io,
-        message: "Select capability packs.",
+        message: "Select capability packs",
         groupSpacing: 1,
         maxItems: 10,
         // Allow submitting zero packs; clack's default `required: true` would
@@ -204,7 +285,11 @@ export async function createClackPrompts(
       });
       const selected = unwrap(value);
       if (selected.length === 0) {
-        return { skillPacks: [], reviewerSubagents: false, advisoryHooks: false };
+        return {
+          skillPacks: [],
+          reviewerSubagents: false,
+          advisoryHooks: false,
+        };
       }
       // Reuse the pure parser so availability gating stays single-sourced.
       return parseWizardCapabilitySelection(
@@ -218,7 +303,7 @@ export async function createClackPrompts(
     async confirmGitignore({ default: def, entries }) {
       const value = await confirm({
         ...io,
-        message: `Add missing recommended .gitignore entries?\n${entries
+        message: `Add the missing recommended .gitignore entries?\n${entries
           .map((entry) => `  - ${entry}`)
           .join("\n")}`,
         initialValue: def,
@@ -230,7 +315,7 @@ export async function createClackPrompts(
       // A `select` keeps "Preview only" first and the default, per contract.
       const value = await select<boolean>({
         ...io,
-        message: "How should this plan run?",
+        message: "Choose how to apply this plan",
         initialValue: def,
         options: [
           { value: false, label: "Preview only - write nothing" },
@@ -243,7 +328,7 @@ export async function createClackPrompts(
     async confirmManualLanguages({ default: def }) {
       const value = await confirm({
         ...io,
-        message: "No language was detected. Enter language slugs manually?",
+        message: "No language detected. Enter language slugs manually?",
         initialValue: def,
       });
       return unwrap(value);
