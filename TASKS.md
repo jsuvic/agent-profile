@@ -39,3 +39,21 @@ Spec approved 2026-07-06. `@clack/prompts@1.7.0` installed (exact pin).
 Recommended merge order: WS1-I1 -> WS1-I2 -> WS2-I1 -> WS3-I1. WS3-I1 is
 blocked on phase-20 WS3-I3 plus the narrowed WS3-I6 checklist (Codex
 project-MCP proof; Claude-first sequencing permitted).
+
+## phase-27: Ownership + Upgrade Lifecycle (`docs/specs/phase-27/001-import-ownership-lockfile-conformance.md`)
+
+Spec 001 approved 2026-07-07 (0.4.1 patch); 002-004 planned pending grill
+sessions.
+
+| Id | Task | State | Brief |
+| --- | --- | --- | --- |
+| I1 | Lockfile-first classification in the import report | done | [001-lockfile-first-classification.md](docs/specs/phase-27/issues/001-lockfile-first-classification.md) |
+
+I1 is standalone; merge before any phase-27/002+ work begins.
+
+Unblocked 2026-07-07 (twice): first amendment authorizes the minimal
+manual-owned branch in `planRegionAwareWrites`; second amendment
+redefines parity - category equality for lockfile-backed rows, an
+expected-pair table for no-entry rows (the markerless divergence is the
+phase-14 consent-gated adoption design, not a bug). No further behavior
+change authorized.

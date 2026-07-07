@@ -491,8 +491,10 @@ export function recommendStrategy(
     );
   }
 
-  const hasLegacyMarker = rootFiles.some((file) =>
-    file.tags.includes("generated-looking"),
+  const hasLegacyMarker = rootFiles.some(
+    (file) =>
+      file.ownership === "unknown" &&
+      file.tags.includes("generated-looking"),
   );
   if (hasLegacyMarker) {
     warnings.push(
@@ -500,10 +502,20 @@ export function recommendStrategy(
     );
   }
 
+  for (const file of rootFiles) {
+    if (
+      file.ownership === "generated-owned" &&
+      file.notes.some((note) => note.includes("differs from ai-profile.lock"))
+    ) {
+      warnings.push(
+        `${file.path} differs from ai-profile.lock; compile will refuse until the drift is resolved.`,
+      );
+    }
+  }
+
   const hasUnmarkedSupported = rootFiles.some(
     (file) =>
-      file.ownership !== "mixed" &&
-      file.ownership !== "generated-owned" &&
+      file.ownership === "unknown" &&
       !file.tags.includes("generated-looking") &&
       file.action !== "refuse-conflict",
   );
