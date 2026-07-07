@@ -206,6 +206,11 @@ the threat model:
   output format.
 - `tabnine -p` non-interactive JSON mode.
 
+(Amended 2026-07-06: the exact flag sets are pinned in
+`002-init-assist-threat-model.md`. Tabnine is excluded from v1 per the
+threat model's exclusion rule - its headless mode has no invocation-level
+read-only allowlist. The v1 detection list is claude and codex only.)
+
 Adapters must: pass a fixed instruction requesting JSON matching
 `AssistRecommendationV1` only; select the most restrictive documented
 read-only/sandboxed mode the client offers; set a wall-clock timeout; capture
@@ -279,7 +284,12 @@ Reconstructed as `ASSIST-SEC-001..010`; approving this spec fixes their text.
 - No APC-initiated network, install, shell, or file mutation from assistant
   output.
 - Assistant stdout is never persisted verbatim.
-- The version probes execute only `<client> --version`.
+- (Amended 2026-07-06) Detection performs PATH resolution only; no child
+  process - not even `<client> --version` - is spawned before explicit
+  consent. The single adapter invocation is the only spawn in an assist
+  run. (Previously: "The version probes execute only `<client>
+  --version`"; the probe is dropped entirely - version incompatibility
+  surfaces as a non-zero adapter exit and degrades.)
 
 ## Acceptance Criteria
 
@@ -310,8 +320,9 @@ Reconstructed as `ASSIST-SEC-001..010`; approving this spec fixes their text.
   or any execution path; raw text absent from all output (echo sentinel).
 - Write-path sentinel: no file mutation occurs before diff approval; degrade
   leaves the tree untouched.
-- Execution sentinel: no child process other than the version probes and the
-  single chosen adapter invocation.
+- Execution sentinel: no child process other than the single chosen adapter
+  invocation (amended 2026-07-06: version probes removed; detection is
+  PATH resolution only).
 - Stderr sentinel: an adapter fixture writing assistant-style text and
   secret-shaped strings to stderr -> none of it reaches terminal output,
   files, or logs; only the deterministic degrade message appears.

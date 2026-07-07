@@ -18,6 +18,13 @@ approval: the invocation adapters (WS3-I3) may not land, and the mapping
 (WS3-I4) may not be reviewed, before the `002` sign-off checklist is complete.
 WS3-I1, WS3-I2, and WS3-I5 are cleared for implementation now.
 
+Progress 2026-07-06: the per-tool flags are pinned in `002` (Codex and
+Claude; Tabnine excluded from v1), the literal consent notice is approved,
+detection is tightened to PATH resolution only (version probes dropped;
+`001` amended), and a closed degrade-reason classifier is added. The `002`
+sign-off is narrowed to the Codex project-MCP proof and the WS3-I3
+implementation sentinels; the Claude adapter may land first.
+
 Progress 2026-07-04: WS3-I1 (schema + catalog wiring) and WS3-I2 (two-pass
 validator) landed in `apps/cli/src/assist-schema.ts` and
 `apps/cli/src/assist-validator.ts`. Spec 001 was amended the same day to fix
