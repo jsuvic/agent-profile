@@ -71,11 +71,11 @@ import {
 } from "@agent-profile/doctor";
 
 import {
-  createDefaultPrompts,
   formatWizardDeclined,
   isNonInteractive,
   recommendStrategy,
   runInitWizard,
+  WizardCancelled,
   WIZARD_CLIENT_IDS,
   type CliPrompts,
   type WizardClientId,
@@ -1069,24 +1069,46 @@ async function dispatchInitWizard(
     report: toWizardImportReport(wizardPhaseReport),
   };
 
-  const prompts = input.promptsOverride ?? createDefaultPrompts(input.io);
-  const outcome = await runInitWizard({
-    context,
-    io: input.io,
-    prompts,
-    rebuildReport: async (strategy) => {
-      const refreshed = await buildPhase14ImportReport({
-        rootDir: input.rootDir,
-        mode: "dry-run",
-        strategy,
-        profilePath: input.profilePath,
-        profile: profileForReport,
-        wouldCreateProfile: input.existingProfileBytes === undefined,
-        stack: stackForWizard.stack,
-      });
-      return toWizardImportReport(refreshed);
-    },
-  });
+  // Lazy-load the clack adapter only on the interactive branch: the
+  // `isNonInteractive` gate above already returned, so importing it here keeps
+  // the clack module out of every non-interactive run. A single
+  // `AbortController` threads through all prompts.
+  let prompts: CliPrompts;
+  if (input.promptsOverride) {
+    prompts = input.promptsOverride;
+  } else {
+    const controller = new AbortController();
+    const { createClackPrompts } = await import("./wizard-clack.js");
+    prompts = createClackPrompts({ signal: controller.signal });
+  }
+
+  let outcome: Awaited<ReturnType<typeof runInitWizard>>;
+  try {
+    outcome = await runInitWizard({
+      context,
+      io: input.io,
+      prompts,
+      rebuildReport: async (strategy) => {
+        const refreshed = await buildPhase14ImportReport({
+          rootDir: input.rootDir,
+          mode: "dry-run",
+          strategy,
+          profilePath: input.profilePath,
+          profile: profileForReport,
+          wouldCreateProfile: input.existingProfileBytes === undefined,
+          stack: stackForWizard.stack,
+        });
+        return toWizardImportReport(refreshed);
+      },
+    });
+  } catch (error) {
+    if (error instanceof WizardCancelled) {
+      // Binding cancel contract: print the cancel line, exit 0, write nothing.
+      input.io.stdout("Cancelled - no files written.\n");
+      return { kind: "declined" };
+    }
+    throw error;
+  }
 
   if (!outcome.confirmed) {
     return { kind: "declined" };

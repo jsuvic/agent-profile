@@ -1,10 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import { createInterface } from "node:readline/promises";
-
 import { getCapabilityArtifactPaths } from "@agent-profile/compiler";
 import type { AiProfileSkillPackId, SafetyMode } from "@agent-profile/core";
+
+/**
+ * Signals that the user aborted an interactive prompt (Ctrl+C or an aborted
+ * `AbortSignal`). The clack adapter throws this after `isCancel` on any prompt
+ * result; `dispatchInitWizard` catches it once, prints the cancel line, and
+ * exits 0 having written nothing.
+ */
+export class WizardCancelled extends Error {
+  constructor() {
+    super("Interactive wizard cancelled by the user.");
+    this.name = "WizardCancelled";
+  }
+}
 
 export type CliIo = {
   stdout: (text: string) => void;
@@ -787,135 +798,6 @@ export async function runInitWizard(input: {
   return {
     ...outcomeDraft,
     confirmed,
-  };
-}
-
-export function createDefaultPrompts(io: CliIo): CliPrompts {
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: true,
-  });
-
-  const ask = async (question: string, fallback: string): Promise<string> => {
-    io.stdout(question);
-    const answer = await rl.question("");
-    return answer.trim() === "" ? fallback : answer.trim();
-  };
-
-  return {
-    async confirmManualLanguages({ default: def }) {
-      const raw = await ask(
-        formatWizardManualLanguagesConfirmationQuestion(),
-        def ? "yes" : "no",
-      );
-      const normalized = raw.trim().toLowerCase();
-      if (normalized === "y" || normalized === "yes") return true;
-      if (normalized === "n" || normalized === "no") return false;
-      return def;
-    },
-    async enterManualLanguages() {
-      return ask(formatWizardManualLanguagesEntryQuestion(), "");
-    },
-    async selectStrategy({ default: def }) {
-      const raw = await ask(
-        formatWizardStrategyQuestion(def),
-        def === "preserve" ? "1" : "2",
-      );
-      if (raw === "2" || raw.toLowerCase().startsWith("r")) return "regions";
-      if (raw === "1" || raw.toLowerCase().startsWith("p")) return "preserve";
-      return def;
-    },
-    async selectClients({ defaults }) {
-      const raw = await ask(
-        formatWizardClientSelectionQuestion(defaults),
-        defaults.join(","),
-      );
-      return parseWizardClientSelection(raw);
-    },
-    async selectSetupProfile({ default: def }) {
-      const raw = await ask(
-        formatWizardSetupProfileQuestion(def),
-        String(SETUP_PROFILE_IDS.indexOf(def) + 1),
-      );
-      return parseWizardSetupProfile(raw);
-    },
-    async selectCapabilities({
-      defaults,
-      reviewerSubagentsAvailable,
-      advisoryHooksAvailable,
-    }) {
-      const defaultNumbers = [
-        defaults.includes("base") ? "1" : "",
-        defaults.includes("review") ? "2" : "",
-        defaults.includes("advanced-review") ? "3" : "",
-        defaults.includes("mcp-recommendations") ? "5" : "",
-      ].filter((value) => value !== "");
-      const raw = await ask(
-        formatWizardCapabilityQuestion({
-          defaults,
-          reviewerSubagentsAvailable,
-          advisoryHooksAvailable,
-        }),
-        defaultNumbers.join(","),
-      );
-      return parseWizardCapabilitySelection(
-        raw,
-        reviewerSubagentsAvailable,
-        defaults,
-        advisoryHooksAvailable,
-      );
-    },
-    async confirmGitignore({ default: def, entries }) {
-      const raw = await ask(
-        formatWizardGitignoreQuestion(entries),
-        def ? "1" : "2",
-      );
-      const normalized = raw.trim().toLowerCase();
-      if (normalized === "1" || normalized === "y" || normalized === "yes") {
-        return true;
-      }
-      if (normalized === "2" || normalized === "n" || normalized === "no") {
-        return false;
-      }
-      return def;
-    },
-    async confirmWritePlan({ default: def }) {
-      try {
-        const raw = await ask(
-          formatWizardWriteConfirmationQuestion(),
-          def ? "2" : "1",
-        );
-        const normalized = raw.trim().toLowerCase();
-
-        if (
-          normalized === "2" ||
-          normalized === "write" ||
-          normalized === "--write" ||
-          normalized === "w" ||
-          normalized === "y" ||
-          normalized === "yes"
-        ) {
-          return true;
-        }
-
-        if (
-          normalized === "1" ||
-          normalized === "dry-run" ||
-          normalized === "dryrun" ||
-          normalized === "dry run" ||
-          normalized === "preview" ||
-          normalized === "n" ||
-          normalized === "no"
-        ) {
-          return false;
-        }
-
-        return def;
-      } finally {
-        rl.close();
-      }
-    },
   };
 }
 
