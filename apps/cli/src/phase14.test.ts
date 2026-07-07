@@ -12,7 +12,14 @@ import {
   GENERATED_START_MARKER,
   MANUAL_END_MARKER,
   MANUAL_START_MARKER,
+  buildLockfileV1,
+  buildPhase14ImportReport,
   parseMixedFile,
+  replaceGeneratedRegion,
+  serializeLockfile,
+  sha256Hex,
+  type AiProfileLockV2,
+  type TemplateDescriptor,
   validateLockfileText,
 } from "@agent-profile/compiler";
 
@@ -541,6 +548,405 @@ test("phase-14 compile refuses generated-owned region file with hash mismatch un
     overwritten.includes("User edit that diverges"),
     false,
   );
+});
+
+type OwnershipParityFixture = {
+  name: string;
+  setup: () => Promise<string>;
+};
+
+async function materializeGeneratedOwnershipRoot(): Promise<string> {
+  const rootDir = await createRoot();
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force", "--target", "agents-md"],
+    createOutput(),
+  );
+  assert.equal(code, 0);
+  return rootDir;
+}
+
+async function readV2Lockfile(rootDir: string): Promise<AiProfileLockV2> {
+  const result = validateLockfileText(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  );
+  assert.equal(result.ok, true);
+  assert.ok(result.ok && result.version === 2);
+  return result.lockfile as AiProfileLockV2;
+}
+
+async function writeV2Lockfile(
+  rootDir: string,
+  lockfile: AiProfileLockV2,
+): Promise<void> {
+  await writeFile(
+    path.join(rootDir, "ai-profile.lock"),
+    serializeLockfile(lockfile),
+    "utf8",
+  );
+}
+
+async function materializeMixedOwnershipRoot(): Promise<string> {
+  const rootDir = await createRoot();
+  await writeFile(
+    path.join(rootDir, "AGENTS.md"),
+    `${GENERATED_START_MARKER}\n` +
+      `stale before first compile\n` +
+      `${GENERATED_END_MARKER}\n` +
+      `\n` +
+      `${MANUAL_START_MARKER}\n` +
+      `manual body\n` +
+      `${MANUAL_END_MARKER}\n`,
+    "utf8",
+  );
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+    createOutput(),
+  );
+  assert.equal(code, 0);
+  return rootDir;
+}
+
+async function materializeManualOwnershipRoot(): Promise<string> {
+  const rootDir = await materializeGeneratedOwnershipRoot();
+  const lockfile = await readV2Lockfile(rootDir);
+  await writeV2Lockfile(rootDir, {
+    ...lockfile,
+    outputs: [
+      {
+        path: "AGENTS.md",
+        target: "manual",
+        templateId: "manual",
+        ownership: "manual-owned",
+      },
+    ],
+  });
+  return rootDir;
+}
+
+async function convertGeneratedOwnershipLockfileToV1(
+  rootDir: string,
+): Promise<void> {
+  const lockfile = await readV2Lockfile(rootDir);
+  const output = lockfile.outputs.find(
+    (entry) =>
+      entry.path === "AGENTS.md" && entry.ownership === "generated-owned",
+  );
+  if (!output || output.ownership !== "generated-owned") {
+    assert.fail("expected generated-owned AGENTS.md lockfile output");
+  }
+  const template = lockfile.templates.find(
+    (entry) => entry.id === output.templateId,
+  );
+  assert.ok(template);
+  assert.equal(template.target, "agents-md");
+  const templateDescriptor: TemplateDescriptor = {
+    ...template,
+    target: "agents-md",
+  };
+  const bytes = await readFile(path.join(rootDir, "AGENTS.md"));
+  await writeFile(
+    path.join(rootDir, "ai-profile.lock"),
+    serializeLockfile(
+      buildLockfileV1({
+        profileBytes: await readFile(path.join(rootDir, "ai-profile.yaml")),
+        templates: [templateDescriptor],
+        files: [
+          {
+            path: output.path,
+            target: "agents-md",
+            templateId: output.templateId,
+            bytes,
+            sha256: output.sha256,
+          },
+        ],
+      }),
+    ),
+    "utf8",
+  );
+}
+
+test("phase-27 compile dry-run preserves a manual-owned region-aware path", async () => {
+  const rootDir = await materializeManualOwnershipRoot();
+  const before = await readFile(path.join(rootDir, "AGENTS.md"));
+  const output = createOutput();
+
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--dry-run", "--target", "agents-md"],
+    output,
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.doesNotMatch(output.stderrText(), /refus|unknown-ownership/iu);
+  assert.match(
+    output.stdoutText(),
+    /preserve AGENTS\.md \(manual-owned\)/u,
+  );
+  assert.deepEqual(await readFile(path.join(rootDir, "AGENTS.md")), before);
+  assert.equal(
+    (await readV2Lockfile(rootDir)).outputs.find(
+      (entry) => entry.path === "AGENTS.md",
+    )?.ownership,
+    "manual-owned",
+  );
+});
+
+test("phase-27 compile write preserves a manual-owned region-aware path and lockfile entry", async () => {
+  const rootDir = await materializeManualOwnershipRoot();
+  const before = await readFile(path.join(rootDir, "AGENTS.md"));
+  const output = createOutput();
+
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+    output,
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.doesNotMatch(output.stderrText(), /refus|unknown-ownership/iu);
+  assert.match(
+    output.stdoutText(),
+    /preserve AGENTS\.md \(manual-owned\)/u,
+  );
+  assert.deepEqual(await readFile(path.join(rootDir, "AGENTS.md")), before);
+  assert.equal(
+    (await readV2Lockfile(rootDir)).outputs.find(
+      (entry) => entry.path === "AGENTS.md",
+    )?.ownership,
+    "manual-owned",
+  );
+});
+
+function importVerdictCategory(finding: {
+  action: string;
+  notes: string[];
+}): "update" | "preserve" | "refuse" {
+  if (
+    finding.action === "refuse-conflict" ||
+    finding.notes.some((note) => note.includes("compile` will refuse"))
+  ) {
+    return "refuse";
+  }
+  if (
+    finding.action === "insert-regions" ||
+    finding.action === "update-generated-region"
+  ) {
+    return "update";
+  }
+  return "preserve";
+}
+
+test("phase-27 import report and compile agree on lockfile ownership verdicts", async (t) => {
+  const fixtures: OwnershipParityFixture[] = [
+    {
+      name: "generated-owned matching bytes preserve",
+      setup: materializeGeneratedOwnershipRoot,
+    },
+    {
+      name: "generated-owned drift with legacy marker refuses compile",
+      setup: async () => {
+        const rootDir = await materializeGeneratedOwnershipRoot();
+        await writeFile(
+          path.join(rootDir, "AGENTS.md"),
+          "<!-- Generated by Agent Profile Compiler. Do not edit by hand. -->\n# edited\n",
+          "utf8",
+        );
+        return rootDir;
+      },
+    },
+    {
+      name: "v1 whole-file matching bytes preserve",
+      setup: async () => {
+        const rootDir = await materializeGeneratedOwnershipRoot();
+        await convertGeneratedOwnershipLockfileToV1(rootDir);
+        return rootDir;
+      },
+    },
+    {
+      name: "v1 whole-file drift refuses compile",
+      setup: async () => {
+        const rootDir = await materializeGeneratedOwnershipRoot();
+        await convertGeneratedOwnershipLockfileToV1(rootDir);
+        await writeFile(
+          path.join(rootDir, "AGENTS.md"),
+          "<!-- Generated by Agent Profile Compiler. Do not edit by hand. -->\n# edited v1 output\n",
+          "utf8",
+        );
+        return rootDir;
+      },
+    },
+    {
+      name: "mixed valid markers update",
+      setup: async () => {
+        const rootDir = await materializeMixedOwnershipRoot();
+        const lockfile = await readV2Lockfile(rootDir);
+        const staleInner = Buffer.from("trusted stale generated region\n", "utf8");
+        const current = await readFile(path.join(rootDir, "AGENTS.md"));
+        const updated = replaceGeneratedRegion(current, staleInner);
+        assert.ok(updated);
+        await writeFile(path.join(rootDir, "AGENTS.md"), updated);
+        await writeV2Lockfile(rootDir, {
+          ...lockfile,
+          outputs: lockfile.outputs.map((output) =>
+            output.path === "AGENTS.md" && output.ownership === "mixed"
+              ? {
+                  ...output,
+                  regions: [
+                    { ...output.regions[0], sha256: sha256Hex(staleInner) },
+                  ],
+                }
+              : output,
+          ),
+        });
+        return rootDir;
+      },
+    },
+    {
+      name: "mixed missing markers refuses",
+      setup: async () => {
+        const rootDir = await materializeMixedOwnershipRoot();
+        await writeFile(path.join(rootDir, "AGENTS.md"), "# damaged\n", "utf8");
+        return rootDir;
+      },
+    },
+    {
+      name: "manual-owned preserves",
+      setup: materializeManualOwnershipRoot,
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    await t.test(fixture.name, async () => {
+      const rootDir = await fixture.setup();
+      const report = await buildPhase14ImportReport({
+        rootDir,
+        mode: "dry-run",
+        strategy: "regions",
+        profilePath: "ai-profile.yaml",
+        wouldCreateProfile: false,
+        stack: { languages: [], frameworks: [], packageManagers: [], testing: [] },
+      });
+      const finding = report.files.find((file) => file.path === "AGENTS.md");
+      assert.ok(finding);
+      const before = await readFile(path.join(rootDir, "AGENTS.md"));
+      const output = createOutput();
+      const code = await runCli(
+        ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+        output,
+      );
+      const after = await readFile(path.join(rootDir, "AGENTS.md"));
+      const refusalOutput = /Refusing to overwrite/u.test(output.stderrText());
+      let compileCategory: "update" | "preserve" | "refuse";
+      if (code !== 0 || refusalOutput) {
+        assert.equal(code, 3, output.stderrText());
+        assert.equal(refusalOutput, true, output.stderrText());
+        compileCategory = "refuse";
+      } else {
+        assert.doesNotMatch(output.stderrText(), /refus/iu);
+        compileCategory =
+          Buffer.compare(before, after) === 0 ? "preserve" : "update";
+      }
+
+      assert.equal(importVerdictCategory(finding), compileCategory);
+    });
+  }
+});
+
+test("phase-27 no-entry import actions and compile outcomes remain explicit", async (t) => {
+  const markerless = "# Existing manual instructions\n";
+  const cases: Array<{
+    name: string;
+    strategy: "preserve" | "regions";
+    bytes: string;
+    importAction:
+      | "preserve"
+      | "insert-regions"
+      | "update-generated-region"
+      | "refuse-conflict";
+    compileCode: 0 | 3;
+    compileReason?: "unknown-ownership" | "partial-markers";
+  }> = [
+    {
+      name: "markerless preserve strategy keeps import preserve and compile adoption refusal",
+      strategy: "preserve",
+      bytes: markerless,
+      importAction: "preserve",
+      compileCode: 3,
+      compileReason: "unknown-ownership",
+    },
+    {
+      name: "markerless regions strategy offers insertion and compile adoption refusal",
+      strategy: "regions",
+      bytes: markerless,
+      importAction: "insert-regions",
+      compileCode: 3,
+      compileReason: "unknown-ownership",
+    },
+    {
+      name: "valid markers update in import and compile",
+      strategy: "regions",
+      bytes:
+        `${GENERATED_START_MARKER}\nstale\n${GENERATED_END_MARKER}\n\n` +
+        `${MANUAL_START_MARKER}\nmanual\n${MANUAL_END_MARKER}\n`,
+      importAction: "update-generated-region",
+      compileCode: 0,
+    },
+    {
+      name: "partial markers refuse in import and compile",
+      strategy: "regions",
+      bytes: `${GENERATED_START_MARKER}\ndamaged\n`,
+      importAction: "refuse-conflict",
+      compileCode: 3,
+      compileReason: "partial-markers",
+    },
+  ];
+
+  for (const fixture of cases) {
+    await t.test(fixture.name, async () => {
+      const rootDir = await createRoot();
+      await writeFile(path.join(rootDir, "AGENTS.md"), fixture.bytes, "utf8");
+      const report = await buildPhase14ImportReport({
+        rootDir,
+        mode: "dry-run",
+        strategy: fixture.strategy,
+        profilePath: "ai-profile.yaml",
+        wouldCreateProfile: false,
+        stack: { languages: [], frameworks: [], packageManagers: [], testing: [] },
+      });
+      const finding = report.files.find((file) => file.path === "AGENTS.md");
+      assert.ok(finding);
+      assert.equal(finding.action, fixture.importAction);
+
+      const before = await readFile(path.join(rootDir, "AGENTS.md"));
+      const output = createOutput();
+      const code = await runCli(
+        ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+        output,
+      );
+      assert.equal(code, fixture.compileCode, output.stderrText());
+
+      if (fixture.compileReason) {
+        assert.match(
+          output.stderrText(),
+          new RegExp(`AGENTS\\.md \\(${fixture.compileReason}\\)`, "u"),
+        );
+        if (fixture.compileReason === "unknown-ownership") {
+          assert.match(
+            output.stderrText(),
+            /agent-profile init --import --strategy regions --write/u,
+          );
+        }
+        assert.deepEqual(
+          await readFile(path.join(rootDir, "AGENTS.md")),
+          before,
+        );
+      } else {
+        assert.doesNotMatch(output.stderrText(), /refus/iu);
+        assert.notDeepEqual(
+          await readFile(path.join(rootDir, "AGENTS.md")),
+          before,
+        );
+      }
+    });
+  }
 });
 
 test("phase-14 init --import --strategy regions adopts a file with no trailing newline cleanly", async () => {

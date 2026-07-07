@@ -24,6 +24,7 @@ import {
   RECOMMENDED_IGNORE_LINES,
   replaceGeneratedRegion,
   safeOutputPath,
+  serializeLockfile,
   serializeMixedFile,
   sha256Hex,
   toLockfileV2View,
@@ -502,13 +503,17 @@ async function runCompile(
     return 3;
   }
 
-  const lockfile = createLockfileFile({
+  const generatedLockfile = createLockfileFile({
     profilePath: safeProfilePath.path,
     profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
     mixedOutputs: regionPlan.mixedOutputs,
   });
+  const lockfile = retainManualOwnedLockOutputs(
+    generatedLockfile,
+    regionPlan.manualOutputs,
+  );
   const writes = [
     ...regionPlan.writes,
     { path: lockfile.path, bytes: lockfile.bytes },
@@ -550,7 +555,14 @@ async function runCompile(
     return 1;
   }
 
-  io.stdout(formatWritePlan("Agent Profile Compile", parsed.write, plan));
+  io.stdout(
+    formatWritePlan(
+      "Agent Profile Compile",
+      parsed.write,
+      plan,
+      regionPlan.manualOutputs.map((output) => output.path),
+    ),
+  );
 
   if (compileResult.notes && compileResult.notes.length > 0) {
     io.stdout(
@@ -2604,6 +2616,7 @@ function formatWritePlan(
   title: string,
   wrote: boolean,
   plan: WritePlanResult,
+  manualOwnedPaths: readonly string[] = [],
 ): string {
   const lines = [
     title,
@@ -2618,6 +2631,10 @@ function formatWritePlan(
     lines.push(
       `[${action.action}] ${action.path} (${action.plannedBytes} bytes)`,
     );
+  }
+
+  for (const manualOwnedPath of manualOwnedPaths) {
+    lines.push(`preserve ${manualOwnedPath} (manual-owned)`);
   }
 
   return `${lines.join("\n").replace(/\n*$/u, "")}\n`;
@@ -3126,6 +3143,7 @@ function formatRegionAwareWriteRefusals(
 type RegionAwareWritePlan = {
   writes: PlannedWrite[];
   mixedOutputs: MixedOutputDescriptor[];
+  manualOutputs: LockOutputV2[];
   refusals: RegionAwareRefusal[];
 };
 
@@ -3139,11 +3157,21 @@ async function planRegionAwareWrites(
   const lockfile = await readLockfileForRegions(rootDir);
   const writes: PlannedWrite[] = [];
   const mixedOutputs: MixedOutputDescriptor[] = [];
+  const manualOutputs: LockOutputV2[] = [];
   const refusals: RegionAwareRefusal[] = [];
 
   for (const file of files) {
     if (!REGION_AWARE_PATHS.has(file.path)) {
       writes.push({ path: file.path, bytes: file.bytes });
+      continue;
+    }
+
+    const lockOutput = lockfile?.outputs.find(
+      (output) => output.path === file.path,
+    );
+
+    if (lockOutput?.ownership === "manual-owned") {
+      manualOutputs.push(lockOutput);
       continue;
     }
 
@@ -3155,10 +3183,6 @@ async function planRegionAwareWrites(
     }
 
     const existing = existingRead.bytes;
-    const lockOutput = lockfile?.outputs.find(
-      (output) => output.path === file.path,
-    );
-
     if (!existing) {
       writes.push({ path: file.path, bytes: file.bytes });
       continue;
@@ -3229,7 +3253,36 @@ async function planRegionAwareWrites(
     refusals.push({ path: file.path, reason: "unknown-ownership" });
   }
 
-  return { writes, mixedOutputs, refusals };
+  return { writes, mixedOutputs, manualOutputs, refusals };
+}
+
+function retainManualOwnedLockOutputs(
+  lockfileFile: GeneratedFile,
+  manualOutputs: readonly LockOutputV2[],
+): GeneratedFile {
+  if (manualOutputs.length === 0) return lockfileFile;
+
+  const result = validateLockfileText(
+    Buffer.from(lockfileFile.bytes).toString("utf8"),
+  );
+  if (!result.ok) {
+    throw new Error("compiler generated an invalid lockfile");
+  }
+
+  const lockfile = toLockfileV2View(result.lockfile);
+  const manualByPath = new Map(
+    manualOutputs.map((output) => [output.path, output]),
+  );
+  const bytes = Buffer.from(
+    serializeLockfile({
+      ...lockfile,
+      outputs: lockfile.outputs.map(
+        (output) => manualByPath.get(output.path) ?? output,
+      ),
+    }),
+    "utf8",
+  );
+  return { ...lockfileFile, bytes, sha256: sha256Hex(bytes) };
 }
 
 function generatedInnerBytesFor(file: GeneratedFile): Buffer {

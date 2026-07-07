@@ -4,6 +4,10 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Fix 0.4.1 import-report ownership conformance: root instruction files now
+  honor lockfile v1/v2 ownership before marker inspection, report generated
+  drift consistently with compile, refuse damaged mixed ownership, and never
+  offer regions adoption for lockfile-owned files (Phase 27/001).
 - Add Phase 26 WS1-I2 interactive CLI presentation (implementing
   `docs/specs/phase-26/001-clack-cli-presentation.md`, issue
   `002-logo-framing-style.md`): a pure `formatLogo(command, version, unicode)`

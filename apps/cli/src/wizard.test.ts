@@ -11,6 +11,12 @@ import test from "node:test";
 import {
   GENERATED_END_MARKER,
   GENERATED_START_MARKER,
+  MANUAL_END_MARKER,
+  MANUAL_START_MARKER,
+  serializeLockfile,
+  sha256Hex,
+  validateLockfileText,
+  type AiProfileLockV2,
 } from "@agent-profile/compiler";
 
 import { runCli } from "./index.js";
@@ -181,6 +187,42 @@ async function writeUnmarkedRoots(rootDir: string): Promise<void> {
     "# CLAUDE.md\n\nProject memory.\n",
     "utf8",
   );
+}
+
+async function materializeGeneratedWizardRoot(label: string): Promise<string> {
+  const rootDir = await createTsRoot(label);
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--write", "--client", "codex"],
+    { io: output, nonInteractive: true },
+  );
+  assert.equal(code, 0, output.stderrText());
+  const compileOutput = createOutput();
+  const compileCode = await runCli(
+    [
+      "compile",
+      "--root",
+      rootDir,
+      "--write",
+      "--force",
+      "--target",
+      "agents-md",
+    ],
+    { io: compileOutput },
+  );
+  assert.equal(compileCode, 0, compileOutput.stderrText());
+  return rootDir;
+}
+
+async function readWizardV2Lockfile(
+  rootDir: string,
+): Promise<AiProfileLockV2> {
+  const result = validateLockfileText(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  );
+  assert.equal(result.ok, true);
+  assert.ok(result.ok && result.version === 2);
+  return result.lockfile as AiProfileLockV2;
 }
 
 test("isNonInteractive: --non-interactive flag wins", () => {
@@ -454,6 +496,100 @@ test("recommendStrategy: legacy generated marker recommends preserve plus warnin
   );
 });
 
+test("recommendStrategy: drifted lockfile-owned root warns without claiming manual preservation", () => {
+  const report: WizardImportReport = {
+    files: [
+      {
+        path: "AGENTS.md",
+        exists: true,
+        kind: "root-instructions",
+        ownership: "generated-owned",
+        tags: ["generated-looking"],
+        action: "preserve",
+        notes: [
+          "differs from ai-profile.lock (user edits or drift); `agent-profile compile` will refuse until resolved (`--force` overwrites)",
+        ],
+      },
+    ],
+    gitignore: [],
+    summary: {
+      wouldCreateProfile: false,
+      wouldUpdateRegions: 0,
+      preservedManualFiles: 1,
+      conflicts: 0,
+    },
+  };
+
+  const recommendation = recommendStrategy(report);
+
+  assert.equal(recommendation.strategy, "preserve");
+  assert.deepEqual(recommendation.warnings, [
+    "AGENTS.md differs from ai-profile.lock; compile will refuse until the drift is resolved.",
+  ]);
+  assert.equal(
+    recommendation.warnings.some((warning) =>
+      warning.includes("preserved as manual content"),
+    ),
+    false,
+  );
+});
+
+test("recommendStrategy: lockfile manual-owned root never recommends regions", () => {
+  const report: WizardImportReport = {
+    files: [
+      {
+        path: "AGENTS.md",
+        exists: true,
+        kind: "root-instructions",
+        ownership: "manual-owned",
+        tags: [],
+        action: "preserve",
+        notes: [],
+      },
+    ],
+    gitignore: [],
+    summary: {
+      wouldCreateProfile: false,
+      wouldUpdateRegions: 0,
+      preservedManualFiles: 1,
+      conflicts: 0,
+    },
+  };
+
+  assert.equal(recommendStrategy(report).strategy, "preserve");
+});
+
+test("recommendStrategy: damaged lockfile-mixed root is preserved with a conflict warning", () => {
+  const report: WizardImportReport = {
+    files: [
+      {
+        path: "AGENTS.md",
+        exists: true,
+        kind: "root-instructions",
+        ownership: "mixed",
+        tags: [],
+        action: "refuse-conflict",
+        notes: [
+          "lockfile records mixed ownership but region markers are missing or damaged; manual repair required",
+        ],
+      },
+    ],
+    gitignore: [],
+    summary: {
+      wouldCreateProfile: false,
+      wouldUpdateRegions: 0,
+      preservedManualFiles: 0,
+      conflicts: 1,
+    },
+  };
+
+  const recommendation = recommendStrategy(report);
+  assert.equal(recommendation.strategy, "preserve");
+  assert.ok(
+    recommendation.warnings.some((warning) => warning.includes("conflict")),
+  );
+});
+
 test("recommendStrategy: foreign skill conflict recommends preserve plus warning", () => {
   const report: WizardImportReport = {
     files: [
@@ -713,7 +849,10 @@ test("interactive write creates selected client files and reports setup result",
   assert.match(text, /updated generated region in AGENTS\.md/u);
   assert.match(text, /generated \d+ client files/u);
   assert.match(text, /Clients selected: Codex and Claude/u);
-  assert.doesNotMatch(text, /agent-profile compile --write/u);
+  assert.match(
+    text,
+    /lockfile-owned generated file; refresh via `agent-profile compile --write`/u,
+  );
   assert.equal(await fileExists(path.join(rootDir, "ai-profile.lock")), true);
   assert.equal(
     await fileExists(path.join(rootDir, ".codex", "config.toml")),
@@ -1260,6 +1399,124 @@ test("regions strategy choice updates write plan before final confirmation", asy
     /- preserve AGENTS\.md(?!\sinto)/u.test(planSection),
     false,
     "plan should not still claim AGENTS.md is preserved",
+  );
+});
+
+test("regions wizard plan preserves markerless lockfile-owned root without insert-regions", async () => {
+  const rootDir = await materializeGeneratedWizardRoot(
+    "lockfile-owned-regions-plan",
+  );
+  const markerless = Buffer.from("# Lockfile-owned instructions\n", "utf8");
+  await writeFile(path.join(rootDir, "AGENTS.md"), markerless);
+  const lockfile = await readWizardV2Lockfile(rootDir);
+  await writeFile(
+    path.join(rootDir, "ai-profile.lock"),
+    serializeLockfile({
+      ...lockfile,
+      outputs: lockfile.outputs.map((output) =>
+        output.path === "AGENTS.md" && output.ownership === "generated-owned"
+          ? { ...output, sha256: sha256Hex(markerless) }
+          : output,
+      ),
+    }),
+    "utf8",
+  );
+  const importOutput = createOutput();
+  const importCode = await runCli(
+    [
+      "init",
+      "--root",
+      rootDir,
+      "--import",
+      "--strategy",
+      "regions",
+      "--dry-run",
+    ],
+    { io: importOutput, nonInteractive: true },
+  );
+  assert.equal(importCode, 0, importOutput.stderrText());
+  assert.match(importOutput.stdoutText(), /AGENTS\.md: present \(generated\)/u);
+  assert.match(
+    importOutput.stdoutText(),
+    /lockfile-owned generated file; refresh via `agent-profile compile --write`/u,
+  );
+  assert.doesNotMatch(importOutput.stdoutText(), /AGENTS\.md: insert-regions/u);
+
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts: scriptedPrompts({
+      strategy: "regions",
+      clients: [],
+      gitignore: false,
+      confirm: false,
+    }),
+  });
+
+  assert.equal(code, 0, output.stderrText());
+  const planIndex = output.stdoutText().indexOf("== Create setup plan ==");
+  assert.notEqual(planIndex, -1);
+  const planSection = output.stdoutText().slice(planIndex);
+  assert.match(planSection, /- preserve AGENTS\.md/u);
+  assert.doesNotMatch(planSection, /adopt AGENTS\.md into mixed ownership/u);
+  assert.doesNotMatch(planSection, /insert-regions.*AGENTS\.md/iu);
+});
+
+test("wizard lists the damaged mixed-markers path and exact repair note", async () => {
+  const rootDir = await materializeGeneratedWizardRoot(
+    "damaged-mixed-listing",
+  );
+  const generatedBody = Buffer.from("generated body\n", "utf8");
+  await writeFile(
+    path.join(rootDir, "AGENTS.md"),
+    `${GENERATED_START_MARKER}\n${generatedBody.toString("utf8")}` +
+      `${GENERATED_END_MARKER}\n\n${MANUAL_START_MARKER}\nmanual body\n` +
+      `${MANUAL_END_MARKER}\n`,
+    "utf8",
+  );
+  const lockfile = await readWizardV2Lockfile(rootDir);
+  const mixedOutputs: AiProfileLockV2["outputs"] = lockfile.outputs.map(
+    (output): AiProfileLockV2["outputs"][number] =>
+      output.path === "AGENTS.md" && output.ownership === "generated-owned"
+        ? {
+            path: output.path,
+            target: output.target,
+            templateId: output.templateId,
+            ownership: "mixed",
+            regions: [
+              {
+                id: "agent-profile:generated",
+                target: output.target,
+                templateId: output.templateId,
+                sha256: sha256Hex(generatedBody),
+              },
+            ],
+          }
+        : output,
+  );
+  const mixedLockfile: AiProfileLockV2 = {
+    ...lockfile,
+    outputs: mixedOutputs,
+  };
+  await writeFile(
+    path.join(rootDir, "ai-profile.lock"),
+    serializeLockfile(mixedLockfile),
+    "utf8",
+  );
+  await writeFile(path.join(rootDir, "AGENTS.md"), "# damaged\n", "utf8");
+
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts: scriptedPrompts({ confirm: false }),
+  });
+
+  assert.equal(code, 0, output.stderrText());
+  assert.match(
+    output.stdoutText(),
+    /AGENTS\.md: lockfile records mixed ownership but region markers are missing or damaged; manual repair required/u,
   );
 });
 

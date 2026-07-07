@@ -12,8 +12,9 @@ import {
   replaceGeneratedRegion,
   serializeMixedFile,
 } from "./regions.js";
-import { safeOutputPath } from "./shared.js";
+import { safeOutputPath, sha256Hex } from "./shared.js";
 import { toLockfileV2View, validateLockfileText } from "./lockfile.js";
+import type { LockOutputV2 } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Shared Phase 14 import-report builder.
@@ -202,9 +203,11 @@ export async function buildPhase14ImportReport(
     string,
     "generated-owned" | "mixed" | "manual-owned"
   >();
+  const lockOutputByPath = new Map<string, LockOutputV2>();
   if (lockfile) {
     for (const output of lockfile.outputs) {
       ownershipByPath.set(output.path, output.ownership);
+      lockOutputByPath.set(output.path, output);
     }
   }
 
@@ -248,6 +251,12 @@ export async function buildPhase14ImportReport(
     if (containsAbsolutePathLiteral(bytes)) {
       tags.push("contains-absolute-path");
     }
+    if (
+      entry.kind === "root-instructions" &&
+      hasLegacyGeneratedMarker(bytes)
+    ) {
+      tags.push("generated-looking");
+    }
 
     if (entry.kind === "client-config" && !entry.isLocalRuntime) {
       const ownership = ownershipByPath.get(entry.path) ?? "generated-owned";
@@ -280,6 +289,72 @@ export async function buildPhase14ImportReport(
                 "contains MCP entries; not imported into ai-profile.yaml in Phase 14",
               ]
             : ["local runtime config; not adopted by Phase 14"],
+      });
+      preservedManualFiles += 1;
+      continue;
+    }
+
+    const lockOutput = lockOutputByPath.get(entry.path);
+    if (lockOutput?.ownership === "generated-owned") {
+      const matchesLockfile = sha256Hex(bytes) === lockOutput.sha256;
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "generated-owned",
+        tags,
+        action: "preserve",
+        notes: [
+          matchesLockfile
+            ? "lockfile-owned generated file; refresh via `agent-profile compile --write`"
+            : "differs from ai-profile.lock (user edits or drift); `agent-profile compile` will refuse until resolved (`--force` overwrites)",
+        ],
+      });
+      preservedManualFiles += 1;
+      continue;
+    }
+
+    if (lockOutput?.ownership === "mixed") {
+      const parsed = hasAllRegionMarkers(bytes) ? parseMixedFile(bytes) : undefined;
+      if (!parsed?.ok) {
+        files.push({
+          path: entry.path,
+          exists: true,
+          kind: entry.kind,
+          ownership: "mixed",
+          tags,
+          action: "refuse-conflict",
+          notes: [
+            "lockfile records mixed ownership but region markers are missing or damaged; manual repair required",
+          ],
+        });
+        conflicts += 1;
+        continue;
+      }
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "mixed",
+        tags,
+        action: "update-generated-region",
+        notes: [],
+      });
+      if (input.strategy === "regions") {
+        wouldUpdateRegions += 1;
+      }
+      continue;
+    }
+
+    if (lockOutput?.ownership === "manual-owned") {
+      files.push({
+        path: entry.path,
+        exists: true,
+        kind: entry.kind,
+        ownership: "manual-owned",
+        tags,
+        action: "preserve",
+        notes: [],
       });
       preservedManualFiles += 1;
       continue;
@@ -327,10 +402,6 @@ export async function buildPhase14ImportReport(
       });
       conflicts += 1;
       continue;
-    }
-
-    if (hasLegacyGeneratedMarker(bytes)) {
-      tags.push("generated-looking");
     }
 
     if (input.strategy === "regions") {
