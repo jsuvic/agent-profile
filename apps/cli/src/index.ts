@@ -1079,7 +1079,7 @@ async function dispatchInitWizard(
   } else {
     const controller = new AbortController();
     const { createClackPrompts } = await import("./wizard-clack.js");
-    prompts = createClackPrompts({ signal: controller.signal });
+    prompts = await createClackPrompts({ signal: controller.signal });
   }
 
   let outcome: Awaited<ReturnType<typeof runInitWizard>>;

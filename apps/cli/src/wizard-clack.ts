@@ -4,16 +4,6 @@
 import process from "node:process";
 import type { Readable, Writable } from "node:stream";
 
-import {
-  confirm,
-  groupMultiselect,
-  isCancel,
-  log,
-  multiselect,
-  select,
-  text,
-} from "@clack/prompts";
-
 import type { AiProfileSkillPackId } from "@agent-profile/core";
 
 import {
@@ -87,9 +77,18 @@ const CAPABILITY_OPTIONAL: ReadonlyArray<CapabilityOption> = [
  * come from the pure `wizard.ts` helpers and the option arguments; the adapter
  * contains no decision logic beyond mapping clack values back onto the seam.
  */
-export function createClackPrompts(
+export async function createClackPrompts(
   options: ClackPromptOptions = {},
-): CliPrompts {
+): Promise<CliPrompts> {
+  // Import clack dynamically here rather than at module top: esbuild flattens
+  // the outer `import("./wizard-clack.js")` into the single-file bundle, so a
+  // static top-level clack import would hoist to the bundle's module scope and
+  // evaluate at process startup — breaking the "non-interactive never loads
+  // clack" contract for the shipped binary. A dynamic import of the external
+  // package stays a real runtime `import()`.
+  const { confirm, groupMultiselect, isCancel, log, multiselect, select, text } =
+    await import("@clack/prompts");
+
   const io = {
     input: options.input ?? process.stdin,
     output: options.output ?? process.stdout,
@@ -188,6 +187,9 @@ export function createClackPrompts(
         message: "Select capability packs.",
         groupSpacing: 1,
         maxItems: 10,
+        // Allow submitting zero packs; clack's default `required: true` would
+        // otherwise make the `selected.length === 0` outcome unreachable.
+        required: false,
         initialValues: [...defaults],
         options: {
           Recommended: CAPABILITY_RECOMMENDED.map((option) => ({

@@ -58,11 +58,11 @@ type Harness = {
   controller: AbortController;
 };
 
-function harness(): Harness {
+async function harness(): Promise<Harness> {
   const input = new MockReadable();
   const output = new MockWritable();
   const controller = new AbortController();
-  const prompts = createClackPrompts({
+  const prompts = await createClackPrompts({
     input,
     output,
     signal: controller.signal,
@@ -80,7 +80,7 @@ async function press(input: MockReadable, keys: string[]): Promise<void> {
 // --- Adapter stream tests: one per prompt type -------------------------------
 
 test("selectStrategy submits the highlighted default over injected streams", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.selectStrategy({
     default: "regions",
     recommendation: RECOMMENDATION,
@@ -90,7 +90,7 @@ test("selectStrategy submits the highlighted default over injected streams", asy
 });
 
 test("selectStrategy navigates to a non-default option", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.selectStrategy({
     default: "preserve",
     recommendation: RECOMMENDATION,
@@ -101,7 +101,7 @@ test("selectStrategy navigates to a non-default option", async () => {
 });
 
 test("selectSetupProfile returns the navigated profile id", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.selectSetupProfile({ default: "guarded-corporate" });
   // Second option in phase-12 order is balanced-solo.
   await press(input, [DOWN, ENTER]);
@@ -109,35 +109,35 @@ test("selectSetupProfile returns the navigated profile id", async () => {
 });
 
 test("confirmWritePlan keeps preview first and default (returns false on enter)", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.confirmWritePlan({ default: false });
   await press(input, [ENTER]);
   assert.equal(await result, false);
 });
 
 test("confirmWritePlan returns true when the create option is chosen", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.confirmWritePlan({ default: false });
   await press(input, [DOWN, ENTER]);
   assert.equal(await result, true);
 });
 
 test("selectClients submits pre-checked defaults via multiselect initialValues", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.selectClients({ defaults: ["codex"] });
   await press(input, [ENTER]);
   assert.deepEqual(await result, ["codex"]);
 });
 
 test("selectClients allows selecting zero clients", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.selectClients({ defaults: [] });
   await press(input, [ENTER]);
   assert.deepEqual(await result, []);
 });
 
 test("selectCapabilities submits pre-checked packs via groupMultiselect", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.selectCapabilities({
     defaults: ["base", "review"],
     reviewerSubagentsAvailable: false,
@@ -152,7 +152,7 @@ test("selectCapabilities submits pre-checked packs via groupMultiselect", async 
 });
 
 test("selectCapabilities omits unavailable packs and warns exactly once", async () => {
-  const { input, output, prompts } = harness();
+  const { input, output, prompts } = await harness();
   const result = prompts.selectCapabilities({
     defaults: ["base", "review"],
     reviewerSubagentsAvailable: false,
@@ -170,8 +170,25 @@ test("selectCapabilities omits unavailable packs and warns exactly once", async 
   );
 });
 
+test("selectCapabilities allows submitting zero packs", async () => {
+  const { input, prompts } = await harness();
+  const result = prompts.selectCapabilities({
+    defaults: [],
+    reviewerSubagentsAvailable: false,
+    advisoryHooksAvailable: false,
+  });
+  // Nothing pre-checked; submitting must be accepted (required:false) and yield
+  // the zero-packs outcome rather than hanging on clack's required guard.
+  await press(input, [ENTER]);
+  assert.deepEqual(await result, {
+    skillPacks: [],
+    reviewerSubagents: false,
+    advisoryHooks: false,
+  });
+});
+
 test("selectCapabilities does not warn when everything is available", async () => {
-  const { input, output, prompts } = harness();
+  const { input, output, prompts } = await harness();
   const result = prompts.selectCapabilities({
     defaults: ["base", "review"],
     reviewerSubagentsAvailable: true,
@@ -183,7 +200,7 @@ test("selectCapabilities does not warn when everything is available", async () =
 });
 
 test("confirmGitignore submits its default over injected streams", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.confirmGitignore({
     default: false,
     entries: [".env.*", ".mcp.json"],
@@ -193,21 +210,21 @@ test("confirmGitignore submits its default over injected streams", async () => {
 });
 
 test("confirmManualLanguages submits its default over injected streams", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.confirmManualLanguages({ default: false });
   await press(input, [ENTER]);
   assert.equal(await result, false);
 });
 
 test("enterManualLanguages returns the typed slug string", async () => {
-  const { input, prompts } = harness();
+  const { input, prompts } = await harness();
   const result = prompts.enterManualLanguages();
   await press(input, ["typescript", ENTER]);
   assert.equal(await result, "typescript");
 });
 
 test("enterManualLanguages wires parseManualLanguageSlugs into validate", async () => {
-  const { input, output, prompts } = harness();
+  const { input, output, prompts } = await harness();
   const result = prompts.enterManualLanguages();
   await press(input, ["bad slug", ENTER]);
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -227,7 +244,7 @@ test("enterManualLanguages wires parseManualLanguageSlugs into validate", async 
 
 for (const kind of ["select", "confirm", "text"] as const) {
   test(`clack cancel (Ctrl+C) throws WizardCancelled from a ${kind} prompt`, async () => {
-    const { input, prompts } = harness();
+    const { input, prompts } = await harness();
     const result =
       kind === "select"
         ? prompts.selectStrategy({
@@ -359,7 +376,9 @@ const MAIN_SOURCE = `
 import { register } from "node:module";
 register(process.env.PROBE_URL, import.meta.url);
 if (process.env.SENTINEL_MODE === "load") {
-  await import(process.env.CLACK_ADAPTER_URL);
+  const { createClackPrompts } = await import(process.env.CLACK_ADAPTER_URL);
+  // Construct the adapter so its dynamic clack import actually runs.
+  await createClackPrompts();
   process.exit(0);
 }
 const { runCli } = await import(process.env.CLI_INDEX_URL);
@@ -368,6 +387,13 @@ const code = await runCli(
   { io: { stdout() {}, stderr() {} } },
 );
 process.exit(code);
+`;
+
+// Preload module that registers the load probe, for running the packaged
+// single-file bundle (dist/index.js) under plain node (no tsx).
+const REGISTER_SOURCE = `
+import { register } from "node:module";
+register(process.env.PROBE_URL, import.meta.url);
 `;
 
 async function runSentinelChild(
@@ -426,4 +452,59 @@ test("runtime sentinel probe actually detects the clack module when loaded", asy
     "probe must record @clack/prompts once the adapter loads it",
   );
   assert.match(loadLog, /wizard-clack/u);
+});
+
+// The shipped artifact is the esbuild single-file bundle, which flattens the
+// lazy `import("./wizard-clack.js")`. This guards that the clack import stays a
+// real runtime import in the bundle and is not hoisted to startup.
+test("packaged bundle never evaluates clack in a non-interactive run", async () => {
+  const bundlePath = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+  assert.ok(
+    existsSync(bundlePath),
+    "dist/index.js must be built (run `npm run test --workspace @agent-profile/cli`)",
+  );
+
+  const scratch = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-clack-bundle-sentinel-"),
+  );
+  const cliRoot = await createFreshRoot();
+  const probePath = path.join(scratch, "probe.mjs");
+  const registerPath = path.join(scratch, "register.mjs");
+  const logPath = path.join(scratch, "clack-load.log");
+  await writeFile(probePath, PROBE_SOURCE, "utf8");
+  await writeFile(registerPath, REGISTER_SOURCE, "utf8");
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      pathToFileURL(registerPath).href,
+      bundlePath,
+      "init",
+      "--root",
+      cliRoot,
+      "--non-interactive",
+    ],
+    {
+      cwd: fileURLToPath(new URL("../", import.meta.url)),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLACK_LOAD_LOG: logPath,
+        PROBE_URL: pathToFileURL(probePath).href,
+      },
+    },
+  );
+  const loadLog = existsSync(logPath)
+    ? await (await import("node:fs/promises")).readFile(logPath, "utf8")
+    : "";
+  await rm(scratch, { recursive: true, force: true });
+  await rm(cliRoot, { recursive: true, force: true });
+
+  assert.equal(result.status, 0, `bundle exited non-zero:\n${result.stderr}`);
+  assert.equal(
+    loadLog,
+    "",
+    `packaged bundle must not evaluate clack when non-interactive, saw:\n${loadLog}`,
+  );
 });
