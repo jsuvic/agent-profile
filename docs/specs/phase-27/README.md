@@ -44,6 +44,11 @@ Planned (grill sessions before drafting):
 - `issues/002-capability-catalog-provenance.md` (I2)
 - `issues/003-upgrade-command.md` (I3)
 
+I3 implements the approved upgrade flow: offline report mode, interactive
+keep/adopt/customize selection, insertion-only YAML edits with refusal rather
+than re-rendering, and integer catalog provenance stamped only after a
+successful write. Upgrade does not invoke compile.
+
 Task states are tracked in the root `TASKS.md` ledger.
 
 ## Decisions

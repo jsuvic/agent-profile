@@ -27,7 +27,8 @@
     "@agent-profile/doctor": "0.3.0",
     "@agent-profile/scanner": "0.2.0",
     "@agent-profile/web": "0.4.1",
-    "@clack/prompts": "1.7.0"
+    "@clack/prompts": "1.7.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "esbuild": "^0.28.1"

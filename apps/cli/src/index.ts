@@ -34,6 +34,7 @@ import {
   hasAllRegionMarkers,
   hasAnyRegionMarker,
   type CompilerTargetId,
+  type AiProfileLockV2,
   type GeneratedFile,
   type ImportStrategy,
   type LockOutputV2,
@@ -45,9 +46,13 @@ import {
 import type {
   AiProfile,
   AiProfileSkillPackId,
+  CapabilityCatalogEntry,
   SafetyMode,
 } from "@agent-profile/core";
 import {
+  CAPABILITY_CATALOG,
+  CAPABILITY_CATALOG_VERSION,
+  computeOfferedCapabilities,
   deriveEffectivePermissions,
   parseProfileYaml,
   verifyPresetToken,
@@ -73,6 +78,7 @@ import {
 
 import type { LogoCommand } from "./branding.js";
 import type { Presenter, TaskLogSink } from "./presentation.js";
+import { planProfileInsertions } from "./upgrade-editor.js";
 import {
   formatWizardDeclined,
   isNonInteractive,
@@ -99,7 +105,20 @@ export type CliOptions = {
   presetNow?: () => number;
   presetVerificationKeys?: readonly PresetVerificationKey[];
   prompts?: CliPrompts;
+  upgradePrompts?: UpgradePrompts;
   nonInteractive?: boolean;
+};
+
+export type UpgradeStrategy = "keep" | "adopt-recommended" | "customize";
+
+export type UpgradePrompts = {
+  begin(): void;
+  showOffered(capabilityIds: readonly string[]): void;
+  choose(input: { default: "keep" }): Promise<UpgradeStrategy>;
+  customize(capabilityIds: readonly string[]): Promise<readonly string[]>;
+  showDiff(diff: string): void;
+  confirmWrite(input: { default: false }): Promise<boolean>;
+  end(written: boolean): void;
 };
 
 /**
@@ -155,6 +174,18 @@ type ParsedCompileArgs =
       ok: false;
       message: string;
     };
+
+type ParsedUpgradeArgs =
+  | {
+      ok: true;
+      root: string;
+      write: boolean;
+      adoptRecommended: boolean;
+      nonInteractive: boolean;
+      json: boolean;
+      help: boolean;
+    }
+  | { ok: false; message: string };
 
 type ParsedInitArgs =
   | {
@@ -276,12 +307,314 @@ export async function runCli(
           ? { nonInteractive: options.nonInteractive }
           : {}),
       });
+    case "upgrade":
+      return runUpgrade(rest, cwd, io, {
+        ...(options.upgradePrompts ? { prompts: options.upgradePrompts } : {}),
+        ...(options.nonInteractive !== undefined
+          ? { nonInteractive: options.nonInteractive }
+          : {}),
+      });
     case "ui":
       return runUi(rest, cwd, io, options.launchUi ?? launchPublishedUi);
     default:
       io.stderr(`Unknown command: ${command ?? ""}\n\n${formatHelp()}`);
       return 2;
   }
+}
+
+type RunUpgradeOptions = {
+  prompts?: UpgradePrompts;
+  nonInteractive?: boolean;
+};
+
+async function runUpgrade(
+  args: string[],
+  cwd: string,
+  io: CliIo,
+  options: RunUpgradeOptions,
+): Promise<number> {
+  const parsed = parseUpgradeArgs(args);
+  if (!parsed.ok) {
+    io.stderr(`${parsed.message}\n\n${formatHelp()}`);
+    return 2;
+  }
+  if (parsed.help) {
+    io.stdout(formatHelp());
+    return 0;
+  }
+
+  const rootDir = path.resolve(cwd, parsed.root);
+  let profileBytes: Uint8Array | undefined;
+  let lockfileText: string | undefined;
+  try {
+    profileBytes = await readOptionalBytes(rootDir, "ai-profile.yaml");
+    lockfileText = await readOptionalText(rootDir, "ai-profile.lock");
+  } catch {
+    io.stderr("Upgrade inputs could not be read safely under --root.\n");
+    return 1;
+  }
+  if (!profileBytes) {
+    io.stderr(
+      "ai-profile.yaml was not found. Run `agent-profile init` first.\n",
+    );
+    return 1;
+  }
+  if (!lockfileText) {
+    io.stderr(
+      "ai-profile.lock was not found. Run `agent-profile compile` first.\n",
+    );
+    return 1;
+  }
+
+  const profileSource = Buffer.from(profileBytes).toString("utf8");
+  const syntaxPlan = planProfileInsertions(profileSource, CAPABILITY_CATALOG);
+  if (
+    syntaxPlan.refusals.length > 0 &&
+    syntaxPlan.refusals.every(
+      (refusal) => refusal.reason === "unparseable profile",
+    )
+  ) {
+    if (parsed.json) {
+      io.stdout(
+        `${JSON.stringify({
+          command: "upgrade",
+          catalogVersion: CAPABILITY_CATALOG_VERSION,
+          recordedCatalogVersion: null,
+          offered: [],
+          wrote: false,
+          refusals: syntaxPlan.refusals,
+        })}\n`,
+      );
+    } else {
+      io.stdout(formatUpgradeRefusals(syntaxPlan.refusals));
+    }
+    return 0;
+  }
+  const profileResult = parseProfileYaml(profileSource, {
+    sourcePath: "ai-profile.yaml",
+  });
+  if (!profileResult.ok) {
+    io.stderr(formatValidationIssues(profileResult.issues));
+    return 1;
+  }
+  const lockfileResult = validateLockfileText(lockfileText);
+  if (!lockfileResult.ok) {
+    io.stderr(formatLockfileIssues(lockfileResult.issues));
+    return 1;
+  }
+  const lockfileView = toLockfileV2View(lockfileResult.lockfile);
+  const recordedVersion = lockfileView.upgrade?.catalogVersion;
+  const offered = computeOfferedCapabilities(
+    profileResult.profile,
+    recordedVersion,
+  );
+  const offeredIds = offered.map((entry) => entry.id);
+  const scriptedWrite = parsed.write && parsed.adoptRecommended;
+  const interactive =
+    !parsed.json &&
+    !parsed.nonInteractive &&
+    (options.nonInteractive === false ||
+      (options.nonInteractive !== true && isInteractiveTty(io)));
+
+  if ((!interactive || scriptedWrite) && !parsed.json) {
+    emitUpgradeReport(io, parsed.json, recordedVersion, offeredIds);
+  }
+  if (offered.length === 0) {
+    if (parsed.json) {
+      emitUpgradeReport(io, true, recordedVersion, offeredIds);
+    }
+    if (interactive && !scriptedWrite) {
+      const prompts = await getUpgradePrompts(options.prompts);
+      prompts.begin();
+      prompts.showOffered([]);
+      prompts.end(false);
+    }
+    return 0;
+  }
+
+  if (!interactive && !scriptedWrite) {
+    if (parsed.json) {
+      emitUpgradeReport(io, true, recordedVersion, offeredIds);
+    }
+    return 0;
+  }
+
+  let selected: readonly CapabilityCatalogEntry[] = offered;
+  let prompts: UpgradePrompts | undefined;
+  if (interactive && !scriptedWrite) {
+    prompts = await getUpgradePrompts(options.prompts);
+    try {
+      prompts.begin();
+      prompts.showOffered(offeredIds);
+      const strategy = await prompts.choose({ default: "keep" });
+      if (strategy === "keep") {
+        prompts.end(false);
+        return 0;
+      }
+      if (strategy === "customize") {
+        const chosen = new Set(await prompts.customize(offeredIds));
+        selected = offered.filter((entry) => chosen.has(entry.id));
+      }
+    } catch (error) {
+      if (error instanceof WizardCancelled) {
+        io.stdout("Cancelled - no files written.\n");
+        return 0;
+      }
+      throw error;
+    }
+  }
+
+  if (selected.length === 0) {
+    prompts?.end(false);
+    return 0;
+  }
+  const edit = planProfileInsertions(profileSource, selected);
+  if (edit.refusals.length > 0) {
+    const refusalText = formatUpgradeRefusals(edit.refusals);
+    if (parsed.json) {
+      io.stdout(
+        `${JSON.stringify({
+          command: "upgrade",
+          catalogVersion: CAPABILITY_CATALOG_VERSION,
+          recordedCatalogVersion: recordedVersion ?? null,
+          offered: offeredIds,
+          wrote: false,
+          refusals: edit.refusals,
+        })}\n`,
+      );
+    } else if (prompts) prompts.showDiff(refusalText.trimEnd());
+    else io.stdout(refusalText);
+    prompts?.end(false);
+    return 0;
+  }
+
+  const diff = formatUpgradeDiff(edit.insertions);
+  if (prompts) {
+    prompts.showDiff(diff);
+    let approved: boolean;
+    try {
+      approved = await prompts.confirmWrite({ default: false });
+    } catch (error) {
+      if (error instanceof WizardCancelled) {
+        io.stdout("Cancelled - no files written.\n");
+        return 0;
+      }
+      throw error;
+    }
+    if (!approved) {
+      prompts.end(false);
+      return 0;
+    }
+  } else if (!parsed.json) {
+    io.stdout(`${diff}\n`);
+  }
+
+  const stampedLockfile: AiProfileLockV2 = {
+    ...lockfileView,
+    profile: {
+      ...lockfileView.profile,
+      sha256: sha256Hex(edit.source),
+    },
+    upgrade: { catalogVersion: CAPABILITY_CATALOG_VERSION },
+  };
+  try {
+    // The explicit flag pair or interactive confirmation is the approval for
+    // this one write plan; profile and provenance are never written separately.
+    await applyWritePlan({
+      rootDir,
+      writes: [
+        { path: "ai-profile.yaml", bytes: edit.source },
+        { path: "ai-profile.lock", bytes: serializeLockfile(stampedLockfile) },
+      ],
+    });
+  } catch {
+    io.stderr("Upgrade write plan could not be applied safely under --root.\n");
+    return 1;
+  }
+
+  if (prompts) prompts.end(true);
+  else if (parsed.json) {
+    io.stdout(
+      `${JSON.stringify({
+        command: "upgrade",
+        catalogVersion: CAPABILITY_CATALOG_VERSION,
+        recordedCatalogVersion: recordedVersion ?? null,
+        offered: offeredIds,
+        wrote: true,
+        inserted: selected.map((entry) => entry.id),
+      })}\n`,
+    );
+  } else {
+    io.stdout(
+      "Updated ai-profile.yaml. Run `agent-profile compile` to refresh generated files.\n",
+    );
+  }
+  return 0;
+}
+
+async function getUpgradePrompts(
+  override: UpgradePrompts | undefined,
+): Promise<UpgradePrompts> {
+  if (override) return override;
+  const { createUpgradeClackPrompts } = await import("./upgrade-clack.js");
+  return createUpgradeClackPrompts(CLI_VERSION);
+}
+
+function emitUpgradeReport(
+  io: CliIo,
+  json: boolean,
+  recordedVersion: number | undefined,
+  offeredIds: readonly string[],
+): void {
+  if (json) {
+    io.stdout(
+      `${JSON.stringify({
+        command: "upgrade",
+        catalogVersion: CAPABILITY_CATALOG_VERSION,
+        recordedCatalogVersion: recordedVersion ?? null,
+        offered: offeredIds,
+      })}\n`,
+    );
+    return;
+  }
+  const lines = [
+    "Agent Profile Upgrade",
+    `catalog version: ${CAPABILITY_CATALOG_VERSION}`,
+    `recorded catalog version: ${recordedVersion ?? "missing"}`,
+  ];
+  if (offeredIds.length === 0) lines.push("nothing to offer");
+  else
+    lines.push("offered capabilities:", ...offeredIds.map((id) => `- ${id}`));
+  io.stdout(`${lines.join("\n")}\n`);
+}
+
+function formatUpgradeDiff(
+  insertions: readonly { readonly text: string }[],
+): string {
+  return insertions
+    .flatMap((insertion) => insertion.text.trimEnd().split("\n"))
+    .map((line) => `+${line}`)
+    .join("\n");
+}
+
+function formatUpgradeRefusals(
+  refusals: readonly {
+    readonly capabilityId: string;
+    readonly reason: string;
+    readonly manualLine: string;
+  }[],
+): string {
+  return `Refused unsafe profile insertions; add these lines manually:\n${refusals
+    .map(
+      (item) => `- ${item.capabilityId} (${item.reason})\n${item.manualLine}`,
+    )
+    .join("\n")}\n`;
+}
+
+function formatLockfileIssues(
+  issues: readonly { code: string; path: string; message: string }[],
+): string {
+  return `${issues.map((issue) => `${issue.code} ${issue.path}: ${issue.message}`).join("\n")}\n`;
 }
 
 async function runUi(
@@ -785,6 +1118,8 @@ async function runInit(
   let wizardSkillPacks: ReadonlyArray<AiProfileSkillPackId> | undefined;
   let wizardReviewerSubagents = false;
   let wizardAdvisoryHooks = false;
+  let interactiveExistingPointer =
+    !parsed.json && !parsed.quiet && isInteractiveTty(io);
   if (isWizardEligibleArgs(args) && presetPayload === undefined) {
     const dispatch = await dispatchInitWizard({
       args: parsed,
@@ -796,8 +1131,14 @@ async function runInit(
       nonInteractiveOverride: options.nonInteractive,
     });
     if (dispatch.kind === "declined") {
+      if (existingProfileBytes && !parsed.json && !parsed.quiet) {
+        io.stdout(
+          "New capabilities may be available; run `agent-profile upgrade`.\n",
+        );
+      }
       return 0;
     }
+    interactiveExistingPointer = dispatch.kind !== "non-interactive";
     wizardCreatesClientFiles =
       dispatch.kind === "confirmed" && dispatch.createClientFiles;
     if (dispatch.kind === "confirmed") {
@@ -903,6 +1244,11 @@ async function runInit(
       gitignoreUpdated,
       ...(importReport ? { import: importReport } : {}),
     });
+    if (interactiveExistingPointer && !parsed.json && !parsed.quiet) {
+      io.stdout(
+        "New capabilities may be available; run `agent-profile upgrade`.\n",
+      );
+    }
     return 0;
   }
 
@@ -1368,6 +1714,56 @@ function toWizardImportReport(report: Phase14ImportReport): WizardImportReport {
       preservedManualFiles: report.summary.preservedManualFiles,
       conflicts: report.summary.conflicts,
     },
+  };
+}
+
+function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
+  let root = ".";
+  let write = false;
+  let adoptRecommended = false;
+  let nonInteractive = false;
+  let json = false;
+  let help = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    switch (arg) {
+      case "--root": {
+        const value = args[index + 1];
+        if (!value || value.startsWith("--")) {
+          return { ok: false, message: "--root requires a path." };
+        }
+        root = value;
+        index += 1;
+        break;
+      }
+      case "--write":
+        write = true;
+        break;
+      case "--adopt-recommended":
+        adoptRecommended = true;
+        break;
+      case "--non-interactive":
+        nonInteractive = true;
+        break;
+      case "--json":
+        json = true;
+        break;
+      case "--help":
+      case "-h":
+        help = true;
+        break;
+      default:
+        return { ok: false, message: `Unknown option: ${arg ?? ""}` };
+    }
+  }
+  return {
+    ok: true,
+    root,
+    write,
+    adoptRecommended,
+    nonInteractive,
+    json,
+    help,
   };
 }
 
@@ -2768,6 +3164,7 @@ Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
   agent-profile doctor [--root <path>] [--json] [--mcp-suggestions]
   agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
+  agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--non-interactive] [--json]
   agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 
 Commands:
@@ -2778,6 +3175,7 @@ Commands:
             curated MCP candidate ids. It never installs, configures, or
             fetches anything and never changes the exit code.
   init      Create a starting ai-profile.yaml (interactive wizard with no args).
+  upgrade   Report or insert newly available capabilities (preview first).
   ui        Start the local read-only UI.
 
 Init wizard:
