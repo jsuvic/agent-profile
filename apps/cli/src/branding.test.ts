@@ -7,8 +7,10 @@ import test from "node:test";
 
 import {
   accent,
+  colorizeDoctorLine,
   colorizeLogo,
   colorizePlanLine,
+  formatDoctorCountSummary,
   formatLogo,
   formatPlanLine,
 } from "./branding.js";
@@ -234,6 +236,118 @@ test("colorizePlanLine uses the supplied stream's color capability", () => {
     assert.ok(
       colorizePlanLine("- create ai-profile.yaml", colorStream).includes(ESC),
     );
+  });
+});
+
+// --- compile plan verbs: change/unchanged coloring ---------------------------
+
+test("formatPlanLine marks change lines with '~' and unchanged with '='", () => {
+  withColorEnv({ NO_COLOR: "1" }, () => {
+    assert.equal(
+      formatPlanLine("- change AGENTS.md (512 bytes)"),
+      "~ change AGENTS.md (512 bytes)",
+    );
+    assert.equal(
+      formatPlanLine("- unchanged ai-profile.lock (128 bytes)"),
+      "= unchanged ai-profile.lock (128 bytes)",
+    );
+  });
+});
+
+test("colorizePlanLine tints change yellow and unchanged dim on a color stream", () => {
+  withColorEnv({}, () => {
+    const colorStream = new PassThrough();
+    Object.defineProperty(colorStream, "isTTY", { value: true });
+    // Yellow SGR is 33; dim is 2. Distinct sequences prove distinct classes.
+    assert.match(colorizePlanLine("- change AGENTS.md", colorStream), /\[33m/u);
+    assert.match(
+      colorizePlanLine("- unchanged ai-profile.lock", colorStream),
+      /\[2m/u,
+    );
+  });
+});
+
+// --- doctor count summary (pure) ---------------------------------------------
+
+test("formatDoctorCountSummary pluralizes and orders error, warning, info", () => {
+  assert.equal(
+    formatDoctorCountSummary([
+      { severity: "error" },
+      { severity: "error" },
+      { severity: "warning" },
+    ]),
+    "2 errors, 1 warning",
+  );
+  assert.equal(
+    formatDoctorCountSummary([{ severity: "warning" }]),
+    "1 warning",
+  );
+  assert.equal(
+    formatDoctorCountSummary([{ severity: "info" }, { severity: "info" }]),
+    "2 info",
+  );
+  assert.equal(
+    formatDoctorCountSummary([
+      { severity: "warning" },
+      { severity: "error" },
+      { severity: "info" },
+    ]),
+    "1 error, 1 warning, 1 info",
+  );
+  assert.equal(formatDoctorCountSummary([]), "");
+});
+
+// --- doctor severity line coloring -------------------------------------------
+
+test("colorizeDoctorLine leaves severity lines untouched under NO_COLOR", () => {
+  withColorEnv({ NO_COLOR: "1" }, () => {
+    for (const line of [
+      "[error] LINT-LOCK-001 ai-profile.lock",
+      "[warning] LINT-PERM-004 ai-profile.yaml",
+      "[info] LINT-PERM-006 ai-profile.yaml",
+      "No issues found.",
+    ]) {
+      assert.equal(colorizeDoctorLine(line), line);
+    }
+  });
+});
+
+test("colorizeDoctorLine tints each severity token distinctly on a color stream", () => {
+  withColorEnv({}, () => {
+    const colorStream = new PassThrough();
+    Object.defineProperty(colorStream, "isTTY", { value: true });
+    assert.match(
+      colorizeDoctorLine("[error] LINT-LOCK-001 ai-profile.lock", colorStream),
+      /\[31m\[error\]/u,
+    );
+    assert.match(
+      colorizeDoctorLine(
+        "[warning] LINT-PERM-004 ai-profile.yaml",
+        colorStream,
+      ),
+      /\[33m\[warning\]/u,
+    );
+    assert.match(
+      colorizeDoctorLine("[info] LINT-PERM-006 ai-profile.yaml", colorStream),
+      /\[2m\[info\]/u,
+    );
+    assert.match(colorizeDoctorLine("No issues found.", colorStream), /\[32m/u);
+  });
+});
+
+test("colorizeDoctorLine passes non-severity lines through untouched", () => {
+  withColorEnv({}, () => {
+    const colorStream = new PassThrough();
+    Object.defineProperty(colorStream, "isTTY", { value: true });
+    for (const line of [
+      "Agent Profile Doctor",
+      "status: pass",
+      "expected: deny",
+      "actual: allow",
+      "",
+    ]) {
+      assert.equal(colorizeDoctorLine(line, colorStream), line);
+    }
   });
 });
 

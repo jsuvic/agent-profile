@@ -4,7 +4,23 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
-## 0.4.1 — 2026-07-07
+- Add Phase 26 WS2-I1 static presentation for `compile`, `doctor`, `ui`, and
+  the init write phase (implementing `docs/specs/phase-26/001-clack-cli-presentation.md`,
+  issue `003-static-presentation.md`). On the interactive TTY only: `compile`
+  gains the wordmark logo, a compile spinner, a colored `+`/`~`/`=` write
+  plan, a `--write` progress bar, and a `log.success` file-count summary;
+  `doctor` gains the logo, a timer spinner, color-tinted `[error]`/`[warning]`/
+  `[info]` severities, a green `No issues found.`, and a one-line count
+  summary; `ui` gains the logo, a task log over the already-spawned server's
+  stdout (cleared on port bind, retained on non-zero exit), and the
+  url/root/posture block as a `note`; the init write phase renders as named
+  steps (create profile, generate client files, update .gitignore). Color is
+  applied via `node:util` `styleText` through the pure `branding.ts` helpers
+  (no color dependency); every clack call is dynamically imported behind the
+  interactive-TTY gate, so non-interactive, `--json`, `--quiet`, piped, and
+  generated-file surfaces stay byte-identical and never evaluate clack. The
+  named write steps use a spinner-based runner rather than clack `tasks()`,
+  which leaks its frame timer and blocks stdin when a step throws.
 
 - Fix 0.4.1 import-report ownership conformance: root instruction files now
   honor lockfile v1/v2 ownership before marker inspection, report generated

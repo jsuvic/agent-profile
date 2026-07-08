@@ -135,7 +135,11 @@ test("doctor --mcp-suggestions matches the golden text fixture and exits 0", asy
   assert.equal(
     output.stdoutText(),
     await readFile(
-      path.join(mcpSuggestionsFixtureDir, "expected", "doctor-mcp-suggestions.txt"),
+      path.join(
+        mcpSuggestionsFixtureDir,
+        "expected",
+        "doctor-mcp-suggestions.txt",
+      ),
       "utf8",
     ),
   );
@@ -190,6 +194,55 @@ test("doctor without --mcp-suggestions emits no MCP suggestion codes", async () 
   assert.doesNotMatch(output.stdoutText(), /MCP-SUGGEST/u);
 });
 
+// --- TTY-gating: piped/non-interactive runs stay byte-identical (no color) ---
+
+const ANSI_ESCAPE = "[";
+
+test("doctor piped output carries no ANSI and no interactive logo glyph", async () => {
+  const rootDir = await createFixtureRoot();
+  const output = createOutput();
+  const code = await runCli(["doctor", "--root", rootDir], { io: output });
+
+  assert.equal(code, 0);
+  const text = output.stdoutText();
+  assert.equal(text.includes(ANSI_ESCAPE), false, "no ANSI in piped doctor");
+  assert.equal(text.includes("◆"), false, "no wordmark glyph in piped doctor");
+  // The frozen plain header is still the first line.
+  assert.ok(text.startsWith("Agent Profile Doctor\n"));
+});
+
+test("compile piped output carries no ANSI and no interactive logo glyph", async () => {
+  const rootDir = await createProfileOnlyRoot();
+  const output = createOutput();
+  const code = await runCli(["compile", "--root", rootDir, "--dry-run"], {
+    io: output,
+  });
+
+  assert.equal(code, 0);
+  const text = output.stdoutText();
+  assert.equal(text.includes(ANSI_ESCAPE), false, "no ANSI in piped compile");
+  assert.equal(text.includes("◆"), false, "no wordmark glyph in piped compile");
+  assert.ok(text.startsWith("Agent Profile Compile\n"));
+});
+
+test("ui piped startup output carries no ANSI and no interactive logo glyph", async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-ui-gate-"));
+  const output = createOutput();
+  const code = await runCli(
+    ["ui", "--root", rootDir, "--host", "127.0.0.1", "--port", "48630"],
+    {
+      io: output,
+      launchUi: async () => 0,
+    },
+  );
+
+  assert.equal(code, 0);
+  const text = output.stdoutText();
+  assert.equal(text.includes(ANSI_ESCAPE), false, "no ANSI in piped ui");
+  assert.equal(text.includes("◆"), false, "no wordmark glyph in piped ui");
+  assert.ok(text.startsWith("Agent Profile UI\n"));
+});
+
 test("ui command propagates root and prints local-only startup output", async () => {
   const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-ui-"));
   const output = createOutput();
@@ -227,8 +280,7 @@ test("ui command propagates root and prints local-only startup output", async ()
 test("ui command --port auto reserves an ephemeral loopback port", async () => {
   const output = createOutput();
   let launched:
-    | { port: number; sessionToken: string; host: string }
-    | undefined;
+    { port: number; sessionToken: string; host: string } | undefined;
   const code = await runCli(["ui", "--port", "auto", "--host", "127.0.0.1"], {
     io: output,
     launchUi: async (request) => {
@@ -249,15 +301,7 @@ test("ui command --open true explicitly opts in", async () => {
   const output = createOutput();
   let launched: { open: boolean } | undefined;
   const code = await runCli(
-    [
-      "ui",
-      "--port",
-      "48633",
-      "--host",
-      "127.0.0.1",
-      "--open",
-      "true",
-    ],
+    ["ui", "--port", "48633", "--host", "127.0.0.1", "--open", "true"],
     {
       io: output,
       launchUi: async (request) => {
@@ -275,15 +319,7 @@ test("ui command --open false explicitly opts out", async () => {
   const output = createOutput();
   let launched: { open: boolean } | undefined;
   const code = await runCli(
-    [
-      "ui",
-      "--port",
-      "48634",
-      "--host",
-      "127.0.0.1",
-      "--open",
-      "false",
-    ],
+    ["ui", "--port", "48634", "--host", "127.0.0.1", "--open", "false"],
     {
       io: output,
       launchUi: async (request) => {
@@ -763,17 +799,19 @@ test("init text and JSON report deterministic shallow detection sources", async 
   );
 
   const textOutput = createOutput();
-  const textCode = await runCli(
-    ["init", "--root", rootDir, "--dry-run"],
-    { io: textOutput },
-  );
+  const textCode = await runCli(["init", "--root", rootDir, "--dry-run"], {
+    io: textOutput,
+  });
   assert.equal(textCode, 0);
   assert.match(textOutput.stdoutText(), /Detection sources:/u);
   assert.ok(
     textOutput.stdoutText().indexOf("api/pom.xml") <
       textOutput.stdoutText().indexOf("client/package.json"),
   );
-  assert.equal(textOutput.stdoutText().includes("SECRET_DEPENDENCY_VALUE"), false);
+  assert.equal(
+    textOutput.stdoutText().includes("SECRET_DEPENDENCY_VALUE"),
+    false,
+  );
 
   const jsonOutput = createOutput();
   const jsonCode = await runCli(
@@ -812,7 +850,10 @@ test("init text and JSON report deterministic shallow detection sources", async 
       },
     },
   ]);
-  assert.equal(jsonOutput.stdoutText().includes("SECRET_DEPENDENCY_VALUE"), false);
+  assert.equal(
+    jsonOutput.stdoutText().includes("SECRET_DEPENDENCY_VALUE"),
+    false,
+  );
 });
 
 test("init reports no detection sources and explains the unknown fallback", async () => {

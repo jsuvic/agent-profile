@@ -107,9 +107,12 @@ function classifyPlanVerb(verb: string): PlanMark {
       return { symbol: "+", color: "green" };
     case "adopt":
     case "update":
+    case "change":
       return { symbol: "~", color: "yellow" };
     case "refuse":
       return { symbol: "~", color: "red" };
+    case "unchanged":
+    case "preserve":
     default:
       return { symbol: "=", color: "dim" };
   }
@@ -143,4 +146,107 @@ export function colorizePlanLine(
   const [verb = ""] = body.split(" ", 1);
   const { color } = classifyPlanVerb(verb);
   return paint(color, formatPlanLine(line), stream);
+}
+
+/** Diff-style markers for the compile write plan's `[action] path` lines. */
+const COMPILE_ACTION_MARK: Record<string, PlanMark> = {
+  create: { symbol: "+", color: "green" },
+  change: { symbol: "~", color: "yellow" },
+  unchanged: { symbol: "=", color: "dim" },
+};
+
+/**
+ * Pure formatter for a single compile write-plan line. `[create] path (N bytes)`
+ * lines gain a `+`/`~`/`=` marker (create/change/unchanged); `preserve ...`
+ * manual-owned lines become `=`; every other line passes through untouched.
+ * Terminal color is applied separately by `colorizeCompilePlanLine`.
+ */
+export function formatCompilePlanLine(line: string): string {
+  const action = /^\[(create|change|unchanged)\] (.*)$/u.exec(line);
+  if (action) {
+    const mark = COMPILE_ACTION_MARK[action[1] ?? ""];
+    return mark ? `${mark.symbol} ${action[1]} ${action[2]}` : line;
+  }
+  if (line.startsWith("preserve ")) {
+    return `= ${line}`;
+  }
+  return line;
+}
+
+/** Apply compile write-plan color using the actual output stream. */
+export function colorizeCompilePlanLine(
+  line: string,
+  stream: Writable = process.stdout,
+): string {
+  const action = /^\[(create|change|unchanged)\] /u.exec(line);
+  if (action) {
+    const mark = COMPILE_ACTION_MARK[action[1] ?? ""];
+    return mark ? paint(mark.color, formatCompilePlanLine(line), stream) : line;
+  }
+  if (line.startsWith("preserve ")) {
+    return paint("dim", formatCompilePlanLine(line), stream);
+  }
+  return line;
+}
+
+type DoctorSeverityLike = { severity: string };
+
+const DOCTOR_SEVERITY_COLOR: Record<string, StyleFormat> = {
+  error: "red",
+  warning: "yellow",
+  info: "dim",
+};
+
+/**
+ * Pure one-line doctor count summary, e.g. `2 errors, 1 warning`. Counts are
+ * ordered error -> warning -> info; only non-zero severities appear; `error`
+ * and `warning` pluralize, `info` does not. Returns `""` for no issues (the
+ * caller renders the green no-issues line instead).
+ */
+export function formatDoctorCountSummary(
+  issues: readonly DoctorSeverityLike[],
+): string {
+  const counts = { error: 0, warning: 0, info: 0 };
+  for (const issue of issues) {
+    if (issue.severity === "error") counts.error += 1;
+    else if (issue.severity === "warning") counts.warning += 1;
+    else if (issue.severity === "info") counts.info += 1;
+  }
+  const parts: string[] = [];
+  if (counts.error > 0) {
+    parts.push(`${counts.error} error${counts.error === 1 ? "" : "s"}`);
+  }
+  if (counts.warning > 0) {
+    parts.push(`${counts.warning} warning${counts.warning === 1 ? "" : "s"}`);
+  }
+  if (counts.info > 0) {
+    parts.push(`${counts.info} info`);
+  }
+  return parts.join(", ");
+}
+
+/**
+ * Colorize a doctor text line for the interactive terminal. Lines beginning
+ * with a `[error]`/`[warning]`/`[info]` severity token get that token tinted
+ * (red/yellow/dim); the `No issues found.` line is tinted green; all other
+ * lines (headers, `expected:`/`actual:`, blanks) pass through untouched. Color
+ * is applied only through the actual output stream, so `NO_COLOR` and non-TTY
+ * streams strip it natively.
+ */
+export function colorizeDoctorLine(
+  line: string,
+  stream: Writable = process.stdout,
+): string {
+  if (line === "No issues found.") {
+    return paint("green", line, stream);
+  }
+  const match = /^\[(error|warning|info)\]/u.exec(line);
+  if (match) {
+    const token = match[0];
+    const color = DOCTOR_SEVERITY_COLOR[match[1] ?? ""];
+    if (color) {
+      return `${paint(color, token, stream)}${line.slice(token.length)}`;
+    }
+  }
+  return line;
 }
