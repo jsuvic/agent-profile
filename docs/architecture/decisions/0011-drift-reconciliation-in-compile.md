@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed; accepted with phase-27/003 spec approval.
+Accepted 2026-07-08 with phase-27/003 spec approval.
 
 ## Context
 

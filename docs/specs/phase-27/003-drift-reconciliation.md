@@ -2,8 +2,8 @@
 
 ## Status
 
-Draft 2026-07-08. Synthesized from the grill-change agreement record of
-the same date (four decisions). Issue briefs are created on approval.
+Approved 2026-07-08. Synthesized from the grill-change agreement record of
+the same date (four decisions). Accepts ADR 0011.
 
 ## Problem
 
