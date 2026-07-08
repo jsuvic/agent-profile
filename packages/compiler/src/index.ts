@@ -20,7 +20,11 @@ export {
   validateLockfileText,
   validateLockfileValue,
 } from "./lockfile.js";
-export type { BuildLockfileInput, MixedOutputDescriptor } from "./lockfile.js";
+export type {
+  BuildLockfileInput,
+  BuildLockfileV1Input,
+  MixedOutputDescriptor,
+} from "./lockfile.js";
 export {
   GENERATED_END_MARKER,
   GENERATED_START_MARKER,

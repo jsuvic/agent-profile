@@ -11,6 +11,7 @@ import {
   MANUAL_START_MARKER,
   buildLockfile,
   buildLockfileV1,
+  createLockfileV1File,
   hasAllRegionMarkers,
   hasAnyRegionMarker,
   hasLegacyGeneratedMarker,
@@ -20,6 +21,7 @@ import {
   serializeMixedFile,
   serializeLockfile,
   sha256Hex,
+  toLockfileV2View,
   validateLockfileText,
   validateLockfileValue,
   type AiProfileLockV1,
@@ -80,6 +82,80 @@ test("phase-14 lockfile v2 validator rejects unknown object properties", () => {
   assert.equal(result.ok, false);
 });
 
+test("phase-27 lockfile v2 provenance round-trips through validation and v2 views", () => {
+  const lockfile = buildLockfile({
+    profileBytes: "version: 1\n",
+    templates: [FAKE_TEMPLATE],
+    files: [FAKE_FILE],
+    catalogVersion: 25,
+  });
+
+  const serialized = serializeLockfile(lockfile);
+  assert.match(serialized, /"upgrade": \{\n    "catalogVersion": 25\n  \}/u);
+  assert.equal(serializeLockfile(lockfile), serialized);
+
+  const result = validateLockfileText(serialized);
+  assert.equal(result.ok, true);
+  if (!result.ok || result.version !== 2) return;
+  const v2View = toLockfileV2View(result.lockfile);
+  assert.deepEqual(v2View.upgrade, { catalogVersion: 25 });
+});
+
+test("phase-27 lockfile v2 provenance stays optional and validates strictly", () => {
+  const withoutUpgrade = buildLockfile({
+    profileBytes: "version: 1\n",
+    templates: [FAKE_TEMPLATE],
+    files: [FAKE_FILE],
+  });
+  assert.equal("upgrade" in withoutUpgrade, false);
+  assert.equal(
+    validateLockfileText(serializeLockfile(withoutUpgrade)).ok,
+    true,
+  );
+
+  for (const [upgrade, expectedPath] of [
+    [{ catalogVersion: 0 }, "/upgrade/catalogVersion"],
+    [{ catalogVersion: "25" }, "/upgrade/catalogVersion"],
+    [{ catalogVersion: 25.5 }, "/upgrade/catalogVersion"],
+    [
+      { catalogVersion: Number.MAX_SAFE_INTEGER + 1 },
+      "/upgrade/catalogVersion",
+    ],
+    [{ catalogVersion: 25, surprise: true }, "/upgrade/surprise"],
+  ] as const) {
+    const result = validateLockfileValue({ ...withoutUpgrade, upgrade });
+    assert.equal(result.ok, false);
+    if (result.ok) continue;
+    assert.equal(result.issues[0]?.path, expectedPath);
+    assert.equal(result.issues[0]?.code, "lockfile_schema_error");
+  }
+
+  const newer = buildLockfile({
+    profileBytes: "version: 1\n",
+    templates: [FAKE_TEMPLATE],
+    files: [FAKE_FILE],
+    catalogVersion: 26,
+  });
+  assert.equal(validateLockfileValue(newer).ok, true);
+});
+
+test("phase-27 v1 lockfile builders exclude catalog provenance at compile time", () => {
+  const input = {
+    profileBytes: "version: 1\n",
+    templates: [FAKE_TEMPLATE],
+    files: [FAKE_FILE],
+  };
+  buildLockfileV1(input);
+  createLockfileV1File(input);
+
+  if (false) {
+    // @ts-expect-error catalog provenance belongs only to lockfile v2
+    buildLockfileV1({ ...input, catalogVersion: 25 });
+    // @ts-expect-error catalog provenance belongs only to lockfile v2
+    createLockfileV1File({ ...input, catalogVersion: 25 });
+  }
+});
+
 test("phase-14 lockfile v1 stays readable through version dispatch", () => {
   const v1 = buildLockfileV1({
     profileBytes: "version: 1\n",
@@ -103,10 +179,7 @@ test("phase-14 lockfile v1 -> v2 migration is deterministic and idempotent", () 
   assert.deepEqual(first, second);
   assert.equal(first.version, 2);
   assert.equal(first.outputs[0]?.ownership, "generated-owned");
-  assert.equal(
-    serializeLockfile(first),
-    serializeLockfile(second),
-  );
+  assert.equal(serializeLockfile(first), serializeLockfile(second));
 });
 
 test("phase-14 lockfile v1 -> v2 migration preserves sha256, target, and templateId", () => {
@@ -277,7 +350,10 @@ test("phase-14 serializeMixedFile inserts a newline before the manual end marker
 
   const text = result.toString("utf8");
   // The manual end marker must be on its own line.
-  assert.match(text, /\nrules without trailing newline\n<!-- agent-profile:manual:end -->\n$/u);
+  assert.match(
+    text,
+    /\nrules without trailing newline\n<!-- agent-profile:manual:end -->\n$/u,
+  );
 
   // The result must round-trip through parseMixedFile cleanly.
   const parsed = parseMixedFile(result);
@@ -352,7 +428,8 @@ test("phase-14 replaceGeneratedRegion preserves CRLF marker line endings", () =>
 });
 
 test("phase-14 region parser ignores marker lines inside fenced code blocks", () => {
-  const text = `${GENERATED_START_MARKER}\n` +
+  const text =
+    `${GENERATED_START_MARKER}\n` +
     "Example:\n" +
     "```\n" +
     `${GENERATED_END_MARKER}\n` +

@@ -28,6 +28,16 @@ export {
 export { containsSecretLikeLiteral } from "./security.js";
 export { REVIEWER_DEFINITIONS } from "./reviewer-definitions.js";
 export type { ReviewerDefinition } from "./reviewer-definitions.js";
+export {
+  CAPABILITY_CATALOG,
+  CAPABILITY_CATALOG_VERSION,
+  computeOfferedCapabilities,
+} from "./capability-catalog.js";
+export type {
+  CapabilityCatalogEntry,
+  CapabilityInsertionShape,
+  UpgradeableWorkflowField,
+} from "./capability-catalog.js";
 export { PRESET_VERIFICATION_KEYS } from "./preset/public-keys.js";
 export { verifyPresetToken } from "./preset/token.js";
 export type { PresetVerificationKey } from "./preset/public-keys.js";

@@ -40,6 +40,15 @@ export type BuildLockfileInput = {
   files: GeneratedFile[];
   /** Optional: paths with mixed ownership and their region hashes. */
   mixedOutputs?: MixedOutputDescriptor[];
+  /** Optional capability-catalog provenance for upgrade-aware callers. */
+  catalogVersion?: number;
+};
+
+export type BuildLockfileV1Input = Omit<
+  BuildLockfileInput,
+  "catalogVersion"
+> & {
+  catalogVersion?: never;
 };
 
 const SUPPORTED_VERSIONS = new Set([1, 2]);
@@ -62,13 +71,16 @@ export function buildLockfile(input: BuildLockfileInput): AiProfileLockV2 {
     },
     compiler: input.compiler ?? AGENT_PROFILE_COMPILER,
     templates: input.templates.map(toLockTemplate).sort(compareLockTemplates),
+    ...(input.catalogVersion === undefined
+      ? {}
+      : { upgrade: { catalogVersion: input.catalogVersion } }),
     outputs: input.files
       .map((file) => toLockOutputV2(file, mixedByPath))
       .sort(compareLockOutputsV2),
   };
 }
 
-export function buildLockfileV1(input: BuildLockfileInput): AiProfileLockV1 {
+export function buildLockfileV1(input: BuildLockfileV1Input): AiProfileLockV1 {
   const profilePath = safeOutputPath(input.profilePath ?? "ai-profile.yaml");
 
   return {
@@ -97,7 +109,9 @@ export function createLockfileFile(input: BuildLockfileInput): GeneratedFile {
   );
 }
 
-export function createLockfileV1File(input: BuildLockfileInput): GeneratedFile {
+export function createLockfileV1File(
+  input: BuildLockfileV1Input,
+): GeneratedFile {
   return createGeneratedTextFile(
     "ai-profile.lock",
     "lockfile",
@@ -113,7 +127,9 @@ export function createLockfileV1File(input: BuildLockfileInput): GeneratedFile {
  * result of `buildLockfile(input)` for the same inputs produces byte-identical
  * v2 bytes.
  */
-export function migrateLockfileV1ToV2(lockfile: AiProfileLockV1): AiProfileLockV2 {
+export function migrateLockfileV1ToV2(
+  lockfile: AiProfileLockV1,
+): AiProfileLockV2 {
   return {
     version: 2,
     profile: lockfile.profile,
@@ -201,7 +217,10 @@ function toLockTemplate(template: TemplateDescriptor): LockTemplate {
   };
 }
 
-function validateLockfileV1Object(value: unknown, issues: LockfileIssue[]): void {
+function validateLockfileV1Object(
+  value: unknown,
+  issues: LockfileIssue[],
+): void {
   if (!isRecord(value)) {
     issues.push(schemaIssue("/", "object", describeValue(value)));
     return;
@@ -226,7 +245,10 @@ function validateLockfileV1Object(value: unknown, issues: LockfileIssue[]): void
   validateOutputsV1(value.outputs, issues);
 }
 
-function validateLockfileV2Object(value: unknown, issues: LockfileIssue[]): void {
+function validateLockfileV2Object(
+  value: unknown,
+  issues: LockfileIssue[],
+): void {
   if (!isRecord(value)) {
     issues.push(schemaIssue("/", "object", describeValue(value)));
     return;
@@ -237,6 +259,7 @@ function validateLockfileV2Object(value: unknown, issues: LockfileIssue[]): void
     "/",
     ["version", "profile", "compiler", "templates", "outputs"],
     issues,
+    ["upgrade"],
   );
 
   if (value.version !== 2) {
@@ -248,7 +271,33 @@ function validateLockfileV2Object(value: unknown, issues: LockfileIssue[]): void
   validateProfile(value.profile, issues);
   validateCompiler(value.compiler, issues);
   validateTemplates(value.templates, issues);
+  if (Object.prototype.hasOwnProperty.call(value, "upgrade")) {
+    validateUpgrade(value.upgrade, issues);
+  }
   validateOutputsV2(value.outputs, issues);
+}
+
+function validateUpgrade(value: unknown, issues: LockfileIssue[]): void {
+  if (!isRecord(value)) {
+    issues.push(schemaIssue("/upgrade", "object", describeValue(value)));
+    return;
+  }
+
+  requireExactKeys(value, "/upgrade", ["catalogVersion"], issues);
+
+  if (
+    typeof value.catalogVersion !== "number" ||
+    !Number.isSafeInteger(value.catalogVersion) ||
+    value.catalogVersion < 1
+  ) {
+    issues.push(
+      schemaIssue(
+        "/upgrade/catalogVersion",
+        "positive safe integer",
+        describeValue(value.catalogVersion),
+      ),
+    );
+  }
 }
 
 function validateProfile(value: unknown, issues: LockfileIssue[]): void {
@@ -523,8 +572,9 @@ function requireExactKeys(
   path: string,
   keys: string[],
   issues: LockfileIssue[],
+  optionalKeys: string[] = [],
 ): void {
-  const allowed = new Set(keys);
+  const allowed = new Set([...keys, ...optionalKeys]);
 
   for (const key of keys) {
     if (!Object.prototype.hasOwnProperty.call(value, key)) {

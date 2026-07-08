@@ -138,9 +138,7 @@ export type LockManualOwnedOutputV2 = {
 };
 
 export type LockOutputV2 =
-  | LockGeneratedOwnedOutputV2
-  | LockMixedOutputV2
-  | LockManualOwnedOutputV2;
+  LockGeneratedOwnedOutputV2 | LockMixedOutputV2 | LockManualOwnedOutputV2;
 
 export type LockfileIssueCode =
   | "lockfile_missing"
@@ -192,6 +190,9 @@ export type AiProfileLockV2 = {
   };
   compiler: CompilerInfo;
   templates: LockTemplate[];
+  upgrade?: {
+    catalogVersion: number;
+  };
   outputs: LockOutputV2[];
 };
 

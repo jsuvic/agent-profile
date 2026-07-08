@@ -42,12 +42,15 @@ project-MCP proof; Claude-first sequencing permitted).
 
 ## phase-27: Ownership + Upgrade Lifecycle (`docs/specs/phase-27/001-import-ownership-lockfile-conformance.md`)
 
-Spec 001 approved 2026-07-07 (0.4.1 patch); 002-004 planned pending grill
-sessions.
+Specs 001 and 002 approved (2026-07-07 and 2026-07-08 respectively);
+003 awaits approval and 004 awaits a grill session.
 
 | Id | Task | State | Brief |
 | --- | --- | --- | --- |
 | I1 | Lockfile-first classification in the import report | done | [001-lockfile-first-classification.md](docs/specs/phase-27/issues/001-lockfile-first-classification.md) |
+| I2 | Capability catalog + `upgrade.catalogVersion` provenance | done | [002-capability-catalog-provenance.md](docs/specs/phase-27/issues/002-capability-catalog-provenance.md) |
+| I3 | `upgrade` command: wizard, insertion editor, report mode | sequenced | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md) |
+| I4 | Compile drift classification flow | human-gate | (brief on 003 spec approval; parallel-safe with I2/I3, coordinate `index.ts`) |
 
 I1 is standalone; merge before any phase-27/002+ work begins.
 
