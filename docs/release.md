@@ -52,6 +52,11 @@ may remain on older published versions when their contents did not change.
    than 6 calendar months. It runs only on the release path; unit tests and
    routine CI stay time-independent.
 
+   For every phase that adds a user-selectable capability, also extend the
+   reviewed `CAPABILITY_CATALOG`, advance `CAPABILITY_CATALOG_VERSION` to the
+   capability's integer phase revision, and add/update catalog ordering and
+   insertion-shape tests. Do not use product semver for catalog provenance.
+
 5. Rebuild and verify the workspace:
 
    ```bash

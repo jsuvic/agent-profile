@@ -15,7 +15,7 @@ import type { Writable } from "node:stream";
  * interactive branch by the caller (see `wizard-clack.ts`).
  */
 
-export type LogoCommand = "init" | "compile" | "doctor" | "ui";
+export type LogoCommand = "init" | "compile" | "doctor" | "upgrade" | "ui";
 
 type StyleFormat = Parameters<typeof styleText>[0];
 
@@ -187,6 +187,14 @@ export function colorizeCompilePlanLine(
     return paint("dim", formatCompilePlanLine(line), stream);
   }
   return line;
+}
+
+/** Color an insertion-only upgrade diff without embedding ANSI sequences. */
+export function colorizeUpgradeDiffLine(
+  line: string,
+  stream: Writable = process.stdout,
+): string {
+  return line.startsWith("+") ? paint("green", line, stream) : line;
 }
 
 type DoctorSeverityLike = { severity: string };

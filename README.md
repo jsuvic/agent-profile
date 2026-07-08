@@ -156,6 +156,8 @@ agent-profile init --client codex,claude --write
 agent-profile init --import --strategy preserve --dry-run
 agent-profile init --import --strategy regions --write
 agent-profile init --import --update-gitignore --write
+agent-profile upgrade                                       # report newly available capabilities
+agent-profile upgrade --write --adopt-recommended           # explicit scripted mutation
 agent-profile compile --dry-run
 agent-profile compile --write
 agent-profile doctor
@@ -198,6 +200,18 @@ manual.
 readable and are migrated to v2 on the next successful write; the migration
 is deterministic and idempotent. Older `agent-profile` binaries will reject
 v2 lockfiles — see [Release notes](docs/release-notes/phase-14.md).
+
+### Upgrading existing profiles (Phase 27)
+
+`agent-profile upgrade` compares the installed capability catalog with
+`ai-profile.yaml` and `ai-profile.lock`. Non-interactive runs are report-only;
+the only scripted write path is the explicit
+`--write --adopt-recommended` pair. Interactive runs default to keeping the
+current profile and preview exact insertions before asking to write. Upgrade
+inserts new pack entries and workflow booleans without modifying existing YAML
+values or formatting, refuses unsafe flow-style or anchored targets with a
+manual line, records the integer catalog revision after a successful write,
+and never runs `compile` implicitly.
 
 ### Local Migration UI (Phase 16)
 

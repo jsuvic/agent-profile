@@ -397,6 +397,39 @@ async function createFreshRoot(): Promise<string> {
   return rootDir;
 }
 
+async function createUpgradeSentinelRoot(): Promise<string> {
+  const rootDir = await createFreshRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    `version: 1
+profile: { name: sentinel, description: sentinel }
+stack: { languages: [typescript], frameworks: [], packageManagers: [npm], testing: [] }
+clients:
+  tabnine: { enabled: true }
+  codex: { enabled: true }
+  claude: { enabled: true }
+workflow: { sdd: true, tdd: true, finalReview: true }
+`,
+    "utf8",
+  );
+  await writeFile(
+    path.join(rootDir, "ai-profile.lock"),
+    `${JSON.stringify({
+      version: 2,
+      profile: {
+        path: "ai-profile.yaml",
+        schemaVersion: 1,
+        sha256: "0".repeat(64),
+      },
+      compiler: { name: "agent-profile", version: "0.4.1" },
+      templates: [],
+      outputs: [],
+    })}\n`,
+    "utf8",
+  );
+  return rootDir;
+}
+
 async function createNoLanguageRoot(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "agent-profile-clack-cancel-empty-"));
 }
@@ -470,7 +503,7 @@ const PROBE_SOURCE = `
 import { appendFileSync } from "node:fs";
 const LOG = process.env.CLACK_LOAD_LOG;
 export async function load(url, context, nextLoad) {
-  if (LOG && (url.includes("@clack/") || url.includes("wizard-clack"))) {
+  if (LOG && (url.includes("@clack/") || url.includes("wizard-clack") || url.includes("upgrade-clack"))) {
     appendFileSync(LOG, url + "\\n");
   }
   return nextLoad(url, context);
@@ -487,8 +520,9 @@ if (process.env.SENTINEL_MODE === "load") {
   process.exit(0);
 }
 const { runCli } = await import(process.env.CLI_INDEX_URL);
+const command = process.env.SENTINEL_COMMAND === "upgrade" ? "upgrade" : "init";
 const code = await runCli(
-  ["init", "--root", process.env.CLI_ROOT, "--non-interactive"],
+  [command, "--root", process.env.CLI_ROOT, "--non-interactive"],
   { io: { stdout() {}, stderr() {} } },
 );
 process.exit(code);
@@ -502,12 +536,15 @@ register(process.env.PROBE_URL, import.meta.url);
 `;
 
 async function runSentinelChild(
-  mode: "non-interactive" | "load",
+  mode: "non-interactive" | "upgrade-non-interactive" | "load",
 ): Promise<{ status: number | null; loadLog: string; stderr: string }> {
   const scratch = await mkdtemp(
     path.join(tmpdir(), "agent-profile-clack-sentinel-"),
   );
-  const cliRoot = await createFreshRoot();
+  const cliRoot =
+    mode === "upgrade-non-interactive"
+      ? await createUpgradeSentinelRoot()
+      : await createFreshRoot();
   const probePath = path.join(scratch, "probe.mjs");
   const mainPath = path.join(scratch, "main.mjs");
   const logPath = path.join(scratch, "clack-load.log");
@@ -525,6 +562,7 @@ async function runSentinelChild(
       CLACK_ADAPTER_URL: new URL("./wizard-clack.js", import.meta.url).href,
       CLI_ROOT: cliRoot,
       SENTINEL_MODE: mode === "load" ? "load" : "non-interactive",
+      SENTINEL_COMMAND: mode === "upgrade-non-interactive" ? "upgrade" : "init",
     },
   });
   const loadLog = existsSync(logPath)
@@ -547,6 +585,18 @@ test("non-interactive init never evaluates the clack module (runtime sentinel)",
     loadLog,
     "",
     `clack must stay unloaded in a non-interactive run, saw:\n${loadLog}`,
+  );
+});
+
+test("non-interactive upgrade never evaluates the clack module (runtime sentinel)", async () => {
+  const { status, loadLog, stderr } = await runSentinelChild(
+    "upgrade-non-interactive",
+  );
+  assert.equal(status, 0, `child exited non-zero:\n${stderr}`);
+  assert.equal(
+    loadLog,
+    "",
+    `clack must stay unloaded in a non-interactive upgrade, saw:\n${loadLog}`,
   );
 });
 
@@ -615,5 +665,55 @@ test("packaged bundle never evaluates clack in a non-interactive run", async () 
     loadLog,
     "",
     `packaged bundle must not evaluate clack when non-interactive, saw:\n${loadLog}`,
+  );
+});
+
+test("packaged bundle never evaluates clack in a non-interactive upgrade", async () => {
+  const bundlePath = fileURLToPath(
+    new URL("../dist/index.js", import.meta.url),
+  );
+  assert.ok(existsSync(bundlePath));
+  const scratch = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-upgrade-clack-bundle-sentinel-"),
+  );
+  const cliRoot = await createUpgradeSentinelRoot();
+  const probePath = path.join(scratch, "probe.mjs");
+  const registerPath = path.join(scratch, "register.mjs");
+  const logPath = path.join(scratch, "clack-load.log");
+  await writeFile(probePath, PROBE_SOURCE, "utf8");
+  await writeFile(registerPath, REGISTER_SOURCE, "utf8");
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      pathToFileURL(registerPath).href,
+      bundlePath,
+      "upgrade",
+      "--root",
+      cliRoot,
+      "--non-interactive",
+    ],
+    {
+      cwd: fileURLToPath(new URL("../", import.meta.url)),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLACK_LOAD_LOG: logPath,
+        PROBE_URL: pathToFileURL(probePath).href,
+      },
+    },
+  );
+  const loadLog = existsSync(logPath)
+    ? await (await import("node:fs/promises")).readFile(logPath, "utf8")
+    : "";
+  await rm(scratch, { recursive: true, force: true });
+  await rm(cliRoot, { recursive: true, force: true });
+
+  assert.equal(result.status, 0, `bundle exited non-zero:\n${result.stderr}`);
+  assert.equal(
+    loadLog,
+    "",
+    `packaged bundle must not evaluate clack for upgrade, saw:\n${loadLog}`,
   );
 });

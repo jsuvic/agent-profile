@@ -4,6 +4,16 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Add Phase 27 I3 `agent-profile upgrade`: catalog-version-aware reporting,
+  interactive keep/adopt/customize choices with preview-only defaults, and the
+  explicit `--write --adopt-recommended` scripted mutation path. Profile edits
+  are insertion-only and byte-preserving through YAML Document offsets;
+  flow-style, anchored, or malformed targets fail closed with exact manual
+  lines and no partial write. Successful writes stamp the integer catalog
+  revision and point to (but never chain) `agent-profile compile`. Existing
+  interactive init now points to upgrade; non-interactive init remains
+  byte-identical. Clack remains lazy behind the interactive gate.
+
 - Add Phase 26 WS2-I1 static presentation for `compile`, `doctor`, `ui`, and
   the init write phase (implementing `docs/specs/phase-26/001-clack-cli-presentation.md`,
   issue `003-static-presentation.md`). On the interactive TTY only: `compile`

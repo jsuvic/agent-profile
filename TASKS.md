@@ -49,7 +49,7 @@ Specs 001, 002, 003 approved (001 2026-07-07; 002 and 003 2026-07-08);
 | --- | --- | --- | --- |
 | I1 | Lockfile-first classification in the import report | done | [001-lockfile-first-classification.md](docs/specs/phase-27/issues/001-lockfile-first-classification.md) |
 | I2 | Capability catalog + `upgrade.catalogVersion` provenance | done | [002-capability-catalog-provenance.md](docs/specs/phase-27/issues/002-capability-catalog-provenance.md) |
-| I3 | `upgrade` command: wizard, insertion editor, report mode | ready | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md) |
+| I3 | `upgrade` command: wizard, insertion editor, report mode | done | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md) |
 | I4 | Compile drift classification flow | ready | [004-drift-reconciliation-flow.md](docs/specs/phase-27/issues/004-drift-reconciliation-flow.md) |
 
 I3 and I4 are parallel-safe apart from shared `apps/cli/src/index.ts`
