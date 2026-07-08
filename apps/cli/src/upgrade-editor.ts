@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import type { CapabilityCatalogEntry } from "@agent-profile/core";
-import { isMap, isSeq, parseDocument, type Node } from "yaml";
+import { isMap, isNode, isSeq, parseDocument, type Node } from "yaml";
 
 export type ProfileInsertion = {
   readonly capabilityIds: readonly string[];
@@ -497,7 +497,7 @@ function mergePendingInsertions(
 function inferIndentStep(root: Node): number | undefined {
   if (!isMap(root)) return undefined;
   const candidates = root.items
-    .map((item) => nodeIndent(item.value))
+    .map((item) => (isNode(item.value) ? nodeIndent(item.value) : undefined))
     .filter((indent): indent is number => indent !== undefined && indent > 0);
   return candidates.length > 0 ? Math.min(...candidates) : undefined;
 }

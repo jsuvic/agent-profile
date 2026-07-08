@@ -252,6 +252,35 @@ capabilities:
   assertInsertionOnly(source, plan);
 });
 
+test("planProfileInsertions safely inserts a workflow boolean after an EOF inline comment", () => {
+  const source = "version: 1\nworkflow:\n  finalReview: true # owned";
+  const plan = planProfileInsertions(source, [
+    capability("workflow.logging-guidance"),
+  ]);
+
+  assert.deepEqual(plan.refusals, []);
+  assert.equal(
+    plan.source,
+    "version: 1\nworkflow:\n  finalReview: true # owned\n  loggingGuidance: true\n",
+  );
+  assert.equal(parseDocument(plan.source).errors.length, 0);
+  assertInsertionOnly(source, plan);
+});
+
+test("planProfileInsertions refuses to scaffold when content follows an explicit end marker", () => {
+  // Content past `...` is a second document. Inserting anywhere risks
+  // crossing the marker, so upgrade refuses rather than emitting bytes it
+  // cannot prove safe, and reports the exact manual line instead.
+  const source = "version: 1\nworkflow:\n  finalReview: true\n...\nother: 2\n";
+  const plan = planProfileInsertions(source, [capability("skills.review")]);
+
+  assert.equal(plan.source, source, "no bytes written to the profile");
+  assert.deepEqual(plan.insertions, []);
+  assert.equal(plan.refusals.length, 1);
+  assert.equal(plan.refusals[0]?.reason, "unparseable profile");
+  assert.equal(plan.refusals[0]?.manualLine, "      - review");
+});
+
 function assertInsertionOnly(
   source: string,
   plan: ReturnType<typeof planProfileInsertions>,
