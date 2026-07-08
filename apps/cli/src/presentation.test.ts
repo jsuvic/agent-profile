@@ -387,6 +387,32 @@ test("pump caps forwarded output and stops after the size cap", async () => {
   );
 });
 
+test("pump caps a newline-less flood before buffering past the cap", async () => {
+  const sink = recordingSink();
+  const pump = createServerLogPump(sink, 32);
+  // A server that streams a long line (or any output) without a newline must
+  // not grow the internal buffer past the cap before it binds or exits.
+  const flood = "x".repeat(4096);
+  pump.write(flood);
+  pump.write(flood);
+  // Nothing that large may ever reach the sink, and a truncation notice fires.
+  assert.ok(
+    sink.messages.every((line) => line.length < 256),
+    "no oversized buffered line may be forwarded",
+  );
+  assert.ok(sink.messages.some((line) => /truncated/u.test(line)));
+
+  // The crash-retained path stays bounded: exiting non-zero after truncation
+  // never dumps the giant buffer.
+  pump.exited(1);
+  assert.equal(sink.errors.length, 1);
+  assert.equal(
+    sink.messages.some((line) => line.includes(flood)),
+    false,
+    "the runaway buffer must never be emitted",
+  );
+});
+
 test("pump ignores writes after it is done (bound)", async () => {
   const sink = recordingSink();
   const pump = createServerLogPump(sink);

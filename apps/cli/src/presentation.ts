@@ -218,12 +218,17 @@ export function createServerLogPump(
   let done = false;
   let buffer = "";
 
+  const stopAtCap = (): void => {
+    sink.message("... server output truncated (size cap reached).");
+    truncated = true;
+    buffer = "";
+  };
+
   const emit = (line: string): void => {
     if (truncated) return;
     const cost = Buffer.byteLength(line, "utf8") + 1;
     if (forwarded + cost > sizeCap) {
-      sink.message("... server output truncated (size cap reached).");
-      truncated = true;
+      stopAtCap();
       return;
     }
     forwarded += cost;
@@ -234,6 +239,7 @@ export function createServerLogPump(
     let newline = buffer.indexOf("\n");
     while (newline >= 0) {
       emit(buffer.slice(0, newline));
+      if (truncated) return;
       buffer = buffer.slice(newline + 1);
       newline = buffer.indexOf("\n");
     }
@@ -241,9 +247,19 @@ export function createServerLogPump(
 
   return {
     write(chunk) {
-      if (done) return;
+      if (done || truncated) return;
       buffer += chunk;
       drainLines();
+      // Enforce the cap on the pending (newline-less) buffer too: a server that
+      // streams a long line — or any output without newlines — before it binds
+      // or exits would otherwise grow this buffer without bound, defeating the
+      // cap on the crash-retained path.
+      if (
+        !truncated &&
+        forwarded + Buffer.byteLength(buffer, "utf8") > sizeCap
+      ) {
+        stopAtCap();
+      }
     },
     bound() {
       if (done) return;
