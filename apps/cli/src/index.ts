@@ -71,6 +71,8 @@ import {
   type DoctorResult,
 } from "@agent-profile/doctor";
 
+import type { LogoCommand } from "./branding.js";
+import type { Presenter, TaskLogSink } from "./presentation.js";
 import {
   formatWizardDeclined,
   isNonInteractive,
@@ -100,12 +102,27 @@ export type CliOptions = {
   nonInteractive?: boolean;
 };
 
+/**
+ * Optional interactive-TTY presentation hooks for the `ui` command. Set only on
+ * the interactive branch; the launcher pipes the already-spawned server's
+ * stdout to `onStdout`, calls `onBound` when the port binds (clear the boot log
+ * and show the url note), and `onExit` on process exit (retain the log on a
+ * non-zero code). Non-interactive launches leave this undefined and behave
+ * exactly as before.
+ */
+export type UiLaunchPresentation = {
+  onStdout: (chunk: string) => void;
+  onBound: () => void;
+  onExit: (code: number) => void;
+};
+
 export type UiLaunchRequest = {
   rootDir: string;
   host: LoopbackHost;
   port: number;
   open: boolean;
   sessionToken: string;
+  presentation?: UiLaunchPresentation;
 };
 
 export type UiLaunchFunction = (request: UiLaunchRequest) => Promise<number>;
@@ -317,13 +334,42 @@ async function runUi(
 
   // `--open` defaults to true in interactive TTY sessions and false
   // otherwise. Tests and CI pipelines therefore see no browser launch.
-  const open = parsed.open ?? isInteractiveTty(io);
+  const interactive = isInteractiveTty(io);
+  const open = parsed.open ?? interactive;
 
-  io.stdout(`Agent Profile UI\n`);
-  io.stdout(`url: ${url}\n`);
-  io.stdout(`root: ${rootDir}\n`);
-  io.stdout(`posture: local only, read-only, no source upload\n`);
-  io.stdout(`stop: press Ctrl+C\n`);
+  const noteBody = [
+    `url: ${url}`,
+    `root: ${rootDir}`,
+    `posture: local only, read-only, no source upload`,
+    `stop: press Ctrl+C`,
+  ].join("\n");
+
+  // Interactive TTY: wordmark logo, then a task log over the spawned server's
+  // stdout that clears on bind, then the url/posture block as a note. The
+  // frozen plain block below is unchanged for non-interactive and piped runs.
+  let presentation: UiLaunchPresentation | undefined;
+  if (interactive) {
+    const { createClackPresenter, createServerLogPump } =
+      await import("./presentation.js");
+    const presenter = await createClackPresenter({ version: CLI_VERSION });
+    presenter.logo("ui");
+    const sink: TaskLogSink = presenter.taskLog("Starting server");
+    const pump = createServerLogPump(sink);
+    presentation = {
+      onStdout: (chunk) => pump.write(chunk),
+      onBound: () => {
+        pump.bound();
+        presenter.note(noteBody, "Agent Profile UI");
+      },
+      onExit: (code) => pump.exited(code),
+    };
+  } else {
+    io.stdout(`Agent Profile UI\n`);
+    io.stdout(`url: ${url}\n`);
+    io.stdout(`root: ${rootDir}\n`);
+    io.stdout(`posture: local only, read-only, no source upload\n`);
+    io.stdout(`stop: press Ctrl+C\n`);
+  }
 
   // The default `launchPublishedUi` waits for the spawned server to bind the
   // port before opening the browser, so we no longer fire `openInBrowser`
@@ -336,6 +382,7 @@ async function runUi(
     port: resolvedPort,
     open,
     sessionToken,
+    ...(presentation ? { presentation } : {}),
   });
 }
 
@@ -356,10 +403,28 @@ async function runDoctorCommand(
     return 0;
   }
 
-  const result = await runDoctor({
+  const request = {
     rootDir: path.resolve(cwd, parsed.root),
     mcpSuggestions: parsed.mcpSuggestions,
-  });
+  };
+
+  // Interactive rendering is gated behind a real TTY and never applies to
+  // `--json` (a frozen machine-readable surface). Non-interactive text stays
+  // byte-identical to `formatDoctorText`.
+  const presenter =
+    !parsed.json && isInteractiveTty(io)
+      ? await createInteractivePresenter("doctor")
+      : undefined;
+
+  if (presenter) {
+    const result = await presenter.spinner("Running checks", () =>
+      runDoctor(request),
+    );
+    presenter.doctorReport(result);
+    return result.status === "fail" ? 1 : 0;
+  }
+
+  const result = await runDoctor(request);
 
   if (parsed.json) {
     io.stdout(`${JSON.stringify(result, null, 2)}\n`);
@@ -386,6 +451,13 @@ async function runCompile(
     io.stdout(formatHelp());
     return 0;
   }
+
+  // Interactive rendering is gated behind a real TTY; error paths continue to
+  // print their frozen plain messages to stderr. The presenter only adds the
+  // logo, a compile spinner, a colored plan, progress, and the summary line.
+  const presenter = isInteractiveTty(io)
+    ? await createInteractivePresenter("compile")
+    : undefined;
 
   const rootDir = path.resolve(cwd, parsed.root);
   const safeProfilePath = toSafeCliPath(parsed.profile);
@@ -462,9 +534,13 @@ async function runCompile(
 
   let regionPlan: RegionAwareWritePlan;
   try {
-    regionPlan = await planRegionAwareWrites(rootDir, compileResult.files, {
-      force: parsed.force,
-    });
+    const planWork = (): Promise<RegionAwareWritePlan> =>
+      planRegionAwareWrites(rootDir, compileResult.files, {
+        force: parsed.force,
+      });
+    regionPlan = presenter
+      ? await presenter.spinner("Compiling profile", planWork)
+      : await planWork();
   } catch {
     io.stderr(
       formatSimpleError(
@@ -555,14 +631,43 @@ async function runCompile(
     return 1;
   }
 
-  io.stdout(
-    formatWritePlan(
-      "Agent Profile Compile",
-      parsed.write,
-      plan,
-      regionPlan.manualOutputs.map((output) => output.path),
-    ),
+  const manualOwnedPaths = regionPlan.manualOutputs.map(
+    (output) => output.path,
   );
+  const planText = formatWritePlan(
+    "Agent Profile Compile",
+    parsed.write,
+    plan,
+    manualOwnedPaths,
+  );
+
+  if (presenter) {
+    // On --write, tick a progress bar through the committed files, then show a
+    // colored plan and a one-line success summary. Non-interactive output is
+    // unchanged (the frozen `formatWritePlan` text below).
+    if (parsed.write && plan.actions.length > 0) {
+      const bar = presenter.progress(plan.actions.length, "Writing files");
+      for (const action of plan.actions) {
+        bar.advance(action.path);
+      }
+      bar.stop("Files written");
+    }
+    presenter.compilePlan(planText);
+    const written = plan.counts.create + plan.counts.change;
+    if (parsed.write) {
+      presenter.logSuccess(
+        `${written} file${written === 1 ? "" : "s"} written`,
+      );
+    }
+    if (compileResult.notes && compileResult.notes.length > 0) {
+      for (const note of compileResult.notes) {
+        presenter.logInfo(note.message);
+      }
+    }
+    return 0;
+  }
+
+  io.stdout(planText);
 
   if (compileResult.notes && compileResult.notes.length > 0) {
     io.stdout(
@@ -581,6 +686,24 @@ type RunInitOptions = {
   prompts?: CliPrompts;
   nonInteractive?: boolean;
 };
+
+/**
+ * Terminal outcome of one init write step. A `report` failure re-uses the
+ * existing `emitInitOutput` refusal reporting; a `stderr` failure prints a
+ * message and returns a specific exit code. Shared by the plain sequential
+ * write path and the interactive clack `tasks()` rendering so both keep
+ * identical failure semantics.
+ */
+type InitWriteFailure =
+  | { kind: "report"; code: number; report: InitReport }
+  | { kind: "stderr"; code: number; message: string };
+
+/** Carries an `InitWriteFailure` out of a clack task closure. */
+class InitStepAbort extends Error {
+  constructor(readonly failure: InitWriteFailure) {
+    super("init write step aborted");
+  }
+}
 
 async function runInit(
   args: string[],
@@ -866,64 +989,11 @@ async function runInit(
     }
   }
 
-  let plan: WritePlanResult;
-
-  try {
-    plan = parsed.write
-      ? await applyWritePlan({ rootDir, writes })
-      : await planWrites({ rootDir, writes });
-  } catch (error) {
-    const reason = classifyInitWriteFailure(error);
-    emitInitOutput(
-      parsed,
-      io,
-      createInitRefusal({
-        profilePath: safeProfilePath.path,
-        reason,
-        message: formatInitFailureMessage(reason),
-        clients,
-        detectedStack: stackResult.stack.languages,
-      }),
-    );
-    return 1;
-  }
-
-  if (parsed.write) {
-    try {
-      const written = await readOptionalBytes(rootDir, safeProfilePath.path);
-      if (
-        !written ||
-        !Buffer.from(written).equals(Buffer.from(profileText, "utf8"))
-      ) {
-        emitInitOutput(
-          parsed,
-          io,
-          createInitRefusal({
-            profilePath: safeProfilePath.path,
-            reason: "verification failed",
-            message: "written profile could not be verified.",
-            clients,
-            detectedStack: stackResult.stack.languages,
-          }),
-        );
-        return 1;
-      }
-    } catch {
-      emitInitOutput(
-        parsed,
-        io,
-        createInitRefusal({
-          profilePath: safeProfilePath.path,
-          reason: "verification failed",
-          message: "written profile could not be verified.",
-          clients,
-          detectedStack: stackResult.stack.languages,
-        }),
-      );
-      return 1;
-    }
-  }
-
+  // Gitignore reads are computed before the write steps so the plain and the
+  // interactive (`tasks()`) write paths can share identical write closures.
+  // The profile write never touches .gitignore or the runtime files these
+  // scans inspect, so their values are the same as computing them after the
+  // write (golden-enforced for the non-interactive path).
   const suggestions =
     presetPayload === undefined ? await getGitignoreSuggestions(rootDir) : [];
 
@@ -932,35 +1002,147 @@ async function runInit(
       ? await getLocalRuntimeGitignoreFindings(rootDir)
       : [];
 
-  let gitignoreUpdated = false;
-  if (parsed.updateGitignore && parsed.write) {
-    try {
-      gitignoreUpdated = await appendMissingGitignoreLines(rootDir, [
-        ...suggestions,
-        ...gitignoreFindings
-          .filter((finding) => finding.action === "would-add")
-          .map((finding) => finding.line),
-      ]);
-    } catch {
-      // Non-fatal: surface in the report instead of erroring out.
-    }
-  }
-
+  let plan: WritePlanResult | undefined;
   let clientWritePlan: WritePlanResult | undefined;
-  if (wizardCreatesClientFiles && parsed.write) {
+  let gitignoreUpdated = false;
+
+  const profileRefusal = (
+    reason: InitFailureReason,
+    message: string,
+  ): InitWriteFailure => ({
+    kind: "report",
+    code: 1,
+    report: createInitRefusal({
+      profilePath: safeProfilePath.path,
+      reason,
+      message,
+      clients,
+      detectedStack: stackResult.stack.languages,
+    }),
+  });
+
+  const writeProfileStep = async (): Promise<InitWriteFailure | undefined> => {
+    try {
+      plan = parsed.write
+        ? await applyWritePlan({ rootDir, writes })
+        : await planWrites({ rootDir, writes });
+    } catch (error) {
+      const reason = classifyInitWriteFailure(error);
+      return profileRefusal(reason, formatInitFailureMessage(reason));
+    }
+    if (parsed.write) {
+      try {
+        const written = await readOptionalBytes(rootDir, safeProfilePath.path);
+        if (
+          !written ||
+          !Buffer.from(written).equals(Buffer.from(profileText, "utf8"))
+        ) {
+          return profileRefusal(
+            "verification failed",
+            "written profile could not be verified.",
+          );
+        }
+      } catch {
+        return profileRefusal(
+          "verification failed",
+          "written profile could not be verified.",
+        );
+      }
+    }
+    return undefined;
+  };
+
+  const writeClientFilesStep = async (): Promise<
+    InitWriteFailure | undefined
+  > => {
+    if (!(wizardCreatesClientFiles && parsed.write)) return undefined;
     const clientWrite = await writeCompiledClientFiles({
       rootDir,
       profilePath: safeProfilePath.path,
       profile: validation.profile,
       profileBytes: Buffer.from(profileText, "utf8"),
     });
-
     if (!clientWrite.ok) {
-      io.stderr(clientWrite.message);
-      return clientWrite.code;
+      return {
+        kind: "stderr",
+        code: clientWrite.code,
+        message: clientWrite.message,
+      };
     }
-
     clientWritePlan = clientWrite.plan;
+    return undefined;
+  };
+
+  const updateGitignoreStep = async (): Promise<
+    InitWriteFailure | undefined
+  > => {
+    if (parsed.updateGitignore && parsed.write) {
+      try {
+        gitignoreUpdated = await appendMissingGitignoreLines(rootDir, [
+          ...suggestions,
+          ...gitignoreFindings
+            .filter((finding) => finding.action === "would-add")
+            .map((finding) => finding.line),
+        ]);
+      } catch {
+        // Non-fatal: surface in the report instead of erroring out.
+      }
+    }
+    return undefined;
+  };
+
+  const emitWriteFailure = (failure: InitWriteFailure): number => {
+    if (failure.kind === "report") {
+      emitInitOutput(parsed, io, failure.report);
+    } else {
+      io.stderr(failure.message);
+    }
+    return failure.code;
+  };
+
+  // Interactive `--write` renders the three writes as named clack tasks
+  // (create profile -> generate client files -> update .gitignore); every other
+  // run executes them inline in the original order, byte-identical to before.
+  // `--json` and `--quiet` are frozen machine-readable surfaces, so they stay
+  // off the clack path even in a TTY (mirrors the doctor `--json` exclusion).
+  if (parsed.write && !parsed.json && !parsed.quiet && isInteractiveTty(io)) {
+    const { createClackPresenter } = await import("./presentation.js");
+    const initPresenter = await createClackPresenter({ version: CLI_VERSION });
+    const wrap =
+      (step: () => Promise<InitWriteFailure | undefined>) =>
+      async (): Promise<void> => {
+        const failure = await step();
+        if (failure) throw new InitStepAbort(failure);
+      };
+    try {
+      await initPresenter.runTasks([
+        { title: "Create ai-profile.yaml", run: wrap(writeProfileStep) },
+        { title: "Generate client files", run: wrap(writeClientFilesStep) },
+        { title: "Update .gitignore", run: wrap(updateGitignoreStep) },
+      ]);
+    } catch (error) {
+      if (error instanceof InitStepAbort) {
+        return emitWriteFailure(error.failure);
+      }
+      throw error;
+    }
+  } else {
+    for (const step of [
+      writeProfileStep,
+      updateGitignoreStep,
+      writeClientFilesStep,
+    ]) {
+      const failure = await step();
+      if (failure) {
+        return emitWriteFailure(failure);
+      }
+    }
+  }
+
+  if (!plan) {
+    // Unreachable: writeProfileStep always assigns `plan` or returns a failure
+    // that already returned above. This narrows the type for the report below.
+    return 1;
   }
 
   const finalGitignoreSuggestions =
@@ -2383,6 +2565,21 @@ function isInteractiveTty(io: CliIo): boolean {
   return Boolean(process.stdout.isTTY) && process.env.CI !== "true";
 }
 
+/**
+ * Lazy-load the clack presentation adapter on the interactive branch only and
+ * print the command's wordmark logo. Mirrors the wizard's lazy-import gate so
+ * non-interactive runs never evaluate clack (runtime sentinel). Callers reach
+ * this only after `isInteractiveTty` returns true.
+ */
+async function createInteractivePresenter(
+  command: LogoCommand,
+): Promise<Presenter> {
+  const { createClackPresenter } = await import("./presentation.js");
+  const presenter = await createClackPresenter({ version: CLI_VERSION });
+  presenter.logo(command);
+  return presenter;
+}
+
 async function launchPublishedUi(request: UiLaunchRequest): Promise<number> {
   let serverEntry: string;
   try {
@@ -2396,6 +2593,7 @@ async function launchPublishedUi(request: UiLaunchRequest): Promise<number> {
     );
     return 1;
   }
+  const presentation = request.presentation;
   const child = spawn(process.execPath, [serverEntry], {
     env: {
       ...process.env,
@@ -2404,15 +2602,28 @@ async function launchPublishedUi(request: UiLaunchRequest): Promise<number> {
       HOST: request.host,
       PORT: String(request.port),
     },
-    stdio: "inherit",
+    // On the interactive branch the server's stdout is piped into the task log;
+    // stderr stays inherited so crashes remain visible. Otherwise everything is
+    // inherited, exactly as before.
+    stdio: presentation ? ["inherit", "pipe", "inherit"] : "inherit",
   });
 
-  if (request.open) {
-    // Don't await — let the open attempt run in the background. If the
-    // server never comes up we just silently skip the open; the child's
-    // crash will already be visible on stderr.
+  if (presentation && child.stdout) {
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      presentation.onStdout(chunk);
+    });
+  }
+
+  // Both the browser-open path and the task log need to know when the port
+  // binds; probe once and fan out.
+  if (presentation || request.open) {
     void waitForPortInUse(request.host, request.port).then((ready) => {
-      if (ready) {
+      if (!ready) return;
+      if (presentation) {
+        presentation.onBound();
+      }
+      if (request.open) {
         openInBrowser(
           formatUiUrl(request.host, request.port, request.sessionToken),
         );
@@ -2432,13 +2643,11 @@ async function launchPublishedUi(request: UiLaunchRequest): Promise<number> {
     child.once("exit", (code, signal) => {
       process.off("SIGINT", stopChild);
       process.off("SIGTERM", stopChild);
-      if (typeof code === "number") {
-        resolve(code);
-      } else if (signal) {
-        resolve(0);
-      } else {
-        resolve(1);
-      }
+      const exitCode = typeof code === "number" ? code : signal ? 0 : 1;
+      // Retain the boot log only when the server exited non-zero before bind;
+      // the pump's internal `done` guard ignores this after a successful bind.
+      presentation?.onExit(exitCode);
+      resolve(exitCode);
     });
   });
 }
