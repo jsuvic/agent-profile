@@ -42,17 +42,18 @@ project-MCP proof; Claude-first sequencing permitted).
 
 ## phase-27: Ownership + Upgrade Lifecycle (`docs/specs/phase-27/001-import-ownership-lockfile-conformance.md`)
 
-Specs 001 and 002 approved (2026-07-07 and 2026-07-08 respectively);
-003 awaits approval and 004 awaits a grill session.
+Specs 001, 002, 003 approved (001 2026-07-07; 002 and 003 2026-07-08);
+004 awaits a grill session.
 
 | Id | Task | State | Brief |
 | --- | --- | --- | --- |
 | I1 | Lockfile-first classification in the import report | done | [001-lockfile-first-classification.md](docs/specs/phase-27/issues/001-lockfile-first-classification.md) |
 | I2 | Capability catalog + `upgrade.catalogVersion` provenance | done | [002-capability-catalog-provenance.md](docs/specs/phase-27/issues/002-capability-catalog-provenance.md) |
-| I3 | `upgrade` command: wizard, insertion editor, report mode | sequenced | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md) |
-| I4 | Compile drift classification flow | human-gate | (brief on 003 spec approval; parallel-safe with I2/I3, coordinate `index.ts`) |
+| I3 | `upgrade` command: wizard, insertion editor, report mode | ready | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md) |
+| I4 | Compile drift classification flow | ready | [004-drift-reconciliation-flow.md](docs/specs/phase-27/issues/004-drift-reconciliation-flow.md) |
 
-I1 is standalone; merge before any phase-27/002+ work begins.
+I3 and I4 are parallel-safe apart from shared `apps/cli/src/index.ts`
+touchpoints; coordinate merges (if I3 lands first, rebase I4 onto it).
 
 Unblocked 2026-07-07 (twice): first amendment authorizes the minimal
 manual-owned branch in `planRegionAwareWrites`; second amendment

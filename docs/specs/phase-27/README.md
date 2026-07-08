@@ -19,11 +19,11 @@ flow.
   catalog-version provenance field, keep/adopt/customize, and
   insertion-only comment-preserving profile edits. Accepts ADRs
   0009/0010.
-- `003-drift-reconciliation.md` - draft 2026-07-08, synthesized the same
-  way: hash-mismatch classification inside interactive compile - four-way
-  for root instruction files (shared intent relocates into the AGENTS.md
-  manual region), two-way keep/restore for other generated outputs.
-  Awaiting approval (accepts ADR 0011).
+- `003-drift-reconciliation.md` - approved 2026-07-08, synthesized the
+  same way: hash-mismatch classification inside interactive compile -
+  four-way for root instruction files (shared intent relocates into the
+  AGENTS.md manual region), two-way keep/restore for other generated
+  outputs. Accepts ADR 0011.
 
 Planned (grill sessions before drafting):
 
