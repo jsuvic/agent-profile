@@ -1103,7 +1103,9 @@ async function runInit(
   // Interactive `--write` renders the three writes as named clack tasks
   // (create profile -> generate client files -> update .gitignore); every other
   // run executes them inline in the original order, byte-identical to before.
-  if (parsed.write && isInteractiveTty(io)) {
+  // `--json` and `--quiet` are frozen machine-readable surfaces, so they stay
+  // off the clack path even in a TTY (mirrors the doctor `--json` exclusion).
+  if (parsed.write && !parsed.json && !parsed.quiet && isInteractiveTty(io)) {
     const { createClackPresenter } = await import("./presentation.js");
     const initPresenter = await createClackPresenter({ version: CLI_VERSION });
     const wrap =

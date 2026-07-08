@@ -856,6 +856,38 @@ test("init text and JSON report deterministic shallow detection sources", async 
   );
 });
 
+test("init --write --json stays a clean machine-readable surface (no clack frames)", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-init-write-json-"),
+  );
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir, "--write", "--json"], {
+    io: output,
+  });
+
+  assert.equal(code, 0);
+  const text = output.stdoutText();
+  // The frozen --json surface must never gain ANSI or clack task frames, even
+  // though init --write can enter the interactive task renderer in a TTY.
+  assert.equal(text.includes(ANSI_ESCAPE), false, "no ANSI in init --json");
+  const report = JSON.parse(text) as { command: string; wrote: boolean };
+  assert.equal(report.command, "init");
+  assert.equal(report.wrote, true);
+});
+
+test("init --write --quiet emits nothing on stdout (no clack frames)", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-init-write-quiet-"),
+  );
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir, "--write", "--quiet"], {
+    io: output,
+  });
+
+  assert.equal(code, 0);
+  assert.equal(output.stdoutText(), "", "quiet success must be stdout-silent");
+});
+
 test("init reports no detection sources and explains the unknown fallback", async () => {
   const rootDir = await mkdtemp(
     path.join(tmpdir(), "agent-profile-init-no-sources-"),
