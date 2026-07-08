@@ -14,14 +14,19 @@ flow.
   same file; close the generated-bytes-into-manual-region duplication
   hazard.
 
+- `002-upgrade-flow.md` - approved 2026-07-08, synthesized from the
+  grill agreement record of the same date: `agent-profile upgrade` with a
+  catalog-version provenance field, keep/adopt/customize, and
+  insertion-only comment-preserving profile edits. Accepts ADRs
+  0009/0010.
+- `003-drift-reconciliation.md` - draft 2026-07-08, synthesized the same
+  way: hash-mismatch classification inside interactive compile - four-way
+  for root instruction files (shared intent relocates into the AGENTS.md
+  manual region), two-way keep/restore for other generated outputs.
+  Awaiting approval (accepts ADR 0011).
+
 Planned (grill sessions before drafting):
 
-- `002` - existing-profile upgrade flow (`agent-profile upgrade`):
-  detect profiles predating current capability packs, offer
-  keep/adopt/customize, record pack/template provenance in the lockfile.
-- `003` - drift intent reconciliation: classify hash mismatches as
-  shared intent (AGENTS.md manual region), client-specific override,
-  or accidental drift, instead of a bare `--force`.
 - `004` - no-args interactive dispatcher: state detection routes bare
   `agent-profile` to init/upgrade/compile/doctor; non-TTY keeps help
   byte-identical.
@@ -36,6 +41,8 @@ Planned (grill sessions before drafting):
 ## Issues
 
 - `issues/001-lockfile-first-classification.md` (I1)
+- `issues/002-capability-catalog-provenance.md` (I2)
+- `issues/003-upgrade-command.md` (I3)
 
 Task states are tracked in the root `TASKS.md` ledger.
 
