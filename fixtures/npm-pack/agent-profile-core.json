@@ -1,6 +1,10 @@
 {
   "workspace": "@agent-profile/core",
   "files": [
+    "dist/capability-catalog.d.ts",
+    "dist/capability-catalog.d.ts.map",
+    "dist/capability-catalog.js",
+    "dist/capability-catalog.js.map",
     "dist/index.d.ts",
     "dist/index.d.ts.map",
     "dist/index.js",
