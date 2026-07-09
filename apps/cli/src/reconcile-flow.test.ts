@@ -374,6 +374,43 @@ test("AC4 interleaved edit refuses relocation and offers keep/restore/cancel onl
   assert.equal(ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"), "generated-owned");
 });
 
+test("AC4 keeping AGENTS.md manual-owned does not disable client-specific CLAUDE.md relocation", async () => {
+  const rootDir = await createRoot();
+  await materialize(rootDir);
+  await writeFile(
+    path.join(rootDir, "AGENTS.md"),
+    "# AGENTS.md\n\nFully owned by the user now.\n",
+    "utf8",
+  );
+  await driftFile(rootDir, "CLAUDE.md", "Claude-only clean addition.\n");
+
+  const { prompts, events } = scriptPrompts({
+    "AGENTS.md": "keep",
+    "CLAUDE.md": "client-specific",
+  });
+  const output = createOutput();
+  const code = await runCli(["compile", "--root", rootDir, "--write"], {
+    ...output,
+    reconcilePrompts: prompts,
+  });
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(events.includes("classifyOther:AGENTS.md"));
+  assert.ok(events.includes("classifyRoot:CLAUDE.md"));
+
+  const lockfile = await readV2Lockfile(rootDir);
+  assert.equal(ownershipOf(lockfile, "AGENTS.md"), "manual-owned");
+  assert.equal(ownershipOf(lockfile, "CLAUDE.md"), "mixed");
+
+  const claude = parseMixedFile(await readFile(path.join(rootDir, "CLAUDE.md")));
+  assert.ok(claude.ok);
+  if (!claude.ok) return;
+  assert.equal(
+    claude.manualInner.toString("utf8"),
+    "Claude-only clean addition.\n",
+  );
+});
+
 // ---------------------------------------------------------------------------
 // AC5: cancel at any point leaves the tree + lockfile byte-identical
 // ---------------------------------------------------------------------------

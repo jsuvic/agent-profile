@@ -1284,7 +1284,7 @@ async function runDriftReconciliation(input: {
         drifted.canonicalBytes,
         drifted.onDiskBytes,
       );
-      const relocatable = extracted.ok && sharedDestination !== undefined;
+      const relocatable = extracted.ok;
       if (relocatable) {
         prompts.showDrift({
           path,
@@ -1297,9 +1297,13 @@ async function runDriftReconciliation(input: {
           cancelled = true;
           break;
         }
+        if (choice === "shared" && sharedDestination === undefined) {
+          cancelled = true;
+          break;
+        }
         const action = planRootResolution({
           drifted,
-          destination: sharedDestination!,
+          destination: choice === "shared" ? sharedDestination! : drifted,
           choice,
         });
         actions.push(action);
