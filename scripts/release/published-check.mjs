@@ -4,6 +4,8 @@
 // Already-published check: is `<pkg>@<version>` on the npm registry? The HTTP
 // lookup is the ONLY mockable seam (spec Tests note); everything else is pure.
 
+import { fileURLToPath } from "node:url";
+
 export const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 
 // Encode a package name for a registry URL: the scope slash becomes %2f while
@@ -41,4 +43,38 @@ export async function anyPublished(packages, version, options = {}) {
   }
 
   return false;
+}
+
+export async function runPublishedCheck({
+  args = process.argv.slice(2),
+  fetchImpl,
+  writeInfo = (message) => console.log(message),
+  writeError = (message) => console.error(message),
+} = {}) {
+  const [pkg, version] = args;
+  if (!pkg || !version) {
+    writeError(
+      "Usage: node scripts/release/published-check.mjs <package> <version>",
+    );
+    return 2;
+  }
+
+  const published = await isVersionPublished(pkg, version, { fetchImpl });
+  writeInfo(
+    published
+      ? `${pkg}@${version} is already published.`
+      : `${pkg}@${version} is not published.`,
+  );
+  return published ? 0 : 1;
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  runPublishedCheck()
+    .then((exitCode) => {
+      process.exit(exitCode);
+    })
+    .catch((error) => {
+      console.error(error.message);
+      process.exit(2);
+    });
 }

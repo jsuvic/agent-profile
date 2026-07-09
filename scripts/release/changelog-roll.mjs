@@ -15,8 +15,18 @@ import { assertValidVersion } from "./guards.mjs";
 
 const UNRELEASED_HEADING = "## Unreleased";
 
+function normalizeVersion(value) {
+  return typeof value === "string" && value.startsWith("v")
+    ? value.slice(1)
+    : value;
+}
+
 function isReleaseHeading(line, version) {
-  return line === `## ${version}` || line.startsWith(`## ${version} `);
+  const normalizedVersion = normalizeVersion(version);
+  return (
+    line === `## ${normalizedVersion}` ||
+    line.startsWith(`## ${normalizedVersion} `)
+  );
 }
 
 function todayUtc() {

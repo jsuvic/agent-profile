@@ -4,6 +4,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse } from "yaml";
+
+import { PUBLISH_ORDER } from "./publish-package.mjs";
 
 function readWorkflow(path) {
   return readFileSync(path, "utf8");
@@ -30,4 +33,83 @@ test("release-prepare fetches tags before the existing-release guard", () => {
   assert.notEqual(checkoutIndex, -1);
   assert.ok(fetchDepthIndex > checkoutIndex);
   assert.ok(fetchDepthIndex < guardIndex);
+});
+
+test("release-verify publish job is tag-gated with scoped OIDC permissions and no npm token", () => {
+  const source = readWorkflow(".github/workflows/release-verify.yml");
+  const workflow = parse(source);
+  const publish = workflow.jobs.publish;
+
+  assert.ok(publish, "publish job must exist");
+  assert.deepEqual(publish.needs, ["release-verify"]);
+  assert.equal(workflow.permissions.contents, "read");
+  assert.equal(workflow.permissions["id-token"], undefined);
+  assert.deepEqual(publish.permissions, {
+    "id-token": "write",
+    contents: "write",
+  });
+  assert.equal(workflow.jobs["release-verify"].permissions, undefined);
+  assert.match(publish.if, /startsWith\(github\.ref, 'refs\/tags\/v'\)/u);
+  assert.equal(
+    workflow.on.workflow_dispatch.inputs["dry-run"].type,
+    "boolean",
+  );
+  const forbiddenTokenNames = [
+    ["NPM", "TOKEN"].join("_"),
+    ["NODE", "AUTH", "TOKEN"].join("_"),
+  ];
+  assert.equal(
+    forbiddenTokenNames.some((tokenName) => source.includes(tokenName)),
+    false,
+  );
+});
+
+test("release-verify publish job rebuilds artifacts before ordered publish scripts", () => {
+  const workflow = parse(readWorkflow(".github/workflows/release-verify.yml"));
+  const steps = workflow.jobs.publish.steps;
+  const stepNames = steps.map((step) => step.name);
+
+  const guardsIndex = stepNames.indexOf("Run publish guards");
+  const buildIndex = stepNames.indexOf("Build publish artifacts");
+  const packIndex = stepNames.indexOf("Verify npm pack output");
+  const webIndex = stepNames.indexOf("Publish @agent-profile/web");
+  const cliIndex = stepNames.indexOf("Publish @agent-profile/cli");
+  const wrapperIndex = stepNames.indexOf("Publish agent-profile");
+
+  assert.ok(guardsIndex < buildIndex);
+  assert.ok(buildIndex < packIndex);
+  assert.ok(packIndex < webIndex);
+  assert.ok(webIndex < cliIndex);
+  assert.ok(cliIndex < wrapperIndex);
+  assert.equal(steps[buildIndex].run, "npm run build");
+  assert.equal(steps[packIndex].run, "npm run verify:pack");
+  assert.deepEqual(
+    [steps[webIndex], steps[cliIndex], steps[wrapperIndex]].map((step) =>
+      step.run.match(/publish-package\.mjs "([^"]+)"/u)?.[1],
+    ),
+    PUBLISH_ORDER,
+  );
+  assert.match(
+    steps[webIndex].run,
+    /node scripts\/release\/publish-package\.mjs "@agent-profile\/web"/u,
+  );
+  assert.match(
+    steps[cliIndex].run,
+    /node scripts\/release\/publish-package\.mjs "@agent-profile\/cli"/u,
+  );
+  assert.match(
+    steps[wrapperIndex].run,
+    /node scripts\/release\/publish-package\.mjs "agent-profile"/u,
+  );
+});
+
+test("release-verify dry-run publish skips GitHub Release creation", () => {
+  const workflow = parse(readWorkflow(".github/workflows/release-verify.yml"));
+  const steps = workflow.jobs.publish.steps;
+  const releaseMode = steps.find((step) => step.name === "Resolve release mode");
+  const createRelease = steps.find((step) => step.name === "Create GitHub Release");
+
+  assert.match(releaseMode.run, /dry_run=true/u);
+  assert.match(releaseMode.run, /dry_run=false/u);
+  assert.equal(createRelease.if, "steps.release.outputs.dry_run != 'true'");
 });
