@@ -93,3 +93,13 @@ test("extractSection returns the body for a version and null when absent", () =>
   );
   assert.equal(extractSection(POPULATED, "9.9.9"), null);
 });
+
+test("extractSection accepts a tag-shaped version and returns null when absent", () => {
+  const rolled = rollChangelog(POPULATED, "0.4.1", { date: "2026-07-09" });
+
+  assert.equal(
+    extractSection(rolled, "v0.4.1"),
+    "- Add a thing.\n- Fix another thing.",
+  );
+  assert.equal(extractSection(POPULATED, "v9.9.9"), null);
+});

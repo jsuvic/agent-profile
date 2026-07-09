@@ -70,7 +70,7 @@ Spec 001 approved 2026-07-09 (ADR 0012 accepted).
 | --- | --- | --- | --- |
 | I1 | Release scripts + release-prepare workflow | done | [001-release-scripts-prepare-workflow.md](docs/specs/phase-28/issues/001-release-scripts-prepare-workflow.md) |
 | I2 | Auto-tag workflow | done | [002-auto-tag-workflow.md](docs/specs/phase-28/issues/002-auto-tag-workflow.md) |
-| I3 | Publish job + dry-run gate + GitHub Release | sequenced | [003-publish-job.md](docs/specs/phase-28/issues/003-publish-job.md) |
+| I3 | Publish job + dry-run gate + GitHub Release | done | [003-publish-job.md](docs/specs/phase-28/issues/003-publish-job.md) |
 | I4 | Trusted-publisher setup + rehearsal + release.md rewrite | human-gate | [004-trusted-publisher-rehearsal.md](docs/specs/phase-28/issues/004-trusted-publisher-rehearsal.md) |
 
 I1 and I2 are parallel-safe (shared `scripts/release/` directory —
