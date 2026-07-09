@@ -13,6 +13,7 @@
     "build": "npm run build --workspaces --if-present",
     "check": "npm run check --workspaces --if-present && node scripts/verify-package-metadata.mjs",
     "test": "npm run test --workspaces --if-present",
+    "test:release": "node --test \"scripts/release/*.test.mjs\"",
     "lint": "npm run lint --workspaces --if-present",
     "doctor": "npm run build --workspace @agent-profile/cli --if-present && node apps/cli/dist/index.js doctor",
     "build:marketing": "npm run build:marketing --workspace @agent-profile/web",
