@@ -61,3 +61,19 @@ redefines parity - category equality for lockfile-backed rows, an
 expected-pair table for no-entry rows (the markerless divergence is the
 phase-14 consent-gated adoption design, not a bug). No further behavior
 change authorized.
+
+## phase-28: Release Automation (`docs/specs/phase-28/001-release-automation.md`)
+
+Spec 001 approved 2026-07-09 (ADR 0012 accepted).
+
+| Id | Task | State | Brief |
+| --- | --- | --- | --- |
+| I1 | Release scripts + release-prepare workflow | done | [001-release-scripts-prepare-workflow.md](docs/specs/phase-28/issues/001-release-scripts-prepare-workflow.md) |
+| I2 | Auto-tag workflow | done | [002-auto-tag-workflow.md](docs/specs/phase-28/issues/002-auto-tag-workflow.md) |
+| I3 | Publish job + dry-run gate + GitHub Release | sequenced | [003-publish-job.md](docs/specs/phase-28/issues/003-publish-job.md) |
+| I4 | Trusted-publisher setup + rehearsal + release.md rewrite | human-gate | [004-trusted-publisher-rehearsal.md](docs/specs/phase-28/issues/004-trusted-publisher-rehearsal.md) |
+
+I1 and I2 are parallel-safe (shared `scripts/release/` directory —
+coordinate the test-runner entry). I3 sequenced after I1. I4 is the
+maintainer's npm setup + the 0.4.2 live rehearsal, after phase-27 I4
+lands.
