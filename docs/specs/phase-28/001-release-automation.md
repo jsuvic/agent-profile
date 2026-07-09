@@ -77,12 +77,33 @@ no-op; non-bump pushes are no-ops by construction.
 Runs only after the existing verification steps pass in the same run
 (check, test, goldens, verify:pack, baseline-age gate). Guards, then
 publishes `@agent-profile/web` -> `@agent-profile/cli` -> `agent-profile`
-via `npm publish --provenance`, using npm trusted publishing (OIDC).
-`permissions: id-token: write` is scoped to this job only. Skips any
-package whose version is already on the registry (idempotent re-runs).
-Creates a GitHub Release from the tag with the matching CHANGELOG
-section. A `dry-run` workflow_dispatch input substitutes
-`npm publish --dry-run` for the first live rehearsal.
+via `npm publish --provenance` (`--access public` on the scoped
+packages), using npm trusted publishing (OIDC). `permissions: id-token:
+write` is scoped to this job only. Skips any package whose version is
+already on the registry (idempotent re-runs). Creates a GitHub Release
+from the tag with the matching CHANGELOG section.
+
+Two gates on live publishing (amended 2026-07-09 from the I3 review):
+
+1. Arm switch. A live (non-dry-run) publish proceeds only when the
+   repository variable `RELEASE_PUBLISH_ENABLED` equals `"true"`. When it
+   is unset, an auto-tag push still runs the full verification and the
+   publish job, but the live publish step is skipped with an explicit
+   "publisher not armed" message. This exists because the workflow
+   triggers on `push: tags: v*` (auto-tag) as well as `workflow_dispatch`,
+   so without the switch the very first pushed tag would publish live
+   before any rehearsal could run. The switch is set once, after the
+   dry-run rehearsal succeeds, and steady state is then fully automatic.
+   It doubles as a permanent publish kill-switch.
+2. Dry-run rehearsal. The `dry-run` workflow_dispatch input runs the full
+   job with `--dry-run` appended to the exact same publish arguments used
+   live (so `--provenance` and `--access public` are exercised), and
+   publishes nothing. Dry-run ignores the arm switch (it is safe by
+   construction).
+
+Build-arg contract: the dry-run command is the live command plus
+`--dry-run` - never a separately constructed command - so a passing
+rehearsal proves the live argument set.
 
 ### One-time manual setup (maintainer)
 
@@ -114,7 +135,12 @@ tag; three npm packages published with provenance; a GitHub Release.
 - Publish order is web -> cli -> wrapper (exact-pin dependency order);
   a mid-sequence failure leaves earlier packages published and the re-run
   skips them (idempotence is the recovery path).
-- All three packages publish with `--provenance`.
+- All three packages publish with `--provenance`; scoped packages
+  (`@agent-profile/web`, `@agent-profile/cli`) add `--access public`.
+- A live publish requires `vars.RELEASE_PUBLISH_ENABLED == "true"`; unset
+  skips the live publish step with an explicit message (auto-tag pushes
+  still verify). Dry-run ignores the switch. The dry-run publish command
+  is exactly the live command plus `--dry-run`.
 - Release logic lives in `scripts/release/*.mjs` with unit tests
   (changelog roll, version/tag guard, already-published check); workflow
   YAML stays thin wiring.
@@ -147,11 +173,17 @@ tag; three npm packages published with provenance; a GitHub Release.
    no-op (all three skipped), exit green.
 5. A tag whose version mismatches the manifests, or whose commit is not
    on master, refuses before any publish.
-6. The `dry-run` input rehearses the full job with `npm publish
-   --dry-run` and publishes nothing.
-7. `scripts/release/*.mjs` logic (changelog roll, guards,
-   already-published check) is unit-tested; `docs/release.md` is
-   rewritten to the two-action procedure.
+6. The `dry-run` input rehearses the full job with `--dry-run` appended
+   to the live publish arguments (`--provenance`, and `--access public`
+   on scoped packages) and publishes nothing.
+7. With `RELEASE_PUBLISH_ENABLED` unset, an auto-tag push runs
+   verification and reaches the publish job but skips the live publish
+   with a "publisher not armed" message and no registry mutation; setting
+   it to `"true"` lets the same path publish live.
+8. `scripts/release/*.mjs` logic (changelog roll, guards,
+   already-published check, publish-arg construction) is unit-tested;
+   `docs/release.md` is rewritten to the two-action procedure and the
+   one-time arming step.
 
 ## Tests
 
@@ -166,11 +198,17 @@ tag; three npm packages published with provenance; a GitHub Release.
 
 ## Rollout
 
-1. Land scripts + workflows with the publish job gated behind `dry-run`.
+1. Land scripts + workflows with `RELEASE_PUBLISH_ENABLED` unset, so no
+   auto-tag push can publish live before the rehearsal.
 2. Maintainer configures the three trusted publishers on npmjs.com.
-3. Next release (0.4.2, after phase-27 I4): run W1 -> merge -> tag ->
-   W3 in dry-run; inspect logs; re-dispatch live. From then on, fully
-   automatic.
+3. Next release (0.4.2, after phase-27 I4): run W1 -> merge. Auto-tag
+   pushes `v0.4.2`; the tag run verifies and reaches the publish job but
+   skips live publish (unarmed). Dispatch W3 with `dry-run: true` on the
+   tag; inspect logs (guards pass, three dry-run publishes with
+   `--provenance`/`--access public`, no Release).
+4. Set `RELEASE_PUBLISH_ENABLED = "true"`; re-dispatch W3 (not dry-run)
+   on the tag for the live publish. From then on every release is fully
+   automatic: dispatch W1 -> merge.
 
 ## Documentation Updates
 

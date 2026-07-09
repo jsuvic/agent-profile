@@ -17,15 +17,17 @@ export const PUBLISH_ORDER = [
 ];
 
 export function buildPublishArgs(pkg, { dryRun = false } = {}) {
-  if (dryRun) {
-    return ["publish", "--dry-run", "--workspace", pkg];
-  }
-
+  // Build the live argument list, then append --dry-run for the rehearsal so a
+  // passing dry-run exercises the exact live args (--provenance and, for scoped
+  // packages, --access public).
   const args = ["publish", "--provenance"];
   if (pkg.startsWith("@")) {
     args.push("--access", "public");
   }
   args.push("--workspace", pkg);
+  if (dryRun) {
+    args.push("--dry-run");
+  }
   return args;
 }
 

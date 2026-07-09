@@ -42,12 +42,33 @@ test("buildPublishArgs uses provenance without access for the wrapper", () => {
   ]);
 });
 
-test("buildPublishArgs substitutes dry-run publish args", () => {
-  assert.deepEqual(buildPublishArgs("@agent-profile/cli", { dryRun: true }), [
+test("buildPublishArgs dry-run is the scoped live args plus a trailing --dry-run", () => {
+  const live = buildPublishArgs("@agent-profile/cli");
+  assert.deepEqual(live, [
     "publish",
-    "--dry-run",
+    "--provenance",
+    "--access",
+    "public",
     "--workspace",
     "@agent-profile/cli",
+  ]);
+  assert.deepEqual(buildPublishArgs("@agent-profile/cli", { dryRun: true }), [
+    ...live,
+    "--dry-run",
+  ]);
+});
+
+test("buildPublishArgs dry-run is the unscoped live args plus a trailing --dry-run", () => {
+  const live = buildPublishArgs("agent-profile");
+  assert.deepEqual(live, [
+    "publish",
+    "--provenance",
+    "--workspace",
+    "agent-profile",
+  ]);
+  assert.deepEqual(buildPublishArgs("agent-profile", { dryRun: true }), [
+    ...live,
+    "--dry-run",
   ]);
 });
 
