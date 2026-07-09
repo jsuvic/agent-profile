@@ -265,6 +265,32 @@ test("AC2 shared on CLAUDE.md relocates into AGENTS.md and restores CLAUDE.md ca
   assert.equal(ownershipOf(lockfile, "CLAUDE.md"), "generated-owned");
 });
 
+test("AC2 shared relocations into AGENTS.md accumulate across multiple drifted roots", async () => {
+  const rootDir = await createRoot();
+  await materialize(rootDir);
+  await driftFile(rootDir, "AGENTS.md", "Shared from agents.\n");
+  await driftFile(rootDir, "CLAUDE.md", "Shared from claude.\n");
+
+  const { prompts } = scriptPrompts({
+    "AGENTS.md": "shared",
+    "CLAUDE.md": "shared",
+  });
+  const output = createOutput();
+  const code = await runCli(["compile", "--root", rootDir, "--write"], {
+    ...output,
+    reconcilePrompts: prompts,
+  });
+
+  assert.equal(code, 0, output.stderrText());
+  const agents = parseMixedFile(await readFile(path.join(rootDir, "AGENTS.md")));
+  assert.ok(agents.ok);
+  if (!agents.ok) return;
+  assert.equal(
+    agents.manualInner.toString("utf8"),
+    "Shared from agents.\nShared from claude.\n",
+  );
+});
+
 // ---------------------------------------------------------------------------
 // AC3: two-way flow on a drifted skill file
 // ---------------------------------------------------------------------------
