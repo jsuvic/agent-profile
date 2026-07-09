@@ -1236,7 +1236,37 @@ async function runDriftReconciliation(input: {
     };
   };
 
-  const destination = await toDrifted(SHARED_INTENT_DESTINATION, "root");
+  let sharedDestination = await toDrifted(SHARED_INTENT_DESTINATION, "root");
+
+  const updateSharedDestination = (action: ResolutionAction): void => {
+    if (!sharedDestination) return;
+    if (
+      action.type === "relocate-mixed" &&
+      action.destPath === SHARED_INTENT_DESTINATION
+    ) {
+      sharedDestination = {
+        ...sharedDestination,
+        onDiskBytes: Buffer.from(action.bytes),
+      };
+      return;
+    }
+    if (
+      action.type === "restore-canonical" &&
+      action.path === SHARED_INTENT_DESTINATION
+    ) {
+      sharedDestination = {
+        ...sharedDestination,
+        onDiskBytes: Buffer.from(sharedDestination.canonicalBytes),
+      };
+      return;
+    }
+    if (
+      action.type === "keep-manual-owned" &&
+      action.path === SHARED_INTENT_DESTINATION
+    ) {
+      sharedDestination = undefined;
+    }
+  };
 
   const rootPaths = [...input.rootDriftPaths].sort(compareText);
   const otherPaths = [...input.otherDriftPaths].sort(compareText);
@@ -1254,7 +1284,7 @@ async function runDriftReconciliation(input: {
         drifted.canonicalBytes,
         drifted.onDiskBytes,
       );
-      const relocatable = extracted.ok && destination !== undefined;
+      const relocatable = extracted.ok;
       if (relocatable) {
         prompts.showDrift({
           path,
@@ -1267,9 +1297,17 @@ async function runDriftReconciliation(input: {
           cancelled = true;
           break;
         }
-        actions.push(
-          planRootResolution({ drifted, destination: destination!, choice }),
-        );
+        if (choice === "shared" && sharedDestination === undefined) {
+          cancelled = true;
+          break;
+        }
+        const action = planRootResolution({
+          drifted,
+          destination: choice === "shared" ? sharedDestination! : drifted,
+          choice,
+        });
+        actions.push(action);
+        updateSharedDestination(action);
       } else {
         // Interleaved edits (or a missing AGENTS.md target) reduce the menu to
         // keep / restore / cancel.
@@ -1284,7 +1322,9 @@ async function runDriftReconciliation(input: {
           cancelled = true;
           break;
         }
-        actions.push(planOtherResolution(choice, path));
+        const action = planOtherResolution(choice, path);
+        actions.push(action);
+        updateSharedDestination(action);
       }
     }
 
