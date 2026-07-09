@@ -6,7 +6,7 @@
 // tag or a non-bump push is a silent no-op. The git command runner is the only
 // seam; all decision logic is pure and unit-tested (spec Decision Rule 3).
 
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -51,8 +51,23 @@ export function tagIfMissing({
   return { version, tagged: commands.length > 0 };
 }
 
+export function writeGitHubOutput(
+  { version, tagged },
+  output = process.env.GITHUB_OUTPUT,
+) {
+  if (!output) {
+    return;
+  }
+
+  appendFileSync(
+    output,
+    `version=${version}\ntag=v${version}\ntagged=${tagged ? "true" : "false"}\n`,
+  );
+}
+
 function main() {
   const result = tagIfMissing();
+  writeGitHubOutput(result);
   if (result.tagged) {
     console.log(`Created and pushed tag v${result.version}.`);
   } else {

@@ -2,12 +2,16 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { planTagCommands, tagIfMissing } from "./tag-if-missing.mjs";
+import {
+  planTagCommands,
+  tagIfMissing,
+  writeGitHubOutput,
+} from "./tag-if-missing.mjs";
 
 test("planTagCommands emits an annotated tag + push when the tag is missing", () => {
   assert.deepEqual(planTagCommands("0.4.2", { exists: false }), [
@@ -68,5 +72,17 @@ test("tagIfMissing refuses a malformed manifest version", () => {
   assert.throws(
     () => tagIfMissing({ root, runGit: () => "" }),
     /Invalid version/u,
+  );
+});
+
+test("writeGitHubOutput exposes the version, tag, and tagged state", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "ap-tag-output-"));
+  const output = path.join(root, "github-output");
+
+  writeGitHubOutput({ version: "0.4.2", tagged: true }, output);
+
+  assert.equal(
+    readFileSync(output, "utf8"),
+    "version=0.4.2\ntag=v0.4.2\ntagged=true\n",
   );
 });

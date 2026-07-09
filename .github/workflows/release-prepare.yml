@@ -25,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -66,4 +68,4 @@ jobs:
             --base master \
             --head "${branch}" \
             --title "Release ${VERSION}" \
-            --body "Automated release bump for ${VERSION}: synced versions, refreshed lockfile, and rolled changelog. Merging this PR creates tag v${VERSION}, which triggers verification and publish."
+            --body "Automated release bump for ${VERSION}: synced versions, refreshed lockfile, and rolled changelog. Merging this PR creates tag v${VERSION}, then dispatches release verification."
