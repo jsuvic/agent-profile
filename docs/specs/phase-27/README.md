@@ -43,11 +43,22 @@ Planned (grill sessions before drafting):
 - `issues/001-lockfile-first-classification.md` (I1)
 - `issues/002-capability-catalog-provenance.md` (I2)
 - `issues/003-upgrade-command.md` (I3)
+- `issues/004-drift-reconciliation-flow.md` (I4)
 
 I3 implements the approved upgrade flow: offline report mode, interactive
 keep/adopt/customize selection, insertion-only YAML edits with refusal rather
 than re-rendering, and integer catalog provenance stamped only after a
 successful write. Upgrade does not invoke compile.
+
+I4 implements the approved drift-reconciliation flow: interactive `compile`
+classifies each hash-mismatched lockfile-owned file at the point of the refusal
+(four-way for root instruction files, two-way keep/restore for other generated
+outputs), relocates cleanly-separable user lines into a manual region or refuses
+relocation for interleaved edits, and routes every outcome through the existing
+region-aware planner and a single atomic write. Non-interactive compile,
+`--force`, and exit codes stay byte-identical; classifications map only to the
+existing `mixed` / `manual-owned` / rehash transitions. Extends the 27/001
+parity fixtures so post-reconciliation `init --import` and `compile` agree.
 
 Task states are tracked in the root `TASKS.md` ledger.
 
