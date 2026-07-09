@@ -10,6 +10,7 @@ import test from "node:test";
 import {
   buildPhase14ImportReport,
   parseMixedFile,
+  serializeLockfile,
   validateLockfileText,
   type AiProfileLockV2,
 } from "@agent-profile/compiler";
@@ -391,6 +392,52 @@ test("AC5 declining the final confirmation writes nothing", async () => {
   );
 
   assert.equal(code, 3);
+  assert.deepEqual(await readFile(path.join(rootDir, "AGENTS.md")), agentsBefore);
+  assert.deepEqual(await readFile(path.join(rootDir, "ai-profile.lock")), lockBefore);
+});
+
+// ---------------------------------------------------------------------------
+// Safety: reconciliation must not overwrite unrelated protected outputs that
+// are not hash-mismatch drift (no/invalid/missing lockfile entry). A drifted
+// root must not become a backdoor around the standard protected-file refusal.
+// ---------------------------------------------------------------------------
+
+test("root reconciliation does not overwrite a non-drift protected file (missing lockfile entry)", async () => {
+  const rootDir = await createRoot();
+  await materialize(rootDir);
+
+  // Drop the skill's lockfile entry so the on-disk skill is protected with the
+  // non-reconcilable "missing lockfile entry" reason (not hash-mismatch drift).
+  const lockfile = await readV2Lockfile(rootDir);
+  const trimmed: AiProfileLockV2 = {
+    ...lockfile,
+    outputs: lockfile.outputs.filter((output) => output.path !== SKILL_PATH),
+  };
+  await writeFile(
+    path.join(rootDir, "ai-profile.lock"),
+    serializeLockfile(trimmed),
+    "utf8",
+  );
+
+  // Root drift triggers reconciliation; the untracked skill must be preserved.
+  await driftFile(rootDir, "AGENTS.md", "A shared team rule.\n");
+  const skillBefore = await readFile(path.join(rootDir, SKILL_PATH));
+  const agentsBefore = await readFile(path.join(rootDir, "AGENTS.md"));
+  const lockBefore = await readFile(path.join(rootDir, "ai-profile.lock"));
+
+  // "shared" would relocate + write; if reconciliation ran it would also write
+  // the protected skill from regionPlan.writes. It must instead refuse.
+  const { prompts, events } = scriptPrompts({ "AGENTS.md": "shared" });
+  const output = createOutput();
+  const code = await runCli(["compile", "--root", rootDir, "--write"], {
+    ...output,
+    reconcilePrompts: prompts,
+  });
+
+  assert.equal(code, 3, output.stderrText());
+  // Reconciliation was skipped entirely (no menu shown) and nothing was written.
+  assert.equal(events.length, 0);
+  assert.deepEqual(await readFile(path.join(rootDir, SKILL_PATH)), skillBefore);
   assert.deepEqual(await readFile(path.join(rootDir, "AGENTS.md")), agentsBefore);
   assert.deepEqual(await readFile(path.join(rootDir, "ai-profile.lock")), lockBefore);
 });

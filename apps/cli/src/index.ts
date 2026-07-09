@@ -952,22 +952,31 @@ async function runCompile(
 
     // Adoption refusals (partial markers, symlinks, unknown ownership) require
     // `init --import`, not classification; leave them to the frozen refusal.
-    if (otherAdoptionRefusals.length === 0) {
-      let otherDriftPaths: string[] = [];
-      if (parsed.write) {
-        try {
-          const protectedPaths = await getProtectedGeneratedPaths(
-            rootDir,
-            compileResult.files,
-          );
-          otherDriftPaths = protectedPaths
-            .filter((item) => item.reason === "hash mismatch")
-            .map((item) => item.path);
-        } catch {
-          otherDriftPaths = [];
-        }
+    let otherDriftPaths: string[] = [];
+    let blockingProtected = false;
+    if (otherAdoptionRefusals.length === 0 && parsed.write) {
+      try {
+        const protectedPaths = await getProtectedGeneratedPaths(
+          rootDir,
+          compileResult.files,
+        );
+        otherDriftPaths = protectedPaths
+          .filter((item) => item.reason === "hash mismatch")
+          .map((item) => item.path);
+        // Protected paths that are not hash-mismatch drift (no/invalid/missing
+        // lockfile entry) are not reconcilable. They must keep the standard
+        // protected-file refusal rather than being silently overwritten by the
+        // reconciliation write, so if any exist we skip reconciliation and let
+        // the run fall through to the frozen refusal (writes nothing, exit 3).
+        blockingProtected = protectedPaths.some(
+          (item) => item.reason !== "hash mismatch",
+        );
+      } catch {
+        otherDriftPaths = [];
       }
+    }
 
+    if (otherAdoptionRefusals.length === 0 && !blockingProtected) {
       if (rootDriftPaths.length > 0 || otherDriftPaths.length > 0) {
         return runDriftReconciliation({
           rootDir,
