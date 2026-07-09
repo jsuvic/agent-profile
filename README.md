@@ -192,8 +192,21 @@ generated client config and intentionally not recommended for ignore.
 For `AGENTS.md` and `CLAUDE.md` with valid region markers, `compile --write`
 preserves manual region bytes byte-for-byte and refuses to overwrite files
 that lack markers (run `init --import --strategy regions --write` first).
-`--force` does not bypass that refusal — the supported repair path is
-manual.
+
+When a lockfile-owned generated file has drifted from `ai-profile.lock`, an
+interactive `compile` shows the per-file diff and a classification menu instead
+of only refusing. Root instruction files offer four choices — shared intent
+(relocate your lines into the `AGENTS.md` manual region so inheritance carries
+them to Claude and Codex; Tabnine guidelines do not render shared manual
+content), client-specific (relocate into the drifted file's own manual region),
+accidental (restore canonical bytes), or cancel. Other generated outputs offer
+keep (adopt the file as `manual-owned` so compile stops regenerating it),
+restore canonical, or cancel. Interleaved edits that cannot be separated from
+canonical bytes reduce the menu to keep/restore/cancel. Every choice is applied
+through one atomic write after you approve the combined plan; cancel writes
+nothing. Prefer this interactive classification over `--force`, which bypasses
+the flow and overwrites every drifted file. Non-interactive compile refuses
+unchanged.
 
 `ai-profile.lock` is now version 2 with ownership labels
 (`generated-owned`, `mixed`, `manual-owned`). Version 1 lockfiles remain

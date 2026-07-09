@@ -41,6 +41,7 @@ import {
   type MixedOutputDescriptor,
   type Phase14ImportReport,
   type PlannedWrite,
+  type TemplateDescriptor,
   type WritePlanResult,
 } from "@agent-profile/compiler";
 import type {
@@ -78,6 +79,19 @@ import {
 
 import type { LogoCommand } from "./branding.js";
 import type { Presenter, TaskLogSink } from "./presentation.js";
+import {
+  extractManualAdditions,
+  formatDriftDiff,
+  manualOwnedLockOutput,
+  planOtherResolution,
+  planRootResolution,
+  ROOT_INSTRUCTION_PATHS,
+  SHARED_INTENT_DESTINATION,
+  type DriftedFile,
+  type OtherChoice,
+  type ResolutionAction,
+  type RootChoice,
+} from "./reconcile.js";
 import { planProfileInsertions } from "./upgrade-editor.js";
 import {
   formatWizardDeclined,
@@ -106,10 +120,32 @@ export type CliOptions = {
   presetVerificationKeys?: readonly PresetVerificationKey[];
   prompts?: CliPrompts;
   upgradePrompts?: UpgradePrompts;
+  reconcilePrompts?: ReconcilePrompts;
   nonInteractive?: boolean;
 };
 
 export type UpgradeStrategy = "keep" | "adopt-recommended" | "customize";
+
+/**
+ * Injected prompts for the interactive compile drift-reconciliation flow. The
+ * real clack implementation lives behind a lazy import in `reconcile-clack.ts`
+ * (reached only on the interactive branch); tests inject a scripted override so
+ * the non-interactive path never evaluates clack. Mirrors `UpgradePrompts`.
+ */
+export type ReconcilePrompts = {
+  begin(): void;
+  showDrift(input: {
+    path: string;
+    kind: "root" | "other";
+    diff: string;
+    note?: string;
+  }): void;
+  classifyRoot(input: { path: string }): Promise<RootChoice>;
+  classifyOther(input: { path: string }): Promise<OtherChoice>;
+  showSummary(summary: string): void;
+  confirmWrite(input: { default: false }): Promise<boolean>;
+  end(applied: boolean): void;
+};
 
 export type UpgradePrompts = {
   begin(): void;
@@ -293,7 +329,14 @@ export async function runCli(
 
   switch (command) {
     case "compile":
-      return runCompile(rest, cwd, io);
+      return runCompile(rest, cwd, io, {
+        ...(options.reconcilePrompts
+          ? { prompts: options.reconcilePrompts }
+          : {}),
+        ...(options.nonInteractive !== undefined
+          ? { nonInteractive: options.nonInteractive }
+          : {}),
+      });
     case "doctor":
       return runDoctorCommand(rest, cwd, io);
     case "init":
@@ -768,10 +811,16 @@ async function runDoctorCommand(
   return result.status === "fail" ? 1 : 0;
 }
 
+type RunCompileOptions = {
+  prompts?: ReconcilePrompts;
+  nonInteractive?: boolean;
+};
+
 async function runCompile(
   args: string[],
   cwd: string,
   io: CliIo,
+  options: RunCompileOptions = {},
 ): Promise<number> {
   const parsed = parseCompileArgs(args);
 
@@ -884,6 +933,65 @@ async function runCompile(
       ),
     );
     return 1;
+  }
+
+  // Interactive drift reconciliation: at the point compile would refuse a
+  // hash-mismatched lockfile-owned file, let the user classify the edit and
+  // route the outcome through the existing region-aware planner + atomic
+  // write. Non-interactive and --force runs skip this entirely so their
+  // frozen refusal text and exit code stay byte-identical.
+  const reconcileInteractive = shouldReconcileInteractively(parsed, options, io);
+
+  if (reconcileInteractive) {
+    const rootDriftPaths = regionPlan.refusals
+      .filter((item) => item.reason === "hash-mismatch")
+      .map((item) => item.path);
+    const otherAdoptionRefusals = regionPlan.refusals.filter(
+      (item) => item.reason !== "hash-mismatch",
+    );
+
+    // Adoption refusals (partial markers, symlinks, unknown ownership) require
+    // `init --import`, not classification; leave them to the frozen refusal.
+    let otherDriftPaths: string[] = [];
+    let blockingProtected = false;
+    if (otherAdoptionRefusals.length === 0 && parsed.write) {
+      try {
+        const protectedPaths = await getProtectedGeneratedPaths(
+          rootDir,
+          compileResult.files,
+        );
+        otherDriftPaths = protectedPaths
+          .filter((item) => item.reason === "hash mismatch")
+          .map((item) => item.path);
+        // Protected paths that are not hash-mismatch drift (no/invalid/missing
+        // lockfile entry) are not reconcilable. They must keep the standard
+        // protected-file refusal rather than being silently overwritten by the
+        // reconciliation write, so if any exist we skip reconciliation and let
+        // the run fall through to the frozen refusal (writes nothing, exit 3).
+        blockingProtected = protectedPaths.some(
+          (item) => item.reason !== "hash mismatch",
+        );
+      } catch {
+        otherDriftPaths = [];
+      }
+    }
+
+    if (otherAdoptionRefusals.length === 0 && !blockingProtected) {
+      if (rootDriftPaths.length > 0 || otherDriftPaths.length > 0) {
+        return runDriftReconciliation({
+          rootDir,
+          io,
+          write: parsed.write,
+          prompts: await getReconcilePrompts(options.prompts),
+          compileResult,
+          regionPlan,
+          rootDriftPaths,
+          otherDriftPaths,
+          profilePath: safeProfilePath.path,
+          profileBytes,
+        });
+      }
+    }
   }
 
   if (regionPlan.refusals.length > 0) {
@@ -1010,6 +1118,299 @@ async function runCompile(
     );
   }
 
+  return 0;
+}
+
+/**
+ * Gate for the interactive drift-reconciliation flow. `--force` bypasses it
+ * (unchanged overwrite semantics); an injected prompts override forces it on
+ * (tests); otherwise it mirrors the `runUpgrade` interactivity rule — an
+ * explicit `nonInteractive` flag wins, then a real TTY. Non-interactive runs
+ * return `false` and never reach `getReconcilePrompts`, so clack is not loaded.
+ */
+function shouldReconcileInteractively(
+  parsed: { force: boolean },
+  options: RunCompileOptions,
+  io: CliIo,
+): boolean {
+  if (parsed.force) return false;
+  if (options.prompts !== undefined) return true;
+  if (options.nonInteractive === true) return false;
+  if (options.nonInteractive === false) return true;
+  return isInteractiveTty(io);
+}
+
+async function getReconcilePrompts(
+  override: ReconcilePrompts | undefined,
+): Promise<ReconcilePrompts> {
+  if (override) return override;
+  const { createReconcileClackPrompts } = await import("./reconcile-clack.js");
+  return createReconcileClackPrompts(CLI_VERSION);
+}
+
+const SHARED_INTENT_TABNINE_GAP_NOTE =
+  "Shared intent relocates your lines into the AGENTS.md manual region; inheritance carries them to Claude and Codex, but Tabnine guidelines do not render shared manual content.";
+
+const INTERLEAVED_EDIT_NOTE =
+  "Your edits are interleaved with regenerated canonical lines and cannot be cleanly separated, so relocation is unavailable. Choose keep (adopt the file as manual-owned) or restore canonical.";
+
+function formatDriftRefusal(
+  rootPaths: readonly string[],
+  otherPaths: readonly string[],
+): string {
+  const lines: string[] = [];
+  if (rootPaths.length > 0) {
+    lines.push(
+      "Refusing to overwrite lockfile-owned generated region files that differ from ai-profile.lock:",
+      ...rootPaths.map((path) => `- ${path} (hash-mismatch)`),
+      "Re-run with --force after reviewing the diff, or regenerate ai-profile.lock to record the new bytes.",
+    );
+  }
+  if (otherPaths.length > 0) {
+    lines.push(
+      "Refusing to replace existing generated paths without --force:",
+      ...otherPaths.map((path) => `- ${path} (hash mismatch)`),
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function formatReconciliationSummary(
+  actions: readonly ResolutionAction[],
+): string {
+  const lines = ["Drift reconciliation plan:"];
+  for (const action of actions) {
+    if (action.type === "keep-manual-owned") {
+      lines.push(`- ${action.path}: keep (reclassify manual-owned)`);
+    } else if (action.type === "restore-canonical") {
+      lines.push(`- ${action.path}: restore canonical bytes + refresh hash`);
+    } else if (action.type === "relocate-mixed") {
+      lines.push(
+        action.restorePath
+          ? `- ${action.sourcePath}: relocate shared lines into ${action.destPath}; restore ${action.restorePath} canonical`
+          : `- ${action.sourcePath}: relocate lines into ${action.destPath} manual region`,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
+/**
+ * Interactive drift-reconciliation flow. Gathers the drifted files, drives the
+ * classification prompts, maps each choice to a lockfile transition through the
+ * pure planner, and routes every outcome through the existing region-aware
+ * lockfile + atomic write. Cancel at any prompt writes nothing and prints the
+ * standard refusal for the unresolved files.
+ */
+async function runDriftReconciliation(input: {
+  rootDir: string;
+  io: CliIo;
+  write: boolean;
+  prompts: ReconcilePrompts;
+  compileResult: { files: GeneratedFile[]; templates: TemplateDescriptor[] };
+  regionPlan: RegionAwareWritePlan;
+  rootDriftPaths: readonly string[];
+  otherDriftPaths: readonly string[];
+  profilePath: string;
+  profileBytes: Uint8Array;
+}): Promise<number> {
+  const { io, prompts } = input;
+  const fileByPath = new Map(
+    input.compileResult.files.map((file) => [file.path, file]),
+  );
+
+  const toDrifted = async (
+    path: string,
+    kind: "root" | "other",
+  ): Promise<DriftedFile | undefined> => {
+    const file = fileByPath.get(path);
+    if (!file) return undefined;
+    const onDisk = await readOptionalBytes(input.rootDir, path);
+    return {
+      path,
+      kind,
+      target: file.target,
+      templateId: file.templateId,
+      canonicalBytes: Buffer.from(file.bytes),
+      onDiskBytes: onDisk ? Buffer.from(onDisk) : Buffer.alloc(0),
+    };
+  };
+
+  const destination = await toDrifted(SHARED_INTENT_DESTINATION, "root");
+
+  const rootPaths = [...input.rootDriftPaths].sort(compareText);
+  const otherPaths = [...input.otherDriftPaths].sort(compareText);
+
+  prompts.begin();
+  const actions: ResolutionAction[] = [];
+  let cancelled = false;
+
+  try {
+    for (const path of rootPaths) {
+      const drifted = await toDrifted(path, "root");
+      if (!drifted) continue;
+      const diff = formatDriftDiff(drifted.canonicalBytes, drifted.onDiskBytes);
+      const extracted = extractManualAdditions(
+        drifted.canonicalBytes,
+        drifted.onDiskBytes,
+      );
+      const relocatable = extracted.ok && destination !== undefined;
+      if (relocatable) {
+        prompts.showDrift({
+          path,
+          kind: "root",
+          diff,
+          note: SHARED_INTENT_TABNINE_GAP_NOTE,
+        });
+        const choice: RootChoice = await prompts.classifyRoot({ path });
+        if (choice === "cancel") {
+          cancelled = true;
+          break;
+        }
+        actions.push(
+          planRootResolution({ drifted, destination: destination!, choice }),
+        );
+      } else {
+        // Interleaved edits (or a missing AGENTS.md target) reduce the menu to
+        // keep / restore / cancel.
+        prompts.showDrift({
+          path,
+          kind: "root",
+          diff,
+          note: INTERLEAVED_EDIT_NOTE,
+        });
+        const choice: OtherChoice = await prompts.classifyOther({ path });
+        if (choice === "cancel") {
+          cancelled = true;
+          break;
+        }
+        actions.push(planOtherResolution(choice, path));
+      }
+    }
+
+    if (!cancelled) {
+      for (const path of otherPaths) {
+        const drifted = await toDrifted(path, "other");
+        if (!drifted) continue;
+        const diff = formatDriftDiff(
+          drifted.canonicalBytes,
+          drifted.onDiskBytes,
+        );
+        prompts.showDrift({ path, kind: "other", diff });
+        const choice: OtherChoice = await prompts.classifyOther({ path });
+        if (choice === "cancel") {
+          cancelled = true;
+          break;
+        }
+        actions.push(planOtherResolution(choice, path));
+      }
+    }
+  } catch (error) {
+    if (error instanceof WizardCancelled) cancelled = true;
+    else throw error;
+  }
+
+  if (cancelled) {
+    io.stderr(formatDriftRefusal(rootPaths, otherPaths));
+    prompts.end(false);
+    return 3;
+  }
+
+  // Assemble a single write plan from the resolutions. Every outcome reuses the
+  // region-aware planner's writes and lockfile transitions; nothing bypasses
+  // the atomic write.
+  const writeByPath = new Map<string, Uint8Array>();
+  for (const write of input.regionPlan.writes) {
+    writeByPath.set(
+      write.path,
+      typeof write.bytes === "string"
+        ? Buffer.from(write.bytes, "utf8")
+        : write.bytes,
+    );
+  }
+  const mixedOutputs: MixedOutputDescriptor[] = [
+    ...input.regionPlan.mixedOutputs,
+  ];
+  const manualOutputs: LockOutputV2[] = [...input.regionPlan.manualOutputs];
+  const canonicalOf = (path: string): Uint8Array =>
+    Buffer.from(fileByPath.get(path)!.bytes);
+
+  for (const action of actions) {
+    switch (action.type) {
+      case "keep-manual-owned":
+        manualOutputs.push(manualOwnedLockOutput(action.path));
+        writeByPath.delete(action.path);
+        break;
+      case "restore-canonical":
+        writeByPath.set(action.path, canonicalOf(action.path));
+        break;
+      case "relocate-mixed":
+        writeByPath.set(action.destPath, action.bytes);
+        mixedOutputs.push(action.mixedOutput);
+        if (action.restorePath) {
+          writeByPath.set(action.restorePath, canonicalOf(action.restorePath));
+        }
+        break;
+      case "cancel":
+        break;
+    }
+  }
+
+  const generatedLockfile = createLockfileFile({
+    profilePath: input.profilePath,
+    profileBytes: input.profileBytes,
+    templates: input.compileResult.templates,
+    files: input.compileResult.files,
+    mixedOutputs,
+  });
+  const lockfile = retainManualOwnedLockOutputs(generatedLockfile, manualOutputs);
+  const writes: PlannedWrite[] = [
+    ...[...writeByPath.entries()].map(([path, bytes]) => ({ path, bytes })),
+    { path: lockfile.path, bytes: lockfile.bytes },
+  ];
+
+  prompts.showSummary(formatReconciliationSummary(actions));
+
+  if (input.write) {
+    let approved: boolean;
+    try {
+      approved = await prompts.confirmWrite({ default: false });
+    } catch (error) {
+      if (error instanceof WizardCancelled) {
+        io.stderr(formatDriftRefusal(rootPaths, otherPaths));
+        prompts.end(false);
+        return 3;
+      }
+      throw error;
+    }
+    if (!approved) {
+      io.stderr(formatDriftRefusal(rootPaths, otherPaths));
+      prompts.end(false);
+      return 3;
+    }
+  }
+
+  const plan = await createOrApplyWritePlan(
+    input.rootDir,
+    writes,
+    input.write,
+    io,
+  );
+  if (!plan) {
+    prompts.end(false);
+    return 1;
+  }
+
+  const manualOwnedPaths = manualOutputs.map((output) => output.path);
+  io.stdout(
+    formatWritePlan(
+      "Agent Profile Compile",
+      input.write,
+      plan,
+      manualOwnedPaths,
+    ),
+  );
+  prompts.end(input.write);
   return 0;
 }
 
@@ -3768,17 +4169,22 @@ async function planRegionAwareWrites(
   const refusals: RegionAwareRefusal[] = [];
 
   for (const file of files) {
-    if (!REGION_AWARE_PATHS.has(file.path)) {
-      writes.push({ path: file.path, bytes: file.bytes });
-      continue;
-    }
-
     const lockOutput = lockfile?.outputs.find(
       (output) => output.path === file.path,
     );
 
+    // Manual-owned files (root or otherwise) are the user's now: APC stops
+    // regenerating them and retains the lockfile entry verbatim. This is the
+    // 27/001 semantic the interactive drift "keep" classification reuses. Only
+    // paths already recorded manual-owned reach here, so repos without such
+    // entries keep byte-identical output.
     if (lockOutput?.ownership === "manual-owned") {
       manualOutputs.push(lockOutput);
+      continue;
+    }
+
+    if (!REGION_AWARE_PATHS.has(file.path)) {
+      writes.push({ path: file.path, bytes: file.bytes });
       continue;
     }
 

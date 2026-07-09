@@ -23,7 +23,29 @@ import {
   validateLockfileText,
 } from "@agent-profile/compiler";
 
-import { runCli } from "./index.js";
+import { runCli, type ReconcilePrompts } from "./index.js";
+
+/**
+ * Minimal scripted reconcile prompts that pick "keep" (manual-owned) at the
+ * two-way menu and confirm the write. Used by the Phase 27/I4 parity fixture.
+ */
+function keepReconcilePrompts(): ReconcilePrompts {
+  return {
+    begin() {},
+    showDrift() {},
+    async classifyRoot() {
+      return "cancel";
+    },
+    async classifyOther() {
+      return "keep";
+    },
+    showSummary() {},
+    async confirmWrite() {
+      return true;
+    },
+    end() {},
+  };
+}
 
 const FIXTURE_PROFILE = `version: 1
 profile:
@@ -810,6 +832,30 @@ test("phase-27 import report and compile agree on lockfile ownership verdicts", 
     {
       name: "manual-owned preserves",
       setup: materializeManualOwnershipRoot,
+    },
+    {
+      // Phase 27/I4 extension: after the interactive drift "keep" flow adopts a
+      // drifted AGENTS.md as manual-owned, init --import and compile must both
+      // treat it as preserved (parity holds post-reconciliation).
+      name: "manual-owned via drift keep reconciliation preserves",
+      setup: async () => {
+        const rootDir = await materializeGeneratedOwnershipRoot();
+        // Interleaved edit -> relocation refused -> two-way menu -> keep.
+        await writeFile(
+          path.join(rootDir, "AGENTS.md"),
+          "# AGENTS.md\n\nFully rewritten by hand.\n",
+          "utf8",
+        );
+        const code = await runCli(
+          ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+          {
+            ...createOutput(),
+            reconcilePrompts: keepReconcilePrompts(),
+          },
+        );
+        assert.equal(code, 0);
+        return rootDir;
+      },
     },
   ];
 

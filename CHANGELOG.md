@@ -4,6 +4,25 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Add Phase 27 I4 interactive drift reconciliation to `compile` (implementing
+  `docs/specs/phase-27/003-drift-reconciliation.md`). At the point compile would
+  refuse a hash-mismatched lockfile-owned file, an interactive TTY now shows the
+  per-file drift diff (deterministically regenerated canonical bytes vs on-disk)
+  and a classification menu. Root instruction files (`AGENTS.md`, `CLAUDE.md`)
+  get a four-way menu — shared intent (relocate the user's lines into the
+  `AGENTS.md` manual region, restoring the generated region to canonical; the
+  Tabnine gap is stated inline), client-specific (relocate into the drifted
+  file's own manual region), accidental (restore canonical + refresh hash), and
+  cancel (default). All other drifted generated outputs get keep (reclassify
+  `manual-owned`) / restore-canonical / cancel. Interleaved edits that cannot be
+  cleanly separated from canonical bytes refuse relocation and reduce to
+  keep/restore/cancel. Every outcome maps only to existing `mixed` /
+  `manual-owned` / rehash transitions, routes through the existing region-aware
+  planner and a single atomic write, and relocated user lines are byte-preserved.
+  Cancel at any prompt writes nothing and prints the standard refusal.
+  Non-interactive compile, `--json`, exit codes, and `--force` are byte-identical
+  and never evaluate clack (lazy-imported behind the interactive gate).
+
 - Add Phase 27 I3 `agent-profile upgrade`: catalog-version-aware reporting,
   interactive keep/adopt/customize choices with preview-only defaults, and the
   explicit `--write --adopt-recommended` scripted mutation path. Profile edits
