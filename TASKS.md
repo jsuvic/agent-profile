@@ -72,7 +72,7 @@ Spec 001 approved 2026-07-09 (ADR 0012 accepted).
 | I2 | Auto-tag workflow | done | [002-auto-tag-workflow.md](docs/specs/phase-28/issues/002-auto-tag-workflow.md) |
 | I3 | Publish job + dry-run gate + GitHub Release | done | [003-publish-job.md](docs/specs/phase-28/issues/003-publish-job.md) |
 | I4 | Trusted-publisher setup + rehearsal + release.md rewrite | human-gate | [004-trusted-publisher-rehearsal.md](docs/specs/phase-28/issues/004-trusted-publisher-rehearsal.md) |
-| I5 | Verified bump commit via the GitHub API | ready | [005-verified-bump-commit.md](docs/specs/phase-28/issues/005-verified-bump-commit.md) |
+| I5 | Verified bump commit via the GitHub API | done | [005-verified-bump-commit.md](docs/specs/phase-28/issues/005-verified-bump-commit.md) |
 
 I5 is a follow-up fix from the first live run: release-prepare's bump
 commit was unsigned and blocked by the require-signed-commits rule

@@ -53,17 +53,21 @@ jobs:
       - name: Verify metadata
         run: npm run check
 
+      # Create the branch and a single bump commit through the GitHub API so the
+      # commit is signed/Verified (a runner-side commit is unsigned and is
+      # rejected by the "require signed commits" rule). The helper omits any
+      # author/committer/signature field and asserts verification.verified === true.
+      - name: Create verified bump commit
+        id: bump
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/release/create-bump-commit.mjs "${{ steps.guard.outputs.version }}"
+
       - name: Open bump PR
         env:
           VERSION: ${{ steps.guard.outputs.version }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          branch="bump-${VERSION}"
-          git switch -c "${branch}"
-          git add -A
-          git commit -m "Release ${VERSION}"
-          git push -u origin "${branch}"
+          branch="${{ steps.bump.outputs.branch }}"
           gh pr create \
             --base master \
             --head "${branch}" \
