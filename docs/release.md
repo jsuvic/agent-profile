@@ -135,7 +135,21 @@ npx --yes agent-profile doctor
 
 If trusted publishing is unavailable, everything except the publish job
 still works: `release-prepare` opens the bump PR and `auto-tag` still tags.
-Publish the three packages locally, in dependency order, with 2FA:
+
+First build the publish artifacts. `apps/cli` publishes `dist/*` and
+`apps/web` publishes `build/`, both gitignored and produced only by
+`npm run build`; there are no `prepack`/`prepublishOnly` hooks, so a fresh
+checkout must build and verify before publishing or it ships stale or
+missing output:
+
+```bash
+npm ci
+npm run build
+node scripts/verify-package-metadata.mjs
+npm run verify:pack
+```
+
+Then publish the three packages, in dependency order, with 2FA:
 
 ```bash
 npm publish --workspace @agent-profile/web --otp <code>
