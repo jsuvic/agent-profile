@@ -4,6 +4,8 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+## 0.4.2 — 2026-07-10
+
 - Add Phase 27 I4 interactive drift reconciliation to `compile` (implementing
   `docs/specs/phase-27/003-drift-reconciliation.md`). At the point compile would
   refuse a hash-mismatched lockfile-owned file, an interactive TTY now shows the
