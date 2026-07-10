@@ -98,6 +98,7 @@ jobs:
         id: release
         env:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs['dry-run'] }}
+          RELEASE_PUBLISH_ENABLED: ${{ vars.RELEASE_PUBLISH_ENABLED }}
         run: |
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           if [ "$DRY_RUN" = "true" ]; then
@@ -107,18 +108,37 @@ jobs:
             echo "dry_run_arg=" >> "$GITHUB_OUTPUT"
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           fi
+          # Arm switch: a live publish proceeds only when the repository
+          # variable RELEASE_PUBLISH_ENABLED == 'true'. Dry-run ignores it.
+          if [ "$RELEASE_PUBLISH_ENABLED" = "true" ]; then
+            echo "armed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "armed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report unarmed live publish
+        if: steps.release.outputs.dry_run != 'true' && steps.release.outputs.armed == 'false'
+        run: echo "publisher not armed; skipping live publish (set RELEASE_PUBLISH_ENABLED=true to arm)"
+
+      # Fail before any registry mutation if the tag lacks a CHANGELOG section,
+      # so the release cannot publish packages and then be left without notes.
+      - name: Verify changelog section
+        run: node scripts/release/changelog-section.mjs "$GITHUB_REF_NAME" > /dev/null
 
       - name: Publish @agent-profile/web
+        if: steps.release.outputs.dry_run == 'true' || steps.release.outputs.armed == 'true'
         run: node scripts/release/publish-package.mjs "@agent-profile/web" "${{ steps.release.outputs.version }}" ${{ steps.release.outputs.dry_run_arg }}
 
       - name: Publish @agent-profile/cli
+        if: steps.release.outputs.dry_run == 'true' || steps.release.outputs.armed == 'true'
         run: node scripts/release/publish-package.mjs "@agent-profile/cli" "${{ steps.release.outputs.version }}" ${{ steps.release.outputs.dry_run_arg }}
 
       - name: Publish agent-profile
+        if: steps.release.outputs.dry_run == 'true' || steps.release.outputs.armed == 'true'
         run: node scripts/release/publish-package.mjs "agent-profile" "${{ steps.release.outputs.version }}" ${{ steps.release.outputs.dry_run_arg }}
 
       - name: Create GitHub Release
-        if: steps.release.outputs.dry_run != 'true'
+        if: steps.release.outputs.dry_run != 'true' && steps.release.outputs.armed == 'true'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |

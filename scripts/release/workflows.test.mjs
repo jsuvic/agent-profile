@@ -111,5 +111,72 @@ test("release-verify dry-run publish skips GitHub Release creation", () => {
 
   assert.match(releaseMode.run, /dry_run=true/u);
   assert.match(releaseMode.run, /dry_run=false/u);
-  assert.equal(createRelease.if, "steps.release.outputs.dry_run != 'true'");
+  assert.match(createRelease.if, /steps\.release\.outputs\.dry_run != 'true'/u);
+});
+
+test("release-verify arm switch gates live publish on RELEASE_PUBLISH_ENABLED", () => {
+  const source = readWorkflow(".github/workflows/release-verify.yml");
+  const workflow = parse(source);
+  const steps = workflow.jobs.publish.steps;
+  const releaseMode = steps.find((step) => step.name === "Resolve release mode");
+
+  // The arm flag derives from the repository variable.
+  assert.match(source, /vars\.RELEASE_PUBLISH_ENABLED/u);
+  assert.match(releaseMode.run, /armed=true/u);
+  assert.match(releaseMode.run, /armed=false/u);
+
+  // Every live publish step and the Release step carry the armed OR dry-run
+  // condition so an unarmed live push skips publishing, while dry-run always
+  // runs.
+  const armedCondition =
+    "steps.release.outputs.dry_run == 'true' || steps.release.outputs.armed == 'true'";
+  for (const name of [
+    "Publish @agent-profile/web",
+    "Publish @agent-profile/cli",
+    "Publish agent-profile",
+  ]) {
+    const step = steps.find((s) => s.name === name);
+    assert.equal(step.if, armedCondition, `${name} must carry the armed guard`);
+  }
+
+  const createRelease = steps.find((step) => step.name === "Create GitHub Release");
+  assert.equal(
+    createRelease.if,
+    "steps.release.outputs.dry_run != 'true' && steps.release.outputs.armed == 'true'",
+  );
+
+  // Dry-run resolution must not depend on the arm switch.
+  assert.match(releaseMode.run, /DRY_RUN/u);
+});
+
+test("release-verify validates the changelog section before publishing", () => {
+  const workflow = parse(readWorkflow(".github/workflows/release-verify.yml"));
+  const steps = workflow.jobs.publish.steps;
+  const stepNames = steps.map((step) => step.name);
+
+  const changelogIndex = stepNames.indexOf("Verify changelog section");
+  const webIndex = stepNames.indexOf("Publish @agent-profile/web");
+
+  assert.notEqual(changelogIndex, -1, "a changelog validation step must exist");
+  assert.ok(
+    changelogIndex < webIndex,
+    "changelog validation must precede the publish steps",
+  );
+  assert.match(
+    steps[changelogIndex].run,
+    /changelog-section\.mjs "\$GITHUB_REF_NAME"/u,
+  );
+});
+
+test("release-verify skips unarmed live publish with an explicit message", () => {
+  const workflow = parse(readWorkflow(".github/workflows/release-verify.yml"));
+  const steps = workflow.jobs.publish.steps;
+  const guard = steps.find(
+    (step) => step.name === "Report unarmed live publish",
+  );
+
+  assert.ok(guard, "an unarmed-skip notice step must exist");
+  assert.match(guard.if, /armed == 'false'/u);
+  assert.match(guard.if, /dry_run != 'true'/u);
+  assert.match(guard.run, /publisher not armed; skipping live publish/u);
 });
