@@ -24,6 +24,13 @@ flow.
   four-way for root instruction files (shared intent relocates into the
   AGENTS.md manual region), two-way keep/restore for other generated
   outputs. Accepts ADR 0011.
+- `006-flow-guidance-patch.md` - draft 2026-07-10 from the 0.4.1/0.4.2
+  field-test findings, 0.4.3 patch: state-computed next-step advice
+  (fixes the upgrade -> "run compile" -> dry-run dead-end loop),
+  lockfile-optional upgrade per the seeding rule, compile dry-run
+  nothing-written hint, strategy-question skip when nothing exists to
+  preserve, capability-picker client-applicability hints, post-write
+  report labeling.
 
 Planned (grill sessions before drafting):
 

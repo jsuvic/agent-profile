@@ -51,6 +51,7 @@ Specs 001, 002, 003 approved (001 2026-07-07; 002 and 003 2026-07-08);
 | I2 | Capability catalog + `upgrade.catalogVersion` provenance | done | [002-capability-catalog-provenance.md](docs/specs/phase-27/issues/002-capability-catalog-provenance.md) |
 | I3 | `upgrade` command: wizard, insertion editor, report mode | done | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md) |
 | I4 | Compile drift classification flow | done | [004-drift-reconciliation-flow.md](docs/specs/phase-27/issues/004-drift-reconciliation-flow.md) |
+| I5 | Flow guidance conformance patch (0.4.3) | ready | [005-flow-guidance-conformance.md](docs/specs/phase-27/issues/005-flow-guidance-conformance.md) |
 
 I3 and I4 are parallel-safe apart from shared `apps/cli/src/index.ts`
 touchpoints; coordinate merges (if I3 lands first, rebase I4 onto it).
@@ -71,14 +72,18 @@ Spec 001 approved 2026-07-09 (ADR 0012 accepted).
 | I1 | Release scripts + release-prepare workflow | done | [001-release-scripts-prepare-workflow.md](docs/specs/phase-28/issues/001-release-scripts-prepare-workflow.md) |
 | I2 | Auto-tag workflow | done | [002-auto-tag-workflow.md](docs/specs/phase-28/issues/002-auto-tag-workflow.md) |
 | I3 | Publish job + dry-run gate + GitHub Release | done | [003-publish-job.md](docs/specs/phase-28/issues/003-publish-job.md) |
-| I4 | Trusted-publisher setup + rehearsal + release.md rewrite | human-gate | [004-trusted-publisher-rehearsal.md](docs/specs/phase-28/issues/004-trusted-publisher-rehearsal.md) |
+| I4 | Trusted-publisher setup + rehearsal + release.md rewrite | done | [004-trusted-publisher-rehearsal.md](docs/specs/phase-28/issues/004-trusted-publisher-rehearsal.md) |
 | I5 | Verified bump commit via the GitHub API | done | [005-verified-bump-commit.md](docs/specs/phase-28/issues/005-verified-bump-commit.md) |
 
 I5 is a follow-up fix from the first live run: release-prepare's bump
 commit was unsigned and blocked by the require-signed-commits rule
 (PR #80 re-signed by hand). It does not block 0.4.2.
 
-I1 and I2 are parallel-safe (shared `scripts/release/` directory —
-coordinate the test-runner entry). I3 sequenced after I1. I4 is the
-maintainer's npm setup + the 0.4.2 live rehearsal, after phase-27 I4
-lands.
+## phase-29: Tabnine Workflow Skills (`docs/specs/phase-29/001-tabnine-workflow-skills.md`)
+
+Spec 001 approved 2026-07-10 (ADR 0013 accepted, superseding ADR 0007
+for the skills layer).
+
+| Id | Task | State | Brief |
+| --- | --- | --- | --- |
+| I1 | Shared-convention skill emission for Tabnine + exclusions + goldens | sequenced | [001-shared-skills-emission.md](docs/specs/phase-29/issues/001-shared-skills-emission.md) (after phase-27 I5, golden churn separation) |
