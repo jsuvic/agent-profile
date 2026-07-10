@@ -16,13 +16,35 @@ export const PUBLISH_ORDER = [
   "agent-profile",
 ];
 
-export function buildPublishArgs(pkg, { dryRun = false } = {}) {
+// npm publishes under the "latest" dist-tag by default. A SemVer prerelease
+// (e.g. 0.4.2-alpha.1) must not become latest, so derive a non-latest tag from
+// its prerelease identifier. Returns null for stable versions (keep latest).
+export function distTagForVersion(version) {
+  if (typeof version !== "string") {
+    return null;
+  }
+  // Drop build metadata, then take the prerelease segment after the first "-".
+  const prerelease = version.split("+")[0].split("-").slice(1).join("-");
+  if (!prerelease) {
+    return null;
+  }
+  const identifier = prerelease.split(".")[0];
+  return /^[A-Za-z][0-9A-Za-z-]*$/u.test(identifier)
+    ? identifier
+    : "prerelease";
+}
+
+export function buildPublishArgs(pkg, { dryRun = false, version } = {}) {
   // Build the live argument list, then append --dry-run for the rehearsal so a
-  // passing dry-run exercises the exact live args (--provenance and, for scoped
-  // packages, --access public).
+  // passing dry-run exercises the exact live args (--provenance, --access
+  // public on scoped packages, and the prerelease --tag when applicable).
   const args = ["publish", "--provenance"];
   if (pkg.startsWith("@")) {
     args.push("--access", "public");
+  }
+  const distTag = distTagForVersion(version);
+  if (distTag) {
+    args.push("--tag", distTag);
   }
   args.push("--workspace", pkg);
   if (dryRun) {
@@ -52,7 +74,7 @@ export async function runPublishPackage({
     return 0;
   }
 
-  const result = runCommand("npm", buildPublishArgs(pkg, { dryRun }), {
+  const result = runCommand("npm", buildPublishArgs(pkg, { dryRun, version }), {
     stdio: "inherit",
   });
   if (result.error) {

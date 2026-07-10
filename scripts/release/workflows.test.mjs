@@ -149,6 +149,25 @@ test("release-verify arm switch gates live publish on RELEASE_PUBLISH_ENABLED", 
   assert.match(releaseMode.run, /DRY_RUN/u);
 });
 
+test("release-verify validates the changelog section before publishing", () => {
+  const workflow = parse(readWorkflow(".github/workflows/release-verify.yml"));
+  const steps = workflow.jobs.publish.steps;
+  const stepNames = steps.map((step) => step.name);
+
+  const changelogIndex = stepNames.indexOf("Verify changelog section");
+  const webIndex = stepNames.indexOf("Publish @agent-profile/web");
+
+  assert.notEqual(changelogIndex, -1, "a changelog validation step must exist");
+  assert.ok(
+    changelogIndex < webIndex,
+    "changelog validation must precede the publish steps",
+  );
+  assert.match(
+    steps[changelogIndex].run,
+    /changelog-section\.mjs "\$GITHUB_REF_NAME"/u,
+  );
+});
+
 test("release-verify skips unarmed live publish with an explicit message", () => {
   const workflow = parse(readWorkflow(".github/workflows/release-verify.yml"));
   const steps = workflow.jobs.publish.steps;

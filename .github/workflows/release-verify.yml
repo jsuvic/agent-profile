@@ -120,6 +120,11 @@ jobs:
         if: steps.release.outputs.dry_run != 'true' && steps.release.outputs.armed == 'false'
         run: echo "publisher not armed; skipping live publish (set RELEASE_PUBLISH_ENABLED=true to arm)"
 
+      # Fail before any registry mutation if the tag lacks a CHANGELOG section,
+      # so the release cannot publish packages and then be left without notes.
+      - name: Verify changelog section
+        run: node scripts/release/changelog-section.mjs "$GITHUB_REF_NAME" > /dev/null
+
       - name: Publish @agent-profile/web
         if: steps.release.outputs.dry_run == 'true' || steps.release.outputs.armed == 'true'
         run: node scripts/release/publish-package.mjs "@agent-profile/web" "${{ steps.release.outputs.version }}" ${{ steps.release.outputs.dry_run_arg }}
