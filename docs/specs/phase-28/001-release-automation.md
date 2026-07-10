@@ -65,6 +65,18 @@ section into `## <version> — <date>` (fresh empty `Unreleased` added),
 runs `verify-package-metadata`, and opens the bump PR. Refuses when the
 target version is already tagged or published.
 
+Verified-commit contract (amended 2026-07-10 from the first live run):
+the bump commit is created through the GitHub API using the ambient
+`GITHUB_TOKEN`, not `git commit` on the runner. API-created commits are
+signed by GitHub and show as Verified, so the bump PR satisfies a
+branch-protection "require signed commits" rule; a runner-side
+`git commit` is unsigned and cannot merge under that rule. The workflow
+edits the files, then a `scripts/release/*.mjs` helper creates the branch
+and a single verified commit via the Git Data API (blobs -> tree ->
+commit -> ref) and opens the PR. W2 (auto-tag) is unaffected: it tags an
+already-merged, already-signed master commit, and the "require signed
+commits" rule does not govern tag refs.
+
 ### W2 - auto-tag (push to master)
 
 Reads `packages/agent-profile/package.json` version; if tag `v<version>`
@@ -128,7 +140,11 @@ tag; three npm packages published with provenance; a GitHub Release.
   containing no secret reference for npm.
 - `id-token: write` appears only on the publish job; every other job and
   workflow keeps `contents: read` (plus `contents: write` for W2's tag
-  push and the GitHub Release step).
+  push and the GitHub Release step, and `contents: write` +
+  `pull-requests: write` on W1 for the API commit and bump PR).
+- W1's bump commit is created via the GitHub API (verified/signed by
+  GitHub), never `git commit` on the runner, so it satisfies a
+  "require signed commits" branch-protection rule.
 - Publish preconditions, all mechanical: tag commit is an ancestor of
   master; tag version equals the wrapper, cli, and web manifest versions;
   verification steps passed in the same workflow run.
