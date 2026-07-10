@@ -3,6 +3,11 @@
   "version": "0.4.2",
   "description": "Command-line interface for Agent Profile Compiler.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jsuvic/agent-profile.git",
+    "directory": "apps/cli"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

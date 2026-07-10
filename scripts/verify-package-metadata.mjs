@@ -63,6 +63,31 @@ for (const { packagePath, manifest } of packages) {
   }
 }
 
+// Provenance requirement. Packages published with `npm publish --provenance`
+// (the release-verify publish job: web, cli, wrapper) must declare a
+// repository.url matching this GitHub repo, or npm rejects the upload with
+// E422 while validating the sigstore provenance bundle. Mirror that check
+// here so a missing/empty field fails at CI instead of mid-release.
+const provenanceRepoUrl = "https://github.com/jsuvic/agent-profile";
+const provenancePackagePaths = [
+  "apps/web/package.json",
+  "apps/cli/package.json",
+  "packages/agent-profile/package.json",
+];
+
+function normalizeRepoUrl(url) {
+  return (url ?? "").replace(/^git\+/u, "").replace(/\.git$/u, "");
+}
+
+for (const packagePath of provenancePackagePaths) {
+  const manifest = readJson(packagePath);
+  if (normalizeRepoUrl(manifest.repository?.url) !== provenanceRepoUrl) {
+    fail(
+      `${manifest.name} must set repository.url to ${provenanceRepoUrl} for --provenance publishing (${packagePath}); found "${manifest.repository?.url ?? ""}"`,
+    );
+  }
+}
+
 // Product-version coherence. The wrapper, CLI, and web package must all ship
 // the same version, and every cross-package pin in the user-visible chain
 // must be the exact same string. The landing-page VERSION constant must
