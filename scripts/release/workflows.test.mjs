@@ -35,6 +35,59 @@ test("release-prepare fetches tags before the existing-release guard", () => {
   assert.ok(fetchDepthIndex < guardIndex);
 });
 
+test("release-prepare creates the bump commit via the API, not git commit", () => {
+  const source = readWorkflow(".github/workflows/release-prepare.yml");
+  const workflow = parse(source);
+
+  // Verified-commit contract: no runner-side git commit anywhere.
+  assert.equal(
+    /git commit/u.test(source),
+    false,
+    "release-prepare must not run git commit (unsigned commits fail signing rule)",
+  );
+
+  // Keeps the permissions the API commit + bump PR need.
+  assert.deepEqual(workflow.permissions, {
+    contents: "write",
+    "pull-requests": "write",
+  });
+
+  const steps = workflow.jobs.prepare.steps;
+  const commitStep = steps.find((step) =>
+    /create-bump-commit\.mjs/u.test(step.run ?? ""),
+  );
+  assert.ok(
+    commitStep,
+    "a step must create the bump commit via create-bump-commit.mjs",
+  );
+
+  // The helper asserts verification.verified internally; the PR is still opened
+  // with gh pr create after it.
+  const prStep = steps.find((step) => /gh pr create/u.test(step.run ?? ""));
+  assert.ok(prStep, "the bump PR must still be opened with gh pr create");
+  assert.ok(
+    steps.indexOf(commitStep) < steps.indexOf(prStep),
+    "the commit must be created before the PR is opened",
+  );
+});
+
+test("release-verify warns loudly when a dispatch is not on a v* tag", () => {
+  const workflow = parse(readWorkflow(".github/workflows/release-verify.yml"));
+  // The warning lives in the always-running verify job: the publish job is
+  // tag-gated and would be skipped entirely on a branch dispatch, so a step
+  // inside it could never fire to make the skip loud.
+  const steps = workflow.jobs["release-verify"].steps;
+  const warn = steps.find((step) =>
+    /publish only runs on tags/u.test(step.run ?? ""),
+  );
+
+  assert.ok(warn, "a not-on-a-tag warning step must exist");
+  assert.match(warn.if, /startsWith\(github\.ref, 'refs\/tags\/v'\)/u);
+  assert.match(warn.if, /dry-run/u);
+  // Warns, never fails the run.
+  assert.match(warn.run, /::warning::/u);
+});
+
 test("release-verify publish job is tag-gated with scoped OIDC permissions and no npm token", () => {
   const source = readWorkflow(".github/workflows/release-verify.yml");
   const workflow = parse(source);
@@ -50,10 +103,7 @@ test("release-verify publish job is tag-gated with scoped OIDC permissions and n
   });
   assert.equal(workflow.jobs["release-verify"].permissions, undefined);
   assert.match(publish.if, /startsWith\(github\.ref, 'refs\/tags\/v'\)/u);
-  assert.equal(
-    workflow.on.workflow_dispatch.inputs["dry-run"].type,
-    "boolean",
-  );
+  assert.equal(workflow.on.workflow_dispatch.inputs["dry-run"].type, "boolean");
   const forbiddenTokenNames = [
     ["NPM", "TOKEN"].join("_"),
     ["NODE", "AUTH", "TOKEN"].join("_"),
@@ -84,8 +134,8 @@ test("release-verify publish job rebuilds artifacts before ordered publish scrip
   assert.equal(steps[buildIndex].run, "npm run build");
   assert.equal(steps[packIndex].run, "npm run verify:pack");
   assert.deepEqual(
-    [steps[webIndex], steps[cliIndex], steps[wrapperIndex]].map((step) =>
-      step.run.match(/publish-package\.mjs "([^"]+)"/u)?.[1],
+    [steps[webIndex], steps[cliIndex], steps[wrapperIndex]].map(
+      (step) => step.run.match(/publish-package\.mjs "([^"]+)"/u)?.[1],
     ),
     PUBLISH_ORDER,
   );
@@ -106,8 +156,12 @@ test("release-verify publish job rebuilds artifacts before ordered publish scrip
 test("release-verify dry-run publish skips GitHub Release creation", () => {
   const workflow = parse(readWorkflow(".github/workflows/release-verify.yml"));
   const steps = workflow.jobs.publish.steps;
-  const releaseMode = steps.find((step) => step.name === "Resolve release mode");
-  const createRelease = steps.find((step) => step.name === "Create GitHub Release");
+  const releaseMode = steps.find(
+    (step) => step.name === "Resolve release mode",
+  );
+  const createRelease = steps.find(
+    (step) => step.name === "Create GitHub Release",
+  );
 
   assert.match(releaseMode.run, /dry_run=true/u);
   assert.match(releaseMode.run, /dry_run=false/u);
@@ -118,7 +172,9 @@ test("release-verify arm switch gates live publish on RELEASE_PUBLISH_ENABLED", 
   const source = readWorkflow(".github/workflows/release-verify.yml");
   const workflow = parse(source);
   const steps = workflow.jobs.publish.steps;
-  const releaseMode = steps.find((step) => step.name === "Resolve release mode");
+  const releaseMode = steps.find(
+    (step) => step.name === "Resolve release mode",
+  );
 
   // The arm flag derives from the repository variable.
   assert.match(source, /vars\.RELEASE_PUBLISH_ENABLED/u);
@@ -139,7 +195,9 @@ test("release-verify arm switch gates live publish on RELEASE_PUBLISH_ENABLED", 
     assert.equal(step.if, armedCondition, `${name} must carry the armed guard`);
   }
 
-  const createRelease = steps.find((step) => step.name === "Create GitHub Release");
+  const createRelease = steps.find(
+    (step) => step.name === "Create GitHub Release",
+  );
   assert.equal(
     createRelease.if,
     "steps.release.outputs.dry_run != 'true' && steps.release.outputs.armed == 'true'",

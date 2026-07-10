@@ -26,6 +26,14 @@ jobs:
       AGENT_PROFILE_SITE_URL: https://agent-profile.com
 
     steps:
+      # The publish job is tag-gated, so dispatching this workflow on a branch
+      # runs verification but silently skips publish. Make that skip loud (warn
+      # only; never fail). Lives here, in the always-running verify job, because a
+      # step inside the skipped publish job could never fire on a branch dispatch.
+      - name: Warn if not dispatched on a v* tag
+        if: ${{ github.event_name == 'workflow_dispatch' && !startsWith(github.ref, 'refs/tags/v') && !inputs['dry-run'] }}
+        run: echo "::warning::Release Verify was not dispatched on a v* tag; publish only runs on tags — re-run on the tag."
+
       - name: Checkout
         uses: actions/checkout@v7
 
