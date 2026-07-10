@@ -67,15 +67,27 @@ target version is already tagged or published.
 
 Verified-commit contract (amended 2026-07-10 from the first live run):
 the bump commit is created through the GitHub API using the ambient
-`GITHUB_TOKEN`, not `git commit` on the runner. API-created commits are
-signed by GitHub and show as Verified, so the bump PR satisfies a
-branch-protection "require signed commits" rule; a runner-side
-`git commit` is unsigned and cannot merge under that rule. The workflow
-edits the files, then a `scripts/release/*.mjs` helper creates the branch
-and a single verified commit via the Git Data API (blobs -> tree ->
-commit -> ref) and opens the PR. W2 (auto-tag) is unaffected: it tags an
-already-merged, already-signed master commit, and the "require signed
-commits" rule does not govern tag refs.
+`GITHUB_TOKEN`, not `git commit` on the runner. GitHub signs an
+API-created commit as `github-actions[bot]` **only when the request
+carries no custom author, committer, or signature fields** (GitHub bot
+signature-verification rule); supplying those fields - the natural
+carry-over from the old `git config user.name`/`git commit` - produces an
+unsigned commit that fails the rule again. The contract is therefore
+outcome-based, not mechanism-only:
+
+- The create-commit request omits author, committer, and signature
+  entirely. A signing-capable path is required: GraphQL
+  `createCommitOnBranch` (which uses the authenticated identity and
+  cannot take arbitrary author fields) is preferred over raw Git Data
+  blobs/tree/commit for exactly this reason.
+- After creation, the workflow fetches the commit and asserts
+  `verification.verified === true`, failing the run otherwise. This guard
+  catches any implementation that reintroduces custom fields or uses a
+  non-signing path, so the bug cannot silently return.
+
+W2 (auto-tag) is unaffected: it tags an already-merged, already-signed
+master commit, and the "require signed commits" rule does not govern tag
+refs.
 
 ### W2 - auto-tag (push to master)
 

@@ -16,12 +16,25 @@ Replace the `git config` + `git commit` + `git push` tail of
 `release-prepare.yml` with a `scripts/release/create-bump-commit.mjs`
 helper that, after the version/lockfile/changelog edits are made in the
 working tree, creates a branch `bump-<version>` and a single commit
-through the GitHub Git Data API using `GITHUB_TOKEN` (blobs -> tree ->
-commit parented on the dispatch SHA -> create ref), then opens the PR
-(existing `gh pr create` is fine). API-created commits are signed by
-GitHub and show as Verified. The commit contents must be byte-identical
-to what the edits produced (same files, same bytes). W2 (auto-tag) is not
+through the GitHub API using `GITHUB_TOKEN`, then opens the PR (existing
+`gh pr create` is fine). The commit contents must be byte-identical to
+what the edits produced (same files, same bytes). W2 (auto-tag) is not
 touched.
+
+Signing is outcome-based, not just "use the API": GitHub signs an
+API-created commit as `github-actions[bot]` only when the request carries
+**no** custom author, committer, or signature fields. Therefore:
+
+- The create-commit request omits author, committer, and signature.
+  Prefer GraphQL `createCommitOnBranch` (uses the authenticated identity;
+  cannot take arbitrary author fields) over raw Git Data
+  blobs/tree/commit; do not port the old `github-actions[bot]`
+  name/email into the request.
+- After creating the commit, fetch it and assert
+  `verification.verified === true`; fail the workflow with a clear
+  message otherwise. This guard is mandatory - it makes any regression
+  (custom fields, non-signing path) fail loudly instead of silently
+  reintroducing the unsigned-commit bug.
 
 ## Non-goals
 
@@ -35,21 +48,26 @@ touched.
 
 The bump PR commit shows "Verified" on GitHub and is mergeable under a
 require-signed-commits rule; the committed tree is byte-identical to the
-runner-side edits (versions, lockfile, changelog roll); dispatch for an
-already-tagged/published version still refuses before creating anything.
+runner-side edits (versions, lockfile, changelog roll); the create-commit
+request carries no custom author/committer/signature fields; the workflow
+asserts `verification.verified === true` and fails otherwise; dispatch for
+an already-tagged/published version still refuses before creating
+anything.
 
 ## Expected RED proof
 
-Unit tests for the helper's tree assembly (correct paths, file modes,
-base64 content, parent SHA) fail before it exists; a shape assertion in
-`workflows.test.mjs` that release-prepare no longer runs `git commit`
-fails.
+Unit tests fail before the helper exists: (a) the request payload builder
+includes no author/committer/signature keys; (b) a post-create guard
+throws when `verification.verified` is `false`; (c) a shape assertion in
+`workflows.test.mjs` that release-prepare no longer runs `git commit`.
 
 ## Expected GREEN proof
 
-Helper unit tests green; `workflows.test.mjs` asserts the API-commit path
-and the absence of runner-side `git commit`; the next real dispatch
-produces a Verified bump commit (proven live, like the rest of W1).
+Helper unit tests green (no custom-field keys in the request; the guard
+throws on unverified and passes on verified); `workflows.test.mjs`
+asserts the API-commit path, the verification assertion step, and the
+absence of runner-side `git commit`; the next real dispatch produces a
+Verified bump commit.
 
 ## Seam under test
 
