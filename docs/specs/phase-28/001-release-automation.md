@@ -65,6 +65,30 @@ section into `## <version> — <date>` (fresh empty `Unreleased` added),
 runs `verify-package-metadata`, and opens the bump PR. Refuses when the
 target version is already tagged or published.
 
+Verified-commit contract (amended 2026-07-10 from the first live run):
+the bump commit is created through the GitHub API using the ambient
+`GITHUB_TOKEN`, not `git commit` on the runner. GitHub signs an
+API-created commit as `github-actions[bot]` **only when the request
+carries no custom author, committer, or signature fields** (GitHub bot
+signature-verification rule); supplying those fields - the natural
+carry-over from the old `git config user.name`/`git commit` - produces an
+unsigned commit that fails the rule again. The contract is therefore
+outcome-based, not mechanism-only:
+
+- The create-commit request omits author, committer, and signature
+  entirely. A signing-capable path is required: GraphQL
+  `createCommitOnBranch` (which uses the authenticated identity and
+  cannot take arbitrary author fields) is preferred over raw Git Data
+  blobs/tree/commit for exactly this reason.
+- After creation, the workflow fetches the commit and asserts
+  `verification.verified === true`, failing the run otherwise. This guard
+  catches any implementation that reintroduces custom fields or uses a
+  non-signing path, so the bug cannot silently return.
+
+W2 (auto-tag) is unaffected: it tags an already-merged, already-signed
+master commit, and the "require signed commits" rule does not govern tag
+refs.
+
 ### W2 - auto-tag (push to master)
 
 Reads `packages/agent-profile/package.json` version; if tag `v<version>`
@@ -128,7 +152,11 @@ tag; three npm packages published with provenance; a GitHub Release.
   containing no secret reference for npm.
 - `id-token: write` appears only on the publish job; every other job and
   workflow keeps `contents: read` (plus `contents: write` for W2's tag
-  push and the GitHub Release step).
+  push and the GitHub Release step, and `contents: write` +
+  `pull-requests: write` on W1 for the API commit and bump PR).
+- W1's bump commit is created via the GitHub API (verified/signed by
+  GitHub), never `git commit` on the runner, so it satisfies a
+  "require signed commits" branch-protection rule.
 - Publish preconditions, all mechanical: tag commit is an ancestor of
   master; tag version equals the wrapper, cli, and web manifest versions;
   verification steps passed in the same workflow run.
