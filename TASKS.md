@@ -42,8 +42,8 @@ project-MCP proof; Claude-first sequencing permitted).
 
 ## phase-27: Ownership + Upgrade Lifecycle (`docs/specs/phase-27/001-import-ownership-lockfile-conformance.md`)
 
-Specs 001, 002, 003 approved (001 2026-07-07; 002 and 003 2026-07-08);
-004 awaits a grill session.
+Specs 001, 002, 003, 006 approved and shipped (through 0.4.3); 004
+approved 2026-07-11 (ADR 0014 accepted).
 
 | Id | Task | State | Brief |
 | --- | --- | --- | --- |
@@ -52,6 +52,7 @@ Specs 001, 002, 003 approved (001 2026-07-07; 002 and 003 2026-07-08);
 | I3 | `upgrade` command: wizard, insertion editor, report mode | done | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md) |
 | I4 | Compile drift classification flow | done | [004-drift-reconciliation-flow.md](docs/specs/phase-27/issues/004-drift-reconciliation-flow.md) |
 | I5 | Flow guidance conformance patch (0.4.3) | done | [005-flow-guidance-conformance.md](docs/specs/phase-27/issues/005-flow-guidance-conformance.md) |
+| I6 | No-args interactive dispatcher | ready | [006-no-args-dispatcher.md](docs/specs/phase-27/issues/006-no-args-dispatcher.md) |
 
 I3 and I4 are parallel-safe apart from shared `apps/cli/src/index.ts`
 touchpoints; coordinate merges (if I3 lands first, rebase I4 onto it).
@@ -81,8 +82,8 @@ commit was unsigned and blocked by the require-signed-commits rule
 
 ## phase-29: Tabnine Workflow Skills (`docs/specs/phase-29/001-tabnine-workflow-skills.md`)
 
-Spec 001 approved 2026-07-10 (ADR 0013 accepted, superseding ADR 0007
-for the skills layer).
+Spec 001 approved 2026-07-10 (ADR 0013 accepted; ADR 0007 not
+superseded - it carries only a dated staleness note). Shipped in 0.4.3.
 
 | Id | Task | State | Brief |
 | --- | --- | --- | --- |
