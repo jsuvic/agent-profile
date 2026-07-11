@@ -4,6 +4,10 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Route interactive bare `agent-profile` invocations through a read-only
+  repository-state menu while preserving byte-identical non-TTY help and all
+  explicit subcommand contracts.
+
 ## 0.4.3 — 2026-07-11
 
 - Add Phase 29 I1 Tabnine workflow skills (implementing

@@ -519,7 +519,7 @@ const PROBE_SOURCE = `
 import { appendFileSync } from "node:fs";
 const LOG = process.env.CLACK_LOAD_LOG;
 export async function load(url, context, nextLoad) {
-  if (LOG && (url.includes("@clack/") || url.includes("wizard-clack") || url.includes("upgrade-clack"))) {
+  if (LOG && (url.includes("@clack/") || url.includes("wizard-clack") || url.includes("upgrade-clack") || url.includes("dispatch-clack") || url.endsWith("/dispatch.js"))) {
     appendFileSync(LOG, url + "\\n");
   }
   return nextLoad(url, context);
@@ -538,7 +538,7 @@ if (process.env.SENTINEL_MODE === "load") {
 const { runCli } = await import(process.env.CLI_INDEX_URL);
 const command = process.env.SENTINEL_COMMAND === "upgrade" ? "upgrade" : "init";
 const code = await runCli(
-  [command, "--root", process.env.CLI_ROOT, "--non-interactive"],
+  process.env.SENTINEL_COMMAND === "bare" ? [] : [command, "--root", process.env.CLI_ROOT, "--non-interactive"],
   { io: { stdout() {}, stderr() {} } },
 );
 process.exit(code);
@@ -552,7 +552,7 @@ register(process.env.PROBE_URL, import.meta.url);
 `;
 
 async function runSentinelChild(
-  mode: "non-interactive" | "upgrade-non-interactive" | "load",
+  mode: "non-interactive" | "upgrade-non-interactive" | "bare-non-interactive" | "load",
 ): Promise<{ status: number | null; loadLog: string; stderr: string }> {
   const scratch = await mkdtemp(
     path.join(tmpdir(), "agent-profile-clack-sentinel-"),
@@ -578,7 +578,7 @@ async function runSentinelChild(
       CLACK_ADAPTER_URL: new URL("./wizard-clack.js", import.meta.url).href,
       CLI_ROOT: cliRoot,
       SENTINEL_MODE: mode === "load" ? "load" : "non-interactive",
-      SENTINEL_COMMAND: mode === "upgrade-non-interactive" ? "upgrade" : "init",
+      SENTINEL_COMMAND: mode === "upgrade-non-interactive" ? "upgrade" : mode === "bare-non-interactive" ? "bare" : "init",
     },
   });
   const loadLog = existsSync(logPath)
@@ -614,6 +614,12 @@ test("non-interactive upgrade never evaluates the clack module (runtime sentinel
     "",
     `clack must stay unloaded in a non-interactive upgrade, saw:\n${loadLog}`,
   );
+});
+
+test("non-interactive bare invocation never evaluates clack or dispatcher detection", async () => {
+  const { status, loadLog, stderr } = await runSentinelChild("bare-non-interactive");
+  assert.equal(status, 0, `child exited non-zero:\n${stderr}`);
+  assert.equal(loadLog, "", `clack must stay unloaded for bare non-TTY help, saw:\n${loadLog}`);
 });
 
 test("runtime sentinel probe actually detects the clack module when loaded", async () => {

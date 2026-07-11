@@ -72,6 +72,10 @@ parity fixtures so post-reconciliation `init --import` and `compile` agree.
 
 Task states are tracked in the root `TASKS.md` ledger.
 
+I6 adds the approved no-arguments interactive dispatcher: a read-only router
+that offers existing commands based on repository state. Explicit verbs remain
+the scripting interface, and non-interactive bare help remains unchanged.
+
 ## Decisions
 
 - The import-report fix is a conformance patch, not a design change:

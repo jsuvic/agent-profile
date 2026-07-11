@@ -78,6 +78,13 @@ import {
 } from "@agent-profile/doctor";
 
 import type { LogoCommand } from "./branding.js";
+import {
+  buildCompileWrites,
+  findLockfileOwnedDrift,
+  planCompileDryRun,
+  planRegionAwareWrites,
+} from "./compile-plan.js";
+import type { DispatcherPrompts } from "./dispatch-clack.js";
 import type { Presenter, TaskLogSink } from "./presentation.js";
 import {
   extractManualAdditions,
@@ -121,6 +128,7 @@ export type CliOptions = {
   prompts?: CliPrompts;
   upgradePrompts?: UpgradePrompts;
   reconcilePrompts?: ReconcilePrompts;
+  dispatcherPrompts?: DispatcherPrompts;
   nonInteractive?: boolean;
 };
 
@@ -276,7 +284,7 @@ const require = createRequire(import.meta.url);
 // CLI version stamped into the interactive logo. Read at runtime from the
 // package manifest (one level up from both src/index.ts and dist/index.js) so
 // it never drifts from the published version.
-const CLI_VERSION: string = ((): string => {
+export const CLI_VERSION: string = ((): string => {
   try {
     return (
       (require("../package.json") as { version?: string }).version ?? "0.0.0"
@@ -320,7 +328,58 @@ export async function runCli(
   const io: CliIo = { ...DEFAULT_IO, ...options.io };
   const cwd = path.resolve(options.cwd ?? process.cwd());
 
-  if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
+  if (argv.length === 0) {
+    if (!isInteractiveTty(io) && !options.dispatcherPrompts) {
+      io.stdout(formatHelp());
+      return 0;
+    }
+    const { runBareDispatcher } = await import("./dispatch.js");
+    return runBareDispatcher(
+      cwd,
+      io,
+      options,
+      {
+        doctor: () => runDoctorCommand([], cwd, io),
+        init: () =>
+          runInit([], cwd, io, {
+            ...(options.prompts ? { prompts: options.prompts } : {}),
+            ...(options.nonInteractive !== undefined
+              ? { nonInteractive: options.nonInteractive }
+              : {}),
+          }),
+        upgrade: () =>
+          runUpgrade([], cwd, io, {
+            ...(options.upgradePrompts
+              ? { prompts: options.upgradePrompts }
+              : {}),
+            ...(options.nonInteractive !== undefined
+              ? { nonInteractive: options.nonInteractive }
+              : {}),
+          }),
+        ui: () => runUi([], cwd, io, options.launchUi ?? launchPublishedUi),
+        "compile-write": () =>
+          runCompile(["--write"], cwd, io, {
+            ...(options.reconcilePrompts
+              ? { prompts: options.reconcilePrompts }
+              : {}),
+            ...(options.nonInteractive !== undefined
+              ? { nonInteractive: options.nonInteractive }
+              : {}),
+          }),
+        "compile-reconcile": () =>
+          runCompile([], cwd, io, {
+            ...(options.reconcilePrompts
+              ? { prompts: options.reconcilePrompts }
+              : {}),
+            ...(options.nonInteractive !== undefined
+              ? { nonInteractive: options.nonInteractive }
+              : {}),
+          }),
+      },
+      CLI_VERSION,
+    );
+  }
+  if (argv[0] === "--help" || argv[0] === "-h") {
     io.stdout(formatHelp());
     return 0;
   }
@@ -953,7 +1012,11 @@ async function runCompile(
   // route the outcome through the existing region-aware planner + atomic
   // write. Non-interactive and --force runs skip this entirely so their
   // frozen refusal text and exit code stay byte-identical.
-  const reconcileInteractive = shouldReconcileInteractively(parsed, options, io);
+  const reconcileInteractive = shouldReconcileInteractively(
+    parsed,
+    options,
+    io,
+  );
 
   if (reconcileInteractive) {
     const rootDriftPaths = regionPlan.refusals
@@ -1033,21 +1096,13 @@ async function runCompile(
     return 3;
   }
 
-  const generatedLockfile = createLockfileFile({
+  const writes = buildCompileWrites({
     profilePath: safeProfilePath.path,
     profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
-    mixedOutputs: regionPlan.mixedOutputs,
+    regionPlan,
   });
-  const lockfile = retainManualOwnedLockOutputs(
-    generatedLockfile,
-    regionPlan.manualOutputs,
-  );
-  const writes = [
-    ...regionPlan.writes,
-    { path: lockfile.path, bytes: lockfile.bytes },
-  ];
 
   if (parsed.write && !parsed.force) {
     let protectedPaths: ProtectedGeneratedPath[];
@@ -1420,18 +1475,21 @@ async function runDriftReconciliation(input: {
     }
   }
 
-  const generatedLockfile = createLockfileFile({
+  const writes = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: input.compileResult.templates,
     files: input.compileResult.files,
-    mixedOutputs,
+    regionPlan: {
+      writes: [...writeByPath.entries()].map(([path, bytes]) => ({
+        path,
+        bytes,
+      })),
+      mixedOutputs,
+      manualOutputs,
+      refusals: [],
+    },
   });
-  const lockfile = retainManualOwnedLockOutputs(generatedLockfile, manualOutputs);
-  const writes: PlannedWrite[] = [
-    ...[...writeByPath.entries()].map(([path, bytes]) => ({ path, bytes })),
-    { path: lockfile.path, bytes: lockfile.bytes },
-  ];
 
   prompts.showSummary(formatReconciliationSummary(actions));
 
@@ -1596,9 +1654,7 @@ async function runInit(
     if (dispatch.kind === "declined") {
       if (existingProfileBytes && !parsed.json && !parsed.quiet) {
         io.stdout(
-          formatExistingInitAdvice(
-            await getExistingInitLockfileState(rootDir),
-          ),
+          formatExistingInitAdvice(await getExistingInitLockfileState(rootDir)),
         );
       }
       return 0;
@@ -3137,6 +3193,15 @@ async function getProtectedGeneratedPaths(
   const outputsByPath = new Map<string, LockOutputV2>(
     lockfileV2.outputs.map((output) => [output.path, output]),
   );
+  const generatedOwnedDrift = await findLockfileOwnedDrift(
+    rootDir,
+    lockfileV2.outputs,
+    new Set(existingFiles.map((item) => item.file.path)),
+  );
+  const generatedOwnedDriftPaths = new Set([
+    ...generatedOwnedDrift.region,
+    ...generatedOwnedDrift.other,
+  ]);
   const protectedPaths: ProtectedGeneratedPath[] = [];
 
   for (const item of existingFiles) {
@@ -3170,7 +3235,7 @@ async function getProtectedGeneratedPaths(
       continue;
     }
 
-    if (sha256Hex(item.bytes) !== lockOutput.sha256) {
+    if (generatedOwnedDriftPaths.has(item.file.path)) {
       protectedPaths.push({
         path: item.file.path,
         reason: "hash mismatch",
@@ -3255,7 +3320,7 @@ async function createOrApplyWritePlan(
   try {
     return write
       ? await applyWritePlan({ rootDir, writes })
-      : await planWrites({ rootDir, writes });
+      : await planCompileDryRun(rootDir, writes);
   } catch {
     io.stderr(
       formatSimpleError(
@@ -4239,7 +4304,7 @@ function formatRegionAwareWriteRefusals(
   return `${lines.join("\n")}\n`;
 }
 
-type RegionAwareWritePlan = {
+export type RegionAwareWritePlan = {
   writes: PlannedWrite[];
   mixedOutputs: MixedOutputDescriptor[];
   manualOutputs: LockOutputV2[];
@@ -4247,154 +4312,6 @@ type RegionAwareWritePlan = {
 };
 
 const REGION_AWARE_PATHS = new Set(["AGENTS.md", "CLAUDE.md"]);
-
-async function planRegionAwareWrites(
-  rootDir: string,
-  files: GeneratedFile[],
-  options: { force: boolean } = { force: false },
-): Promise<RegionAwareWritePlan> {
-  const lockfile = await readLockfileForRegions(rootDir);
-  const writes: PlannedWrite[] = [];
-  const mixedOutputs: MixedOutputDescriptor[] = [];
-  const manualOutputs: LockOutputV2[] = [];
-  const refusals: RegionAwareRefusal[] = [];
-
-  for (const file of files) {
-    const lockOutput = lockfile?.outputs.find(
-      (output) => output.path === file.path,
-    );
-
-    // Manual-owned files (root or otherwise) are the user's now: APC stops
-    // regenerating them and retains the lockfile entry verbatim. This is the
-    // 27/001 semantic the interactive drift "keep" classification reuses. Only
-    // paths already recorded manual-owned reach here, so repos without such
-    // entries keep byte-identical output.
-    if (lockOutput?.ownership === "manual-owned") {
-      manualOutputs.push(lockOutput);
-      continue;
-    }
-
-    if (!REGION_AWARE_PATHS.has(file.path)) {
-      writes.push({ path: file.path, bytes: file.bytes });
-      continue;
-    }
-
-    const existingRead = await readRegionAwareFile(rootDir, file.path);
-
-    if (existingRead.refused) {
-      refusals.push({ path: file.path, reason: "symlink" });
-      continue;
-    }
-
-    const existing = existingRead.bytes;
-    if (!existing) {
-      writes.push({ path: file.path, bytes: file.bytes });
-      continue;
-    }
-
-    if (lockOutput?.ownership === "generated-owned") {
-      // Phase 14: region-aware paths bypass getProtectedGeneratedPaths, so
-      // verify the on-disk file still matches the lockfile hash here.
-      // Mismatches indicate user edits to a lockfile-owned generated file
-      // and must require --force, mirroring the behavior for every other
-      // generated output.
-      if (!options.force && sha256Hex(existing) !== lockOutput.sha256) {
-        refusals.push({ path: file.path, reason: "hash-mismatch" });
-        continue;
-      }
-      writes.push({ path: file.path, bytes: file.bytes });
-      continue;
-    }
-
-    if (lockOutput?.ownership === "mixed") {
-      const buffer = Buffer.from(existing);
-      if (!hasAllRegionMarkers(buffer)) {
-        refusals.push({ path: file.path, reason: "partial-markers" });
-        continue;
-      }
-      const generatedInner = generatedInnerBytesFor(file);
-      const updated = replaceGeneratedRegion(buffer, generatedInner);
-      if (!updated) {
-        refusals.push({ path: file.path, reason: "duplicate-markers" });
-        continue;
-      }
-      writes.push({ path: file.path, bytes: updated });
-      mixedOutputs.push({
-        path: file.path,
-        target: file.target,
-        templateId: file.templateId,
-        regionHash: sha256Hex(generatedInner),
-      });
-      continue;
-    }
-
-    const existingBuffer = Buffer.from(existing);
-
-    if (hasAllRegionMarkers(existingBuffer)) {
-      // Mixed file with no lockfile evidence yet — adopt without overwriting
-      // the manual region byte-for-byte. This is the post-init regions flow.
-      const generatedInner = generatedInnerBytesFor(file);
-      const updated = replaceGeneratedRegion(existingBuffer, generatedInner);
-      if (!updated) {
-        refusals.push({ path: file.path, reason: "duplicate-markers" });
-        continue;
-      }
-      writes.push({ path: file.path, bytes: updated });
-      mixedOutputs.push({
-        path: file.path,
-        target: file.target,
-        templateId: file.templateId,
-        regionHash: sha256Hex(generatedInner),
-      });
-      continue;
-    }
-
-    if (hasAnyRegionMarker(existingBuffer)) {
-      refusals.push({ path: file.path, reason: "partial-markers" });
-      continue;
-    }
-
-    refusals.push({ path: file.path, reason: "unknown-ownership" });
-  }
-
-  return { writes, mixedOutputs, manualOutputs, refusals };
-}
-
-function retainManualOwnedLockOutputs(
-  lockfileFile: GeneratedFile,
-  manualOutputs: readonly LockOutputV2[],
-): GeneratedFile {
-  if (manualOutputs.length === 0) return lockfileFile;
-
-  const result = validateLockfileText(
-    Buffer.from(lockfileFile.bytes).toString("utf8"),
-  );
-  if (!result.ok) {
-    throw new Error("compiler generated an invalid lockfile");
-  }
-
-  const lockfile = toLockfileV2View(result.lockfile);
-  const manualByPath = new Map(
-    manualOutputs.map((output) => [output.path, output]),
-  );
-  const bytes = Buffer.from(
-    serializeLockfile({
-      ...lockfile,
-      outputs: lockfile.outputs.map(
-        (output) => manualByPath.get(output.path) ?? output,
-      ),
-    }),
-    "utf8",
-  );
-  return { ...lockfileFile, bytes, sha256: sha256Hex(bytes) };
-}
-
-function generatedInnerBytesFor(file: GeneratedFile): Buffer {
-  // The whole rendered file becomes the generated inner body. Manual region
-  // bytes are preserved by the caller; serializeMixedFile is not used here
-  // because we only update the generated region in-place.
-  return Buffer.from(file.bytes);
-}
 
 async function main(): Promise<void> {
   process.exitCode = await runCli();
