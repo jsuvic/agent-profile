@@ -2,20 +2,24 @@
 
 ## Status
 
-Accepted 2026-07-10 with phase-29/001 spec approval. Supersedes ADR
-0007's documentation-only stance for the skills layer (ADR 0007 remains
-correct for the guidance layer).
+Accepted 2026-07-10 with phase-29/001 spec approval. This does not
+supersede ADR 0007: that ADR decided logging guidance ships as an
+always-read topic, a decision unaffected here. ADR 0007 receives only a
+dated note that one rationale premise ("skills reach only Claude/Codex")
+is outdated.
 
 ## Context
 
-ADR 0007 fixed Tabnine as documentation-only because Tabnine had no
-mechanism to invoke instruction content. Tabnine CLI now ships Agent
-Skills that discover `<project>/.agents/skills/<name>/SKILL.md` - the
-exact path and frontmatter format APC already emits for Codex - and
-Subagents in a proprietary `.tabnine/agent/agents/` path gated behind an
-experimental settings flag. A field test (0.4.1, 2026-07-10) showed users
-selecting capability packs on Tabnine-only setups and expecting the
-workflow skills.
+Before phase-29, APC emitted workflow skills only for Claude and Codex
+because Tabnine had no documented mechanism to invoke instruction
+content - the premise recorded (for logging) in ADR 0007. Tabnine CLI
+now ships Agent Skills that discover
+`<project>/.agents/skills/<name>/SKILL.md` - the exact path and
+frontmatter format APC already emits for Codex - and Subagents in a
+proprietary `.tabnine/agent/agents/` path gated behind an experimental
+settings flag. A field test (0.4.1, 2026-07-10) showed users selecting
+capability packs on Tabnine-only setups and expecting the workflow
+skills.
 
 ## Decision
 

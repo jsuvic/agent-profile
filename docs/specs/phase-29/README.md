@@ -9,9 +9,10 @@ subagents stay excluded while experimental-flag-gated.
 
 ## Specs
 
-- `001-tabnine-workflow-skills.md` - draft 2026-07-10, awaiting approval
-  (accepts ADR 0013, which supersedes ADR 0007's documentation-only
-  stance for the skills layer).
+- `001-tabnine-workflow-skills.md` - approved 2026-07-10 (accepts ADR
+  0013). Does not supersede ADR 0007 (that ADR's logging-topic decision
+  stands); ADR 0007 gets only a dated staleness note on one rationale
+  premise.
 
 ## Issues
 

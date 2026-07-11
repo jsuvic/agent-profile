@@ -8,8 +8,16 @@ verified the same day: Agent Skills discovery includes
 `<project>/.agents/skills/<name>/SKILL.md` with the same
 frontmatter-plus-markdown format APC already emits; subagents live in the
 proprietary `.tabnine/agent/agents/` path behind an experimental settings
-flag. Accepts ADR 0013 on approval (supersedes ADR 0007's
-documentation-only premise).
+flag. Accepts ADR 0013 on approval.
+
+Note (2026-07-10): an earlier draft claimed this supersedes ADR 0007.
+It does not. ADR 0007 decided that *logging guidance* ships as an
+always-read topic, not a skill; that decision stands regardless of
+Tabnine's skill support (an always-on convention belongs in the
+always-read layer on the merits). Phase-29 only makes Tabnine
+skill-capable for the *workflow* skills, a separate concern. ADR 0007
+receives a one-line staleness note (its "skills reach only Claude/Codex"
+rationale premise is dated), not a supersession.
 
 ## Problem
 
@@ -17,8 +25,9 @@ Tabnine-only setups receive guidelines only. Users selecting capability
 packs expect the workflow skills (grill-change, sdd-change, tdd-change,
 final-review) - the 0.4.1 field test surfaced exactly this expectation -
 and Tabnine CLI now discovers skills natively from the shared
-`.agents/skills/` convention. ADR 0007's premise (no invocation
-mechanism) is outdated for the skills layer.
+`.agents/skills/` convention. The pre-phase-29 assumption that Tabnine
+has no invocation mechanism (a rationale premise in ADR 0007, and the
+reason workflow skills were never emitted for it) is outdated.
 
 ## Goal
 
@@ -105,8 +114,9 @@ guidance/skill layering strict.
 4. No dangling cross-reference in any pack x client matrix combination
    including Tabnine-only (extends the existing conditional-pointer
    tests).
-5. The Tabnine notes caveat line appears exactly once; ADR 0007 is
-   marked superseded by ADR 0013.
+5. The Tabnine notes caveat line appears exactly once; ADR 0007 gains a
+   dated staleness note (its "skills reach only Claude/Codex" premise is
+   outdated) while its decision is left intact; ADR 0013 is Accepted.
 
 ## Tests
 
@@ -123,8 +133,10 @@ condition, add the exclusion + note, regenerate goldens per spec.
 
 ## Documentation Updates
 
-- ADR 0013 accepted; ADR 0007 status amended to "Superseded by ADR
-  0013 (2026-07-10)" with its guidance-layer scope noted.
+- ADR 0013 accepted. ADR 0007 gains a dated staleness note that its
+  "skills reach only Claude/Codex" rationale premise is outdated
+  (Tabnine added Agent Skills); its decision (logging guidance is an
+  always-read topic) is unchanged and NOT superseded.
 - docs/targets Tabnine page; CHANGELOG; phase-29 README.
 
 ## Issue Plan

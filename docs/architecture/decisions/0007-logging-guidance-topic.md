@@ -4,6 +4,15 @@
 
 Accepted with phase-25 approval (2026-07-06)
 
+Note (2026-07-10, phase-29): the Rationale premise that "skills reach
+only skill-capable clients (Claude, Codex)" is outdated - Tabnine CLI
+added Agent Skills that discover the shared `.agents/skills/`
+convention. This does not change the decision: logging guidance is an
+always-on convention, so it belongs in the always-read topic layer
+regardless of which clients support skills. ADR 0013 records the
+separate decision to emit *workflow* skills for Tabnine and does not
+supersede this ADR.
+
 ## Context
 
 Phase 25 adds a stack-agnostic logging convention that APC emits into

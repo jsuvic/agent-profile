@@ -22,8 +22,10 @@ when Claude or Codex is enabled; Tabnine-only setups get an
 informational compile note naming them and the reason (phase-22
 `automation_target_not_generated` pattern). Generated Tabnine notes gain
 one caveat line (Agent Skills requires a current Tabnine CLI
-generation). Amend ADR 0007's status to "Superseded by ADR 0013
-(2026-07-10)" scoped to the skills layer.
+generation). Add a dated staleness note to ADR 0007 that its "skills
+reach only Claude/Codex" rationale premise is outdated (Tabnine added
+Agent Skills); do NOT change ADR 0007's status or decision - it is not
+superseded (its logging-topic decision stands).
 
 ## Non-goals
 
@@ -75,8 +77,8 @@ should NOT need it - emission-condition change, not a new capability).
   branch (prefer condition parameters over new template text)
 - `apps/cli/src/wizard.ts` (capability availability for Tabnine-only:
   reviewer subagents stay unavailable; workflow packs become available)
-- golden fixtures; `docs/architecture/decisions/0007-*.md` status line;
-  docs/targets Tabnine page; CHANGELOG
+- golden fixtures; `docs/architecture/decisions/0007-*.md` staleness
+  note (not the status/decision); docs/targets Tabnine page; CHANGELOG
 
 ## Dependencies
 
@@ -96,8 +98,8 @@ verbatim safety rules render identically across clients.
 
 ## Documentation impact
 
-ADR 0007 supersession line; docs/targets Tabnine page; CHANGELOG;
-phase-29 README.
+ADR 0007 staleness note (premise only, decision unchanged);
+docs/targets Tabnine page; CHANGELOG; phase-29 README.
 
 ## Implementation context
 
@@ -112,5 +114,5 @@ are phase-22; the note pattern is `automation_target_not_generated`.
 
 Byte-identity goldens audited (codex+tabnine shared files vs
 codex-only); exclusion note text reviewed; no `.tabnine/agent/` path
-anywhere in emission; ADR 0007 amendment present; verbatim rules
-byte-equal across renderings.
+anywhere in emission; ADR 0007 staleness note present with its status
+and decision unchanged; verbatim rules byte-equal across renderings.
