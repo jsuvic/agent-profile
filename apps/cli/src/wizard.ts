@@ -718,13 +718,16 @@ export function formatWizardPlan(
     lines.push(
       `Advisory hooks: ${outcome.advisoryHooks ? "enabled" : "disabled"}`,
     );
+    // Phase 29 (I1): a Tabnine-only setup now emits the workflow and loop
+    // skills to the shared `.agents/skills/` convention, so the packs do
+    // produce artifacts; the plan's `generate` lines above list them.
     if (
       outcome.clients.length === 1 &&
       outcome.clients[0] === "tabnine" &&
       outcome.skillPacks.length > 0
     ) {
       lines.push(
-        `Note: selected packs produce no artifacts for the selected clients: ${outcome.skillPacks.join(", ")}.`,
+        "Note: Tabnine Agent Skills discovery of .agents/skills/ requires a current Tabnine CLI generation.",
       );
     }
   }

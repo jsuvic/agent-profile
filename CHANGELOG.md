@@ -4,6 +4,23 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Add Phase 29 I1 Tabnine workflow skills (implementing
+  `docs/specs/phase-29/001-tabnine-workflow-skills.md`; ADR 0013). The shared
+  `.agents/skills/` emission condition extends from "Codex enabled" to "Codex or
+  Tabnine enabled", so Tabnine-only setups now emit the instruction-only
+  workflow skills (`grill-change`, `request-to-spec-issues`, `sdd-change`,
+  `tdd-change`, `final-review`), the selected review, specialist,
+  `mcp-fit-check`, and phase-22 loop skills to the shared convention Tabnine CLI
+  discovers - one file per skill, guidelines unchanged. Delegation-dependent
+  skills (`subagent-driven-change`, `implement-next`) still require a
+  delegation-capable client (Claude or Codex); a Tabnine-only setup omits them
+  and gets an informational compile note. A single caveat note reports that
+  Agent Skills discovery requires a current Tabnine CLI generation. Enabling
+  Tabnine alongside Codex changes no existing `.agents/skills/` byte
+  (golden-proven); nothing is written under `.tabnine/agent/` and Tabnine
+  `settings.json` is never touched. ADR 0007's status is amended to note
+  supersession by ADR 0013 for the skills layer.
+
 ## 0.4.3 — 2026-07-11
 
 - Correct Phase 27 command-flow guidance: init now names the ordered

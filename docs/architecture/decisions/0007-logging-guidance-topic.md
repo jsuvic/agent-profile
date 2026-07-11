@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted with phase-25 approval (2026-07-06)
+Superseded by ADR 0013 (2026-07-10) for the skills layer
 
 Note (2026-07-10, phase-29): the Rationale premise that "skills reach
 only skill-capable clients (Claude, Codex)" is outdated - Tabnine CLI

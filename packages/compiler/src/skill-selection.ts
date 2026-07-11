@@ -185,6 +185,71 @@ export function resolveSelectedSkills(profile: AiProfile): SkillId[] {
   });
 }
 
+// Phase 29 (I1, ADR 0013): delegation-dependent skills drive the
+// implementer -> spec-reviewer -> code-quality-reviewer chain, which targets a
+// delegation-capable client (Claude or Codex). A Tabnine-only setup gets the
+// instruction-only workflow and loop skills but excludes these two, plus an
+// informational compile note.
+export const DELEGATION_DEPENDENT_SKILLS = [
+  "subagent-driven-change",
+  "implement-next",
+] as const satisfies readonly SkillId[];
+
+/**
+ * Whether the profile enables a delegation-capable client. When false (a
+ * Tabnine-only setup), the delegation-dependent skills are excluded from the
+ * shared `.agents/skills/` emission.
+ */
+export function hasDelegationCapableClient(clients: {
+  codex: boolean;
+  claude: boolean;
+}): boolean {
+  return clients.codex || clients.claude;
+}
+
+/**
+ * The skills actually emitted to a workflow-skills target for this profile:
+ * `resolveSelectedSkills` minus the delegation-dependent skills when no
+ * delegation-capable client is enabled (Tabnine-only). Emission and required
+ * template-id resolution both route through this so files and lockfile stay in
+ * step.
+ */
+export function resolveEmittedSkills(profile: AiProfile): SkillId[] {
+  const skills = resolveSelectedSkills(profile);
+  if (
+    hasDelegationCapableClient({
+      codex: profile.clients.codex.enabled,
+      claude: profile.clients.claude.enabled,
+    })
+  ) {
+    return skills;
+  }
+  return skills.filter(
+    (skill) =>
+      !(DELEGATION_DEPENDENT_SKILLS as readonly SkillId[]).includes(skill),
+  );
+}
+
+/**
+ * The delegation-dependent skills that a Tabnine-only setup would have selected
+ * but excludes; empty when a delegation-capable client is enabled. Drives the
+ * informational compile note.
+ */
+export function excludedDelegationSkills(profile: AiProfile): SkillId[] {
+  if (
+    hasDelegationCapableClient({
+      codex: profile.clients.codex.enabled,
+      claude: profile.clients.claude.enabled,
+    })
+  ) {
+    return [];
+  }
+  const selected = new Set(resolveSelectedSkills(profile));
+  return (DELEGATION_DEPENDENT_SKILLS as readonly SkillId[]).filter((skill) =>
+    selected.has(skill),
+  );
+}
+
 export function getCapabilityArtifactPaths(input: {
   clients: { tabnine: boolean; codex: boolean; claude: boolean };
   skillPacks: ReadonlyArray<AiProfileSkillPackId>;
@@ -201,8 +266,22 @@ export function getCapabilityArtifactPaths(input: {
   });
   const paths: string[] = [];
 
-  if (input.clients.codex) {
-    for (const skill of skills) {
+  // Phase 29 (I1): the shared `.agents/skills/` convention is discovered by
+  // Codex and Tabnine alike. A Tabnine-only setup (no delegation-capable
+  // client) excludes the delegation-dependent skills.
+  if (input.clients.codex || input.clients.tabnine) {
+    const emitted = hasDelegationCapableClient({
+      codex: input.clients.codex,
+      claude: input.clients.claude,
+    })
+      ? skills
+      : skills.filter(
+          (skill) =>
+            !(DELEGATION_DEPENDENT_SKILLS as readonly SkillId[]).includes(
+              skill,
+            ),
+        );
+    for (const skill of emitted) {
       paths.push(`.agents/skills/${skill}/SKILL.md`);
     }
   }
