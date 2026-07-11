@@ -18,10 +18,9 @@ All notable changes to Agent Profile Compiler will be documented in this file.
   Agent Skills discovery requires a current Tabnine CLI generation. Enabling
   Tabnine alongside Codex changes no existing `.agents/skills/` byte
   (golden-proven); nothing is written under `.tabnine/agent/` and Tabnine
-  `settings.json` is never touched. ADR 0007's status is amended to note
-  supersession by ADR 0013 for the skills layer.
-
-## 0.4.3 — 2026-07-11
+  `settings.json` is never touched. ADR 0007 gains a dated note that its
+  "skills reach only Claude/Codex" premise is outdated; its logging-topic
+  decision is unchanged and is not superseded.
 
 - Correct Phase 27 command-flow guidance: init now names the ordered
   `compile --write` then `upgrade` path; compile dry-run explicitly says that
