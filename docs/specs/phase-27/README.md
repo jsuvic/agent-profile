@@ -24,19 +24,22 @@ flow.
   four-way for root instruction files (shared intent relocates into the
   AGENTS.md manual region), two-way keep/restore for other generated
   outputs. Accepts ADR 0011.
-- `006-flow-guidance-patch.md` - draft 2026-07-10 from the 0.4.1/0.4.2
-  field-test findings, 0.4.3 patch: state-computed next-step advice
-  (fixes the upgrade -> "run compile" -> dry-run dead-end loop),
-  lockfile-optional upgrade per the seeding rule, compile dry-run
-  nothing-written hint, strategy-question skip when nothing exists to
-  preserve, capability-picker client-applicability hints, post-write
-  report labeling.
+- `006-flow-guidance-patch.md` - approved 2026-07-10 from the
+  0.4.1/0.4.2 field-test findings, shipped in 0.4.3: state-computed
+  next-step advice (fixes the upgrade -> "run compile" -> dry-run
+  dead-end loop), lockfile-optional upgrade per the seeding rule,
+  compile dry-run nothing-written hint, strategy-question skip,
+  capability-picker client-applicability hints, post-write report
+  labeling.
+- `004-no-args-dispatcher.md` - draft 2026-07-11, synthesized from the
+  grill agreement record of the same date: bare `agent-profile` on an
+  interactive TTY becomes a state-aware router (seven-state priority
+  table, detection reuses the commands' own machinery, run-once-exit);
+  non-TTY bare output stays byte-identical help with no detection.
+  Accepts ADR 0014 on approval.
 
 Planned (grill sessions before drafting):
 
-- `004` - no-args interactive dispatcher: state detection routes bare
-  `agent-profile` to init/upgrade/compile/doctor; non-TTY keeps help
-  byte-identical.
 - `005` (phase-later) - local run-cost stats and curated subagent
   context: document per-client local usage sources (Codex session JSONL,
   Claude Code transcripts), optionally emit a post-run cost-summary
