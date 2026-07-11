@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -48,6 +48,88 @@ test("upgrade missing revision offers every not-enabled capability and current r
     0,
   );
   assert.match(currentOutput.stdoutText(), /nothing to offer/iu);
+});
+
+test("upgrade missing lockfile seeds exact offers and writes insertions without stamping", async () => {
+  const expectedOffered = [
+    "workflow.code-review",
+    "workflow.refactoring",
+    "workflow.documentation",
+    "skills.review",
+    "skills.advanced-review",
+    "skills.mcp-recommendations",
+    "workflow.subagent-driven-development",
+    "skills.automation",
+    "workflow.memory-guidance",
+    "workflow.logging-guidance",
+  ];
+  const reportRoot = await createUpgradeRoot(undefined);
+  await rm(path.join(reportRoot, "ai-profile.lock"));
+  const reportOutput = createOutput();
+  assert.equal(
+    await runCli(["upgrade", "--root", reportRoot, "--non-interactive"], {
+      io: reportOutput,
+    }),
+    0,
+  );
+  assert.deepEqual(
+    reportOutput
+      .stdoutText()
+      .split("\n")
+      .filter((line) => line.startsWith("- "))
+      .map((line) => line.slice(2)),
+    expectedOffered,
+  );
+
+  const writeRoot = await createUpgradeRoot(undefined);
+  await rm(path.join(writeRoot, "ai-profile.lock"));
+  const writeOutput = createOutput();
+  assert.equal(
+    await runCli(
+      [
+        "upgrade",
+        "--root",
+        writeRoot,
+        "--write",
+        "--adopt-recommended",
+      ],
+      { io: writeOutput },
+    ),
+    0,
+  );
+  const profile = await readFile(path.join(writeRoot, "ai-profile.yaml"), "utf8");
+  assert.match(profile, /      - automation\n/u);
+  assert.match(profile, /  loggingGuidance: true\n/u);
+  await assert.rejects(() => readFile(path.join(writeRoot, "ai-profile.lock")), {
+    code: "ENOENT",
+  });
+  assert.match(
+    writeOutput.stdoutText(),
+    /Catalog version not stamped without a lockfile/u,
+  );
+});
+
+test("upgrade refuses a present-but-empty lockfile instead of treating it as missing", async () => {
+  const root = await createUpgradeRoot(undefined);
+  await writeFile(path.join(root, "ai-profile.lock"), "", "utf8");
+  const beforeProfile = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const output = createOutput();
+
+  const code = await runCli(
+    ["upgrade", "--root", root, "--write", "--adopt-recommended"],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /ai-profile\.lock could not be parsed/u);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    beforeProfile,
+  );
+  assert.equal(await readFile(path.join(root, "ai-profile.lock"), "utf8"), "");
 });
 
 test("upgrade non-interactive ignores --write unless paired with --adopt-recommended", async () => {
@@ -299,7 +381,7 @@ test("upgrade interactive cancel exits 0 and writes nothing", async () => {
   );
 });
 
-test("existing-profile init adds only the interactive upgrade pointer and freezes non-interactive bytes", async () => {
+test("existing-profile init computes safe advice from lockfile presence and freezes JSON/quiet", async () => {
   const nonInteractiveRoot = await createUpgradeRoot(23);
   const plain = createOutput();
   assert.equal(
@@ -310,10 +392,75 @@ test("existing-profile init adds only the interactive upgrade pointer and freeze
   );
   assert.equal(
     plain.stdoutText(),
-    "Agent Profile Init (write)\n\n" +
+      "Agent Profile Init (write)\n\n" +
       "unchanged: ai-profile.yaml already exists. no changes proposed.\n\n" +
-      "Next step: run `agent-profile compile --dry-run` to inspect compiled artifacts.\n",
+      "Next step: run `agent-profile upgrade` to review available capabilities.\n",
   );
+
+  const missingLockRoot = await createUpgradeRoot(23);
+  await rm(path.join(missingLockRoot, "ai-profile.lock"));
+  const missingLockOutput = createOutput();
+  assert.equal(
+    await runCli(["init", "--root", missingLockRoot, "--write"], {
+      io: missingLockOutput,
+    }),
+    0,
+  );
+  assert.match(
+    missingLockOutput.stdoutText(),
+    /Next step: run `agent-profile compile --write`[^\n]*\nThen: run `agent-profile upgrade`/u,
+  );
+
+  const invalidLockRoot = await createUpgradeRoot(23);
+  await writeFile(path.join(invalidLockRoot, "ai-profile.lock"), "{invalid\n");
+  const invalidLockOutput = createOutput();
+  assert.equal(
+    await runCli(["init", "--root", invalidLockRoot, "--write"], {
+      io: invalidLockOutput,
+    }),
+    0,
+  );
+  assert.match(
+    invalidLockOutput.stdoutText(),
+    /ai-profile\.lock is invalid or unreadable; no next-step command is suggested\./u,
+  );
+  assert.doesNotMatch(invalidLockOutput.stdoutText(), /`agent-profile /u);
+
+  const unreadableLockRoot = await createUpgradeRoot(23);
+  await rm(path.join(unreadableLockRoot, "ai-profile.lock"));
+  await mkdir(path.join(unreadableLockRoot, "ai-profile.lock"));
+  const unreadableLockOutput = createOutput();
+  assert.equal(
+    await runCli(["init", "--root", unreadableLockRoot, "--write"], {
+      io: unreadableLockOutput,
+    }),
+    0,
+  );
+  assert.match(
+    unreadableLockOutput.stdoutText(),
+    /ai-profile\.lock is invalid or unreadable; no next-step command is suggested\./u,
+  );
+  assert.doesNotMatch(unreadableLockOutput.stdoutText(), /`agent-profile /u);
+
+  const declinedInvalidRoot = await createUpgradeRoot(23);
+  await writeFile(
+    path.join(declinedInvalidRoot, "ai-profile.lock"),
+    "{invalid\n",
+  );
+  const declinedInvalidOutput = createOutput();
+  assert.equal(
+    await runCli(["init", "--root", declinedInvalidRoot], {
+      io: declinedInvalidOutput,
+      nonInteractive: false,
+      prompts: initPreviewPrompts(),
+    }),
+    0,
+  );
+  assert.match(
+    declinedInvalidOutput.stdoutText(),
+    /ai-profile\.lock is invalid or unreadable; no next-step command is suggested\.\n$/u,
+  );
+  assert.doesNotMatch(declinedInvalidOutput.stdoutText(), /`agent-profile /u);
 
   const jsonRoot = await createUpgradeRoot(23);
   const jsonOutput = createOutput();
@@ -366,7 +513,7 @@ test("existing-profile init adds only the interactive upgrade pointer and freeze
   );
   assert.match(
     interactive.stdoutText(),
-    /New capabilities may be available; run `agent-profile upgrade`\.\n$/u,
+    /Next step: run `agent-profile upgrade` to review available capabilities\.\n$/u,
   );
 });
 

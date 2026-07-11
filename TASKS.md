@@ -51,7 +51,7 @@ Specs 001, 002, 003 approved (001 2026-07-07; 002 and 003 2026-07-08);
 | I2 | Capability catalog + `upgrade.catalogVersion` provenance | done | [002-capability-catalog-provenance.md](docs/specs/phase-27/issues/002-capability-catalog-provenance.md) |
 | I3 | `upgrade` command: wizard, insertion editor, report mode | done | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md) |
 | I4 | Compile drift classification flow | done | [004-drift-reconciliation-flow.md](docs/specs/phase-27/issues/004-drift-reconciliation-flow.md) |
-| I5 | Flow guidance conformance patch (0.4.3) | ready | [005-flow-guidance-conformance.md](docs/specs/phase-27/issues/005-flow-guidance-conformance.md) |
+| I5 | Flow guidance conformance patch (0.4.3) | done | [005-flow-guidance-conformance.md](docs/specs/phase-27/issues/005-flow-guidance-conformance.md) |
 
 I3 and I4 are parallel-safe apart from shared `apps/cli/src/index.ts`
 touchpoints; coordinate merges (if I3 lands first, rebase I4 onto it).

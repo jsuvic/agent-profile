@@ -60,9 +60,15 @@ to what gets generated - only to what is said, asked, and required.
    seeding rule (missing catalogVersion - and a fortiori a missing
    lockfile - means "offer everything not enabled" from the profile
    alone). Write mode applies insertions and skips the catalogVersion
-   stamp with a note ("recorded on next compile --write") when no
-   lockfile exists; the enabled-check keeps adopted capabilities from
-   being re-offered, so the skipped stamp is harmless.
+   stamp when no lockfile exists, printing a note that states the stamp
+   is skipped and that upgrade re-checks the profile so adopted
+   capabilities are not re-offered ("Catalog version not stamped without
+   a lockfile; upgrade re-checks the profile, so adopted capabilities are
+   not re-offered."). The note does not promise a later compile stamp:
+   `compile --write` does not record catalogVersion, and stamping the
+   current catalog version there would defeat the seeding rule by
+   suppressing future offers. The enabled-check keeps adopted
+   capabilities from being re-offered, so the skipped stamp is harmless.
 3. Init next-step lines are state-computed and ordered: no lockfile ->
    "run `agent-profile compile --write`" first; the upgrade suggestion
    appears only when a lockfile exists (or after the compile line,
