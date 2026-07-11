@@ -820,7 +820,10 @@ test("upgrade without a lockfile reports offers and defers the stamp on write", 
     ),
     0,
   );
-  assert.match(writeOutput.stdoutText(), /recorded on next compile --write/u);
+  assert.match(
+    writeOutput.stdoutText(),
+    /Catalog version not stamped without a lockfile/u,
+  );
   assert.equal(await fileExists(path.join(writeRoot, "ai-profile.lock")), false);
 });
 

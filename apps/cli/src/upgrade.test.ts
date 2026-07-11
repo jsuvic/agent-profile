@@ -103,7 +103,33 @@ test("upgrade missing lockfile seeds exact offers and writes insertions without 
   await assert.rejects(() => readFile(path.join(writeRoot, "ai-profile.lock")), {
     code: "ENOENT",
   });
-  assert.match(writeOutput.stdoutText(), /recorded on next compile --write/u);
+  assert.match(
+    writeOutput.stdoutText(),
+    /Catalog version not stamped without a lockfile/u,
+  );
+});
+
+test("upgrade refuses a present-but-empty lockfile instead of treating it as missing", async () => {
+  const root = await createUpgradeRoot(undefined);
+  await writeFile(path.join(root, "ai-profile.lock"), "", "utf8");
+  const beforeProfile = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const output = createOutput();
+
+  const code = await runCli(
+    ["upgrade", "--root", root, "--write", "--adopt-recommended"],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /ai-profile\.lock could not be parsed/u);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    beforeProfile,
+  );
+  assert.equal(await readFile(path.join(root, "ai-profile.lock"), "utf8"), "");
 });
 
 test("upgrade non-interactive ignores --write unless paired with --adopt-recommended", async () => {

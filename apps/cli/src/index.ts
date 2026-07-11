@@ -434,7 +434,10 @@ async function runUpgrade(
     return 1;
   }
   let lockfileView: AiProfileLockV2 | undefined;
-  if (lockfileText) {
+  // A present-but-empty (or otherwise unreadable) lockfile must be validated and
+  // refused like any other invalid lockfile, not silently treated as missing:
+  // readOptionalText returns "" for an empty file and undefined only when absent.
+  if (lockfileText !== undefined) {
     const lockfileResult = validateLockfileText(lockfileText);
     if (!lockfileResult.ok) {
       io.stderr(formatLockfileIssues(lockfileResult.issues));
@@ -599,7 +602,7 @@ async function runUpgrade(
   }
   if (!lockfileView && !parsed.json) {
     io.stdout(
-      "Catalog version not stamped; it will be recorded on next compile --write.\n",
+      "Catalog version not stamped without a lockfile; upgrade re-checks the profile, so adopted capabilities are not re-offered.\n",
     );
   }
   return 0;
