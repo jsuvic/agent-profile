@@ -42,7 +42,10 @@ Spec 004 acceptance criteria 1-9.
 State-matrix fixtures (one per table row) and the multi-state priority
 fixtures fail against current bare behavior (help printed, no menu);
 the exit-code passthrough test fails; the non-TTY help golden stays
-green throughout.
+green throughout. The state-6 fixtures must include the negative case:
+old/absent catalogVersion with every newer capability already enabled
+-> `computeOfferedCapabilities` empty -> falls through to Current, not
+a no-op upgrade (spec table row 6, amended 2026-07-11).
 
 ## Expected GREEN proof
 

@@ -70,7 +70,7 @@ explicit) exits 0 having run nothing.
 | 3 | Never compiled | profile present, `ai-profile.lock` absent | Generate agent files (`compile --write`) |
 | 4 | Drift | lockfile-owned outputs' hashes differ from disk | Review edited files (interactive `compile`, 27/003 reconciliation) |
 | 5 | Stale outputs | compile dry-run plan shows creates/changes | Refresh agent files (`compile --write`) |
-| 6 | New capabilities | lockfile `catalogVersion` < `CAPABILITY_CATALOG_VERSION`, or field absent | Adopt new capabilities (`upgrade`) |
+| 6 | New capabilities | `computeOfferedCapabilities(profile, catalogVersion)` returns a non-empty set (amended 2026-07-11: the version comparison alone is insufficient - an old or absent `catalogVersion` with every newer capability already enabled offers nothing, and phase-27/002 defines that as "nothing to offer"; routing it to upgrade would be a no-op. The offered set is the command's own source of truth, per Decision Rule 1) | Adopt new capabilities (`upgrade`) |
 | 7 | Current | none of the above | "Everything up to date" note; `doctor`/`ui` offered; exit 0 |
 
 - Choosing an entry runs the existing command in-process with its own
@@ -124,7 +124,10 @@ files, reports, or formats.
 2. Profile without lockfile -> pre-selects compile --write.
 3. Drift fixture (27/003 harness) -> pre-selects the reconciliation
    compile; stale-only fixture -> pre-selects refresh.
-4. Older/absent catalogVersion -> pre-selects upgrade.
+4. Non-empty offered set (`computeOfferedCapabilities`) -> pre-selects
+   upgrade; older/absent catalogVersion with every newer capability
+   already enabled -> falls through to Current (negative fixture
+   required).
 5. Broken-markers fixture -> pre-selects doctor even when other states
    also hold (priority proof); a drift+upgrade fixture pre-selects
    drift with upgrade listed.
