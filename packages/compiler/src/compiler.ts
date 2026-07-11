@@ -52,10 +52,7 @@ import {
   renderReviewChangeSkill,
   renderSpecialistReviewSkill,
 } from "./phase12-skill-content.js";
-import {
-  automationTabnineNote,
-  renderLoopSkillContent,
-} from "./loop-skill-content.js";
+import { renderLoopSkillContent } from "./loop-skill-content.js";
 import {
   buildClaudeAdvisoryHooksValue,
   getAdvisoryHookNotes,
@@ -67,7 +64,8 @@ import {
 } from "./hooks.js";
 import {
   disablesModelInvocation,
-  emitsImplementNext,
+  excludedDelegationSkills,
+  resolveEmittedSkills,
   resolveSelectedSkills,
   type SkillId,
 } from "./skill-selection.js";
@@ -431,8 +429,8 @@ export function compileProfile(request: CompileRequest): CompileResult {
   );
   const notes = [
     ...getAdvisoryHookNotes(request.profile),
-    ...getAutomationPackNotes(request.profile),
-    ...getImplementNextNotes(request.profile),
+    ...getDelegationExclusionNotes(request.profile),
+    ...getTabnineAgentSkillsCaveatNotes(request.profile),
   ];
 
   return {
@@ -446,45 +444,50 @@ export function compileProfile(request: CompileRequest): CompileResult {
 }
 
 /**
- * Not-supported notes for the automation pack on a Tabnine-including target set
- * (never silence). Loop skills emit only for Claude and Codex; a profile that
- * selects `automation` with Tabnine enabled gets an explicit informational
- * note instead of silent omission.
+ * Phase 29 (I1, ADR 0013): the delegation-dependent skills
+ * (`subagent-driven-change`, `implement-next`) drive the implementer ->
+ * spec-reviewer -> code-quality-reviewer chain, which needs a delegation-capable
+ * client (Claude or Codex). A Tabnine-only setup that would otherwise select
+ * them omits them and gets one informational note naming them and the reason
+ * (never silence; the phase-22 not-generated pattern).
  */
-function getAutomationPackNotes(profile: AiProfile): CompileNote[] {
-  const packs = profile.capabilities?.skills?.packs ?? [];
-
-  if (!packs.includes("automation") || !profile.clients.tabnine.enabled) {
-    return [];
-  }
-
-  return [automationTabnineNote("/capabilities/skills/packs")];
-}
-
-/**
- * Phase 24 (I4): `implement-next` never silences a missing-capability target.
- * When its prerequisites are met but Tabnine is enabled, emit an informational
- * note (mirroring the WS6 automation-pack pattern): Tabnine is not
- * `confirmed-official` for the subagent chain the dispatcher drives, so the
- * skill is generated for Claude and Codex only.
- */
-function getImplementNextNotes(profile: AiProfile): CompileNote[] {
-  if (
-    !emitsImplementNext(profile.workflow) ||
-    !profile.clients.tabnine.enabled
-  ) {
+function getDelegationExclusionNotes(profile: AiProfile): CompileNote[] {
+  const excluded = excludedDelegationSkills(profile);
+  if (excluded.length === 0) {
     return [];
   }
 
   return [
     {
-      code: "implement_next_target_not_generated",
+      code: "delegation_target_not_generated",
       path: "/workflow/subagentDrivenDevelopment",
-      expected:
-        "skills-capable client with a confirmed-official subagent chain (Claude or Codex)",
-      actual: "Tabnine has no implement-next dispatcher surface",
+      expected: "a delegation-capable client (Claude or Codex)",
+      actual: "Tabnine-only setup has no subagent-delegation surface",
+      message: `${excluded.join(
+        " and ",
+      )} ${excluded.length === 1 ? "is" : "are"} not generated for a Tabnine-only setup: the subagent-delegation chain requires a delegation-capable client (Claude or Codex).`,
+    },
+  ];
+}
+
+/**
+ * Phase 29 (I1): a single caveat surfaced whenever Tabnine is enabled - Agent
+ * Skills discovery from the shared `.agents/skills/` convention needs a current
+ * Tabnine CLI generation. Appears exactly once.
+ */
+function getTabnineAgentSkillsCaveatNotes(profile: AiProfile): CompileNote[] {
+  if (!profile.clients.tabnine.enabled) {
+    return [];
+  }
+
+  return [
+    {
+      code: "tabnine_agent_skills_cli",
+      path: "/clients/tabnine",
+      expected: "a current Tabnine CLI generation with Agent Skills discovery",
+      actual: "Agent Skills discovery depends on the installed Tabnine CLI",
       message:
-        "implement-next is not generated for Tabnine: the ledger dispatcher targets skills-capable clients with a confirmed-official subagent chain (Claude and Codex) only.",
+        "Agent Skills discovery of the shared .agents/skills/ convention requires a current Tabnine CLI generation.",
     },
   ];
 }
@@ -950,7 +953,7 @@ function renderWorkflowSkillFiles(
   target: WorkflowSkillTargetId,
   rootPath: ".agents/skills" | ".claude/skills",
 ): GeneratedFile[] {
-  const selected = resolveSelectedSkills(profile);
+  const selected = resolveEmittedSkills(profile);
   const selectedSet = new Set(selected);
   const loggingOn = profile.workflow.loggingGuidance === true;
   return selected.map((skill) =>
@@ -2159,8 +2162,19 @@ function getEnabledTargetIds(profile: AiProfile): CompilerTargetId[] {
     }
   }
 
+  // Phase 29 (I1, ADR 0013): the shared `.agents/skills/` convention (the
+  // `codex-workflow-skills` target) is discovered by Codex and Tabnine alike,
+  // so it emits when either is enabled. Enabling Tabnine alongside Codex adds
+  // no file - the same target renders the same bytes (byte-identity contract).
+  if (
+    (profile.clients.codex.enabled || profile.clients.tabnine.enabled) &&
+    !targets.includes("codex-workflow-skills")
+  ) {
+    targets.push("codex-workflow-skills");
+  }
+
   if (profile.clients.codex.enabled) {
-    targets.push("codex-config", "codex-workflow-skills");
+    targets.push("codex-config");
     if (getSelectedAdvisoryHookRoles(profile).length > 0) {
       targets.push("codex-hooks");
     }
@@ -2456,7 +2470,7 @@ function getRequiredWorkflowSkillTemplateIds(
   profile: AiProfile,
   target: WorkflowSkillTargetId,
 ): string[] {
-  return resolveSelectedSkills(profile).map((skill) =>
+  return resolveEmittedSkills(profile).map((skill) =>
     getWorkflowSkillTemplateId(target, skill),
   );
 }

@@ -975,7 +975,7 @@ test("phase-12 wizard writes setup profile, skill packs, and reviewer subagents"
   );
 });
 
-test("Tabnine-only plan notes selected packs that produce no artifacts", async () => {
+test("phase-29 I1 Tabnine-only plan generates the shared skills and notes the CLI caveat", async () => {
   const rootDir = await createTsRoot("tabnine-pack-applicability");
   const output = createOutput();
   const prompts = scriptedPrompts({
@@ -992,9 +992,16 @@ test("Tabnine-only plan notes selected packs that produce no artifacts", async (
     }),
     0,
   );
+  // Phase 29 (I1): a Tabnine-only setup emits the workflow skills to the shared
+  // convention, so the plan lists them and no longer claims "no artifacts".
   assert.match(
     output.stdoutText(),
-    /selected packs produce no artifacts for the selected clients: base, review/u,
+    /generate \.agents\/skills\/sdd-change\/SKILL\.md/u,
+  );
+  assert.doesNotMatch(output.stdoutText(), /produce no artifacts/u);
+  assert.match(
+    output.stdoutText(),
+    /Tabnine Agent Skills discovery of \.agents\/skills\/ requires a current Tabnine CLI generation\./u,
   );
 });
 

@@ -227,4 +227,49 @@ describe("getCapabilityArtifactPaths", () => {
       ],
     );
   });
+
+  it("emits the shared .agents/skills convention for a Tabnine-only setup", () => {
+    // Phase 29 (I1): Tabnine discovers the shared convention, so a Tabnine-only
+    // selection generates the workflow skills (plus the Tabnine code-review
+    // guideline) with no Codex/Claude artifacts.
+    assert.deepEqual(
+      getCapabilityArtifactPaths({
+        clients: { tabnine: true, codex: false, claude: false },
+        skillPacks: ["review", "advanced-review"],
+        reviewerSubagents: false,
+      }),
+      [
+        ".agents/skills/architecture-review/SKILL.md",
+        ".agents/skills/readability-review/SKILL.md",
+        ".agents/skills/review-change/SKILL.md",
+        ".agents/skills/security-review/SKILL.md",
+        ".agents/skills/test-review/SKILL.md",
+        ".tabnine/guidelines/60-code-review.md",
+      ],
+    );
+  });
+
+  it("excludes delegation-dependent skills for a Tabnine-only setup", () => {
+    const paths = getCapabilityArtifactPaths({
+      clients: { tabnine: true, codex: false, claude: false },
+      skillPacks: [],
+      reviewerSubagents: false,
+      workflow: {
+        sdd: true,
+        tdd: true,
+        finalReview: true,
+        subagentDrivenDevelopment: true,
+      },
+    });
+    assert.equal(
+      paths.includes(".agents/skills/subagent-driven-change/SKILL.md"),
+      false,
+    );
+    assert.equal(
+      paths.includes(".agents/skills/implement-next/SKILL.md"),
+      false,
+    );
+    // The instruction-only workflow skills are still present.
+    assert.equal(paths.includes(".agents/skills/sdd-change/SKILL.md"), true);
+  });
 });

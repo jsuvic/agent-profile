@@ -86,4 +86,4 @@ for the skills layer).
 
 | Id | Task | State | Brief |
 | --- | --- | --- | --- |
-| I1 | Shared-convention skill emission for Tabnine + exclusions + goldens | sequenced | [001-shared-skills-emission.md](docs/specs/phase-29/issues/001-shared-skills-emission.md) (after phase-27 I5, golden churn separation) |
+| I1 | Shared-convention skill emission for Tabnine + exclusions + goldens | done | [001-shared-skills-emission.md](docs/specs/phase-29/issues/001-shared-skills-emission.md) (after phase-27 I5, golden churn separation) |

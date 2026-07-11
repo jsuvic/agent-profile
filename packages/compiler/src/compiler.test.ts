@@ -359,8 +359,19 @@ test("compile issues are deterministic for unsupported, disabled, and missing te
   assert.equal(disabled.ok, false);
   assert.equal(disabled.ok ? "" : disabled.issues[0]?.code, "disabled_target");
 
+  // Phase 29 (I1): `codex-workflow-skills` (the shared `.agents/skills/`
+  // convention) is enabled when Codex OR Tabnine is enabled, so it is only a
+  // disabled target when both convention clients are off.
+  const conventionDisabledProfile = {
+    ...profileResult.profile,
+    clients: {
+      ...profileResult.profile.clients,
+      codex: { enabled: false },
+      tabnine: { enabled: false },
+    },
+  };
   const disabledCodexSkills = compileProfile({
-    profile: disabledProfile,
+    profile: conventionDisabledProfile,
     targets: ["codex-workflow-skills"],
   });
   assert.equal(disabledCodexSkills.ok, false);
@@ -2885,18 +2896,22 @@ test("phase-17 disabling Codex or Claude omits that client's grill-change skill"
   assert.equal(profileResult.ok, true);
   if (!profileResult.ok) return;
 
-  const codexOff: AiProfile = {
+  // Phase 29 (I1): `.agents/skills/` is the shared convention for Codex AND
+  // Tabnine, so omitting the Codex-owned path means disabling both convention
+  // clients (Codex + Tabnine), leaving only Claude.
+  const conventionOff: AiProfile = {
     ...profileResult.profile,
     clients: {
       ...profileResult.profile.clients,
       codex: { enabled: false },
+      tabnine: { enabled: false },
     },
   };
-  const codexResult = compileProfile({ profile: codexOff });
-  assert.equal(codexResult.ok, true);
-  if (!codexResult.ok) return;
+  const conventionResult = compileProfile({ profile: conventionOff });
+  assert.equal(conventionResult.ok, true);
+  if (!conventionResult.ok) return;
 
-  for (const file of codexResult.files) {
+  for (const file of conventionResult.files) {
     assert.equal(
       file.path === ".agents/skills/grill-change/SKILL.md",
       false,
@@ -3078,14 +3093,17 @@ test("phase-18 disabling Codex or Claude omits that client's request-to-spec-iss
   assert.equal(profileResult.ok, true);
   if (!profileResult.ok) return;
 
-  const codexOff: AiProfile = {
+  // Phase 29 (I1): `.agents/skills/` is shared by Codex AND Tabnine; omitting
+  // the Codex-owned path means disabling both convention clients.
+  const conventionOff: AiProfile = {
     ...profileResult.profile,
     clients: {
       ...profileResult.profile.clients,
       codex: { enabled: false },
+      tabnine: { enabled: false },
     },
   };
-  const codexResult = compileProfile({ profile: codexOff });
+  const codexResult = compileProfile({ profile: conventionOff });
   assert.equal(codexResult.ok, true);
   if (!codexResult.ok) return;
 
@@ -4437,9 +4455,11 @@ test("phase-21 tabnine hook intent is reported, never silent; codex has no note"
   if (!result.ok) return;
 
   assert.ok(result.notes, "notes must be reported");
+  // Phase 29 (I1): Tabnine-enabled setups also carry the Agent Skills CLI
+  // caveat note.
   assert.deepEqual(
     result.notes.map((note) => note.code),
-    ["hooks_target_not_generated"],
+    ["hooks_target_not_generated", "tabnine_agent_skills_cli"],
   );
   assert.ok(result.notes[0]?.message.includes("Tabnine"), "tabnine note");
   assert.equal(
@@ -4521,22 +4541,40 @@ test("phase-22 automation pack emits the five loop skills for Claude and Codex o
   }
 });
 
-test("phase-22 automation pack reports an informational Tabnine note", () => {
+test("phase-29 I1 automation loop skills now reach Tabnine via the shared convention (no not-generated note)", () => {
+  // Phase 29 supersedes the phase-22 automation not-generated note: Tabnine CLI
+  // discovers the loop skills from `.agents/skills/`, so no "not generated"
+  // note fires; the Tabnine caveat note is emitted instead.
   const result = compileProfile({
     profile: phase12Profile({ packs: ["automation"] }),
   });
 
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  const note = result.notes?.find(
-    (candidate) => candidate.code === "automation_target_not_generated",
+
+  for (const name of LOOP_SKILL_NAMES) {
+    assert.ok(
+      result.files.some(
+        (file) => file.path === `.agents/skills/${name}/SKILL.md`,
+      ),
+      `loop skill ${name} shared with Tabnine`,
+    );
+  }
+  assert.equal(
+    (result.notes ?? []).some((note) =>
+      note.message.includes("loop skills are not generated"),
+    ),
+    false,
   );
-  assert.ok(note, "expected automation Tabnine note");
-  assert.match(note.message, /Tabnine/u);
-  assert.equal(note.path, "/capabilities/skills/packs");
+  assert.ok(
+    (result.notes ?? []).some(
+      (note) => note.code === "tabnine_agent_skills_cli",
+    ),
+    "expected the Tabnine Agent Skills CLI caveat",
+  );
 });
 
-test("phase-22 automation pack emits no Tabnine note when Tabnine is disabled", () => {
+test("phase-29 I1 automation pack emits no Tabnine caveat when Tabnine is disabled", () => {
   const profile: AiProfile = {
     ...phase12Profile({ packs: ["automation"] }),
     clients: {
@@ -4551,7 +4589,7 @@ test("phase-22 automation pack emits no Tabnine note when Tabnine is disabled", 
   if (!result.ok) return;
   assert.equal(
     result.notes?.some(
-      (candidate) => candidate.code === "automation_target_not_generated",
+      (candidate) => candidate.code === "tabnine_agent_skills_cli",
     ) ?? false,
     false,
   );
@@ -5235,10 +5273,332 @@ test("phase-24 I4 implement-next is omitted without both prerequisites and never
   }
 });
 
-test("phase-24 I4 emits an informational note (never silence) for Tabnine when implement-next prerequisites are met", () => {
+// ---------------------------------------------------------------------------
+// Phase 29 I1: shared-convention skill emission for Tabnine.
+// ---------------------------------------------------------------------------
+
+const WORKFLOW_SKILL_NAMES = [
+  "grill-change",
+  "request-to-spec-issues",
+  "sdd-change",
+  "tdd-change",
+  "final-review",
+] as const;
+
+function tabnineOnlyProfile(input: {
+  packs?: NonNullable<
+    NonNullable<AiProfile["capabilities"]>["skills"]
+  >["packs"];
+  subagentDrivenDevelopment?: boolean;
+}): AiProfile {
+  return {
+    version: 1,
+    profile: { name: "phase-29", description: "Tabnine-only skills fixture." },
+    stack: {
+      languages: ["typescript"],
+      frameworks: [],
+      packageManagers: ["npm"],
+      testing: [],
+    },
+    clients: {
+      tabnine: { enabled: true },
+      codex: { enabled: false },
+      claude: { enabled: false },
+    },
+    workflow: {
+      sdd: true,
+      tdd: true,
+      finalReview: true,
+      ...(input.subagentDrivenDevelopment === true
+        ? { subagentDrivenDevelopment: true }
+        : {}),
+    },
+    capabilities: {
+      ...(input.packs ? { skills: { packs: input.packs } } : {}),
+      ...(input.subagentDrivenDevelopment === true
+        ? {
+            delegation: {
+              subagents: {
+                enabled: true,
+                agents: [
+                  { useTemplate: "implementer" as const },
+                  { useTemplate: "spec-reviewer" as const },
+                  { useTemplate: "code-quality-reviewer" as const },
+                ],
+              },
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+test("phase-29 I1 Tabnine-only emits workflow skills to the shared .agents/skills convention", () => {
+  const result = compileProfile({
+    profile: tabnineOnlyProfile({ packs: ["automation"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const name of WORKFLOW_SKILL_NAMES) {
+    const file = result.files.find(
+      (candidate) => candidate.path === `.agents/skills/${name}/SKILL.md`,
+    );
+    assert.ok(file, `expected .agents/skills/${name}/SKILL.md`);
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.match(body, new RegExp(`^---\\nname: ${name}\\n`, "u"), name);
+    assert.match(body, /\ndescription: /u, name);
+  }
+  // No Claude/Codex artifacts for a Tabnine-only setup.
+  assert.equal(
+    result.files.some((file) => file.path.startsWith(".claude/skills/")),
+    false,
+  );
+  assert.equal(
+    result.files.some((file) => file.path.startsWith(".codex/")),
+    false,
+  );
+});
+
+test("phase-29 I1 Tabnine-only emits the phase-22 loop skills to .agents/skills", () => {
+  const result = compileProfile({
+    profile: tabnineOnlyProfile({ packs: ["automation"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  for (const name of LOOP_SKILL_NAMES) {
+    assert.ok(
+      result.files.some(
+        (file) => file.path === `.agents/skills/${name}/SKILL.md`,
+      ),
+      `expected loop skill ${name} for Tabnine`,
+    );
+  }
+});
+
+test("phase-29 I1 Tabnine-only omits delegation-dependent skills and emits an informational note", () => {
+  // Explicit targets avoid the unrelated experimental tabnine-subagents path;
+  // the exclusion + note are profile-based, like the phase-24 WS6 note.
+  const result = compileProfile({
+    profile: tabnineOnlyProfile({ subagentDrivenDevelopment: true }),
+    targets: ["codex-workflow-skills", "tabnine-guidelines"],
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const skill of ["subagent-driven-change", "implement-next"]) {
+    assert.equal(
+      result.files.some((file) => file.path.includes(`/${skill}/SKILL.md`)),
+      false,
+      `Tabnine-only must not emit ${skill}`,
+    );
+    assert.equal(
+      result.templates.some((template) =>
+        template.id.includes(`/${skill}@`),
+      ),
+      false,
+      `Tabnine-only must not list a template for ${skill}`,
+    );
+  }
+
+  const note = (result.notes ?? []).find(
+    (candidate) => candidate.code === "delegation_target_not_generated",
+  );
+  assert.ok(note, "expected a delegation-exclusion note for Tabnine-only");
+  assert.match(note.message, /subagent-driven-change/u);
+  assert.match(note.message, /implement-next/u);
+  assert.match(note.message, /Claude or Codex/u);
+});
+
+test("phase-29 I1 delegation-exclusion note does not fire when Codex is enabled", () => {
+  const result = compileProfile({
+    profile: {
+      ...tabnineOnlyProfile({ subagentDrivenDevelopment: true }),
+      clients: {
+        tabnine: { enabled: true },
+        codex: { enabled: true },
+        claude: { enabled: false },
+      },
+    },
+    targets: ["codex-workflow-skills", "tabnine-guidelines"],
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(
+    (result.notes ?? []).some(
+      (candidate) => candidate.code === "delegation_target_not_generated",
+    ),
+    false,
+  );
+  // The delegation skills ARE emitted (Codex is delegation-capable).
+  assert.ok(
+    result.files.some(
+      (file) => file.path === ".agents/skills/subagent-driven-change/SKILL.md",
+    ),
+  );
+});
+
+test("phase-29 I1 Tabnine setups gain the Agent Skills CLI caveat note exactly once", () => {
+  const result = compileProfile({
+    profile: tabnineOnlyProfile({ packs: ["automation"] }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const caveats = (result.notes ?? []).filter(
+    (candidate) => candidate.code === "tabnine_agent_skills_cli",
+  );
+  assert.equal(caveats.length, 1, "caveat note must appear exactly once");
+  assert.match(caveats[0].message, /Tabnine CLI/u);
+});
+
+test("phase-29 I1 caveat note does not fire when Tabnine is disabled", () => {
+  const result = compileProfile({
+    profile: {
+      ...tabnineOnlyProfile({ packs: ["automation"] }),
+      clients: {
+        tabnine: { enabled: false },
+        codex: { enabled: true },
+        claude: { enabled: true },
+      },
+    },
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(
+    (result.notes ?? []).some(
+      (candidate) => candidate.code === "tabnine_agent_skills_cli",
+    ),
+    false,
+  );
+});
+
+test("phase-29 I1 enabling Tabnine alongside Codex changes no .agents/skills byte", () => {
+  const codexOnly = compileProfile({
+    profile: {
+      ...tabnineOnlyProfile({ packs: ["automation", "review", "advanced-review"] }),
+      clients: {
+        tabnine: { enabled: false },
+        codex: { enabled: true },
+        claude: { enabled: false },
+      },
+    },
+  });
+  const codexAndTabnine = compileProfile({
+    profile: {
+      ...tabnineOnlyProfile({ packs: ["automation", "review", "advanced-review"] }),
+      clients: {
+        tabnine: { enabled: true },
+        codex: { enabled: true },
+        claude: { enabled: false },
+      },
+    },
+  });
+
+  assert.equal(codexOnly.ok && codexAndTabnine.ok, true);
+  if (!codexOnly.ok || !codexAndTabnine.ok) return;
+
+  const sharedBytes = (result: typeof codexOnly) =>
+    result.ok
+      ? result.files
+          .filter((file) => file.path.startsWith(".agents/skills/"))
+          .map(
+            (file) =>
+              `${file.path}\n${Buffer.from(file.bytes).toString("utf8")}`,
+          )
+          .sort()
+      : [];
+
+  assert.deepEqual(sharedBytes(codexOnly), sharedBytes(codexAndTabnine));
+  assert.ok(sharedBytes(codexOnly).length > 0);
+});
+
+test("phase-29 I1 Tabnine-only .agents/skills bytes equal the Codex-only rendering", () => {
+  const shared = {
+    packs: ["automation", "review", "advanced-review"],
+  } satisfies Parameters<typeof tabnineOnlyProfile>[0];
+  const tabnineOnly = compileProfile({
+    profile: tabnineOnlyProfile(shared),
+  });
+  const codexOnly = compileProfile({
+    profile: {
+      ...tabnineOnlyProfile(shared),
+      clients: {
+        tabnine: { enabled: false },
+        codex: { enabled: true },
+        claude: { enabled: false },
+      },
+    },
+  });
+
+  assert.equal(tabnineOnly.ok && codexOnly.ok, true);
+  if (!tabnineOnly.ok || !codexOnly.ok) return;
+
+  const sharedBytes = (result: typeof tabnineOnly) =>
+    result.ok
+      ? result.files
+          .filter((file) => file.path.startsWith(".agents/skills/"))
+          .map(
+            (file) =>
+              `${file.path}\n${Buffer.from(file.bytes).toString("utf8")}`,
+          )
+          .sort()
+      : [];
+
+  assert.deepEqual(sharedBytes(tabnineOnly), sharedBytes(codexOnly));
+});
+
+test("phase-29 I1 Tabnine-only golden fixture is byte-stable", async () => {
+  const fixtureDir = fileURLToPath(
+    new URL("../../../fixtures/tabnine-workflow-skills/", import.meta.url),
+  );
+  const result = await compareGoldenFixture(fixtureDir);
+  assert.equal(
+    result.ok,
+    true,
+    result.ok
+      ? ""
+      : result.failures.map((failure) => failure.message).join("\n"),
+  );
+});
+
+test("phase-29 I1 Tabnine-only loop cross-references never dangle", () => {
+  const result = compileProfile({
+    profile: tabnineOnlyProfile({
+      packs: ["automation", "base", "review", "advanced-review"],
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const emittedSkillPaths = new Set(
+    result.files
+      .filter((file) => file.path.startsWith(".agents/skills/"))
+      .map((file) => file.path),
+  );
+
+  for (const file of result.files) {
+    if (!file.path.startsWith(".agents/skills/")) continue;
+    const text = Buffer.from(file.bytes).toString("utf8");
+    for (const match of text.matchAll(/\brun `([a-z0-9][a-z0-9-]*)`/gu)) {
+      assert.ok(
+        emittedSkillPaths.has(`.agents/skills/${match[1]}/SKILL.md`),
+        `${file.path} references non-generated ${match[1]}`,
+      );
+    }
+  }
+});
+
+test("phase-29 I1 with Codex enabled, implement-next reaches Tabnine via the shared convention and no exclusion note fires", () => {
   const profile: AiProfile = {
     version: 1,
-    profile: { name: "i4", description: "implement-next note." },
+    profile: { name: "i4", description: "implement-next shared." },
     stack: {
       languages: ["typescript"],
       frameworks: [],
@@ -5271,7 +5631,7 @@ test("phase-24 I4 emits an informational note (never silence) for Tabnine when i
   };
 
   // Explicit targets avoid the unrelated experimental tabnine-subagents
-  // workspace-write constraint; the note is profile-based like the WS6 note.
+  // workspace-write constraint.
   const result = compileProfile({
     profile,
     targets: [
@@ -5283,16 +5643,24 @@ test("phase-24 I4 emits an informational note (never silence) for Tabnine when i
   assert.equal(result.ok, true);
   if (!result.ok) return;
 
-  const note = (result.notes ?? []).find(
-    (n) => n.code === "implement_next_target_not_generated",
+  // A delegation-capable client (Codex/Claude) is enabled, so implement-next is
+  // emitted to the shared convention Tabnine reads; the exclusion note is silent.
+  assert.equal(
+    (result.notes ?? []).some(
+      (n) => n.code === "delegation_target_not_generated",
+    ),
+    false,
   );
-  assert.ok(note, "expected an implement-next not-generated note for Tabnine");
-  assert.match(note.message, /implement-next is not generated for Tabnine/u);
-  // Tabnine emits no implement-next artifact.
+  assert.ok(
+    result.files.some(
+      (file) => file.path === ".agents/skills/implement-next/SKILL.md",
+    ),
+    "implement-next emitted to the shared convention",
+  );
+  // Nothing under the Tabnine-proprietary agent path.
   for (const file of result.files) {
     assert.equal(
-      file.path.startsWith(".tabnine/") &&
-        file.path.includes("implement-next"),
+      file.path.startsWith(".tabnine/agent/"),
       false,
       file.path,
     );

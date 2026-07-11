@@ -63,13 +63,14 @@ export type CompileIssue = {
   message: string;
 };
 
-// Phase 21/22: informational, non-failing compile reports. Used for the
+// Phase 21/22/29: informational, non-failing compile reports. Used for the
 // "never silence" contract when an intent cannot be generated for a target
-// (advisory hooks or automation loop skills on Tabnine).
+// (advisory hooks on Tabnine, delegation-dependent skills on a Tabnine-only
+// setup) and for the Tabnine Agent Skills CLI caveat.
 export type CompileNoteCode =
   | "hooks_target_not_generated"
-  | "automation_target_not_generated"
-  | "implement_next_target_not_generated";
+  | "delegation_target_not_generated"
+  | "tabnine_agent_skills_cli";
 
 export type CompileNote = {
   code: CompileNoteCode;

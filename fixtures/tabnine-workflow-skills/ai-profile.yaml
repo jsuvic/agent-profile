@@ -1,0 +1,47 @@
+version: 1
+profile:
+  name: tabnine-workflow-skills
+  description: Phase 29 fixture - Tabnine-only setup emitting the shared workflow and loop skills.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: false
+  claude:
+    enabled: false
+safety:
+  mode: guarded
+  requiresSandbox: false
+permissions:
+  filesystem:
+    read: allow
+    write: ask
+  shell:
+    run: ask
+  secrets:
+    access: deny
+  dependencies:
+    install: ask
+  network:
+    external: ask
+  production:
+    access: deny
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+capabilities:
+  skills:
+    packs:
+      - base
+      - review
+      - advanced-review
+      - automation
+      - mcp-recommendations
