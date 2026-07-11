@@ -4,6 +4,8 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+## 0.4.3 — 2026-07-11
+
 - Add Phase 29 I1 Tabnine workflow skills (implementing
   `docs/specs/phase-29/001-tabnine-workflow-skills.md`; ADR 0013). The shared
   `.agents/skills/` emission condition extends from "Codex enabled" to "Codex or
