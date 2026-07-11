@@ -151,6 +151,19 @@ test("selectCapabilities submits pre-checked packs via groupMultiselect", async 
   });
 });
 
+test("selectCapabilities labels client applicability in the picker", async () => {
+  const { input, output, prompts } = await harness();
+  const result = prompts.selectCapabilities({
+    defaults: ["base", "review"],
+    reviewerSubagentsAvailable: true,
+    advisoryHooksAvailable: true,
+  });
+  await press(input, [ENTER]);
+  await result;
+  assert.match(output.text(), /Base instructions \(Claude\/Codex only\)/u);
+  assert.match(output.text(), /Claude\/Codex reviewer subagents/u);
+});
+
 test("selectCapabilities omits unavailable packs and warns exactly once", async () => {
   const { input, output, prompts } = await harness();
   const result = prompts.selectCapabilities({
@@ -446,6 +459,9 @@ const CANCELLABLE_STEPS: ReadonlyArray<keyof CliPrompts> = [
 for (const step of CANCELLABLE_STEPS) {
   test(`cancel at ${step} exits 0, prints the cancel line, and writes nothing`, async () => {
     const rootDir = await createFreshRoot();
+    if (step === "selectStrategy") {
+      await writeFile(path.join(rootDir, "AGENTS.md"), "# Existing\n", "utf8");
+    }
     const output = createOutput();
     const prompts = fakePrompts({
       [step]: () => {

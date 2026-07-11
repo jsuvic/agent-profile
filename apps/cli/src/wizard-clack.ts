@@ -78,24 +78,33 @@ type CapabilityOption = {
 };
 
 const CAPABILITY_RECOMMENDED: ReadonlyArray<CapabilityOption> = [
-  { value: "base", label: "Base instructions" },
-  { value: "review", label: "Code review" },
+  { value: "base", label: "Base instructions (Claude/Codex only)" },
+  { value: "review", label: "Code review (Claude/Codex only)" },
 ];
 
 const CAPABILITY_OPTIONAL: ReadonlyArray<CapabilityOption> = [
-  { value: "advanced-review", label: "Specialist reviews" },
+  {
+    value: "advanced-review",
+    label: "Specialist reviews (Claude/Codex only)",
+  },
   {
     value: "reviewer-subagents",
     label: "Claude/Codex reviewer subagents",
     requires: "reviewer-subagents",
   },
-  { value: "mcp-recommendations", label: "MCP recommendations" },
+  {
+    value: "mcp-recommendations",
+    label: "MCP recommendations (Claude/Codex only)",
+  },
   {
     value: "advisory-hooks",
     label: "Advisory hooks (Claude/Codex reminders and read-only git context)",
     requires: "advisory-hooks",
   },
-  { value: "automation", label: "Automation loop skills" },
+  {
+    value: "automation",
+    label: "Automation loop skills (Claude/Codex only)",
+  },
 ];
 
 /**

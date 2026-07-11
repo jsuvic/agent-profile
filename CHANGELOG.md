@@ -4,6 +4,18 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+## 0.4.3 — 2026-07-11
+
+- Correct Phase 27 command-flow guidance: init now names the ordered
+  `compile --write` then `upgrade` path; compile dry-run explicitly says that
+  nothing was written; compile and upgrade follow-up guidance names
+  `compile --write`; upgrade can report and apply profile-only capability
+  seeding without a lockfile while deferring the catalog stamp; empty import
+  scans skip the strategy question with the preserve default; capability
+  choices identify Claude/Codex-only output and Tabnine-only plans call out
+  selected packs with no artifacts; write-mode import results use the heading
+  `Files report (state after write)`.
+
 ## 0.4.2 — 2026-07-10
 
 - Add Phase 27 I4 interactive drift reconciliation to `compile` (implementing

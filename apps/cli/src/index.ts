@@ -402,13 +402,6 @@ async function runUpgrade(
     );
     return 1;
   }
-  if (!lockfileText) {
-    io.stderr(
-      "ai-profile.lock was not found. Run `agent-profile compile` first.\n",
-    );
-    return 1;
-  }
-
   const profileSource = Buffer.from(profileBytes).toString("utf8");
   const syntaxPlan = planProfileInsertions(profileSource, CAPABILITY_CATALOG);
   if (
@@ -440,13 +433,16 @@ async function runUpgrade(
     io.stderr(formatValidationIssues(profileResult.issues));
     return 1;
   }
-  const lockfileResult = validateLockfileText(lockfileText);
-  if (!lockfileResult.ok) {
-    io.stderr(formatLockfileIssues(lockfileResult.issues));
-    return 1;
+  let lockfileView: AiProfileLockV2 | undefined;
+  if (lockfileText) {
+    const lockfileResult = validateLockfileText(lockfileText);
+    if (!lockfileResult.ok) {
+      io.stderr(formatLockfileIssues(lockfileResult.issues));
+      return 1;
+    }
+    lockfileView = toLockfileV2View(lockfileResult.lockfile);
   }
-  const lockfileView = toLockfileV2View(lockfileResult.lockfile);
-  const recordedVersion = lockfileView.upgrade?.catalogVersion;
+  const recordedVersion = lockfileView?.upgrade?.catalogVersion;
   const offered = computeOfferedCapabilities(
     profileResult.profile,
     recordedVersion,
@@ -552,22 +548,31 @@ async function runUpgrade(
     io.stdout(`${diff}\n`);
   }
 
-  const stampedLockfile: AiProfileLockV2 = {
-    ...lockfileView,
-    profile: {
-      ...lockfileView.profile,
-      sha256: sha256Hex(edit.source),
-    },
-    upgrade: { catalogVersion: CAPABILITY_CATALOG_VERSION },
-  };
+  const stampedLockfile: AiProfileLockV2 | undefined = lockfileView
+    ? {
+        ...lockfileView,
+        profile: {
+          ...lockfileView.profile,
+          sha256: sha256Hex(edit.source),
+        },
+        upgrade: { catalogVersion: CAPABILITY_CATALOG_VERSION },
+      }
+    : undefined;
   try {
-    // The explicit flag pair or interactive confirmation is the approval for
-    // this one write plan; profile and provenance are never written separately.
+    // The explicit flag pair or interactive confirmation approves one write plan;
+    // provenance is included when a usable lockfile exists and otherwise deferred.
     await applyWritePlan({
       rootDir,
       writes: [
         { path: "ai-profile.yaml", bytes: edit.source },
-        { path: "ai-profile.lock", bytes: serializeLockfile(stampedLockfile) },
+        ...(stampedLockfile
+          ? [
+              {
+                path: "ai-profile.lock",
+                bytes: serializeLockfile(stampedLockfile),
+              },
+            ]
+          : []),
       ],
     });
   } catch {
@@ -589,7 +594,12 @@ async function runUpgrade(
     );
   } else {
     io.stdout(
-      "Updated ai-profile.yaml. Run `agent-profile compile` to refresh generated files.\n",
+      "Updated ai-profile.yaml. Run `agent-profile compile --write` to refresh generated files.\n",
+    );
+  }
+  if (!lockfileView && !parsed.json) {
+    io.stdout(
+      "Catalog version not stamped; it will be recorded on next compile --write.\n",
     );
   }
   return 0;
@@ -1105,6 +1115,11 @@ async function runCompile(
         presenter.logInfo(note.message);
       }
     }
+    if (!parsed.write) {
+      presenter.logInfo(
+        "Nothing was written; run `agent-profile compile --write` to apply.",
+      );
+    }
     return 0;
   }
 
@@ -1115,6 +1130,12 @@ async function runCompile(
       `\nNotes:\n${compileResult.notes
         .map((note) => `- ${note.message}`)
         .join("\n")}\n`,
+    );
+  }
+
+  if (!parsed.write) {
+    io.stdout(
+      "\nNothing was written; run `agent-profile compile --write` to apply.\n",
     );
   }
 
@@ -1559,8 +1580,6 @@ async function runInit(
   let wizardSkillPacks: ReadonlyArray<AiProfileSkillPackId> | undefined;
   let wizardReviewerSubagents = false;
   let wizardAdvisoryHooks = false;
-  let interactiveExistingPointer =
-    !parsed.json && !parsed.quiet && isInteractiveTty(io);
   if (isWizardEligibleArgs(args) && presetPayload === undefined) {
     const dispatch = await dispatchInitWizard({
       args: parsed,
@@ -1574,12 +1593,13 @@ async function runInit(
     if (dispatch.kind === "declined") {
       if (existingProfileBytes && !parsed.json && !parsed.quiet) {
         io.stdout(
-          "New capabilities may be available; run `agent-profile upgrade`.\n",
+          formatExistingInitAdvice(
+            await getExistingInitLockfileState(rootDir),
+          ),
         );
       }
       return 0;
     }
-    interactiveExistingPointer = dispatch.kind !== "non-interactive";
     wizardCreatesClientFiles =
       dispatch.kind === "confirmed" && dispatch.createClientFiles;
     if (dispatch.kind === "confirmed") {
@@ -1593,6 +1613,7 @@ async function runInit(
   }
 
   if (existingProfileBytes) {
+    const lockfileState = await getExistingInitLockfileState(rootDir);
     const existingClients = getExistingProfileClients(
       existingProfileBytes,
       safeProfilePath.path,
@@ -1685,10 +1706,8 @@ async function runInit(
       gitignoreUpdated,
       ...(importReport ? { import: importReport } : {}),
     });
-    if (interactiveExistingPointer && !parsed.json && !parsed.quiet) {
-      io.stdout(
-        "New capabilities may be available; run `agent-profile upgrade`.\n",
-      );
+    if (!parsed.json && !parsed.quiet) {
+      io.stdout(`\n${formatExistingInitAdvice(lockfileState)}`);
     }
     return 0;
   }
@@ -3692,7 +3711,12 @@ type ImportReportFile = Phase14ImportReport["files"][number];
 type ImportReportGitignoreFinding = Phase14ImportReport["gitignore"][number];
 
 function formatPhase14ImportReportLines(report: Phase14ImportReport): string[] {
-  const lines: string[] = ["", "Existing files report:"];
+  const lines: string[] = [
+    "",
+    report.mode === "write"
+      ? "Files report (state after write):"
+      : "Existing files report:",
+  ];
   lines.push(`  strategy: ${formatImportStrategy(report.strategy)}`);
   lines.push(`  mode: ${report.mode}`);
   lines.push(`  profile: ${report.profilePath}`);
@@ -3807,13 +3831,41 @@ function formatInitOutcomeSummary(input: InitReport): string[] {
 
 function formatNextStepLines(input: InitReport): string[] {
   if (input.wrote) {
-    return [];
+    return [
+      "",
+      "Next step: run `agent-profile compile --write` to create compiled artifacts.",
+      "Then: run `agent-profile upgrade` to review available capabilities.",
+    ];
   }
 
   return [
     "",
     "Next step: run `agent-profile init --write` to create the profile.",
   ];
+}
+
+type ExistingInitLockfileState = "missing" | "usable" | "invalid";
+
+async function getExistingInitLockfileState(
+  rootDir: string,
+): Promise<ExistingInitLockfileState> {
+  try {
+    const source = await readOptionalText(rootDir, "ai-profile.lock");
+    if (source === undefined) return "missing";
+    return validateLockfileText(source).ok ? "usable" : "invalid";
+  } catch {
+    return "invalid";
+  }
+}
+
+function formatExistingInitAdvice(state: ExistingInitLockfileState): string {
+  if (state === "usable") {
+    return "Next step: run `agent-profile upgrade` to review available capabilities.\n";
+  }
+  if (state === "missing") {
+    return "Next step: run `agent-profile compile --write` to create compiled artifacts.\nThen: run `agent-profile upgrade` to review available capabilities.\n";
+  }
+  return "ai-profile.lock is invalid or unreadable; no next-step command is suggested.\n";
 }
 
 function formatInitText(input: InitReport): string {
@@ -3843,10 +3895,6 @@ function formatInitText(input: InitReport): string {
       lines.push(...formatPhase14ImportReportLines(input.import));
     }
 
-    lines.push(
-      "",
-      "Next step: run `agent-profile compile --dry-run` to inspect compiled artifacts.",
-    );
     return `${lines.join("\n").replace(/\n*$/u, "")}\n`;
   }
 

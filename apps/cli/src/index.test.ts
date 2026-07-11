@@ -377,6 +377,10 @@ test("compile dry-run previews generated files without writing", async () => {
   assert.equal(code, 0);
   assert.match(output.stdoutText(), /Agent Profile Compile/u);
   assert.match(output.stdoutText(), /\[create\] AGENTS\.md/u);
+  assert.match(
+    output.stdoutText(),
+    /Nothing was written; run `agent-profile compile --write` to apply\.\n$/u,
+  );
   await assert.rejects(() => readFile(path.join(rootDir, "AGENTS.md")), {
     code: "ENOENT",
   });
@@ -479,6 +483,7 @@ test("compile write creates generated outputs and lockfile idempotently", async 
 
   assert.equal(firstCode, 0);
   assert.equal(secondCode, 0);
+  assert.doesNotMatch(output.stdoutText(), /Nothing was written/u);
   assert.equal(secondLockfile, firstLockfile);
   assert.equal(
     await readFile(path.join(rootDir, "AGENTS.md"), "utf8"),
@@ -744,6 +749,79 @@ test("init write creates a schema-valid guarded profile and leaves gitignore unc
   assert.match(profileText, /mode: guarded/u);
   assert.match(profileText, /access: deny/u);
   assert.equal(profileText.includes("\n\n"), false);
+});
+
+test("init advice can be followed verbatim to a compiled, upgradable repository", async () => {
+  const rootDir = await createTypescriptRoot();
+  const initOutput = createOutput();
+  const initCode = await runCli(["init", "--write", "--client", "codex"], {
+    io: initOutput,
+    cwd: rootDir,
+  });
+
+  assert.equal(initCode, 0);
+  const advisedCommands = [...initOutput.stdoutText().matchAll(/`agent-profile ([^`]+)`/gu)]
+    .map((match) => match[1])
+    .filter((command) => command.startsWith("compile") || command.startsWith("upgrade"));
+  assert.deepEqual(advisedCommands, ["compile --write", "upgrade"]);
+
+  for (const command of advisedCommands) {
+    const output = createOutput();
+    const code = await runCli(command.split(" "), {
+      io: output,
+      cwd: rootDir,
+    });
+    assert.equal(
+      code,
+      0,
+      `${command} failed:\n${output.stderrText()}${output.stdoutText()}`,
+    );
+  }
+
+  assert.equal(await fileExists(path.join(rootDir, "ai-profile.lock")), true);
+  assert.equal(
+    await fileExists(path.join(rootDir, ".codex", "config.toml")),
+    true,
+  );
+  const upgradeOutput = createOutput();
+  assert.equal(
+    await runCli(["upgrade", "--non-interactive"], {
+      io: upgradeOutput,
+      cwd: rootDir,
+    }),
+    0,
+  );
+});
+
+test("upgrade without a lockfile reports offers and defers the stamp on write", async () => {
+  const reportRoot = await createProfileOnlyRoot();
+  const reportOutput = createOutput();
+  assert.equal(
+    await runCli(["upgrade", "--root", reportRoot, "--non-interactive"], {
+      io: reportOutput,
+    }),
+    0,
+  );
+  assert.match(reportOutput.stdoutText(), /offered capabilities:/u);
+
+  const writeRoot = await createProfileOnlyRoot();
+  const writeOutput = createOutput();
+  assert.equal(
+    await runCli(
+      [
+        "upgrade",
+        "--root",
+        writeRoot,
+        "--write",
+        "--adopt-recommended",
+        "--non-interactive",
+      ],
+      { io: writeOutput },
+    ),
+    0,
+  );
+  assert.match(writeOutput.stdoutText(), /recorded on next compile --write/u);
+  assert.equal(await fileExists(path.join(writeRoot, "ai-profile.lock")), false);
 });
 
 test("init writes unknown when no supported language is detected", async () => {

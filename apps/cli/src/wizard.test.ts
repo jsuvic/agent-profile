@@ -730,7 +730,6 @@ test("interactive wizard skips .gitignore prompt when no recommendation is missi
   });
   const kinds = prompts.calls.map((call) => call.kind);
   assert.deepEqual(kinds, [
-    "selectStrategy",
     "selectClients",
     "selectSetupProfile",
     "selectCapabilities",
@@ -961,6 +960,7 @@ test("phase-12 wizard writes setup profile, skill packs, and reviewer subagents"
   );
   assert.match(output.stdoutText(), /Safety mode: balanced/u);
   assert.match(output.stdoutText(), /Reviewer subagents: enabled/u);
+  assert.match(output.stdoutText(), /Files report \(state after write\):/u);
   assert.match(
     output.stdoutText(),
     /generate \.codex\/agents\/security-reviewer\.toml/u,
@@ -972,6 +972,29 @@ test("phase-12 wizard writes setup profile, skill packs, and reviewer subagents"
   assert.match(
     output.stdoutText(),
     /generate \.agents\/skills\/request-to-spec-issues\/SKILL\.md/u,
+  );
+});
+
+test("Tabnine-only plan notes selected packs that produce no artifacts", async () => {
+  const rootDir = await createTsRoot("tabnine-pack-applicability");
+  const output = createOutput();
+  const prompts = scriptedPrompts({
+    clients: ["tabnine"],
+    skillPacks: ["base", "review"],
+    confirm: false,
+  });
+
+  assert.equal(
+    await runCli(["init", "--root", rootDir], {
+      io: output,
+      nonInteractive: false,
+      prompts,
+    }),
+    0,
+  );
+  assert.match(
+    output.stdoutText(),
+    /selected packs produce no artifacts for the selected clients: base, review/u,
   );
 });
 

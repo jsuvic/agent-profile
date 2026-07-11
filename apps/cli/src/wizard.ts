@@ -718,6 +718,15 @@ export function formatWizardPlan(
     lines.push(
       `Advisory hooks: ${outcome.advisoryHooks ? "enabled" : "disabled"}`,
     );
+    if (
+      outcome.clients.length === 1 &&
+      outcome.clients[0] === "tabnine" &&
+      outcome.skillPacks.length > 0
+    ) {
+      lines.push(
+        `Note: selected packs produce no artifacts for the selected clients: ${outcome.skillPacks.join(", ")}.`,
+      );
+    }
   }
   lines.push(`Update .gitignore: ${outcome.updateGitignore ? "yes" : "no"}`);
   lines.push("");
@@ -753,10 +762,18 @@ export async function runInitWizard(input: {
     );
   }
 
-  const strategy = await input.prompts.selectStrategy({
-    default: recommendation.strategy,
-    recommendation,
-  });
+  let strategy: WizardStrategy;
+  if (existingRootInstructions(input.context.report).length === 0) {
+    strategy = "preserve";
+    input.io.stdout(
+      "No existing root instruction files found; using the create-only default (preserve).\n",
+    );
+  } else {
+    strategy = await input.prompts.selectStrategy({
+      default: recommendation.strategy,
+      recommendation,
+    });
+  }
 
   // Rebuild the import report with the user's chosen strategy so the
   // displayed write plan reflects what will actually be written. Without this
