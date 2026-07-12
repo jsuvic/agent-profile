@@ -4,6 +4,23 @@
 
 Accepted 2026-07-11 with phase-27/004 spec approval.
 
+Amended 2026-07-12 with phase-27/007 approval: the no-loop-back-menu
+rejection stands, but field evidence (a first-contact user on 0.4.4
+routed to doctor, handed 13 raw errors, and exited - forced to re-run
+and re-choose for every recovery step) added a consent-gated follow-up
+chain inside the dispatcher: after a routed action completes, the state
+is re-evaluated and the single highest-priority next action is offered
+as a confirm (default No). Consumed states (offered and run) are
+filtered out of each re-evaluation, so the chain offers the
+highest-priority remaining action - necessary because read-only actions
+like doctor leave their triggering state in place - and stops with a
+note only when no un-consumed applicable action remains (no infinite
+chains). Decline exits with the last completed action's exit code;
+direct subcommand invocations gain no follow-up.
+This preserves the original rationale (one invocation = deliberate
+consent per mutation; exit codes stay meaningful) while removing the
+re-run-and-re-choose toil the original decision did not foresee.
+
 ## Context
 
 Field tests (0.4.1/0.4.2) showed users guessing which command fits the
