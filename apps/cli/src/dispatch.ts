@@ -42,7 +42,7 @@ export async function evaluateDispatchState(
   rootDir: string,
 ): Promise<DispatchState> {
   const actions: DispatchAction[] = [];
-  await buildPhase14ImportReport({
+  const importReport = await buildPhase14ImportReport({
     rootDir,
     mode: "dry-run",
     strategy: "regions",
@@ -51,13 +51,21 @@ export async function evaluateDispatchState(
     stack: { languages: [], frameworks: [], packageManagers: [], testing: [] },
   });
   const doctor = await runDoctor({ rootDir });
+  // Broken state routes to doctor. Doctor errors qualify unless they are
+  // "missing" (a symlinked generated file reports as missing, so that signal
+  // is unreliable for region conflicts) or the lock-age informational code.
+  // Region conflicts the import report refuses - symlinked or
+  // partial/damaged-marker AGENTS.md/CLAUDE.md that compile cannot write and
+  // reconciliation cannot resolve - are broken regardless of how doctor
+  // classifies them.
   if (
     doctor.issues.some(
       (issue) =>
         issue.severity === "error" &&
         issue.actual !== "missing" &&
         issue.code !== "LINT-LOCK-007",
-    )
+    ) ||
+    importReport.summary.conflicts > 0
   )
     actions.push("doctor");
 

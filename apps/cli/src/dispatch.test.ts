@@ -9,6 +9,7 @@ import {
   readdir,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -83,6 +84,44 @@ test("dispatcher priority: invalid lockfile selects doctor before compile", asyn
   try {
     await writeFile(path.join(root, "ai-profile.lock"), "{\n");
     assert.equal((await evaluateDispatchState(root)).actions[0], "doctor");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher: a symlinked region file routes to doctor, not current", async (t) => {
+  const root = await currentRoot();
+  try {
+    await stampCurrentCatalog(root);
+    // A symlinked AGENTS.md is the reviewer's case: doctor reports it as
+    // "missing" (filtered out of the broken check), and only the import
+    // report flags it as a refuse-conflict. Without folding
+    // importReport.summary.conflicts into the broken state, this repo would
+    // report "current" despite compile refusing to write the file.
+    const agentsPath = path.join(root, "AGENTS.md");
+    const target = path.join(root, "AGENTS.real.md");
+    await cp(agentsPath, target);
+    await rm(agentsPath, { force: true });
+    try {
+      await symlink(target, agentsPath, "file");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        t.skip("file symlinks are not available in this environment");
+        return;
+      }
+      throw error;
+    }
+    const actions = (await evaluateDispatchState(root)).actions;
+    assert.equal(
+      actions[0],
+      "doctor",
+      "a symlinked region file must route to doctor, not current",
+    );
+    assert.ok(
+      !actions.includes("current"),
+      "a repo with a symlinked region file is not up to date",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
