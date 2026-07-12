@@ -42,8 +42,8 @@ project-MCP proof; Claude-first sequencing permitted).
 
 ## phase-27: Ownership + Upgrade Lifecycle (`docs/specs/phase-27/001-import-ownership-lockfile-conformance.md`)
 
-Specs 001, 002, 003, 006 approved and shipped (through 0.4.3); 004
-approved 2026-07-11 (ADR 0014 accepted).
+Specs 001-004, 006 approved and shipped (through 0.4.4); 007 approved
+2026-07-12 (ADR 0014 amended: consent-gated follow-up chain).
 
 | Id | Task | State | Brief |
 | --- | --- | --- | --- |
@@ -53,6 +53,7 @@ approved 2026-07-11 (ADR 0014 accepted).
 | I4 | Compile drift classification flow | done | [004-drift-reconciliation-flow.md](docs/specs/phase-27/issues/004-drift-reconciliation-flow.md) |
 | I5 | Flow guidance conformance patch (0.4.3) | done | [005-flow-guidance-conformance.md](docs/specs/phase-27/issues/005-flow-guidance-conformance.md) |
 | I6 | No-args interactive dispatcher | done | [006-no-args-dispatcher.md](docs/specs/phase-27/issues/006-no-args-dispatcher.md) |
+| I7 | Dispatcher follow-up offers + doctor/upgrade clarity | ready | [007-dispatcher-follow-up-clarity.md](docs/specs/phase-27/issues/007-dispatcher-follow-up-clarity.md) |
 
 I3 and I4 are parallel-safe apart from shared `apps/cli/src/index.ts`
 touchpoints; coordinate merges (if I3 lands first, rebase I4 onto it).

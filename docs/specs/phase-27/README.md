@@ -38,6 +38,12 @@ flow.
   non-TTY bare output stays byte-identical help with no detection.
   Accepts ADR 0014 on approval.
 
+- `007-dispatcher-follow-up-and-clarity.md` - draft 2026-07-12 from the
+  second field test (macOS, 0.4.4): consent-gated dispatcher follow-up
+  chain (amends ADR 0014), doctor recommendation summary, upgrade
+  option hints + honest "Adopt all available" label, dispatcher menu
+  logo fix. Approved 2026-07-12 (ADR 0014 amended).
+
 Planned (grill sessions before drafting):
 
 - `005` (phase-later) - local run-cost stats and curated subagent
