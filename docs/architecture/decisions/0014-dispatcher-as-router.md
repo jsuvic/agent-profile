@@ -10,9 +10,13 @@ routed to doctor, handed 13 raw errors, and exited - forced to re-run
 and re-choose for every recovery step) added a consent-gated follow-up
 chain inside the dispatcher: after a routed action completes, the state
 is re-evaluated and the single highest-priority next action is offered
-as a confirm (default No). Each state is offered at most once per
-invocation (no infinite chains); decline exits with the last completed
-action's exit code; direct subcommand invocations gain no follow-up.
+as a confirm (default No). Consumed states (offered and run) are
+filtered out of each re-evaluation, so the chain offers the
+highest-priority remaining action - necessary because read-only actions
+like doctor leave their triggering state in place - and stops with a
+note only when no un-consumed applicable action remains (no infinite
+chains). Decline exits with the last completed action's exit code;
+direct subcommand invocations gain no follow-up.
 This preserves the original rationale (one invocation = deliberate
 consent per mutation; exit codes stay meaningful) while removing the
 re-run-and-re-choose toil the original decision did not foresee.

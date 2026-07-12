@@ -72,17 +72,34 @@ existing consent gate.
 
 After a routed action completes inside the dispatcher (interactive TTY
 only), re-evaluate the repository state with the same imported
-machinery. If the state is not "current", offer the single
-highest-priority next action as a confirm:
+machinery and offer the next action as a confirm:
 "Next: Generate agent files (`compile --write`). Run it now?" -
 default No. Accept -> run it (with its own flow and consent defaults),
 then offer again. Decline or reaching "current" -> exit. The process
 exit code is the last completed action's code (a declined offer does
-not alter it). Safety bound: each state may be offered at most once
-per invocation - if a run leaves the repository in a state already
-offered, stop with a note instead of re-offering (no infinite chains).
-Direct subcommand invocations (`agent-profile doctor` etc.) gain no
-follow-up - this is dispatcher-only.
+not alter it). Direct subcommand invocations (`agent-profile doctor`
+etc.) gain no follow-up - this is dispatcher-only.
+
+Consumed-state filter (amended 2026-07-12 from the approval review):
+"offered at most once" is a filter on the evaluation, not a stop
+trigger. The dispatcher tracks the states consumed this invocation
+(offered and run); on each re-evaluation it drops consumed states from
+the applicable set and offers the highest-priority REMAINING action.
+The chain stops with a note only when the filtered set is empty and
+the state is not "current". This matters because doctor is read-only:
+the Broken state necessarily survives a doctor run, and a literal
+re-evaluation would re-select doctor (or dead-end on a stop trigger)
+instead of progressing - the field-log chain (doctor -> compile
+--write) is only reachable under the filter semantics. Offering a
+mutating action while a broken state persists is safe by the product's
+existing defense in depth: every offered command keeps its own guards,
+previews, and refusal paths (e.g. compile refuses damaged-marker files
+with guidance), so the worst case of a premature offer is a clean,
+explained refusal - never a harmful write. The doctor recommendation
+summary (behavior 2) may supply the offer's wording where a grouped
+recommendation maps to the offered action, but the routing decision
+itself always comes from the filtered state evaluation - one routing
+mechanism, not two.
 
 ### 2. Doctor recommendation summary (interactive TTY only)
 
@@ -138,12 +155,19 @@ the routed command's own logo prints exactly once, when it runs.
 
 ## Acceptance Criteria
 
-1. Dispatcher scenario test (Martin's session shape): broken repo ->
-   doctor runs -> follow-up offers compile --write -> accept -> runs ->
-   next offer or current -> chain ends; each step confirmed; declining
-   at any point exits with the last action's code.
-2. Offered-once bound: a state that recurs after its action is not
-   re-offered; the run ends with a note.
+1. Dispatcher scenario test (the field-log shape): broken repo ->
+   doctor runs (read-only; Broken state persists) -> the consumed-state
+   filter drops Broken and the follow-up offers the next applicable
+   action (compile --write) -> accept -> runs -> next offer or current
+   -> chain ends; each step confirmed; declining at any point exits
+   with the last completed action's code. This criterion is only
+   satisfiable under the filter semantics - it doubles as the
+   regression test for the doctor-cannot-progress contradiction.
+2. Consumed-state filter: a consumed state is never re-offered even
+   when it persists after its action; the run ends with a note only
+   when no un-consumed applicable action remains and the state is not
+   "current" (negative fixture: an action that leaves every remaining
+   applicable state consumed).
 3. Doctor (interactive) prints the grouped recommendation summary with
    deduplicated commands and counts; non-interactive doctor and --json
    are byte-identical to current output.
