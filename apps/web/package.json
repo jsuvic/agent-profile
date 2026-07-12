@@ -1,6 +1,6 @@
 {
   "name": "@agent-profile/web",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Local-first SvelteKit UI for Agent Profile Compiler.",
   "license": "Apache-2.0",
   "repository": {

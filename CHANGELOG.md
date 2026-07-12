@@ -4,6 +4,8 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+## 0.4.4 — 2026-07-12
+
 - Route interactive bare `agent-profile` invocations through a read-only
   repository-state menu while preserving byte-identical non-TTY help and all
   explicit subcommand contracts.
