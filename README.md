@@ -78,6 +78,14 @@ Requirements: Node.js 24+ and npm 11+.
 From the repository you want to configure:
 
 ```bash
+npx agent-profile
+```
+
+On an interactive terminal, the bare command inspects the repository read-only
+and pre-selects the next appropriate action. For scripts and CI, use the
+explicit commands (a non-interactive bare invocation continues to print help):
+
+```bash
 npx agent-profile init
 npx agent-profile compile --dry-run
 npx agent-profile compile --write

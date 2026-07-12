@@ -2235,3 +2235,36 @@ test("built binary: ui validates loopback host without module resolution errors"
   assert.equal(code, 2, `expected exit 2; stderr: ${stderr}`);
   assert.match(stderr, /--host must be 127\.0\.0\.1, localhost, or ::1/u);
 });
+
+test("bare interactive invocation routes an empty repository to init", async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-dispatch-"));
+  let selected: string | undefined;
+  let output = "";
+  try {
+    const code = await runCli([], {
+      cwd: rootDir,
+      io: { stdout: (text: string) => { output += text; }, stderr: () => undefined },
+      dispatcherPrompts: {
+        async choose(input: { initialValue: string }) {
+          selected = input.initialValue;
+          return undefined;
+        },
+      },
+    } as never);
+    assert.equal(code, 0);
+    assert.equal(selected, "init");
+    assert.doesNotMatch(output, /Agent Profile Compiler/u);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("bare non-TTY output is byte-identical to help and performs no detection", async () => {
+  const bare = createOutput();
+  const help = createOutput();
+  const missingRoot = path.join(tmpdir(), `agent-profile-missing-${Date.now()}`);
+  assert.equal(await runCli([], { cwd: missingRoot, io: bare }), 0);
+  assert.equal(await runCli(["--help"], { cwd: missingRoot, io: help }), 0);
+  assert.equal(bare.stdoutText(), help.stdoutText());
+  assert.equal(bare.stderrText(), "");
+});
