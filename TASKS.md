@@ -97,7 +97,7 @@ Spec 001 approved 2026-07-13 (ADRs 0015-0017 accepted).
 
 | Id  | Task                                                    | State     | Brief                                                                                                               |
 | --- | ------------------------------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------- |
-| I1  | Canonical execution policy and client rendering         | ready     | [001-canonical-execution-policy.md](docs/specs/phase-30/issues/001-canonical-execution-policy.md)                   |
+| I1  | Canonical execution policy and client rendering         | done      | [001-canonical-execution-policy.md](docs/specs/phase-30/issues/001-canonical-execution-policy.md)                   |
 | I2  | Task capsules and bounded orchestration                 | sequenced | [002-task-capsules-bounded-orchestration.md](docs/specs/phase-30/issues/002-task-capsules-bounded-orchestration.md) |
 | I3  | Read-only indexed-context diagnostics                   | sequenced | [003-indexed-context-diagnostics.md](docs/specs/phase-30/issues/003-indexed-context-diagnostics.md)                 |
 | I4  | Explicit indexed-context registration repair            | blocked   | [004-indexed-context-registration-repair.md](docs/specs/phase-30/issues/004-indexed-context-registration-repair.md) |

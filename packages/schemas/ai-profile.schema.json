@@ -210,6 +210,9 @@
           }
         }
       }
+    },
+    "subagentPolicy": {
+      "$ref": "#/definitions/subagentPolicy"
     }
   },
   "definitions": {
@@ -362,6 +365,155 @@
             "type": "array",
             "maxItems": 0
           }
+        }
+      }
+    },
+    "subagentPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "roles": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "implementer": { "$ref": "#/definitions/subagentPolicyRole" },
+            "complex-implementer": {
+              "$ref": "#/definitions/subagentPolicyRole"
+            },
+            "explorer": { "$ref": "#/definitions/subagentPolicyRole" },
+            "spec-reviewer": { "$ref": "#/definitions/subagentPolicyRole" },
+            "quality-reviewer": { "$ref": "#/definitions/subagentPolicyRole" },
+            "critical-reviewer": { "$ref": "#/definitions/subagentPolicyRole" },
+            "architect": { "$ref": "#/definitions/subagentPolicyRole" },
+            "grill": { "$ref": "#/definitions/subagentPolicyRole" },
+            "mechanical": { "$ref": "#/definitions/subagentPolicyRole" }
+          }
+        },
+        "orchestration": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxConcurrentThreads": {
+              "type": "integer"
+            },
+            "maxDepth": {
+              "type": "integer"
+            },
+            "parallelWrites": {
+              "type": "boolean"
+            }
+          }
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "handoff": {
+              "type": "string",
+              "enum": ["task-capsule"]
+            },
+            "memory": {
+              "type": "string",
+              "enum": ["targeted"]
+            },
+            "indexed": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "enum": ["preferred", "off"]
+                },
+                "provider": {
+                  "type": "string",
+                  "enum": ["cce"]
+                }
+              }
+            }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "summary": {
+              "type": "string",
+              "enum": ["required"]
+            },
+            "localTrace": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "retention": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "subagentPolicyCapability": {
+      "type": "string",
+      "enum": ["efficient", "balanced", "strongest"]
+    },
+    "subagentPolicyEffort": {
+      "type": "string",
+      "enum": ["low", "medium", "high", "extra-high"]
+    },
+    "subagentPolicyRole": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "effort"],
+      "properties": {
+        "capability": {
+          "$ref": "#/definitions/subagentPolicyCapability"
+        },
+        "effort": {
+          "$ref": "#/definitions/subagentPolicyEffort"
+        },
+        "overrides": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "codex": {
+              "$ref": "#/definitions/subagentPolicyCodexRoleOverride"
+            },
+            "claude": {
+              "$ref": "#/definitions/subagentPolicyClaudeRoleOverride"
+            }
+          }
+        }
+      }
+    },
+    "subagentPolicyCodexRoleOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "$ref": "#/definitions/subagentPolicyEffort"
+        }
+      }
+    },
+    "subagentPolicyClaudeRoleOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "$ref": "#/definitions/subagentPolicyEffort"
         }
       }
     },

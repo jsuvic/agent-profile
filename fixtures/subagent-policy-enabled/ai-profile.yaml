@@ -1,0 +1,70 @@
+version: 1
+profile:
+  name: subagent-policy-enabled
+  description: AI-agent setup that enables the role-aware subagent policy.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+subagentPolicy:
+  enabled: true
+  roles:
+    implementer:
+      capability: balanced
+      effort: medium
+    complex-implementer:
+      capability: balanced
+      effort: high
+    explorer:
+      capability: balanced
+      effort: low
+    spec-reviewer:
+      capability: balanced
+      effort: high
+    quality-reviewer:
+      capability: balanced
+      effort: high
+    critical-reviewer:
+      capability: strongest
+      effort: high
+    architect:
+      capability: strongest
+      effort: extra-high
+    grill:
+      capability: strongest
+      effort: high
+    mechanical:
+      capability: efficient
+      effort: medium
+  orchestration:
+    maxConcurrentThreads: 3
+    maxDepth: 1
+    parallelWrites: false
+  context:
+    handoff: task-capsule
+    memory: targeted
+    indexed:
+      mode: preferred
+      provider: cce
+  evidence:
+    summary: required
+    localTrace:
+      enabled: false
+      retention: 20
