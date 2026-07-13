@@ -16,6 +16,7 @@ and the `disable-model-invocation` skill invocation policy.
 - `issues/003-tdd-enforcement-content.md` (I3)
 - `issues/004-implement-next-skill.md` (I4)
 - `issues/005-doctor-informational-notes.md` (I5)
+- `issues/006-automatic-post-grill-synthesis.md` (I6)
 
 Task states are tracked in the root `TASKS.md` ledger.
 

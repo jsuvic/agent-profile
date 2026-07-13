@@ -71,7 +71,11 @@ When the user agrees the grill is complete, return:
 - Decision rules for implementation tradeoffs
 - ADR candidates that meet the threshold
 - Open questions or risks
-- Confirmation that post-grill synthesis can run next
+- Confirmation that approving this record authorizes the derived synthesis and its bounded persistence
+
+## On Approval
+
+Approving the completed agreement record automatically starts the synthesis step; no second command or approval is needed to begin it. That same approval authorizes one bounded local persistence of the derived spec candidate, issue briefs, ledger, glossary, and qualifying ADRs. It authorizes persistence only: it does not authorize implementation, and it does not authorize persisting anything the agreement record did not decide.
 
 ## Safety
 
