@@ -3284,7 +3284,7 @@ test("phase-18 request-to-spec-issues trigger language fires after a grill, redi
     );
     assert.match(
       text,
-      /Do not re-interview the user unless the grill record contains a contradiction or a genuinely missing decision\./u,
+      /Do not re-interview the user except on a derivation exception - a contradiction, a missing material decision, or scope expansion \(see Derivation Exceptions\)\./u,
       `${file.path}: body must forbid re-interview without cause`,
     );
 
@@ -5270,6 +5270,88 @@ test("phase-24 I4 implement-next is omitted without both prerequisites and never
   }
   for (const template of result.templates) {
     assert.equal(template.id.endsWith("/implement-next@1"), false, template.id);
+  }
+});
+
+test("phase-24 I6 encodes automatic post-grill handoff, single bounded persistence authorization, and derivation-exception stop", async () => {
+  const profileResult = await readProfileFile(minimalProfileFilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  const result = compileProfile({
+    profile: profileResult.profile,
+    targets: ["codex-workflow-skills", "claude-workflow-skills"],
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const synthesisFiles = result.files.filter((f) =>
+    f.path.endsWith("/request-to-spec-issues/SKILL.md"),
+  );
+  assert.equal(synthesisFiles.length, 2);
+
+  for (const file of synthesisFiles) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+
+    assert.equal(text.includes("## Derivation Exceptions"), true, file.path);
+    assert.equal(
+      text.includes(
+        "a contradiction, a missing material decision, or scope expansion",
+      ),
+      true,
+      file.path,
+    );
+    assert.equal(text.includes("without a second approval"), true, file.path);
+    assert.equal(
+      text.includes("The approved grill already authorized this persistence"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Do not implement any synthesized issue"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("Do not persist before the grill agreement is approved"),
+      true,
+      file.path,
+    );
+    // Old duplicate-approval precondition removed.
+    assert.equal(
+      text.includes("The user has confirmed the direction is ready for synthesis"),
+      false,
+      file.path,
+    );
+    // Old second-approval safety line removed.
+    assert.equal(
+      text.includes("explicitly asks for local file writes"),
+      false,
+      file.path,
+    );
+  }
+
+  const grillFiles = result.files.filter((f) =>
+    f.path.endsWith("/grill-change/SKILL.md"),
+  );
+  assert.equal(grillFiles.length, 2);
+
+  for (const file of grillFiles) {
+    const text = Buffer.from(file.bytes).toString("utf8");
+
+    assert.equal(text.includes("## On Approval"), true, file.path);
+    assert.equal(
+      text.includes("automatically starts the synthesis step"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      text.includes("does not authorize implementation"),
+      true,
+      file.path,
+    );
+    // Grill must never name the synthesis skill.
+    assert.equal(text.includes("request-to-spec-issues"), false, file.path);
   }
 });
 

@@ -14,14 +14,14 @@ Convert a completed `grill-change` agreement record into an intent-first spec ca
 
 ## Preconditions
 
-- The grill is complete.
-- The user has confirmed the direction is ready for synthesis.
+- The grill is complete and its agreement record is approved.
+- That grill approval authorizes this synthesis and one bounded local persistence step; do not ask for a second product-level approval.
 - Relevant local specs, ADRs, docs, fixtures, and code context have been checked.
 - If there is no completed grill agreement, stop and run `grill-change` first.
 
 ## Synthesis Rules
 
-1. Do not re-interview the user unless the grill record contains a contradiction or a genuinely missing decision.
+1. Do not re-interview the user except on a derivation exception - a contradiction, a missing material decision, or scope expansion (see Derivation Exceptions).
 2. Keep product intent, non-goals, durable terms, and hard-to-reverse decisions above implementation mechanics.
 3. Preserve existing spec contracts and safety rules unless the user explicitly approved changing them.
 4. Split work into vertical behavior slices, not file layers.
@@ -125,9 +125,13 @@ Use these states:
 - `sequenced`
 - `human-gate`
 
+## Derivation Exceptions
+
+Grill approval covers a faithful synthesis only. Stop before any write, report the issue, and ask the human when derivation reveals a contradiction, a missing material decision, or scope expansion beyond what the grill approved. Persist nothing until the human resolves the exception. These are the only reasons to re-interview after an approved grill.
+
 ## Persisted Artifacts
 
-After the user approves the synthesis, persist workflow state in one write step. All writes go through the client's write-approval flow.
+The approved grill already authorized this persistence, so persist workflow state in one write step without a second approval. First report what will be persisted, then, after the write, report what was persisted. All writes still go through the client's write-approval flow, and this step never implements any synthesized issue.
 
 - `TASKS.md`: an index-only ledger. Each row links to a brief and carries one state from the closed set `ready | blocked | sequenced | parallel-safe | human-gate | in-progress | done`. Keep task content in the briefs, not the ledger.
 - `docs/specs/<spec-dir>/issues/NNN-slug.md`: one brief per slice, using the Issue Brief Format above.
@@ -151,5 +155,6 @@ Return:
 - Do not read or print secrets.
 - Do not include credentials, environment values, production data, or private endpoints.
 - Do not create GitHub issues, labels, projects, or milestones.
-- Do not write files unless the user explicitly asks for local file writes after reviewing the synthesis.
+- Do not persist before the grill agreement is approved, and stop before writes on a contradiction, a missing material decision, or scope expansion.
+- Do not implement any synthesized issue; approval authorizes persistence, not implementation.
 - Do not propose `bypassPermissions`, tool pre-approval, dependency auto-installation, hosted execution, or remote MCP behavior.

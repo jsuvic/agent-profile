@@ -32,7 +32,7 @@
       "id": "targets/codex-workflow-skills/grill-change@1",
       "target": "codex-workflow-skills",
       "version": "1",
-      "sha256": "2171cf57d6c763ec0fd789d8e609089f82f242bd73ae97594a50dc2a10d8b5ae"
+      "sha256": "1dec73131d8e8519353e35478d5eab5e7b7d417ae7cd6ae689c4007f52580800"
     },
     {
       "id": "targets/codex-workflow-skills/loop-docs-update@1",
@@ -80,7 +80,7 @@
       "id": "targets/codex-workflow-skills/request-to-spec-issues@1",
       "target": "codex-workflow-skills",
       "version": "1",
-      "sha256": "e9383b5ca0489fb1b1409bcf7f2a071c393673a40e5511937adc571e78518255"
+      "sha256": "6d5e741a4e667c948d9f8e70d8d39757df7a96139466a44f4dfd974eebf5f73a"
     },
     {
       "id": "targets/codex-workflow-skills/review-change@1",
@@ -175,7 +175,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/grill-change@1",
       "ownership": "generated-owned",
-      "sha256": "2171cf57d6c763ec0fd789d8e609089f82f242bd73ae97594a50dc2a10d8b5ae"
+      "sha256": "1dec73131d8e8519353e35478d5eab5e7b7d417ae7cd6ae689c4007f52580800"
     },
     {
       "path": ".agents/skills/loop-docs-update/SKILL.md",
@@ -231,7 +231,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/request-to-spec-issues@1",
       "ownership": "generated-owned",
-      "sha256": "e9383b5ca0489fb1b1409bcf7f2a071c393673a40e5511937adc571e78518255"
+      "sha256": "6d5e741a4e667c948d9f8e70d8d39757df7a96139466a44f4dfd974eebf5f73a"
     },
     {
       "path": ".agents/skills/review-change/SKILL.md",

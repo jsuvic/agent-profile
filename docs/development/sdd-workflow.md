@@ -49,10 +49,12 @@ stakeholder request
 - `grill-change` clarifies one decision at a time, provides a recommended
   answer per question, and ends with an explicit agreement record. It does
   not produce specs or implementation plans.
-- `request-to-spec-issues` runs only after the grill is complete. It turns
-  the agreement record into an intent-first spec candidate and vertical
-  TDD-ready issue briefs without re-interviewing the user unless a
-  contradiction or genuinely missing decision is found.
+- `request-to-spec-issues` runs after the grill agreement is approved; that
+  approval authorizes the synthesis and one bounded local persistence step
+  without a second product-level approval. It turns the agreement record into
+  an intent-first spec candidate and vertical TDD-ready issue briefs, and it
+  stops before writes only on a derivation exception - a contradiction, a
+  missing material decision, or scope expansion.
 - Tabnine projects receive the same workflow through the
   `.tabnine/guidelines/05-planning-workflow.md` guideline rather than as a
   project skill, because Tabnine consumes guidelines instead of skills.

@@ -44,13 +44,13 @@
       "id": "targets/claude-workflow-skills/grill-change@1",
       "target": "claude-workflow-skills",
       "version": "1",
-      "sha256": "f49455135aafb9dd00074dbcbfab8ae63666d4e6eb684649c29dd1fff71d6dcd"
+      "sha256": "cc27328e7edc401557cceeaa246f7db37b03b03fba336ea17d2c4d54b4c4e899"
     },
     {
       "id": "targets/claude-workflow-skills/request-to-spec-issues@1",
       "target": "claude-workflow-skills",
       "version": "1",
-      "sha256": "d655907ae81720cad2ff5b2b2213f0c8ef0883a44d416070079ffd637792814b"
+      "sha256": "fb04b47a6c1705c16e856f465e8d7c2f8bd4743e7b489b74d35283e8d7069845"
     },
     {
       "id": "targets/claude-workflow-skills/sdd-change@1",
@@ -80,13 +80,13 @@
       "id": "targets/codex-workflow-skills/grill-change@1",
       "target": "codex-workflow-skills",
       "version": "1",
-      "sha256": "2171cf57d6c763ec0fd789d8e609089f82f242bd73ae97594a50dc2a10d8b5ae"
+      "sha256": "1dec73131d8e8519353e35478d5eab5e7b7d417ae7cd6ae689c4007f52580800"
     },
     {
       "id": "targets/codex-workflow-skills/request-to-spec-issues@1",
       "target": "codex-workflow-skills",
       "version": "1",
-      "sha256": "e9383b5ca0489fb1b1409bcf7f2a071c393673a40e5511937adc571e78518255"
+      "sha256": "6d5e741a4e667c948d9f8e70d8d39757df7a96139466a44f4dfd974eebf5f73a"
     },
     {
       "id": "targets/codex-workflow-skills/sdd-change@1",
@@ -168,14 +168,14 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/grill-change@1",
       "ownership": "generated-owned",
-      "sha256": "2171cf57d6c763ec0fd789d8e609089f82f242bd73ae97594a50dc2a10d8b5ae"
+      "sha256": "1dec73131d8e8519353e35478d5eab5e7b7d417ae7cd6ae689c4007f52580800"
     },
     {
       "path": ".agents/skills/request-to-spec-issues/SKILL.md",
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/request-to-spec-issues@1",
       "ownership": "generated-owned",
-      "sha256": "e9383b5ca0489fb1b1409bcf7f2a071c393673a40e5511937adc571e78518255"
+      "sha256": "6d5e741a4e667c948d9f8e70d8d39757df7a96139466a44f4dfd974eebf5f73a"
     },
     {
       "path": ".agents/skills/sdd-change/SKILL.md",
@@ -210,14 +210,14 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/grill-change@1",
       "ownership": "generated-owned",
-      "sha256": "f49455135aafb9dd00074dbcbfab8ae63666d4e6eb684649c29dd1fff71d6dcd"
+      "sha256": "cc27328e7edc401557cceeaa246f7db37b03b03fba336ea17d2c4d54b4c4e899"
     },
     {
       "path": ".claude/skills/request-to-spec-issues/SKILL.md",
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/request-to-spec-issues@1",
       "ownership": "generated-owned",
-      "sha256": "d655907ae81720cad2ff5b2b2213f0c8ef0883a44d416070079ffd637792814b"
+      "sha256": "fb04b47a6c1705c16e856f465e8d7c2f8bd4743e7b489b74d35283e8d7069845"
     },
     {
       "path": ".claude/skills/sdd-change/SKILL.md",
