@@ -5,6 +5,11 @@
 Approved for the planning direction agreed in the 2026-05-20 workflow
 discussion. Not implemented.
 
+The generated-skill implementation moved to phase 24. The post-grill approval
+boundary below is amended by phase-24/001 and ADR 0018 as of 2026-07-13:
+approval of a completed grill automatically authorizes faithful synthesis and
+bounded local persistence; no duplicate synthesis approval is required.
+
 This spec captures the product direction agreed in the planning discussion:
 stakeholder requests should be clarified first, then converted into
 intent-first specs and dependency-aware vertical implementation issues.
@@ -150,11 +155,14 @@ their surface.
 2. The agent runs `grill-change`.
 3. `grill-change` asks one focused question at a time until the direction,
    tradeoffs, non-goals, and unknowns are settled enough for planning.
-4. The user explicitly confirms that the grill session is complete.
-5. The agent runs `request-to-spec-issues`.
+4. The user explicitly confirms and approves the completed grill agreement.
+5. The agent automatically hands the agreement to `request-to-spec-issues`;
+   that approval authorizes faithful synthesis and bounded local persistence
+   without another product-level approval question.
 6. `request-to-spec-issues` does not re-interview the user unless it finds a
-   contradiction or a decision that was not answerable from the grill output
-   and repository context.
+   contradiction, a missing material decision, or scope expansion that was not
+   authorized by the grill output and repository context. It stops before
+   writes in those cases.
 7. The agent creates or proposes an intent-first spec candidate.
 8. The agent creates or proposes vertical TDD-ready implementation issues.
 9. Team members or implementation agents pick unblocked issues.
@@ -449,8 +457,10 @@ generated client config, and the repository trust model.
 - No meaningful implementation starts before the relevant spec or parent
   direction is approved.
 - `request-to-spec-issues` runs only after the grill session is complete.
+- Approval of the completed grill authorizes its faithful synthesis and one
+  bounded local persistence step; implementation remains separately gated.
 - The post-grill synthesis must not ask new questions unless it finds a
-  contradiction or a genuinely missing decision.
+  contradiction, a genuinely missing material decision, or scope expansion.
 - Product intent and decision rules have priority when implementation details
   are ambiguous.
 - Vertical issues must be TDD-ready.
@@ -477,6 +487,9 @@ generated client config, and the repository trust model.
 - The workflow requires `grill-change` before `request-to-spec-issues`.
 - The grill output records product intent, tradeoff direction, non-goals, and
   user confirmation.
+- That confirmation automatically triggers faithful synthesis and bounded
+  local persistence without a duplicate approval prompt; derivation exceptions
+  stop before writes.
 - The spec candidate includes intent, decision rules, engineering contract,
   acceptance criteria, TDD strategy, and issue plan.
 - Every vertical issue includes RED proof, GREEN proof, dependencies, file

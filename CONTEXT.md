@@ -23,6 +23,29 @@ implementation context, including the seam and mock boundary. _Avoid:_
 The public boundary where a test observes behavior. _Avoid:_ "test hook",
 "entry point".
 
+## Subagents and Context
+
+**Task capsule**
+The minimum authoritative handoff for one delegated slice: objective,
+contracts, artifact paths, seam, validation, ownership, and blockers. _Avoid:_
+"full chat context", "context dump".
+
+**Indexed repository context**
+A provider-neutral local capability for focused retrieval from a repository
+index. _Avoid:_ "CCE context" as the canonical product term.
+
+**Degraded context mode**
+The explicit bounded fallback used when indexed repository context is not
+ready. _Avoid:_ "no-MCP mode", "silent fallback".
+
+**Capability class**
+A stable intent for the model strength a role needs, resolved through a
+versioned client mapping. _Avoid:_ "model alias", "model tier".
+
+**Workflow evidence summary**
+A metadata-only record of role resolution, context path, orchestration, and
+validation outcome. _Avoid:_ "telemetry", "prompt log".
+
 ## Logging
 
 **Debug output**
