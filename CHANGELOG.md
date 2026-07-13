@@ -4,6 +4,15 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+- Improve interactive first-contact guidance: the bare dispatcher now offers
+  one consent-gated next action after each completed routed command, doctor
+  groups repeated actionable findings into recommendations, the upgrade menu
+  explains its keep/adopt-all/customize choices, and the dispatcher starts
+  with a neutral agent-profile wordmark. Interactive fixture differences are
+  limited to those new follow-up prompts, doctor recommendation lines, upgrade
+  labels/hints/note, and the neutral dispatcher wordmark; non-interactive
+  doctor and upgrade output and JSON remain unchanged.
+
 ## 0.4.4 — 2026-07-12
 
 - Route interactive bare `agent-profile` invocations through a read-only

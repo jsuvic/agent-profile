@@ -161,7 +161,9 @@ Feedback is especially useful on:
 
 The bare `npx agent-profile` command above is the interactive entry point:
 it inspects the repository read-only and pre-selects the next appropriate
-action. For scripts and CI, use the explicit commands (a non-interactive
+action. After an action finishes, it may offer one next applicable action at a
+time; each offer defaults to No, so nothing runs without fresh confirmation.
+For scripts and CI, use the explicit commands (a non-interactive
 bare invocation prints help and runs no detection):
 
 ```bash
@@ -311,7 +313,9 @@ current profile and preview exact insertions before asking to write. Upgrade
 inserts new pack entries and workflow booleans without modifying existing YAML
 values or formatting, refuses unsafe flow-style or anchored targets with a
 manual line, records the integer catalog revision after a successful write,
-and never runs `compile` implicitly.
+and never runs `compile` implicitly. The interactive "Adopt all available"
+choice changes `ai-profile.yaml` only; run `agent-profile compile --write`
+afterward to generate the updated agent files.
 
 ### Local Migration UI (Phase 16)
 

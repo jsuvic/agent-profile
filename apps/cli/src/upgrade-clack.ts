@@ -12,6 +12,19 @@ import {
 import type { UpgradePrompts, UpgradeStrategy } from "./index.js";
 import { WizardCancelled } from "./wizard.js";
 
+export const AVAILABLE_CAPABILITIES_NOTE =
+  "Adopting adds entries to ai-profile.yaml only; run `agent-profile compile --write` afterward to generate the files.";
+
+export const UPGRADE_STRATEGY_OPTIONS = [
+  { value: "keep", label: "Keep current", hint: "change nothing and exit" },
+  {
+    value: "adopt-recommended",
+    label: "Adopt all available",
+    hint: "add every listed capability to ai-profile.yaml",
+  },
+  { value: "customize", label: "Customize", hint: "choose which capabilities to add" },
+] as const;
+
 export async function createUpgradeClackPrompts(
   version: string,
 ): Promise<UpgradePrompts> {
@@ -34,7 +47,7 @@ export async function createUpgradeClackPrompts(
     showOffered(ids) {
       note(
         ids.length > 0
-          ? ids.map((id) => `- ${id}`).join("\n")
+          ? `${ids.map((id) => `- ${id}`).join("\n")}\n\n${AVAILABLE_CAPABILITIES_NOTE}`
           : "Nothing to offer.",
         "Available capabilities",
         { output },
@@ -46,11 +59,7 @@ export async function createUpgradeClackPrompts(
           output,
           message: "Choose how to handle available capabilities",
           initialValue: "keep",
-          options: [
-            { value: "keep", label: "Keep current" },
-            { value: "adopt-recommended", label: "Adopt recommended" },
-            { value: "customize", label: "Customize" },
-          ],
+          options: [...UPGRADE_STRATEGY_OPTIONS],
         }),
       );
     },

@@ -3704,6 +3704,7 @@ Commands:
             fetches anything and never changes the exit code.
   init      Create a starting ai-profile.yaml (interactive wizard with no args).
   upgrade   Report or insert newly available capabilities (preview first).
+            --write --adopt-recommended adopts all offered capabilities.
   ui        Start the local read-only UI.
 
 Init wizard:

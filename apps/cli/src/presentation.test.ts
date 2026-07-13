@@ -148,6 +148,8 @@ test("presenter.doctorReport colors severities and appends a count summary", asy
     assert.match(text, /\[33m\[warning\]/u);
     // One-line count summary.
     assert.match(text, /1 error, 1 warning/u);
+    // Interactive-only recommendations follow the existing per-issue output.
+    assert.match(text, /2 recommendations:/u);
     // Guidance/body still rendered.
     assert.match(text, /Lockfile is missing\./u);
   });

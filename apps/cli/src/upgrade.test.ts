@@ -527,6 +527,10 @@ test("upgrade parser keeps help and error status deterministic", async () => {
   const help = createOutput();
   assert.equal(await runCli(["upgrade", "--help"], { io: help }), 0);
   assert.match(help.stdoutText(), /agent-profile upgrade/u);
+  assert.match(
+    help.stdoutText(),
+    /--adopt-recommended.*adopts all offered capabilities/iu,
+  );
 
   const root = await createUpgradeRoot(23);
   const report = createOutput();
