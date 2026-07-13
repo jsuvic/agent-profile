@@ -1,104 +1,87 @@
 # agent-profile
 
-Preview local-first AI Agent Profile Compiler for Codex, Claude, and Tabnine.
+One config file for all your AI coding tools.
 
-`agent-profile` creates one canonical `ai-profile.yaml` in your repository and
-compiles it into deterministic agent-specific configuration files. It is for
-developers who want consistent AI coding-agent instructions without copying the
-same policy across separate tool configs.
+If you use AI coding tools - Claude Code, Codex, Tabnine - each one wants
+its own setup files: `CLAUDE.md` here, `AGENTS.md` there, separate
+settings, separate skills. Keeping them in sync by hand is tedious, and
+they drift apart until each tool behaves differently.
 
-## Preview Status
+Agent Profile fixes that. You describe your project once, in one file
+(`ai-profile.yaml`), and it generates the right files for every tool:
+project instructions, reusable skills (saved workflows your AI tool can
+follow, like a prompt with rules built in), and safety rules. Change the
+one file, regenerate, and every tool is up to date again.
 
-This package is in preview / early access. `agent-profile@0.4.4` is usable for
-experimentation, but the schema, generated files, and command details may change
-before `1.0`.
+Everything runs on your machine. Nothing is uploaded anywhere.
 
-Feedback is welcome at:
-
-- https://github.com/jsuvic/agent-profile/discussions
-- https://github.com/jsuvic/agent-profile/issues
-
-## Quick Start
+## Get started
 
 Requirements: Node.js 24+ and npm 11+.
 
-From your project root:
+1. In your project folder, run:
 
-```bash
-npx agent-profile init --write
-npx agent-profile compile --dry-run
-npx agent-profile compile --write
-npx agent-profile doctor
-npx agent-profile ui
+   ```bash
+   npx agent-profile
+   ```
+
+2. Answer the questions - Enter accepts the suggested answer, and nothing
+   is written until you confirm the final preview.
+3. Accept when it offers to generate the files. That's it - your AI tools
+   now understand your project.
+
+Run `npx agent-profile` again any time: it checks your project and
+suggests the right next step itself (first setup, regenerating files,
+adopting new capabilities, or a health check). Explicit commands
+(`init`, `compile`, `upgrade`, `doctor`, `ui`) exist for scripts and CI -
+see the [full documentation](https://github.com/jsuvic/agent-profile#readme).
+
+## From an Idea to a Reviewed Change
+
+Among the generated files are workflow skills - reusable instructions
+your AI tool picks up automatically once the files exist. Open your AI
+tool's chat (Claude Code, Codex, or Tabnine CLI) inside the repository:
+
+```text
+Use grill-change for this request:
+
+Add a command that shows which generated files have drifted.
 ```
 
-## What It Solves
+Answer one focused question at a time. After approving the clarified
+direction:
 
-AI coding agents need overlapping project context: conventions, safety rules,
-allowed workflows, target-specific settings, and reminders not to expose source
-or secrets. Maintaining that context by hand across `AGENTS.md`, `CLAUDE.md`,
-Codex config, Tabnine guidance, and MCP settings causes drift.
-
-`agent-profile` makes `ai-profile.yaml` the source of truth and treats
-agent-specific files as generated artifacts.
-
-## Commands
-
-### `init`
-
-Creates a starting `ai-profile.yaml` from local repository signals.
-
-```bash
-npx agent-profile init --dry-run
-npx agent-profile init --write
+```text
+I approve it. Prepare the spec and implementation tasks.
 ```
 
-`init` detects supported stack metadata such as languages, frameworks, package
-managers, and test tools from a small allowlist of root metadata files
-(`package.json`, `tsconfig.json`, `svelte.config.*`, `vite.config.*`,
-`playwright.config.*`, `pom.xml`, `build.gradle`, `build.gradle.kts`, and
-`pubspec.yaml` for Flutter/Dart). It does not read `.env` files or upload
-source code. If no supported language metadata exists yet, `init` refuses to
-write because schema v1 requires `stack.languages`; create `ai-profile.yaml`
-manually for documentation-only or currently unsupported project stacks.
+Then implement one approved task at a time:
 
-### `compile`
-
-Turns `ai-profile.yaml` into target-specific files.
-
-```bash
-npx agent-profile compile --dry-run
-npx agent-profile compile --write
+```text
+Use implement-next.
 ```
 
-Dry-run is the safe preview path. `--write` applies generated files locally.
+`grill-change` turns a rough idea into an agreed design,
+`request-to-spec-issues` turns that into a specification and task briefs,
+and `implement-next` implements one task and has separate reviewers check
+it before it is marked done. Advanced users can also invoke `tdd-change`
+and `final-review` directly. See
+[recommended model settings](https://github.com/jsuvic/agent-profile#recommended-model-settings)
+for which stages benefit from a stronger reasoning model.
 
-### `doctor`
+## What Gets Generated
 
-Checks profile structure, lockfile drift, generated artifacts, permissions, and
-security hygiene.
+| Tool    | Generated output                                                              |
+| ------- | ----------------------------------------------------------------------------- |
+| Codex   | project config, `AGENTS.md`, and workflow skills (`.agents/skills/`)          |
+| Claude  | Claude project config, `CLAUDE.md`, and workflow skills (`.claude/skills/`)   |
+| Tabnine | guidelines, MCP configuration, and the shared workflow skills (`.agents/skills/`) |
 
-```bash
-npx agent-profile doctor
-```
-
-### `ui`
-
-Starts the read-only local UI for the current project.
-
-```bash
-npx agent-profile ui
-npx agent-profile ui --root /path/to/project --port 5174
-```
-
-The UI binds to loopback only and reads project state from the selected root.
-Browser writes are not enabled.
-
-## Current Targets
-
-- Tabnine guidelines and MCP config
-- Codex project config and workflow skills
-- Claude project config, `CLAUDE.md`, and workflow skills
+Generated files are deterministic - the same profile and compiler version
+always produce the same output - and every write happens only after you
+review a preview. Repositories that already have `AGENTS.md`, `CLAUDE.md`,
+or agent config are imported safely: existing content is preserved, never
+overwritten silently.
 
 ## Local-First Contract
 
@@ -107,5 +90,19 @@ Browser writes are not enabled.
 - No hosted execution
 - No telemetry by default
 - Generated files are deterministic
-- Write-capable commands use explicit `--write`
-- Runtime permissions are enforced by target agent clients
+- Preview is the default; writes require explicit confirmation or `--write`
+- Runtime permissions are enforced by the target agent clients
+
+## Preview Status
+
+This package is in preview / early access. `agent-profile@0.4.4` is usable
+for experimentation, but the schema, generated files, and command details
+may change before `1.0`.
+
+Full documentation, commands reference, and specs:
+https://github.com/jsuvic/agent-profile#readme
+
+Feedback:
+
+- https://github.com/jsuvic/agent-profile/discussions
+- https://github.com/jsuvic/agent-profile/issues

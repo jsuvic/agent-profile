@@ -1,17 +1,147 @@
-# Agent Profile Compiler
+# Agent Profile
 
-One `ai-profile.yaml` for Codex, Claude, and Tabnine.
+One config file for all your AI coding tools.
 
-Agent Profile Compiler is a local-first CLI that compiles one canonical agent
-profile into deterministic configuration for multiple AI coding agents. It is
-designed for developers who want consistent agent instructions without copying
-and hand-editing separate config files for every tool.
+If you use AI coding tools - Claude Code, Codex, Tabnine - each one wants
+its own setup files: `CLAUDE.md` here, `AGENTS.md` there, separate
+settings, separate skills. Keeping them in sync by hand is tedious, and
+they drift apart until each tool behaves differently.
+
+Agent Profile fixes that. You describe your project once, in one file
+(`ai-profile.yaml`), and it generates the right files for every tool:
+project instructions, reusable skills (saved workflows your AI tool can
+follow, like a prompt with rules built in), and safety rules. Change the
+one file, regenerate, and every tool is up to date again.
+
+Everything runs on your machine. Nothing is uploaded anywhere.
+
+## Get started
+
+1. In your project folder, run:
+
+   ```bash
+   npx agent-profile
+   ```
+
+2. Answer the questions - Enter accepts the suggested answer, and nothing
+   is written until you confirm the final preview.
+3. Accept when it offers to generate the files. That's it - your AI tools
+   now understand your project.
+
+Run `npx agent-profile` again any time: it checks your project and
+suggests the right next step itself (first setup, regenerating files,
+adopting new capabilities, or a health check). You never have to remember
+subcommands - though they all exist for scripts and CI (see
+[Commands](#commands)).
+
+Requirements: Node.js 24+ and npm 11+.
 
 [npm](https://www.npmjs.com/package/agent-profile) |
 [Contributing](CONTRIBUTING.md) |
 [Security](SECURITY.md) |
 [Specs](docs/specs/) |
 [Discussions](https://github.com/jsuvic/agent-profile/discussions)
+
+## From an Idea to a Reviewed Change
+
+Among the generated files are workflow skills - reusable instructions
+your AI tool picks up automatically once the files exist (after setup
+above, or `compile --write`). They give you a short, reviewable path from
+a rough idea to implemented code. Open your AI tool's chat (Claude Code,
+Codex, or Tabnine CLI) inside the repository and drive it like this:
+
+1. Ask the agent to use `grill-change` with a rough feature or change request.
+2. Answer one focused question at a time until the intended behavior is clear.
+3. Approve the agreement and ask the agent to prepare the specification and
+   implementation tasks.
+4. Ask the agent to use `implement-next` for the next approved task.
+5. Repeat `implement-next` when the change contains more than one task.
+
+For example:
+
+```text
+Use grill-change for this request:
+
+Add a command that shows which generated files have drifted.
+```
+
+After approving the clarified direction:
+
+```text
+I approve it. Prepare the spec and implementation tasks.
+```
+
+Then implement one approved task at a time:
+
+```text
+Use implement-next.
+```
+
+The lifecycle is assembled from smaller skills. `request-to-spec-issues` turns
+the approved agreement into a specification and focused task briefs.
+`implement-next` selects one ready task, dispatches a focused implementation,
+then uses separate subagents to check specification compliance and code quality
+before marking the task complete. Task briefs define the expected failing and
+passing test evidence. Advanced users can also invoke focused skills such as
+`tdd-change` and `final-review` directly.
+
+### Recommended Model Settings
+
+Use the most capable reasoning model available for `grill-change` and
+specification preparation. These stages make product, architecture, contract,
+and safety decisions that guide all later implementation work.
+
+When the client supports configurable reasoning effort, use high effort for:
+
+- ambiguous or cross-cutting feature requests
+- architecture and migration decisions
+- public contract or generated-output changes
+- security- or privacy-sensitive work
+
+Focused implementation tasks can usually use a balanced setting because the
+approved specification and task brief already constrain the work. Use higher
+effort again when a task crosses several modules or reveals that the approved
+design may be incomplete.
+
+Subagents should use models capable of following the specification
+independently. Keeping implementation, specification review, and code-quality
+review separate matters more than using the same model for every role.
+
+## What It Does
+
+`ai-profile.yaml` is the source of truth; the per-tool files are build
+artifacts. An excerpt of a profile:
+
+```yaml
+version: 1
+profile:
+  name: my-project
+clients:
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+  tabnine:
+    enabled: true
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+```
+
+compiles into local files for each enabled tool:
+
+| Tool    | Generated output                                                              |
+| ------- | ----------------------------------------------------------------------------- |
+| Codex   | project config, `AGENTS.md`, and workflow skills (`.agents/skills/`)          |
+| Claude  | Claude project config, `CLAUDE.md`, and workflow skills (`.claude/skills/`)   |
+| Tabnine | guidelines, MCP configuration, and the shared workflow skills (`.agents/skills/`) |
+
+Generated files are deterministic: the same profile and compiler version
+always produce the same output, so the files can be reviewed, diffed, and
+committed like any other build artifact. Each tool receives only what it
+supports; anything unsupported is reported instead of translated
+incorrectly.
 
 ## Preview Status
 
@@ -27,63 +157,12 @@ Feedback is especially useful on:
 - missing safety checks or unclear local-first guarantees
 - target outputs you would contribute or use next
 
-## What It Does
+## Using the CLI Directly (Scripts, CI, Power Users)
 
-Agent Profile Compiler turns this:
-
-```yaml
-version: 1
-project:
-  name: my-project
-agents:
-  codex:
-    enabled: true
-  claude:
-    enabled: true
-  tabnine:
-    enabled: true
-```
-
-into agent-specific local files for:
-
-| Target  | Generated output                                        |
-| ------- | ------------------------------------------------------- |
-| Codex   | project config and workflow skills                      |
-| Claude  | Claude project config, `CLAUDE.md`, and workflow skills |
-| Tabnine | guideline output and MCP configuration                  |
-
-Generated files are deterministic. Running the same profile through the same
-compiler version should produce the same output.
-
-## The Problem
-
-AI coding agents all need project context: conventions, safety rules, allowed
-tools, workflow expectations, target-specific config, and reminders not to leak
-source or secrets. Today that context is usually duplicated across files such
-as `AGENTS.md`, `CLAUDE.md`, Codex config, Tabnine guidance, and MCP settings.
-
-That creates three problems:
-
-- agent instructions drift over time
-- safety posture is easy to weaken accidentally
-- onboarding a new agent means rewriting the same policy in another format
-
-Agent Profile Compiler makes the profile the source of truth and treats
-agent-specific files as build artifacts.
-
-## Quick Start
-
-Requirements: Node.js 24+ and npm 11+.
-
-From the repository you want to configure:
-
-```bash
-npx agent-profile
-```
-
-On an interactive terminal, the bare command inspects the repository read-only
-and pre-selects the next appropriate action. For scripts and CI, use the
-explicit commands (a non-interactive bare invocation continues to print help):
+The bare `npx agent-profile` command above is the interactive entry point:
+it inspects the repository read-only and pre-selects the next appropriate
+action. For scripts and CI, use the explicit commands (a non-interactive
+bare invocation prints help and runs no detection):
 
 ```bash
 npx agent-profile init
@@ -271,8 +350,10 @@ doctor checks are reported, not auto-reverted.
 Skills are selected through `capabilities.skills.packs` in `ai-profile.yaml`
 (or the `init` wizard's capability step). Each pack resolves to a fixed,
 deterministic set of instruction-only skills emitted for skills-capable
-clients (Claude under `.claude/skills/<name>/SKILL.md`, Codex under
-`.agents/skills/<name>/SKILL.md`):
+clients: Claude under `.claude/skills/<name>/SKILL.md`, and Codex and
+Tabnine through the shared `.agents/skills/<name>/SKILL.md` convention
+(Tabnine CLI discovers that path natively; requires a current Tabnine CLI
+generation):
 
 | Pack                  | Generates                                                                     |
 | --------------------- | ----------------------------------------------------------------------------- |
@@ -281,6 +362,16 @@ clients (Claude under `.claude/skills/<name>/SKILL.md`, Codex under
 | `advanced-review`     | `security-review`, `readability-review`, `test-review`, `architecture-review` |
 | `automation`          | five loop skills (see below)                                                  |
 | `mcp-recommendations` | `mcp-fit-check`                                                               |
+
+Workflow flags in the profile add skills independently of packs:
+`workflow.sdd: true` emits `grill-change`, `request-to-spec-issues`, and
+`sdd-change`; `workflow.tdd` emits `tdd-change`; `workflow.finalReview`
+emits `final-review`; `workflow.codeReview` emits `review-change`; and
+`workflow.subagentDrivenDevelopment` emits `subagent-driven-change` plus
+`implement-next`. The delegation-dependent skills
+(`subagent-driven-change`, `implement-next`) require a delegation-capable
+client (Claude or Codex); a Tabnine-only setup omits them and reports an
+informational compile note.
 
 ### Automation loop skills
 
@@ -304,9 +395,10 @@ discretion:
 Loop skills only cross-reference another skill (for example `loop-sdd-cycle`
 pointing to `sdd-change`) when that skill is generated for the same target;
 otherwise the step is described inline, so no pack combination produces a
-dangling reference. Tabnine receives no loop artifacts and an explicit
-informational compile note. `doctor` structurally verifies the three required
-sections without executing anything.
+dangling reference. Tabnine receives the loop skills through the shared
+`.agents/skills/` convention like every other instruction-only skill.
+`doctor` structurally verifies the three required sections without
+executing anything.
 
 ## How It Works
 
