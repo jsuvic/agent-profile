@@ -8,11 +8,15 @@ import type { DoctorIssue } from "@agent-profile/doctor";
 
 import { summarizeDoctorRecommendations } from "./doctor-summary.js";
 
-function issue(code: DoctorIssue["code"], guidance: string): DoctorIssue {
+function issue(
+  code: DoctorIssue["code"],
+  guidance: string,
+  path = "fixture-path",
+): DoctorIssue {
   return {
     code,
     severity: "error",
-    path: "fixture-path",
+    path,
     expected: "expected",
     actual: "actual",
     message: "fixture issue",
@@ -23,7 +27,11 @@ function issue(code: DoctorIssue["code"], guidance: string): DoctorIssue {
 test("doctor recommendation summary deduplicates the field-log root causes", () => {
   const issues = [
     ...Array.from({ length: 10 }, () =>
-      issue("LINT-OWN-001", "Review and adopt or overwrite the foreign skill."),
+      issue(
+        "LINT-OWN-001",
+        "Review and adopt or overwrite the foreign skill.",
+        ".agents/skills/foreign/SKILL.md",
+      ),
     ),
     issue("LINT-STRUCT-003", "Run `agent-profile compile --write`."),
     issue("LINT-STRUCT-003", "Run `agent-profile compile --write`."),
@@ -48,4 +56,14 @@ test("doctor recommendation summary deduplicates the field-log root causes", () 
       text: "legacy marker -> `agent-profile init --import --strategy regions --write`",
     },
   ]);
+});
+
+test("doctor recommendation summary preserves non-skill LINT-OWN-001 guidance", () => {
+  const guidance =
+    "Run `agent-profile init --import --strategy regions --write` to reconcile ownership.";
+
+  assert.deepEqual(
+    summarizeDoctorRecommendations([issue("LINT-OWN-001", guidance)]),
+    [{ count: 1, text: guidance }],
+  );
 });

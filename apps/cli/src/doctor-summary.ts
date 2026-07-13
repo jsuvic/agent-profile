@@ -26,13 +26,20 @@ const FIELD_LOG_RECOMMENDATIONS: Partial<
   },
 };
 
+const FOREIGN_SKILL_OR_SUBAGENT_PATH =
+  /(?:^|[\\/])(?:skills|subagents)(?:[\\/]|$)/iu;
+
 export function summarizeDoctorRecommendations(
   issues: readonly DoctorIssue[],
 ): DoctorRecommendation[] {
   const grouped = new Map<string, DoctorRecommendation>();
   for (const issue of issues) {
     if (issue.severity === "info") continue;
-    const known = FIELD_LOG_RECOMMENDATIONS[issue.code];
+    const known =
+      issue.code === "LINT-OWN-001" &&
+      !FOREIGN_SKILL_OR_SUBAGENT_PATH.test(issue.path)
+        ? undefined
+        : FIELD_LOG_RECOMMENDATIONS[issue.code];
     const text = known?.text ?? issue.guidance.trim().replace(/\s+/gu, " ");
     const key = known?.key ?? `guidance:${text}`;
     const recommendation = grouped.get(key);
