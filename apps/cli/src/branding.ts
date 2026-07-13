@@ -59,7 +59,7 @@ export function accent(
  *   wordmark style — a fully ASCII rendering.
  */
 export function formatLogo(
-  command: LogoCommand,
+  command: LogoCommand | undefined,
   version: string,
   unicode: boolean,
 ): string {
@@ -70,7 +70,9 @@ export function formatLogo(
   }
   const glyph = unicode ? GLYPH_UNICODE : GLYPH_ASCII;
   const separator = unicode ? " · " : " - ";
-  return `${glyph} ${NAME}${separator}${command}${separator}${versionLabel}`;
+  return command
+    ? `${glyph} ${NAME}${separator}${command}${separator}${versionLabel}`
+    : `${glyph} ${NAME}${separator}${versionLabel}`;
 }
 
 /** Apply the logo accent using the capabilities of the actual output stream. */

@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { PassThrough } from "node:stream";
 
 import { CAPABILITY_CATALOG_VERSION } from "@agent-profile/core";
 import {
@@ -23,7 +24,10 @@ import {
   evaluateDispatchState,
   runBareDispatcher,
 } from "./dispatch.js";
+import type { DispatcherPrompts } from "./dispatch-clack.js";
+import { createClackDispatcher } from "./dispatch-clack.js";
 import { runCli } from "./index.js";
+import { createClackPresenter } from "./presentation.js";
 
 const fixtureDir = fileURLToPath(
   new URL("../../../fixtures/minimal-valid/", import.meta.url),
@@ -335,6 +339,219 @@ test("dispatcher passes through the selected command exit code", async () => {
       "test",
     );
     assert.equal(code, 47);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher chains past a persisting read-only doctor state with a fresh confirm", async () => {
+  const root = await profileRoot();
+  try {
+    await writeFile(
+      path.join(root, "CLAUDE.md"),
+      "<!-- agent-profile:generated:start -->\nbroken\n",
+    );
+    const beforeDoctor = await evaluateDispatchState(root);
+    assert.equal(beforeDoctor.actions[0], "doctor");
+    assert.ok(beforeDoctor.actions.includes("compile-write"));
+    const confirmations: Array<{
+      action: string;
+      label: string;
+      command: string;
+      default: boolean;
+    }> = [];
+    const notes: string[] = [];
+    const calls: string[] = [];
+    let afterDoctor: Awaited<ReturnType<typeof evaluateDispatchState>> | undefined;
+    const prompts: DispatcherPrompts & {
+      confirmNext(input: {
+        action: string;
+        label: string;
+        command: string;
+        default: boolean;
+      }): Promise<boolean>;
+      showNoRemainingActions(message: string): void;
+    } = {
+      choose: async () => "doctor",
+      async confirmNext(input) {
+        confirmations.push(input);
+        return input.action === "compile-write";
+      },
+      showNoRemainingActions(message) {
+        notes.push(message);
+      },
+    };
+
+    const code = await runBareDispatcher(
+      root,
+      { stdout: () => undefined, stderr: () => undefined },
+      { dispatcherPrompts: prompts },
+      {
+        doctor: async () => {
+          calls.push("doctor");
+          const code = await runCli(["doctor", "--root", root], {
+            io: { stdout: () => undefined, stderr: () => undefined },
+          });
+          afterDoctor = await evaluateDispatchState(root);
+          return code;
+        },
+        "compile-write": async () => {
+          calls.push("compile-write");
+          return runCli(["compile", "--root", root, "--write"], {
+            io: { stdout: () => undefined, stderr: () => undefined },
+          });
+        },
+        init: async () => 0,
+        upgrade: async () => 0,
+        ui: async () => 0,
+        "compile-reconcile": async () => 0,
+      },
+      "test",
+    );
+
+    assert.equal(code, 3);
+    assert.deepEqual(calls, ["doctor", "compile-write"]);
+    assert.equal(afterDoctor?.actions[0], "doctor");
+    assert.ok(afterDoctor?.actions.includes("compile-write"));
+    assert.deepEqual(confirmations[0], {
+      action: "compile-write",
+      label: "Generate agent files",
+      command: "compile --write",
+      default: false,
+    });
+    assert.deepEqual(confirmations[1], {
+      action: "upgrade",
+      label: "Adopt new capabilities",
+      command: "upgrade",
+      default: false,
+    });
+    assert.equal(notes.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher menu is neutral and a routed doctor prints its logo once", async () => {
+  const root = await profileRoot();
+  try {
+    await writeFile(
+      path.join(root, "CLAUDE.md"),
+      "<!-- agent-profile:generated:start -->\nbroken\n",
+    );
+    const output = new PassThrough();
+    let text = "";
+    output.on("data", (chunk: Buffer) => {
+      text += chunk.toString("utf8");
+    });
+    const prompts = await createClackDispatcher("test", {
+      output,
+      choose: async () => "doctor",
+      confirmNext: async () => false,
+    });
+    const presenter = await createClackPresenter({ output, version: "test" });
+    await runBareDispatcher(
+      root,
+      { stdout: () => undefined, stderr: () => undefined },
+      { dispatcherPrompts: prompts },
+      {
+        doctor: async () => {
+          presenter.logo("doctor");
+          return 1;
+        },
+        init: async () => 0,
+        upgrade: async () => 0,
+        ui: async () => 0,
+        "compile-write": async () => 0,
+        "compile-reconcile": async () => 0,
+      },
+      "test",
+    );
+    assert.match(text, /agent-profile.*vtest/u);
+    assert.equal((text.match(/agent-profile.*doctor.*vtest/gu) ?? []).length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher decline preserves the failing last completed action exit code", async () => {
+  const root = await profileRoot();
+  try {
+    const prompts = {
+      choose: async () => "doctor" as const,
+      confirmNext: async () => false,
+    } as DispatcherPrompts;
+    const code = await runBareDispatcher(
+      root,
+      { stdout: () => undefined, stderr: () => undefined },
+      { dispatcherPrompts: prompts },
+      {
+        doctor: async () => 47,
+        "compile-write": async () => {
+          throw new Error("compile must not run after a declined offer");
+        },
+        init: async () => 0,
+        upgrade: async () => 0,
+        ui: async () => 0,
+        "compile-reconcile": async () => 0,
+      },
+      "test",
+    );
+    assert.equal(code, 47);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher notes filtered exhaustion only after every non-current action is consumed", async () => {
+  const root = await profileRoot();
+  try {
+    const events: string[] = [];
+    const prompts: DispatcherPrompts & {
+      confirmNext(input: {
+        action: string;
+        label: string;
+        command: string;
+        default: boolean;
+      }): Promise<boolean>;
+      showNoRemainingActions(message: string): void;
+    } = {
+      choose: async () => "compile-write",
+      async confirmNext(input) {
+        events.push(`confirm:${input.action}`);
+        return true;
+      },
+      showNoRemainingActions(message) {
+        events.push(`note:${message}`);
+      },
+    };
+    const code = await runBareDispatcher(
+      root,
+      { stdout: () => undefined, stderr: () => undefined },
+      { dispatcherPrompts: prompts },
+      {
+        doctor: async () => 0,
+        init: async () => 0,
+        "compile-write": async () => {
+          events.push("run:compile-write");
+          return 0;
+        },
+        "compile-reconcile": async () => 0,
+        upgrade: async () => {
+          events.push("run:upgrade");
+          return 0;
+        },
+        ui: async () => 0,
+      },
+      "test",
+    );
+
+    assert.equal(code, 0);
+    assert.deepEqual(events, [
+      "run:compile-write",
+      "confirm:upgrade",
+      "run:upgrade",
+      "note:No further applicable actions remain. Address the reported issues, then run `agent-profile` again.",
+    ]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

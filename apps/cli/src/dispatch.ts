@@ -38,6 +38,15 @@ const LABELS: Record<DispatchAction, string> = {
   ui: "Open the local UI",
 };
 
+const COMMANDS: Record<Exclude<DispatchAction, "current">, string> = {
+  doctor: "doctor",
+  init: "init",
+  "compile-write": "compile --write",
+  "compile-reconcile": "compile",
+  upgrade: "upgrade",
+  ui: "ui",
+};
+
 export async function evaluateDispatchState(
   rootDir: string,
 ): Promise<DispatchState> {
@@ -154,5 +163,31 @@ export async function runBareDispatcher(
     ));
   const chosen = await chooseDispatchAction(state, prompts);
   if (!chosen || chosen === "current") return 0;
-  return runners[chosen]();
+  const consumed = new Set<DispatchAction>([chosen]);
+  let lastExitCode = await runners[chosen]();
+
+  for (;;) {
+    const reEvaluated = await evaluateDispatchState(cwd);
+    if (reEvaluated.actions[0] === "current") return lastExitCode;
+    const next = reEvaluated.actions.find(
+      (action): action is Exclude<DispatchAction, "current"> =>
+        action !== "current" && !consumed.has(action),
+    );
+    if (!next) {
+      prompts.showNoRemainingActions?.(
+        "No further applicable actions remain. Address the reported issues, then run `agent-profile` again.",
+      );
+      return lastExitCode;
+    }
+    consumed.add(next);
+    const approved =
+      (await prompts.confirmNext?.({
+        action: next,
+        label: LABELS[next],
+        command: COMMANDS[next],
+        default: false,
+      })) ?? false;
+    if (!approved) return lastExitCode;
+    lastExitCode = await runners[next]();
+  }
 }

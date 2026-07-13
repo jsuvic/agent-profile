@@ -108,6 +108,15 @@ test("formatLogo ascii output contains no non-ASCII glyphs", () => {
   });
 });
 
+test("formatLogo renders a neutral dispatcher wordmark without a command label", () => {
+  withColorEnv({ NO_COLOR: "1" }, () => {
+    assert.equal(
+      formatLogo(undefined, "1.2.3", false),
+      "* agent-profile - v1.2.3",
+    );
+  });
+});
+
 test("formatLogo is deterministic across ambient color settings", () => {
   let withoutColor = "";
   let withForcedColor = "";

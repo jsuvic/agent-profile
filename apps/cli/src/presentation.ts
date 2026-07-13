@@ -14,6 +14,7 @@ import {
   formatLogo,
   type LogoCommand,
 } from "./branding.js";
+import { formatDoctorRecommendationSummary } from "./doctor-summary.js";
 
 /**
  * Interactive presentation layer for the repeat-run commands (`compile`,
@@ -125,6 +126,8 @@ export async function createClackPresenter(
       }
       // Interactive-only one-line count summary beneath the issue list.
       lines.push(formatDoctorCountSummary(result.issues));
+      const recommendations = formatDoctorRecommendationSummary(result.issues);
+      if (recommendations) lines.push("", recommendations);
       output.write(`${lines.join("\n")}\n`);
     },
 
