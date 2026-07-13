@@ -5,6 +5,10 @@
 Approved on 2026-07-05. Synthesized from the grill-change agreement record of
 the same date (decisions D1-D10).
 
+Amended and approved on 2026-07-13: completing and approving a grill now
+authorizes the derived `request-to-spec-issues` synthesis and its bounded local
+persistence without a second product-level approval (ADR 0018).
+
 ## Problem
 
 The grill -> synthesis -> implementation pipeline loses state between phases:
@@ -24,11 +28,11 @@ expose a single `implement-next` command per task. Entry-point skills carry
 
 ## Intent
 
-After grill plus one synthesis approval, the human only repeats one command
-per task; the agent receives a hard, persisted brief (seam, mock boundary,
-glossary) instead of vague context. Architecture decisions move before TDD
-where the human already approves the plan; the TDD loop runs without new
-interactions.
+After approving the grill agreement, the human only repeats one command per
+task; synthesis and persistence follow automatically. The agent receives a
+hard, persisted brief (seam, mock boundary, glossary) instead of vague
+context. Architecture decisions move before TDD where the human already
+approved the direction; the TDD loop runs without duplicate approval prompts.
 
 ## Decision Rules
 
@@ -58,9 +62,13 @@ interactions.
 1. Human runs `grill-change`; hard-to-reverse choices arrive as
    Design-it-Twice questions; durable terms and ADR candidates land in the
    agreement record.
-2. Human runs `request-to-spec-issues`; synthesis produces a spec candidate
-   plus briefs with `Seam under test` / `Allowed mock boundary`, and in one
-   approved write step creates or updates `TASKS.md`,
+2. Approval of the completed grill automatically hands the agreement record to
+   `request-to-spec-issues`. That approval also authorizes one bounded local
+   persistence step for the derived spec candidate, briefs, ledger, glossary,
+   and qualifying ADRs; no second synthesis approval is requested. The agent
+   stops instead if derivation reveals a contradiction, a missing material
+   decision, or scope expansion. Normal client filesystem controls still
+   apply. The step creates or updates `TASKS.md`,
    `docs/specs/<spec-dir>/issues/NNN-slug.md`, `CONTEXT.md`, and ADRs meeting
    the threshold.
 3. Human repeats `implement-next`: first `ready` task -> `in-progress` ->
@@ -102,6 +110,10 @@ informational doctor notes for `TASKS.md` / `CONTEXT.md` structure.
   only for targets with verified support (D9).
 - `tdd-change` keeps RED-for-the-right-reason, the golden-fixture rule, and
   red -> green -> refactor unchanged (D5).
+- A completed grill approval is the product-level approval for its faithful
+  synthesis and bounded local persistence. `request-to-spec-issues` MUST NOT
+  ask for duplicate approval, and MUST stop before writes when it finds a
+  contradiction, missing material decision, or scope expansion (ADR 0018).
 
 ## Security Rules
 
@@ -109,7 +121,8 @@ informational doctor notes for `TASKS.md` / `CONTEXT.md` structure.
 - No GitHub issue creation.
 - No autonomous multi-task iteration; `implement-next` never edits briefs or
   continues past a failure.
-- The grill remains read-only.
+- The grill question-and-agreement phase remains read-only; persistence starts
+  only after the human approves the completed agreement record.
 - All writes go through the client's write-approval flow.
 
 ## Acceptance Criteria
@@ -133,6 +146,10 @@ informational doctor notes for `TASKS.md` / `CONTEXT.md` structure.
    support means the flag is omitted.
 6. All goldens are updated within this spec; doctor performs no error-level
    checks on runtime artifacts.
+7. Approving a completed grill automatically invokes synthesis and authorizes
+   its bounded local persistence without a second approval prompt; a
+   contradiction, missing material decision, or scope expansion stops before
+   writes and is reported to the human.
 
 ## Tests
 
@@ -145,6 +162,9 @@ informational doctor notes for `TASKS.md` / `CONTEXT.md` structure.
 - A structural doctor test: informational (not error) result for a malformed
   `TASKS.md` / `CONTEXT.md`; absence tolerated silently.
 - Execution sentinel: no new execution path in the compiler.
+- Golden workflow tests for automatic post-grill handoff, absence of a
+  duplicate synthesis approval, and refusal to persist before grill approval
+  or after an unresolved derivation exception.
 
 ## TDD Strategy
 
@@ -156,7 +176,7 @@ comparison). One slice = one observable emission change = one focused RED.
 
 ## Issue Plan
 
-See `docs/specs/phase-24/issues/` (I1-I5) and the root `TASKS.md` ledger.
+See `docs/specs/phase-24/issues/` (I1-I6) and the root `TASKS.md` ledger.
 
 ## Documentation Updates
 
