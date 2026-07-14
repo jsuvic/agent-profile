@@ -95,7 +95,7 @@ overwritten silently.
 
 ## Preview Status
 
-This package is in preview / early access. `agent-profile@0.4.4` is usable
+This package is in preview / early access. `agent-profile@0.5.0` is usable
 for experimentation, but the schema, generated files, and command details
 may change before `1.0`.
 
