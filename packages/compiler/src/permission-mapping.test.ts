@@ -148,6 +148,52 @@ test("guarded Claude shared settings and mapping report stay on the restrictive 
   assert.equal(byClient.get("tabnine"), "manual-setup-required");
 });
 
+test("trusted-local Claude settings fall back to the restrictive baseline when an explicit narrower override would otherwise be loosened", async () => {
+  const profileResult = await readProfileFile(trustedLocalProfilePath);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return;
+
+  // safety.requiresSandbox: true — the loosened variant (sandbox.enabled:false)
+  // would be looser than declared, so generation must keep the baseline.
+  const sandboxProfile = structuredClone(profileResult.profile);
+  sandboxProfile.safety = { mode: "trusted-local", requiresSandbox: true };
+  const sandboxResult = compileProfile({ profile: sandboxProfile });
+  assert.equal(sandboxResult.ok, true);
+  if (!sandboxResult.ok) return;
+  const sandboxSettings = findClaudeSettings(sandboxResult.files);
+  const sandboxPermissions = sandboxSettings["permissions"] as Record<
+    string,
+    unknown
+  >;
+  assert.equal(sandboxPermissions["defaultMode"], "default");
+  assert.equal(sandboxPermissions["disableBypassPermissionsMode"], "disable");
+  assert.equal(
+    (sandboxSettings["sandbox"] as Record<string, unknown>)["enabled"],
+    true,
+  );
+
+  // permissions.filesystem.write: deny narrows the trusted-local preset — the
+  // acceptEdits auto-accept would be looser than declared, so keep the baseline.
+  const writeDenyProfile = structuredClone(profileResult.profile);
+  writeDenyProfile.permissions = {
+    ...writeDenyProfile.permissions,
+    filesystem: { read: "allow", write: "deny" },
+  };
+  const writeDenyResult = compileProfile({ profile: writeDenyProfile });
+  assert.equal(writeDenyResult.ok, true);
+  if (!writeDenyResult.ok) return;
+  const writeDenyPermissions = findClaudeSettings(writeDenyResult.files)[
+    "permissions"
+  ] as Record<string, unknown>;
+  assert.equal(writeDenyPermissions["defaultMode"], "default");
+  assert.deepEqual(writeDenyPermissions["ask"], [
+    "Bash",
+    "Edit",
+    "Write",
+    "WebFetch",
+  ]);
+});
+
 test("mapping report omits rows for disabled clients", async () => {
   const profileResult = await readProfileFile(trustedLocalProfilePath);
   assert.equal(profileResult.ok, true);

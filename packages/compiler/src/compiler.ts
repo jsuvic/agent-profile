@@ -2209,11 +2209,23 @@ function renderClaudeSettingsJson(profile?: AiProfile): string {
   // Resolve the Claude client's posture from the canonical plan so shared
   // generation never diverges from the resolver. Absent a profile (template
   // source hashing), keep the restrictive baseline bytes.
-  const claudePosture = profile
-    ? resolvePermissionPosture(profile).clients.claude.posture
-    : undefined;
-  const base =
-    claudePosture === "trusted-local" ? trustedLocalSettings : baselineSettings;
+  //
+  // Emit the loosened trusted-local variant ONLY when doing so cannot make the
+  // shared file looser than the declared profile: the resolved Claude posture is
+  // trusted-local, no sandbox is required, and file writes are allowed
+  // (`acceptEdits` auto-accepts edits). An explicit narrower override such as
+  // `permissions.filesystem.write: deny` or `safety.requiresSandbox: true` — which
+  // the resolver preserves in the effective permissions — falls back to the
+  // restrictive baseline. That is stricter-than-declared (a usability warning),
+  // never looser (a safety error).
+  const claudePlan = profile ? resolvePermissionPosture(profile) : undefined;
+  const claudeClient = claudePlan?.clients.claude;
+  const useTrustedLocal =
+    claudePlan !== undefined &&
+    claudeClient?.posture === "trusted-local" &&
+    !claudePlan.requiresSandbox &&
+    claudeClient.effectivePermissions.filesystem.write === "allow";
+  const base = useTrustedLocal ? trustedLocalSettings : baselineSettings;
 
   const roles = profile ? getSelectedAdvisoryHookRoles(profile) : [];
 

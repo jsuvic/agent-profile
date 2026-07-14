@@ -36,6 +36,7 @@ import {
   isSubagentBuiltinNameCollision,
   normalizeSafety,
   parseProfileYaml,
+  resolvePermissionPosture,
   type AiProfile,
   type AiProfileEffectivePermissions,
   type PermissionMode,
@@ -1390,6 +1391,13 @@ async function checkPermissionPosture(
   // overrides (LINT-PERM-005). Full ownership-aware posture severity is Phase 31 I6.
   const intentionalHighAutonomy =
     autonomousSandbox || safety.mode === "trusted-local";
+  // The Claude shared settings are generated from the resolved Claude client
+  // posture, which may be trusted-local through a per-client adjustment even on
+  // a guarded baseline. Evaluate the Claude config against that resolved posture
+  // so an intentional per-client adoption is not misread as guarded drift.
+  const claudeIntentionalHighAutonomy =
+    autonomousSandbox ||
+    resolvePermissionPosture(profile).clients.claude.posture === "trusted-local";
 
   if (safety.mode === "guarded" && effective.shell.run === "allow") {
     issues.push(
@@ -1483,7 +1491,7 @@ async function checkPermissionPosture(
     profile,
     effective,
     autonomousSandbox,
-    intentionalHighAutonomy,
+    claudeIntentionalHighAutonomy,
     issues,
   );
 
@@ -1509,13 +1517,13 @@ async function checkProjectPermissionConfig(
   profile: AiProfile,
   effective: AiProfileEffectivePermissions,
   autonomousSandbox: boolean,
-  intentionalHighAutonomy: boolean,
+  claudeIntentionalHighAutonomy: boolean,
   issues: DoctorIssue[],
 ): Promise<boolean> {
-  // Codex keeps the narrower `autonomousSandbox` exemption (not
-  // `intentionalHighAutonomy`): trusted-local has no safe ignored project-local
-  // Codex activation surface (ADR 0019), so it is manual/session/profile work
-  // and must not loosen Codex config checks. Do not unify these two flags.
+  // Codex keeps the narrower `autonomousSandbox` exemption (not the Claude-
+  // resolved `claudeIntentionalHighAutonomy`): trusted-local has no safe ignored
+  // project-local Codex activation surface (ADR 0019), so it is manual/session/
+  // profile work and must not loosen Codex config checks. Do not unify the flags.
   const codexSandbox = profile.clients.codex.enabled
     ? await checkCodexConfig(rootDir, effective, autonomousSandbox, issues)
     : false;
@@ -1523,7 +1531,7 @@ async function checkProjectPermissionConfig(
     ? await checkClaudeConfig(
         rootDir,
         effective,
-        intentionalHighAutonomy,
+        claudeIntentionalHighAutonomy,
         issues,
       )
     : false;
