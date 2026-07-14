@@ -27,19 +27,26 @@ lossless repair/adopt/review/leave options.
 - Phase-31 acceptance criteria 8-9, limited to inspection/evaluation.
 - Permission arrays and scalars follow documented target precedence/merge
   behavior.
+- Every effective known field identifies the exact contributing source; a
+  `.claude/settings.local.json` scalar must not be attributed to generated
+  `.claude/settings.json`.
+- Reconciliation choices explain the effective consequence and which enabled
+  clients are not synchronized by the client-local value.
 - Adoption is absent when behavior is not losslessly representable.
 - Unreadable/remote/session sources produce `unknown`, never `aligned`.
 
 ## Expected RED proof
 
-Layered Claude fixtures misclassify project/local asks and scalar posture;
+Layered Claude fixtures misclassify project/local asks and scalar posture,
+including attributing a local bypass value to the generated project file;
 consent and forbidden-key sentinels fail; reconciliation options cannot be
 derived.
 
 ## Expected GREEN proof
 
-All source/precedence/consent/unknown/reconciliation table rows pass with no
-forbidden reads and deterministic normalized evidence.
+All source/precedence/consent/unknown/reconciliation table rows pass with exact
+source attribution, per-client consequence guidance, no forbidden reads, and
+deterministic normalized evidence.
 
 ## Seam under test
 

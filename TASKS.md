@@ -126,3 +126,22 @@ RED-first TDD implementation cycle.
 Dependency map: I1 -> (I2 and I3); I1+I2+I3 -> I4; I2+I4 -> I5;
 I1+I2+I3 -> I6; I4+I6 -> I7; I2-I7 -> I8. I2 and I3 are mutually
 parallel-safe after I1 apart from shared canonical types.
+
+## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
+
+Approved 2026-07-14 from the repository-update field-test agreement. Phase 32
+is sequenced after Phase 31 I8 so it reuses the completed permission lifecycle
+instead of adding temporary manual guidance.
+
+| Id  | Task                                                  | State     | Brief                                                                                                     |
+| --- | ----------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------- |
+| I1  | Future-configuration ownership decision               | sequenced | [001-future-configuration-ownership.md](docs/specs/phase-32/issues/001-future-configuration-ownership.md) |
+| I2  | Preserve custom MCP across compile and Doctor         | sequenced | [002-preserve-custom-mcp.md](docs/specs/phase-32/issues/002-preserve-custom-mcp.md)                       |
+| I3  | Capability impact and editable-review model           | sequenced | [003-capability-impact-review-model.md](docs/specs/phase-32/issues/003-capability-impact-review-model.md) |
+| I4  | Supported YAML insertion and exact refusals           | sequenced | [004-supported-yaml-insertion.md](docs/specs/phase-32/issues/004-supported-yaml-insertion.md)             |
+| I5  | Editable interactive upgrade review and atomic apply  | sequenced | [005-editable-upgrade-flow.md](docs/specs/phase-32/issues/005-editable-upgrade-flow.md)                   |
+| I6  | Published guided-update journey and final integration | sequenced | [006-published-update-journey.md](docs/specs/phase-32/issues/006-published-update-journey.md)             |
+
+Dependency map: Phase 31 I8 -> (I1, I3, I4); I1 -> I2; I3+I4 -> I5;
+I2+I5 -> I6. I1, I3, and I4 are parallel-safe after Phase 31; I6 is final
+integration only.

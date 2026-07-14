@@ -3,7 +3,10 @@
 ## Status
 
 Approved on 2026-07-14 from the synthesized permission-control agreement.
-Governed by ADRs 0002, 0004, 0005, 0014, and 0019 as amended by this phase.
+Amended on 2026-07-14 from a repository-update field test to require exact
+permission-source attribution, consequence guidance, and explicit cross-client
+scope. Governed by ADRs 0002, 0004, 0005, 0014, and 0019 as amended by this
+phase.
 
 ## Problem
 
@@ -19,6 +22,11 @@ can intentionally configure a more autonomous local client posture while
 generated shared settings continue to force prompts, and doctor reports the
 intentional local change as unsafe drift rather than reconciling it with a
 declared product intent.
+
+A field test exposed the concrete failure mode: Claude's merged effective mode
+came from `.claude/settings.local.json`, but Doctor attributed the finding to
+`.claude/settings.json`. The user was told neither that the local choice applied
+only to Claude nor what would remain different in Codex or Tabnine.
 
 ## Goal
 
@@ -129,7 +137,9 @@ no detection.
 flow:
 
 1. Reads repository-scoped profile and client permission metadata.
-2. Shows the current declared posture and detectable effective posture.
+2. Shows the current declared posture and detectable effective posture, naming
+   every inspected source that contributes a known field. A local override is
+   attributed to its actual source, not to the generated file it overrides.
 3. With explicit consent, inspects only known permission/sandbox fields in
    user- or machine-level local configuration.
 4. Labels unobserved managed, remote, or session-only state as unknown.
@@ -143,6 +153,10 @@ flow:
 9. Separately offers personal activation and manual client steps.
 10. Reinspects and prints the resulting declared, configured, and unknown
     states.
+
+For every proposed value, the guide explains the behavioral consequence, the
+clients affected, the clients not synchronized by that choice, and whether the
+result is shared intent, personal activation, or manual setup.
 
 ### Existing autonomous setup
 
@@ -170,6 +184,11 @@ When actual configuration differs from declared intent, the guide offers:
 
 Unrepresentable client behavior remains manually owned and is never
 approximated into the canonical profile.
+
+Leaving a local override unchanged never edits or blocks unrelated compilation.
+It preserves the risk-based Doctor finding, names the exact source, explains
+the effective consequence, and points back to the configure choices without
+claiming that other clients share the same behavior.
 
 ### Staged writes
 
@@ -262,6 +281,12 @@ unknown
   developer's machine.
 - Permission inspection reads known permission/sandbox metadata only and never
   claims unobserved scopes are safe.
+- Permission evidence and findings identify the exact inspected source that
+  supplies an effective known field; merged behavior must not be attributed to
+  a lower-precedence generated source.
+- Client-local configuration is never described as synchronized with another
+  client. Guidance states the affected client and the separate posture of every
+  other enabled client.
 - Permission arrays/scopes are evaluated using the target's documented merge
   and precedence rules.
 - Adoption is refused when detected behavior cannot be represented without
@@ -278,7 +303,9 @@ unknown
 
 - `LINT-PERM-003`: hard secret/production denial weakened (`error`).
 - `LINT-PERM-004`: dangerous posture violates its declared sandbox/hard-safety
-  contract (`error`). Legacy Autonomous retains its existing sandbox rule.
+  contract (`error`). Legacy Autonomous retains its existing sandbox rule. A
+  client-local dangerous value is reported at the exact local source that
+  supplies it, with its effective consequence and client-only scope.
 - `LINT-PERM-005`: actual/generated behavior is looser than declared (`error`)
   or an agent-profile-owned artifact differs unexpectedly (`error`, with
   ownership/drift codes retained where applicable).
@@ -331,16 +358,19 @@ unknown
    undocumented settings.
 8. Permission inspection evaluates repository scopes automatically, asks
    before user/machine inspection, reads only approved fields, identifies every
-   source, and reports unavailable managed/session state as unknown.
-9. Reconciliation offers repair/adopt/review/leave; adoption is lossless or
-   refused; cancel and refusal leave all bytes unchanged.
+   source, attributes each effective known value to the source that supplies
+   it, and reports unavailable managed/session state as unknown.
+9. Reconciliation offers repair/adopt/review/leave; every value explains its
+   behavioral consequence and per-client synchronization boundary; adoption is
+   lossless or refused; cancel and refusal leave all bytes unchanged.
 10. Shared apply, including any explicitly selected `.gitignore` prerequisite,
     is atomic. Personal activation occurs only after shared success, requires
     separate confirmation and an already ignored destination, never writes
     `.gitignore`, preserves unrelated local fields, and reports partial failure
     without rolling back valid shared intent.
-11. Doctor emits the binding severity matrix above and never summarizes unknown
-    state as aligned.
+11. Doctor emits the binding severity matrix above, reports a local override at
+    its exact source with client-scoped consequence guidance, and never
+    summarizes unknown state as aligned.
 12. Interactive bare dispatch always lists Change agent control, recommends it
     only for agreed trigger states, and preserves existing command priority for
     unrelated states.
@@ -363,6 +393,10 @@ unknown
 - Tabnine manual/unsupported mapping fixtures.
 - Permission-only inspection tests with filesystem/source-consent sentinels and
   forbidden-key traps.
+- Field regression: generated Claude settings are restrictive while
+  `.claude/settings.local.json` supplies `bypassPermissions`; evidence and
+  Doctor name the local source, retain error severity, explain the effective
+  consequence, and state that Codex and Tabnine are not changed.
 - Reconciliation fixture matrix: repair, adopt, unrepresentable refusal,
   inspect, leave, cancel.
 - Shared atomic-write and personal partial-failure tests.

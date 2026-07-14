@@ -26,20 +26,26 @@ overall summary that never calls unknown state aligned.
 - Phase-31 acceptance criterion 11.
 - Every `LINT-PERM-003` through `008` row has table-driven code, severity,
   expected/actual, redaction, and guidance assertions.
+- A dangerous Claude value supplied by `.claude/settings.local.json` retains
+  risk-based error severity, names that exact source, explains the effective
+  behavior, and states that it does not configure Codex or Tabnine.
 - Intentional local activation within declared posture passes.
 - Legacy Autonomous remains governed by its old sandbox rule and gets an
   informational migration offer only.
 
 ## Expected RED proof
 
-Current Doctor flags trusted local as dangerous drift, treats stricter/looser
-states too similarly, and lacks activation/mapping rows.
+Current Doctor can blame generated `.claude/settings.json` for a merged value
+that actually comes from `.claude/settings.local.json`, flags trusted local as
+dangerous drift, treats stricter/looser states too similarly, and lacks
+activation/mapping rows.
 
 ## Expected GREEN proof
 
-The full severity/ownership/status matrix passes, output order is deterministic,
-and unknown state blocks an aligned summary without causing unsupported-client
-noise to become a safety error.
+The full severity/ownership/status matrix passes, local-source attribution and
+cross-client guidance are exact, output order is deterministic, and unknown
+state blocks an aligned summary without causing unsupported-client noise to
+become a safety error.
 
 ## Seam under test
 
