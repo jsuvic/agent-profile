@@ -374,6 +374,287 @@ export type NormalizedSubagentDefaults = {
 export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 3;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 1;
 
+// --- Phase 30 (I1): opt-in role-aware subagent execution policy. ---
+// Canonical, provider-neutral policy. Exact client model/effort controls are
+// resolved by the versioned mapping in the compiler (ADR 0016); they never
+// appear in this canonical IR.
+
+export type SubagentPolicyCapability = "efficient" | "balanced" | "strongest";
+export type SubagentPolicyEffort = "low" | "medium" | "high" | "extra-high";
+export type SubagentPolicyRoleId =
+  | "implementer"
+  | "complex-implementer"
+  | "explorer"
+  | "spec-reviewer"
+  | "quality-reviewer"
+  | "critical-reviewer"
+  | "architect"
+  | "grill"
+  | "mechanical";
+
+export const SUBAGENT_POLICY_ROLE_IDS: readonly SubagentPolicyRoleId[] =
+  Object.freeze([
+    "implementer",
+    "complex-implementer",
+    "explorer",
+    "spec-reviewer",
+    "quality-reviewer",
+    "critical-reviewer",
+    "architect",
+    "grill",
+    "mechanical",
+  ]);
+
+export type SubagentPolicyOverrideTarget = "codex" | "claude";
+
+/**
+ * Versioned source of truth for exact target identifiers (ADR 0016). Core
+ * validation and compiler resolution consume this descriptor; JSON Schema
+ * accepts a string and semantic validation below prevents drift.
+ */
+export const SUBAGENT_POLICY_TARGET_MAPPING_VERSION = 2;
+export const SUBAGENT_POLICY_TARGET_MODELS = Object.freeze({
+  codex: Object.freeze({
+    efficient: "gpt-5.1-codex-mini",
+    balanced: "gpt-5.2-codex",
+    strongest: "gpt-5.2-codex",
+  }),
+  claude: Object.freeze({
+    efficient: "claude-3-5-haiku-20241022",
+    balanced: "claude-sonnet-4-20250514",
+    strongest: "claude-opus-4-1-20250805",
+  }),
+});
+
+export type SubagentPolicyCodexModel =
+  (typeof SUBAGENT_POLICY_TARGET_MODELS.codex)[keyof typeof SUBAGENT_POLICY_TARGET_MODELS.codex];
+export type SubagentPolicyClaudeModel =
+  (typeof SUBAGENT_POLICY_TARGET_MODELS.claude)[keyof typeof SUBAGENT_POLICY_TARGET_MODELS.claude];
+
+export function isSubagentPolicyCodexModel(
+  value: unknown,
+): value is SubagentPolicyCodexModel {
+  return (
+    typeof value === "string" &&
+    Object.values(SUBAGENT_POLICY_TARGET_MODELS.codex).includes(
+      value as SubagentPolicyCodexModel,
+    )
+  );
+}
+
+export function isSubagentPolicyClaudeModel(
+  value: unknown,
+): value is SubagentPolicyClaudeModel {
+  return (
+    typeof value === "string" &&
+    Object.values(SUBAGENT_POLICY_TARGET_MODELS.claude).includes(
+      value as SubagentPolicyClaudeModel,
+    )
+  );
+}
+
+export type SubagentPolicyCodexRoleOverride = {
+  model?: SubagentPolicyCodexModel;
+  effort?: SubagentPolicyEffort;
+};
+
+export type SubagentPolicyClaudeRoleOverride = {
+  model?: SubagentPolicyClaudeModel;
+  effort?: SubagentPolicyEffort;
+};
+
+export type SubagentPolicyRoleOverride =
+  SubagentPolicyCodexRoleOverride | SubagentPolicyClaudeRoleOverride;
+
+export type SubagentPolicyRoleOverrides = {
+  codex?: SubagentPolicyCodexRoleOverride;
+  claude?: SubagentPolicyClaudeRoleOverride;
+};
+
+export type SubagentPolicyRole = {
+  capability: SubagentPolicyCapability;
+  effort: SubagentPolicyEffort;
+  overrides?: SubagentPolicyRoleOverrides;
+};
+
+export type SubagentPolicyRoles = Partial<
+  Record<SubagentPolicyRoleId, SubagentPolicyRole>
+>;
+
+export type SubagentPolicyOrchestration = {
+  maxConcurrentThreads?: number;
+  maxDepth?: number;
+  parallelWrites?: boolean;
+};
+
+export type SubagentPolicyIndexedMode = "preferred" | "off";
+export type SubagentPolicyIndexedProvider = "cce";
+
+export type SubagentPolicyContext = {
+  handoff?: "task-capsule";
+  memory?: "targeted";
+  indexed?: {
+    mode?: SubagentPolicyIndexedMode;
+    provider?: SubagentPolicyIndexedProvider;
+  };
+};
+
+export type SubagentPolicyEvidence = {
+  summary?: "required";
+  localTrace?: {
+    enabled?: boolean;
+    retention?: number;
+  };
+};
+
+export type AiProfileSubagentPolicy = {
+  enabled: boolean;
+  roles?: SubagentPolicyRoles;
+  orchestration?: SubagentPolicyOrchestration;
+  context?: SubagentPolicyContext;
+  evidence?: SubagentPolicyEvidence;
+};
+
+// The frozen default role matrix (phase-30/001). Used to render the effective
+// role matrix when a profile omits some or all roles.
+export const DEFAULT_SUBAGENT_POLICY_ROLES: SubagentPolicyRoles = Object.freeze(
+  {
+    implementer: Object.freeze({ capability: "balanced", effort: "medium" }),
+    "complex-implementer": Object.freeze({
+      capability: "balanced",
+      effort: "high",
+    }),
+    explorer: Object.freeze({ capability: "balanced", effort: "low" }),
+    "spec-reviewer": Object.freeze({ capability: "balanced", effort: "high" }),
+    "quality-reviewer": Object.freeze({
+      capability: "balanced",
+      effort: "high",
+    }),
+    "critical-reviewer": Object.freeze({
+      capability: "strongest",
+      effort: "high",
+    }),
+    architect: Object.freeze({ capability: "strongest", effort: "extra-high" }),
+    grill: Object.freeze({ capability: "strongest", effort: "high" }),
+    mechanical: Object.freeze({ capability: "efficient", effort: "medium" }),
+  },
+) as SubagentPolicyRoles;
+
+// Orchestration safety bounds and evidence retention limit. These are enforced
+// semantically (with dedicated stable codes) rather than in JSON Schema so the
+// rejection messages are explicit and redacted.
+export const SUBAGENT_POLICY_MAX_DEPTH = 1;
+export const SUBAGENT_POLICY_MAX_CONCURRENT_THREADS = 3;
+export const SUBAGENT_POLICY_RETENTION_MAX = 1000;
+
+export type EffectiveSubagentPolicyRole = Readonly<{
+  capability: SubagentPolicyCapability;
+  effort: SubagentPolicyEffort;
+  overrides: Readonly<SubagentPolicyRoleOverrides>;
+}>;
+
+export type EffectiveSubagentPolicy = Readonly<{
+  enabled: true;
+  roles: Readonly<Record<SubagentPolicyRoleId, EffectiveSubagentPolicyRole>>;
+  orchestration: Readonly<{
+    maxConcurrentThreads: number;
+    maxDepth: number;
+    parallelWrites: boolean;
+  }>;
+  context: Readonly<{
+    handoff: "task-capsule";
+    memory: "targeted";
+    indexed: Readonly<{
+      mode: SubagentPolicyIndexedMode;
+      provider: SubagentPolicyIndexedProvider;
+    }>;
+  }>;
+  evidence: Readonly<{
+    summary: "required";
+    localTrace: Readonly<{ enabled: boolean; retention: number }>;
+  }>;
+}>;
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(child);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/**
+ * Materialize the policy used by every renderer. This deliberately copies the
+ * parsed profile values before recursively freezing them, so later caller
+ * mutation cannot alter a compile and omitted/disabled policy remains inert.
+ */
+export function resolveEffectiveSubagentPolicy(
+  policy: AiProfileSubagentPolicy | undefined,
+): EffectiveSubagentPolicy | undefined {
+  if (policy?.enabled !== true) {
+    return undefined;
+  }
+
+  const roles = {} as Record<SubagentPolicyRoleId, EffectiveSubagentPolicyRole>;
+  for (const id of SUBAGENT_POLICY_ROLE_IDS) {
+    const role = policy.roles?.[id] ?? DEFAULT_SUBAGENT_POLICY_ROLES[id]!;
+    roles[id] = {
+      capability: role.capability,
+      effort: role.effort,
+      overrides: {
+        ...(role.overrides?.codex === undefined
+          ? {}
+          : { codex: { ...role.overrides.codex } }),
+        ...(role.overrides?.claude === undefined
+          ? {}
+          : { claude: { ...role.overrides.claude } }),
+      },
+    };
+  }
+
+  return deepFreeze({
+    enabled: true as const,
+    roles,
+    orchestration: {
+      maxConcurrentThreads:
+        policy.orchestration?.maxConcurrentThreads ??
+        SUBAGENT_POLICY_MAX_CONCURRENT_THREADS,
+      maxDepth: policy.orchestration?.maxDepth ?? SUBAGENT_POLICY_MAX_DEPTH,
+      parallelWrites: policy.orchestration?.parallelWrites ?? false,
+    },
+    context: {
+      handoff: policy.context?.handoff ?? "task-capsule",
+      memory: policy.context?.memory ?? "targeted",
+      indexed: {
+        mode: policy.context?.indexed?.mode ?? "preferred",
+        provider: policy.context?.indexed?.provider ?? "cce",
+      },
+    },
+    evidence: {
+      summary: policy.evidence?.summary ?? "required",
+      localTrace: {
+        enabled: policy.evidence?.localTrace?.enabled ?? false,
+        retention: policy.evidence?.localTrace?.retention ?? 20,
+      },
+    },
+  });
+}
+
+export function getEffectiveSubagentPolicyRoles(
+  policy: AiProfileSubagentPolicy,
+): Array<{ id: SubagentPolicyRoleId; role: EffectiveSubagentPolicyRole }> {
+  const effective = resolveEffectiveSubagentPolicy(policy);
+  if (effective === undefined) {
+    return [];
+  }
+  return SUBAGENT_POLICY_ROLE_IDS.map((id) => ({
+    id,
+    role: effective.roles[id],
+  }));
+}
+
 export type AiProfile = {
   version: 1;
   profile: {
@@ -396,6 +677,7 @@ export type AiProfile = {
   };
   capabilities?: AiProfileCapabilities;
   permissions?: AiProfilePermissions;
+  subagentPolicy?: AiProfileSubagentPolicy;
 };
 
 export function normalizeSubagentName(name: string): string {
@@ -470,7 +752,12 @@ export type ProfileValidationIssueCode =
   | "file_not_found"
   | "yaml_parse_error"
   | "schema_validation_error"
-  | "unsupported_schema_version";
+  | "unsupported_schema_version"
+  | "subagent_policy_max_depth"
+  | "subagent_policy_max_threads"
+  | "subagent_policy_parallel_writes"
+  | "subagent_policy_retention"
+  | "subagent_policy_override_model";
 
 export type ProfileValidationIssue = {
   code: ProfileValidationIssueCode;
@@ -608,7 +895,10 @@ export function validateProfileValue(value: unknown): ProfileValidationResult {
 
   if (validate(value)) {
     const profile = value as AiProfile;
-    const subagentIssues = validateSubagentSemantics(profile);
+    const subagentIssues = [
+      ...validateSubagentSemantics(profile),
+      ...validateSubagentPolicySemantics(profile),
+    ];
 
     if (subagentIssues.length > 0) {
       return {
@@ -701,6 +991,111 @@ function validateSubagentSemantics(
   return issues;
 }
 
+/**
+ * Semantic validation for the phase-30 subagent policy. Only runs when the
+ * policy is explicitly enabled (omission or `enabled: false` preserves prior
+ * behavior). Enforces the orchestration safety bounds and evidence retention
+ * limit that JSON Schema is deliberately not used for, so each rejection has a
+ * dedicated stable code and an explicit, redacted message.
+ */
+function validateSubagentPolicySemantics(
+  profile: AiProfile,
+): ProfileValidationIssue[] {
+  const policy = profile.subagentPolicy;
+
+  if (!policy || policy.enabled !== true) {
+    return [];
+  }
+
+  const issues: ProfileValidationIssue[] = [];
+  const orchestration = policy.orchestration;
+
+  if (orchestration !== undefined) {
+    const threads = orchestration.maxConcurrentThreads;
+    if (
+      threads !== undefined &&
+      (threads < 1 || threads > SUBAGENT_POLICY_MAX_CONCURRENT_THREADS)
+    ) {
+      issues.push({
+        code: "subagent_policy_max_threads",
+        path: "/subagentPolicy/orchestration/maxConcurrentThreads",
+        expected: `integer between 1 and ${SUBAGENT_POLICY_MAX_CONCURRENT_THREADS}`,
+        actual: "out of range",
+        message: `/subagentPolicy/orchestration/maxConcurrentThreads must be between 1 and ${SUBAGENT_POLICY_MAX_CONCURRENT_THREADS}.`,
+      });
+    }
+
+    const depth = orchestration.maxDepth;
+    if (
+      depth !== undefined &&
+      (depth < 1 || depth > SUBAGENT_POLICY_MAX_DEPTH)
+    ) {
+      issues.push({
+        code: "subagent_policy_max_depth",
+        path: "/subagentPolicy/orchestration/maxDepth",
+        expected: `integer equal to ${SUBAGENT_POLICY_MAX_DEPTH}`,
+        actual: "out of range",
+        message: `/subagentPolicy/orchestration/maxDepth must not exceed ${SUBAGENT_POLICY_MAX_DEPTH}.`,
+      });
+    }
+
+    if (orchestration.parallelWrites === true) {
+      issues.push({
+        code: "subagent_policy_parallel_writes",
+        path: "/subagentPolicy/orchestration/parallelWrites",
+        expected: "false",
+        actual: "true",
+        message:
+          "/subagentPolicy/orchestration/parallelWrites must be false; parallel repository writes are not allowed.",
+      });
+    }
+  }
+
+  const retention = policy.evidence?.localTrace?.retention;
+  if (
+    retention !== undefined &&
+    (retention < 1 || retention > SUBAGENT_POLICY_RETENTION_MAX)
+  ) {
+    issues.push({
+      code: "subagent_policy_retention",
+      path: "/subagentPolicy/evidence/localTrace/retention",
+      expected: `integer between 1 and ${SUBAGENT_POLICY_RETENTION_MAX}`,
+      actual: "out of range",
+      message: `/subagentPolicy/evidence/localTrace/retention must be between 1 and ${SUBAGENT_POLICY_RETENTION_MAX}.`,
+    });
+  }
+
+  for (const [roleId, role] of Object.entries(policy.roles ?? {})) {
+    const codexModel = role.overrides?.codex?.model;
+    if (codexModel !== undefined && !isSubagentPolicyCodexModel(codexModel)) {
+      issues.push({
+        code: "subagent_policy_override_model",
+        path: `/subagentPolicy/roles/${roleId}/overrides/codex/model`,
+        expected: "a pinned Codex model identifier",
+        actual: "unsupported model",
+        message:
+          "/subagentPolicy role override uses an unsupported pinned Codex model.",
+      });
+    }
+    const claudeModel = role.overrides?.claude?.model;
+    if (
+      claudeModel !== undefined &&
+      !isSubagentPolicyClaudeModel(claudeModel)
+    ) {
+      issues.push({
+        code: "subagent_policy_override_model",
+        path: `/subagentPolicy/roles/${roleId}/overrides/claude/model`,
+        expected: "a pinned Claude model identifier",
+        actual: "unsupported model",
+        message:
+          "/subagentPolicy role override uses an unsupported pinned Claude model.",
+      });
+    }
+  }
+
+  return issues;
+}
+
 export function normalizeSafety(
   profile: Pick<AiProfile, "safety">,
 ): NormalizedAiProfileSafety {
@@ -774,6 +1169,10 @@ export function renderProfileYaml(profile: AiProfile): string {
 
   if (profile.permissions !== undefined) {
     doc["permissions"] = buildPermissionsDoc(profile.permissions);
+  }
+
+  if (profile.subagentPolicy !== undefined) {
+    doc["subagentPolicy"] = buildSubagentPolicyDoc(profile.subagentPolicy);
   }
 
   const text = yamlStringify(doc, {
@@ -865,6 +1264,116 @@ function buildSubagentDoc(agent: AiProfileSubagent): Record<string, unknown> {
     out["timeoutMinutes"] = agent.timeoutMinutes;
   if (agent.mcpServers !== undefined) out["mcpServers"] = agent.mcpServers;
   return out;
+}
+
+function buildSubagentPolicyDoc(
+  policy: AiProfileSubagentPolicy,
+): Record<string, unknown> {
+  const doc: Record<string, unknown> = { enabled: policy.enabled };
+
+  if (policy.roles !== undefined) {
+    const roles: Record<string, unknown> = {};
+    for (const id of SUBAGENT_POLICY_ROLE_IDS) {
+      const role = policy.roles[id];
+      if (role === undefined) {
+        continue;
+      }
+      const roleDoc: Record<string, unknown> = {
+        capability: role.capability,
+        effort: role.effort,
+      };
+      if (role.overrides !== undefined) {
+        const overrides: Record<string, unknown> = {};
+        for (const target of ["codex", "claude"] as const) {
+          const override = role.overrides[target];
+          if (override === undefined) {
+            continue;
+          }
+          const overrideDoc: Record<string, unknown> = {};
+          if (override.model !== undefined) {
+            overrideDoc["model"] = override.model;
+          }
+          if (override.effort !== undefined) {
+            overrideDoc["effort"] = override.effort;
+          }
+          overrides[target] = overrideDoc;
+        }
+        if (Object.keys(overrides).length > 0) {
+          roleDoc["overrides"] = overrides;
+        }
+      }
+      roles[id] = roleDoc;
+    }
+    if (Object.keys(roles).length > 0) {
+      doc["roles"] = roles;
+    }
+  }
+
+  if (policy.orchestration !== undefined) {
+    const orchestration: Record<string, unknown> = {};
+    if (policy.orchestration.maxConcurrentThreads !== undefined) {
+      orchestration["maxConcurrentThreads"] =
+        policy.orchestration.maxConcurrentThreads;
+    }
+    if (policy.orchestration.maxDepth !== undefined) {
+      orchestration["maxDepth"] = policy.orchestration.maxDepth;
+    }
+    if (policy.orchestration.parallelWrites !== undefined) {
+      orchestration["parallelWrites"] = policy.orchestration.parallelWrites;
+    }
+    if (Object.keys(orchestration).length > 0) {
+      doc["orchestration"] = orchestration;
+    }
+  }
+
+  if (policy.context !== undefined) {
+    const context: Record<string, unknown> = {};
+    if (policy.context.handoff !== undefined) {
+      context["handoff"] = policy.context.handoff;
+    }
+    if (policy.context.memory !== undefined) {
+      context["memory"] = policy.context.memory;
+    }
+    if (policy.context.indexed !== undefined) {
+      const indexed: Record<string, unknown> = {};
+      if (policy.context.indexed.mode !== undefined) {
+        indexed["mode"] = policy.context.indexed.mode;
+      }
+      if (policy.context.indexed.provider !== undefined) {
+        indexed["provider"] = policy.context.indexed.provider;
+      }
+      if (Object.keys(indexed).length > 0) {
+        context["indexed"] = indexed;
+      }
+    }
+    if (Object.keys(context).length > 0) {
+      doc["context"] = context;
+    }
+  }
+
+  if (policy.evidence !== undefined) {
+    const evidence: Record<string, unknown> = {};
+    if (policy.evidence.summary !== undefined) {
+      evidence["summary"] = policy.evidence.summary;
+    }
+    if (policy.evidence.localTrace !== undefined) {
+      const localTrace: Record<string, unknown> = {};
+      if (policy.evidence.localTrace.enabled !== undefined) {
+        localTrace["enabled"] = policy.evidence.localTrace.enabled;
+      }
+      if (policy.evidence.localTrace.retention !== undefined) {
+        localTrace["retention"] = policy.evidence.localTrace.retention;
+      }
+      if (Object.keys(localTrace).length > 0) {
+        evidence["localTrace"] = localTrace;
+      }
+    }
+    if (Object.keys(evidence).length > 0) {
+      doc["evidence"] = evidence;
+    }
+  }
+
+  return doc;
 }
 
 function buildPermissionsDoc(p: AiProfilePermissions): Record<string, unknown> {

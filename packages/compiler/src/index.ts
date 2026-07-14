@@ -53,6 +53,17 @@ export {
   renderClaudeMd,
 } from "./compiler.js";
 export {
+  resolveRoleMapping,
+  SUBAGENT_MAPPING_VERSION,
+} from "./subagent-mapping.js";
+export type {
+  ClaudeModelTier,
+  ClaudeEffort,
+  CodexModelClass,
+  CodexReasoningEffort,
+  ResolvedRoleMapping,
+} from "./subagent-mapping.js";
+export {
   ADVISORY_HOOK_TEMPLATES,
   advisoryHookCommandViolatesForbiddenPatterns,
   buildClaudeAdvisoryHooksValue,

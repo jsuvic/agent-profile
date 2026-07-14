@@ -54,6 +54,11 @@ import {
 } from "./phase12-skill-content.js";
 import { renderLoopSkillContent } from "./loop-skill-content.js";
 import {
+  renderSubagentPolicyAgentsMdSection,
+  renderSubagentPolicyAgentsMdTemplateSource,
+  renderSubagentPolicyTabnineGuideline,
+} from "./subagent-policy-guidance.js";
+import {
   buildClaudeAdvisoryHooksValue,
   getAdvisoryHookNotes,
   getAdvisoryHookTemplateId,
@@ -111,6 +116,12 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
     LOGGING_GUIDANCE_TOPIC,
   ),
   {
+    id: "targets/agents-md/87-subagent-policy@1",
+    target: "agents-md",
+    version: "1",
+    source: renderSubagentPolicyAgentsMdTemplateSource(),
+  },
+  {
     id: "targets/lockfile@1",
     target: "lockfile",
     version: "1",
@@ -167,6 +178,10 @@ const TEMPLATE_SOURCES: TemplateSource[] = [
   guidelineTemplateSource(
     "targets/tabnine-guidelines/86-logging-guidance@1",
     renderLoggingGuidanceGuideline,
+  ),
+  guidelineTemplateSource(
+    "targets/tabnine-guidelines/87-subagent-task-capsules@1",
+    renderSubagentPolicyTabnineGuideline,
   ),
   guidelineTemplateSource(
     "targets/tabnine-guidelines/90-final-review@1",
@@ -590,6 +605,10 @@ export function renderAgentsMd(profile: AiProfile): string {
     profile.workflow.loggingGuidance === true
       ? `\n${renderTopicAsAgentsMdSection(LOGGING_GUIDANCE_TOPIC)}`
       : "";
+  const subagentPolicySection =
+    profile.subagentPolicy?.enabled === true
+      ? `\n${renderSubagentPolicyAgentsMdSection(profile.subagentPolicy)}`
+      : "";
 
   return normalizeGeneratedText(`# AGENTS.md
 
@@ -619,7 +638,7 @@ ${enabledClients}
 - SDD: ${renderRequired(profile.workflow.sdd)}
 - TDD: ${renderRequired(profile.workflow.tdd)}
 - Final implementation review: ${renderRequired(profile.workflow.finalReview)}
-${codeReviewSection}${refactoringSection}${documentationSection}${memoryGuidanceSection}${loggingGuidanceSection}
+${codeReviewSection}${refactoringSection}${documentationSection}${memoryGuidanceSection}${loggingGuidanceSection}${subagentPolicySection}
 ## Permissions
 
 | Permission         | Mode  |
@@ -930,6 +949,17 @@ function renderTabnineGuidelines(profile: AiProfile): GeneratedFile[] {
         common.target,
         "targets/tabnine-guidelines/86-logging-guidance@1",
         renderLoggingGuidanceGuideline(),
+      ),
+    );
+  }
+
+  if (profile.subagentPolicy?.enabled === true) {
+    files.push(
+      createGeneratedTextFile(
+        ".tabnine/guidelines/87-subagent-task-capsules.md",
+        common.target,
+        "targets/tabnine-guidelines/87-subagent-task-capsules@1",
+        renderSubagentPolicyTabnineGuideline(),
       ),
     );
   }
@@ -2421,6 +2451,9 @@ function getRequiredAgentsMdTopicTemplateIds(profile: AiProfile): string[] {
   if (profile.workflow.loggingGuidance === true) {
     ids.push("targets/agents-md/86-logging-guidance@1");
   }
+  if (profile.subagentPolicy?.enabled === true) {
+    ids.push("targets/agents-md/87-subagent-policy@1");
+  }
 
   return ids;
 }
@@ -2467,6 +2500,9 @@ function getRequiredTabnineGuidelineTemplateIds(profile: AiProfile): string[] {
   }
   if (profile.workflow.loggingGuidance === true) {
     ids.push("targets/tabnine-guidelines/86-logging-guidance@1");
+  }
+  if (profile.subagentPolicy?.enabled === true) {
+    ids.push("targets/tabnine-guidelines/87-subagent-task-capsules@1");
   }
   if (profile.workflow.finalReview) {
     ids.push("targets/tabnine-guidelines/90-final-review@1");
