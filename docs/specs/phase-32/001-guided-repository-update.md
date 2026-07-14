@@ -120,8 +120,12 @@ For every offered capability, the review shows:
 
 The user may change the selection, cancel, or continue to an exact
 `ai-profile.yaml` insertion preview. A separate confirmation, default No,
-applies the profile and lockfile atomically. Decline preserves all bytes.
-Compilation remains a separately confirmed next action.
+applies the profile changes atomically. When `ai-profile.lock` exists, the
+profile and existing lockfile update atomically under the Phase 27 provenance
+contract. When it is absent, upgrade inserts only the profile changes, does not
+create or stamp a lockfile, and reports the existing deferred-stamp note.
+Decline preserves all bytes. Compilation remains a separately confirmed next
+action.
 
 ### Unsafe insertion
 
@@ -148,7 +152,8 @@ path, structural reason, and manual value.
 - Informational Doctor/update guidance with no generated-drift failure.
 - Editable capability review model and interactive presentation.
 - Comment-preserving insertion plan or exact refusal record.
-- Atomic profile/lock write report followed by the existing separately
+- Atomic profile write report, plus an atomic existing-lock update report only
+  when `ai-profile.lock` already exists, followed by the existing separately
   consented compile offer.
 
 ## Contracts
@@ -201,7 +206,9 @@ path, structural reason, and manual value.
 5. Interactive Adopt all preselects every offered capability and then opens the
    editable review; Customize opens the same review without bypassing it.
 6. The user can change selections, cancel with byte identity, preview exact
-   insertions, decline the write, or confirm one atomic profile/lock write.
+   insertions, decline the write, or confirm one atomic profile write. An
+   existing lockfile participates in that atomic write; an absent lockfile
+   remains absent and receives no catalog-version stamp, per Phase 27.
 7. Existing ordinary block-style repository YAML accepts the field-log
    workflow, skills-pack, and reviewer-subagent-pack insertions without generic
    unsafe-target refusals.
@@ -274,7 +281,8 @@ See `docs/specs/phase-32/issues/` and `TASKS.md`.
   presentation-local.
 - Prove adopt-all cannot reach a write without editable review and a fresh
   confirmation.
-- Prove cancel/decline byte identity and profile/lock atomicity.
+- Prove cancel/decline byte identity, profile/existing-lock atomicity, and the
+  no-lockfile insertion-only exception.
 - Prove ordinary supported YAML succeeds and unsafe syntax retains exact
   conservative refusal.
 - Prove frozen non-interactive, JSON, quiet, help, exit-code, golden, and pack

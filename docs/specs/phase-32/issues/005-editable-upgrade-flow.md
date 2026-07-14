@@ -13,8 +13,10 @@ separately confirmed profile update while keeping automation explicit.
 
 Interactive Adopt all and Customize enter one review driven by I3 metadata. The
 user edits selections, sees the exact I4 insertion preview, cancels or declines
-without writes, or confirms one atomic profile/lock write. Compile is offered
-only afterward through a separate default-No confirmation.
+without writes, or confirms one atomic profile write. An existing lockfile
+participates atomically; without a lockfile, upgrade preserves the Phase 27
+insertion-only/deferred-stamp exception. Compile is offered only afterward
+through a separate default-No confirmation.
 
 ## Non-goals
 
@@ -28,7 +30,9 @@ only afterward through a separate default-No confirmation.
 - Adopt all preselects every offered item but cannot skip editable review.
 - Customize uses the same review path and supports per-item change.
 - Review displays every I3 field and every I4 refusal before final confirmation.
-- Cancel/decline preserve profile and lock bytes; confirm writes both atomically.
+- Cancel/decline preserve profile and lock bytes; confirm updates an existing
+  lockfile atomically with the profile, while an absent lockfile remains absent
+  and receives no catalog-version stamp.
 - Compile requires a fresh confirmation and decline leaves the successful
   profile update intact.
 
@@ -41,8 +45,8 @@ boundary.
 ## Expected GREEN proof
 
 Prompt/state tests pass for preselection, editing, Customize parity, cancel,
-decline, atomic confirm, refusal, and separate compile consent; frozen scripted
-tests remain byte-identical.
+decline, existing-lock atomic confirm, no-lockfile deferred stamp, refusal, and
+separate compile consent; frozen scripted tests remain byte-identical.
 
 ## Seam under test
 
@@ -83,8 +87,9 @@ text, JSON/quiet, exit codes, and compile consent remain frozen.
 
 ## Security impact
 
-No mutation before exact preview and fresh confirmation; atomic write only;
-decline/cancel byte identity; no network, client launch, or secret access.
+No mutation before exact preview and fresh confirmation; existing-lock atomic
+write only; decline/cancel byte identity; no network, client launch, or secret
+access.
 
 ## Documentation impact
 
