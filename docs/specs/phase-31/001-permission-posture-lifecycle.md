@@ -174,12 +174,15 @@ approximated into the canonical profile.
 ### Staged writes
 
 1. Inspection and plan are read-only.
-2. Shared `ai-profile.yaml` and generated artifacts are previewed and written
-   atomically through existing planners.
+2. Shared `ai-profile.yaml`, generated artifacts, and any explicitly selected
+   `.gitignore` prerequisite for later personal activation are previewed and
+   written atomically through existing planners.
 3. Personal activation is offered only after the shared write succeeds.
 4. A supported local activation writer changes only owned permission fields,
    preserves unrelated content, refuses unsafe structure/symlinks, and requires
-   the local file to be ignored or an explicit ignore update.
+   the local file to already be ignored. If it is not ignored, this stage
+   changes neither the local file nor `.gitignore` and directs the user to rerun
+   the shared preview with the ignore prerequisite or update it manually.
 5. Manual-only client instructions are presented after shared success.
 6. Failed personal activation leaves the valid shared profile in place and is
    reported as incomplete activation.
@@ -331,9 +334,11 @@ unknown
    source, and reports unavailable managed/session state as unknown.
 9. Reconciliation offers repair/adopt/review/leave; adoption is lossless or
    refused; cancel and refusal leave all bytes unchanged.
-10. Shared apply is atomic. Personal activation occurs only after shared
-    success, requires separate confirmation, preserves unrelated local fields,
-    and reports partial failure without rolling back valid shared intent.
+10. Shared apply, including any explicitly selected `.gitignore` prerequisite,
+    is atomic. Personal activation occurs only after shared success, requires
+    separate confirmation and an already ignored destination, never writes
+    `.gitignore`, preserves unrelated local fields, and reports partial failure
+    without rolling back valid shared intent.
 11. Doctor emits the binding severity matrix above and never summarizes unknown
     state as aligned.
 12. Interactive bare dispatch always lists Change agent control, recommends it
@@ -388,7 +393,7 @@ See `docs/specs/phase-31/issues/` and `TASKS.md`.
 
 - I1 is the architecture-rescue prerequisite.
 - I2 and I3 are parallel-safe after I1, apart from shared canonical types.
-- I4 depends on I1 and I3.
+- I4 depends on I1-I3 and consumes I2's versioned client mapping report.
 - I5 depends on I2 and I4.
 - I6 depends on I1-I3 and can proceed in parallel with I4 after those inputs
   stabilize.

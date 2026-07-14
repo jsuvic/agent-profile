@@ -28,7 +28,8 @@ project-local writer exists. The flow reinspects and reports completion.
 - Claude local patch changes only owned permission fields and preserves every
   unrelated byte/field semantically required by the chosen editor contract.
 - Unsafe structure, symlink, unignored destination, conflict, and write failure
-  refuse without partial change.
+  refuse without partial change. An unignored destination changes neither the
+  local file nor `.gitignore` and gives stable rerun/manual guidance.
 - Codex/Tabnine instructions identify manual/session limits and never claim
   automatic completion.
 
@@ -40,7 +41,8 @@ manual mapping fixtures fail.
 ## Expected GREEN proof
 
 Preview/confirm/idempotence/preservation/refusal/partial-failure rows pass and
-the final mapping report distinguishes active, pending, manual, and unknown.
+the final mapping report distinguishes active, pending, manual, and unknown;
+unignored-destination rows prove both the local file and `.gitignore` unchanged.
 
 ## Seam under test
 
@@ -59,7 +61,7 @@ then full tests, check, lint, verify:pack, and package dry-run.
 ## Likely file ownership
 
 - Personal activation planner and safe JSON editor
-- `.gitignore` classification/insertion integration
+- Ignore-status validation and refusal guidance; no `.gitignore` writer
 - Client manual activation guidance catalog
 - Local fixture matrix and readback tests
 
@@ -80,7 +82,8 @@ No global configuration writer is authorized.
 ## Security impact
 
 Ignored local file only, permission fields only, no symlinks, no secrets,
-atomic write, unrelated-field preservation, no client invocation.
+atomic write, unrelated-field preservation, no `.gitignore` write, no client
+invocation.
 
 ## Documentation impact
 
@@ -96,4 +99,5 @@ the owned posture fields.
 ## Review expectations
 
 Inspect byte/semantic preservation, ignore status, symlink checks, refusal
-codes, idempotence, post-write verification, and absence of global writes.
+codes, idempotence, post-write verification, and absence of `.gitignore` or
+global writes.

@@ -123,6 +123,6 @@ RED-first TDD implementation cycle.
 | I7  | Dispatcher permission routing and legacy migration entry | sequenced | [007-dispatcher-permission-routing.md](docs/specs/phase-31/issues/007-dispatcher-permission-routing.md)                                   |
 | I8  | Published permission journey and final integration       | sequenced | [008-published-journey-and-final-integration.md](docs/specs/phase-31/issues/008-published-journey-and-final-integration.md)               |
 
-Dependency map: I1 -> (I2 and I3); I1+I3 -> I4; I2+I4 -> I5;
+Dependency map: I1 -> (I2 and I3); I1+I2+I3 -> I4; I2+I4 -> I5;
 I1+I2+I3 -> I6; I4+I6 -> I7; I2-I7 -> I8. I2 and I3 are mutually
 parallel-safe after I1 apart from shared canonical types.

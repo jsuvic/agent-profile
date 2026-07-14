@@ -13,7 +13,9 @@ interactive flow without guessing commands or risking partial shared writes.
 
 `agent-profile configure` shows current posture, alternatives, per-client
 outcomes, hard denials, and mapping status; supports repair/adopt/review/leave;
-previews profile/generated changes; and applies shared changes atomically.
+previews profile/generated changes plus any explicitly selected `.gitignore`
+prerequisite for later personal activation; and applies shared changes
+atomically.
 
 ## Non-goals
 
@@ -27,6 +29,10 @@ previews profile/generated changes; and applies shared changes atomically.
 - Current posture is preselected; cancel/default leave all bytes unchanged.
 - Legacy Autonomous offers keep, explicit Trusted-local migration, other
   posture, and cancel with no silent reinterpretation.
+- Per-client outcomes and mapping statuses come from I2's versioned mapping
+  report rather than configure-owned mapping logic.
+- An explicitly selected `.gitignore` prerequisite is part of the shared
+  preview and atomic transaction; cancel or failure leaves it unchanged.
 - Unrepresentable adoption is refused with stable redacted guidance.
 
 ## Expected RED proof
@@ -36,8 +42,9 @@ cannot reach a shared preview or atomic apply.
 
 ## Expected GREEN proof
 
-All choice/preview/cancel/refusal/write-failure rows pass; shared profile and
-generated artifacts commit together or remain untouched.
+All choice/preview/cancel/refusal/write-failure rows pass; shared profile,
+generated artifacts, and any selected ignore prerequisite commit together or
+remain untouched.
 
 ## Seam under test
 
@@ -58,12 +65,12 @@ goldens, then full CLI tests, check, lint, verify:pack, and package dry-run.
 - CLI command routing and clack presenter
 - Shared configure/reconciliation orchestrator
 - Existing profile insertion/editor and compile-plan integration
+- `.gitignore` classification/insertion through the shared planner
 - CLI docs/help and flow fixtures
 
 ## Dependencies
 
-`sequenced` after I1 and I3; mapping report presentation may integrate I2 when
-available.
+`sequenced` after I1, I2, and I3; consumes I2's versioned mapping report.
 
 ## Parallelism notes
 
@@ -77,7 +84,8 @@ non-interactive commands and existing compile reconciliation remain unchanged.
 
 ## Security impact
 
-Read-only until preview/confirmation; existing atomic writer; no secret reads,
+Read-only until preview/confirmation; any selected ignore prerequisite is an
+explicit shared mutation in the same atomic transaction; no secret reads,
 network, client execution, dependency install, or implicit posture change.
 
 ## Documentation impact
