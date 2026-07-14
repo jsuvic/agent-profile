@@ -34,6 +34,15 @@ export {
   SUBAGENT_TEMPLATE_NAMES,
   validateProfileValue,
 } from "./profile.js";
+export { resolvePermissionPosture } from "./permission-posture.js";
+export type {
+  ClientPosturePlan,
+  HardDenials,
+  PermissionPosture,
+  PermissionPostureClientId,
+  PermissionPostureLegacyStatus,
+  PermissionPosturePlan,
+} from "./permission-posture.js";
 export { containsSecretLikeLiteral } from "./security.js";
 export { REVIEWER_DEFINITIONS } from "./reviewer-definitions.js";
 export type { ReviewerDefinition } from "./reviewer-definitions.js";
@@ -78,6 +87,7 @@ export type {
   AiProfileSubagentEntry,
   AiProfileSubagentPackId,
   AiProfileSubagentPolicy,
+  ClientPermissionPosture,
   EffectiveSubagentPolicy,
   EffectiveSubagentPolicyRole,
   AiProfileSubagentTemplateRef,

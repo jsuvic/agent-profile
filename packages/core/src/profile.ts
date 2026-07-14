@@ -14,10 +14,26 @@ import aiProfileSchema from "@agent-profile/schemas/ai-profile.schema.json" with
 import { REVIEWER_DEFINITIONS } from "./reviewer-definitions.js";
 
 export type PermissionMode = "allow" | "ask" | "deny";
-export type SafetyMode = "guarded" | "balanced" | "autonomous" | "plan-only";
+export type SafetyMode =
+  | "guarded"
+  | "balanced"
+  | "trusted-local"
+  | "autonomous"
+  | "plan-only";
+
+// Client-neutral posture adjustment (ADR 0004 Phase 31 amendment). `autonomous`
+// is intentionally excluded: it is a legacy baseline-only mode. `inherit` means
+// "use the baseline posture".
+export type ClientPermissionPosture =
+  | "guarded"
+  | "balanced"
+  | "trusted-local"
+  | "plan-only"
+  | "inherit";
 
 export type AiProfileClient = {
   enabled: boolean;
+  permissionPosture?: ClientPermissionPosture;
 };
 
 export type AiProfileStack = {
@@ -575,7 +591,7 @@ export type EffectiveSubagentPolicy = Readonly<{
   }>;
 }>;
 
-function deepFreeze<T>(value: T): T {
+export function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
     for (const child of Object.values(value as Record<string, unknown>)) {
       deepFreeze(child);
@@ -798,6 +814,17 @@ const PERMISSION_PRESETS: Record<SafetyMode, AiProfileEffectivePermissions> = {
   balanced: {
     filesystem: { read: "allow", write: "allow" },
     shell: { run: "ask" },
+    secrets: { access: "deny" },
+    dependencies: { install: "ask" },
+    network: { external: "ask" },
+    production: { access: "deny" },
+  },
+  // Trusted local mirrors autonomous granular autonomy but carries no sandbox
+  // requirement (sandbox is expressed separately via safety.requiresSandbox).
+  // Hard denials stay deny (ADR 0002 Phase 31 amendment).
+  "trusted-local": {
+    filesystem: { read: "allow", write: "allow" },
+    shell: { run: "allow" },
     secrets: { access: "deny" },
     dependencies: { install: "ask" },
     network: { external: "ask" },
@@ -1130,9 +1157,9 @@ export function renderProfileYaml(profile: AiProfile): string {
     testing: profile.stack.testing,
   };
   doc["clients"] = {
-    tabnine: { enabled: profile.clients.tabnine.enabled },
-    codex: { enabled: profile.clients.codex.enabled },
-    claude: { enabled: profile.clients.claude.enabled },
+    tabnine: buildClientDoc(profile.clients.tabnine),
+    codex: buildClientDoc(profile.clients.codex),
+    claude: buildClientDoc(profile.clients.claude),
   };
 
   if (profile.safety !== undefined) {
@@ -1373,6 +1400,16 @@ function buildSubagentPolicyDoc(
     }
   }
 
+  return doc;
+}
+
+function buildClientDoc(client: AiProfileClient): Record<string, unknown> {
+  const doc: Record<string, unknown> = { enabled: client.enabled };
+  // Emit permissionPosture immediately after enabled when present so
+  // round-trip fidelity holds; profiles without it stay byte-identical.
+  if (client.permissionPosture !== undefined) {
+    doc["permissionPosture"] = client.permissionPosture;
+  }
   return doc;
 }
 
