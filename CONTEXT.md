@@ -87,3 +87,14 @@ The normalized behavior inferred from declared intent and every inspected permis
 
 **Mapping status**
 The closed client-capability result describing whether a posture is automatic, personally activated, manual, unsupported, policy-blocked, or unknown. _Avoid:_ "support boolean".
+
+**Configuration source**
+The exact inspected file or client scope that supplies a known effective setting. _Avoid:_ attributing merged behavior to a lower-precedence generated file.
+
+## Repository Update
+
+**User-owned future configuration**
+Valid configuration for a capability the canonical profile cannot yet represent, preserved without management or synchronization claims. _Avoid:_ "generated drift", "automatically adopted config".
+
+**Editable adoption review**
+The interactive capability review where a preselected current/proposed set is explained and may be changed before preview or write consent. _Avoid:_ "adopt confirmation", "bulk accept".

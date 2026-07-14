@@ -13,7 +13,8 @@ mappings, configure flow, dispatcher, Doctor, and migration behavior agree.
 
 Run the packaged `npx agent-profile` and explicit configure journeys against
 new, aligned, drifted, incomplete-activation, legacy Autonomous, unsupported,
-and unknown-policy repositories; finalize docs and compatibility evidence.
+unknown-policy, and client-local-override repositories; finalize docs and
+compatibility evidence.
 
 ## Non-goals
 
@@ -26,6 +27,9 @@ and unknown-policy repositories; finalize docs and compatibility evidence.
 - All Phase-31 acceptance criteria 1-14 pass in the final spec-to-test matrix.
 - Root/package README and CLI docs lead with interactive bare usage and explain
   explicit configure/automation boundaries.
+- The published local-override journey names the contributing source, explains
+  the effective behavior and unsynchronized clients, and offers
+  repair/adopt/review/leave without automatic mutation.
 - Published-package dry-run contains every required spec/schema/runtime asset
   and no local activation file.
 

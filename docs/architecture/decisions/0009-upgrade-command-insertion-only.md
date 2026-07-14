@@ -4,6 +4,10 @@
 
 Accepted 2026-07-08 with phase-27/002 spec approval.
 
+Amended 2026-07-14 with phase-32/001 approval: insertion-only ownership stands,
+while interactive adopt-all becomes preselection into an editable explained
+review rather than final acceptance.
+
 ## Context
 
 Existing profiles cannot reach capabilities added after their creation
@@ -47,3 +51,21 @@ Negative:
 - A fourth top-level command until the phase-27/004 dispatcher absorbs
   discoverability.
 - Insertion-edge-case refusals push occasional users to manual edits.
+
+## 2026-07-14 Phase 32 Accepted Amendment
+
+The insertion-only decision stands. Interactive `Adopt all available` and
+`Customize` now feed one editable adoption review. Adopt-all preselects every
+offered capability; it does not accept or write them. The review explains each
+current/proposed value, enabled/disabled consequence, affected and unaffected
+clients, generated artifact families, prerequisites, and material tradeoffs.
+
+After editing, the user sees the exact insertion preview and receives a
+separate default-No profile-write confirmation. Compile remains a different
+mutation with a different confirmation. The scripted
+`--write --adopt-recommended` spelling and behavior remain the explicit fast
+path.
+
+This amendment preserves targeted comment-safe insertion while correcting the
+interactive consent model: choosing a strategy narrows the review; it is not
+itself informed acceptance of every setting.

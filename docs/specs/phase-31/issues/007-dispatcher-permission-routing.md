@@ -17,6 +17,10 @@ hard permission mismatch, incomplete activation, or legacy migration according
 to the agreed priority; routes to the same configure flow; and participates in
 the existing consent-gated follow-up chain.
 
+A client-local permission override that differs from declared intent is one of
+those mismatch states. The routed configure flow, not the dispatcher, explains
+its exact source, consequences, cross-client scope, and choices.
+
 ## Non-goals
 
 - Reimplementing configure or doctor detection.
