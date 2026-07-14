@@ -146,7 +146,7 @@ incorrectly.
 ## Preview Status
 
 This repository is in preview / early access. The CLI is published as
-`agent-profile@0.4.4`, but the schema, generated files, and command details may
+`agent-profile@0.5.0`, but the schema, generated files, and command details may
 change before `1.0`.
 
 Feedback is especially useful on:

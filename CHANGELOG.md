@@ -4,6 +4,8 @@ All notable changes to Agent Profile Compiler will be documented in this file.
 
 ## Unreleased
 
+## 0.5.0 — 2026-07-14
+
 - Improve interactive first-contact guidance: the bare dispatcher now offers
   one consent-gated next action after each completed routed command, doctor
   groups repeated actionable findings into recommendations, the upgrade menu
