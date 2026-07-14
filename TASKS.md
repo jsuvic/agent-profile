@@ -106,3 +106,23 @@ Spec 001 approved 2026-07-13 (ADRs 0015-0017 accepted).
 
 Recommended merge order: I1 -> (I2 and I3, mutually parallel-safe apart from
 shared schema/goldens) -> I4 and I5 -> I6. I4 is blocked until I3 is done.
+
+## phase-31: Permission Posture Lifecycle (`docs/specs/phase-31/001-permission-posture-lifecycle.md`)
+
+Spec and ADR amendments approved 2026-07-14. I1 is ready for the required
+RED-first TDD implementation cycle.
+
+| Id  | Task                                                     | State     | Brief                                                                                                                                     |
+| --- | -------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| I1  | Canonical permission posture plan and compatibility seam | ready     | [001-canonical-permission-posture-plan.md](docs/specs/phase-31/issues/001-canonical-permission-posture-plan.md)                           |
+| I2  | Capability-graded client mapping and shared generation   | sequenced | [002-client-mapping-and-shared-generation.md](docs/specs/phase-31/issues/002-client-mapping-and-shared-generation.md)                     |
+| I3  | Permission-only inspection and reconciliation model      | sequenced | [003-permission-inspection-and-reconciliation-model.md](docs/specs/phase-31/issues/003-permission-inspection-and-reconciliation-model.md) |
+| I4  | State-aware configure and atomic shared reconciliation   | sequenced | [004-configure-and-shared-reconciliation-flow.md](docs/specs/phase-31/issues/004-configure-and-shared-reconciliation-flow.md)             |
+| I5  | Personal activation and manual client guidance           | sequenced | [005-personal-activation-and-manual-guidance.md](docs/specs/phase-31/issues/005-personal-activation-and-manual-guidance.md)               |
+| I6  | Doctor posture severity and ownership-aware validation   | sequenced | [006-doctor-posture-severity-and-ownership.md](docs/specs/phase-31/issues/006-doctor-posture-severity-and-ownership.md)                   |
+| I7  | Dispatcher permission routing and legacy migration entry | sequenced | [007-dispatcher-permission-routing.md](docs/specs/phase-31/issues/007-dispatcher-permission-routing.md)                                   |
+| I8  | Published permission journey and final integration       | sequenced | [008-published-journey-and-final-integration.md](docs/specs/phase-31/issues/008-published-journey-and-final-integration.md)               |
+
+Dependency map: I1 -> (I2 and I3); I1+I2+I3 -> I4; I2+I4 -> I5;
+I1+I2+I3 -> I6; I4+I6 -> I7; I2-I7 -> I8. I2 and I3 are mutually
+parallel-safe after I1 apart from shared canonical types.

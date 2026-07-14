@@ -64,3 +64,26 @@ and referenced by support. _Avoid:_ "error string", "log message id".
 The fixed, verbatim never-log rule from ADR 0008; it takes priority over
 any project logging convention. _Avoid:_ "log hygiene", "sanitization
 guideline".
+
+## Permission Posture
+
+**Permission posture**
+The user-facing intended outcome for how independently an enabled agent client may act. _Avoid:_ "raw client permission mode".
+
+**Baseline posture**
+The repository-wide permission posture inherited by enabled clients unless a client adjustment is present. _Avoid:_ "global client setting".
+
+**Client adjustment**
+A client-specific posture choice that replaces the baseline defaults for that client while explicit granular permissions and hard denials remain authoritative. _Avoid:_ "client escape hatch".
+
+**Personal activation**
+The separately confirmed developer-local step that enables a declared high-autonomy posture through a documented client surface. _Avoid:_ "automatic approval grant".
+
+**Hard safety denial**
+A restriction for secrets, source upload, production access, or telemetry that no posture or client adjustment may weaken. _Avoid:_ "recommended deny".
+
+**Effective posture**
+The normalized behavior inferred from declared intent and every inspected permission scope, with unobserved scopes recorded as unknown. _Avoid:_ "guaranteed runtime mode".
+
+**Mapping status**
+The closed client-capability result describing whether a posture is automatic, personally activated, manual, unsupported, policy-blocked, or unknown. _Avoid:_ "support boolean".

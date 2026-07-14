@@ -111,3 +111,31 @@ from the selected safety preset.
 - Unknown properties fail validation instead of being silently ignored.
 - Unsupported schema versions fail explicitly until migration support exists.
 - Validation must be local-only and must not resolve remote `$ref` values.
+
+## 2026-07-14 Phase 31 Accepted Amendment
+
+Accepted with the Phase 31 permission-posture lifecycle spec on 2026-07-14.
+
+Schema v1 will add `trusted-local` to the accepted `safety.mode` values while
+preserving `autonomous` and `plan-only`. `autonomous` is retained as a legacy,
+sandbox-required input; new interactive setup offers Guarded, Balanced, and
+Trusted local as the normal development choices and keeps Plan-only available
+for audits.
+
+Each existing client object may gain one optional neutral posture adjustment.
+The Phase 31 I1 RED tests must freeze the exact key name and closed enum before
+implementation. The proposed shape is:
+
+```yaml
+clients:
+  claude:
+    enabled: true
+    permissionPosture: trusted-local
+```
+
+The adjustment vocabulary is client-neutral and must not contain raw client
+setting strings. Omission means inherit the baseline. Explicit global granular
+permissions and hard denials remain authoritative over client posture defaults.
+
+Profiles omitting the additive fields and legacy Autonomous profiles must
+retain byte-identical generated behavior until explicit interactive adoption.

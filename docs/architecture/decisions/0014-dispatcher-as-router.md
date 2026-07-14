@@ -76,3 +76,19 @@ Negative:
   render before the menu appears.
 - The deferred `--state --json` will resurface if editors/CI want
   machine-readable state.
+
+## 2026-07-14 Phase 31 Accepted Amendment
+
+The router decision stands. Phase 31 adds one new routed action,
+`Change agent control`, backed by the explicit `agent-profile configure` flow.
+The action is always visible on interactive bare invocation and is preselected
+only when shared posture is missing, a permission safety mismatch exists,
+personal activation is incomplete, or a legacy Autonomous migration is
+available at the applicable priority.
+
+The dispatcher imports canonical posture, inspection, doctor, and configure
+state. It must not copy their logic. Existing unrelated priority rows and the
+consent-gated follow-up chain remain intact.
+
+Non-TTY, piped, and CI bare invocation remains byte-identical help and runs no
+detection, permission inspection, or presentation loading.

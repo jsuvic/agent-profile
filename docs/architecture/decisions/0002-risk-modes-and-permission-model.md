@@ -223,3 +223,53 @@ Revisit this decision if:
 - `autonomous` mode needs stronger sandbox attestation
 - additional permission dimensions are needed beyond filesystem, shell,
   dependencies, network, secrets, and production access
+
+## 2026-07-14 Phase 31 Accepted Amendment
+
+Accepted with `docs/specs/phase-31/001-permission-posture-lifecycle.md` on
+2026-07-14.
+
+The normal development posture vocabulary becomes:
+
+- `guarded`
+- `balanced`
+- `trusted-local`
+
+`plan-only` remains a supported audit/review mode outside the normal
+development picker. Existing `autonomous` remains a valid legacy,
+sandbox-required mode with byte-identical behavior until the user explicitly
+migrates it; new setup does not offer Autonomous as a normal choice.
+
+Trusted local expresses high autonomy inside a developer-trusted repository.
+It preserves hard denial of secret access, source upload, production access,
+and telemetry. It does not imply a sandbox requirement, but
+`requiresSandbox: true` may request a sandboxed target mapping and targets must
+report when that mapping is partial or unsupported.
+
+The permission derivation order is amended to:
+
+1. Resolve the baseline posture preset.
+2. Replace that baseline for a client when an explicit client adjustment is
+   present.
+3. Apply explicit global granular permission overrides.
+4. Preserve hard denials.
+5. Produce one immutable client-neutral posture plan consumed by compiler,
+   doctor, configure, dispatcher, and UI.
+
+The previous blanket rule that every looser explicit override must be reported
+is narrowed: a looser posture explicitly declared through the approved Trusted
+local contract is intentional, not drift. Behavior looser than the resolved
+declared plan remains an error.
+
+Shared intent and personal activation are separate (ADR 0019). Generated shared
+settings must be compatible with declared intent, while developer-local high
+autonomy requires a second explicit confirmation through a documented client
+surface.
+
+Doctor severity becomes ownership-aware and risk-asymmetric:
+
+- behavior looser than declared or a weakened hard denial is an error;
+- behavior stricter than declared or incomplete activation is a warning;
+- unknown effective state is a warning and cannot summarize as aligned;
+- a documented manual/unsupported target limitation is informational; and
+- intentional personal activation matching declared intent passes.
