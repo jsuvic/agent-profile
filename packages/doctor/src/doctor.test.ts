@@ -297,6 +297,33 @@ permissions:
   );
 });
 
+test("doctor treats a per-client trusted-local Claude adjustment as intentional on a guarded baseline", async () => {
+  // Phase 31 I2: a guarded baseline with clients.claude.permissionPosture:
+  // trusted-local makes the compiler emit trusted-local Claude settings (which
+  // intentionally omit the bypass/auto guards). Doctor must evaluate the Claude
+  // config against the resolved Claude posture, not the global baseline, so this
+  // valid per-client adoption path is not hard-errored as guarded drift.
+  const rootDir = await createGeneratedProject({
+    extraYaml: `
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+    permissionPosture: trusted-local
+`,
+  });
+  const result = await runDoctor({ rootDir });
+
+  assert.equal(
+    result.issues.some((issue) => issue.code === "LINT-PERM-004"),
+    false,
+    JSON.stringify(result.issues, null, 2),
+  );
+});
+
 test("doctor reports Codex and Claude project config looser than effective permissions", async () => {
   const codexRoot = await createGeneratedProject();
   await writeFile(
