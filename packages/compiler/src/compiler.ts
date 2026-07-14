@@ -10,6 +10,7 @@ import {
   getSelectedAdvisoryHookRoles,
   getSubagentDefaults,
   getSubagentTemplateRefs,
+  resolvePermissionPosture,
   REVIEWER_DEFINITIONS,
   SUBAGENT_TEMPLATE_NAMES,
   type AiProfile,
@@ -74,6 +75,7 @@ import {
   resolveSelectedSkills,
   type SkillId,
 } from "./skill-selection.js";
+import { buildClientMappingReport } from "./permission-mapping.js";
 
 type TemplateSource = {
   id: string;
@@ -455,6 +457,11 @@ export function compileProfile(request: CompileRequest): CompileResult {
       .filter((template) => requiredTemplateIds.has(template.id))
       .sort(compareTemplates),
     ...(notes.length > 0 ? { notes } : {}),
+    // Phase 31 (I2): additive capability-graded client mapping metadata derived
+    // from the canonical posture plan (not a generated file).
+    mappingReport: buildClientMappingReport(
+      resolvePermissionPosture(request.profile),
+    ),
   };
 }
 
@@ -2150,7 +2157,10 @@ function hasAnyStack(
 }
 
 function renderClaudeSettingsJson(profile?: AiProfile): string {
-  const base = `{
+  // Restrictive baseline shared Claude settings for guarded/balanced/plan-only/
+  // autonomous and for omitted profiles (byte-frozen). Every existing fixture is
+  // guarded, so these bytes must never change.
+  const baselineSettings = `{
   "permissions": {
     "defaultMode": "default",
     "allow": [],
@@ -2170,6 +2180,40 @@ function renderClaudeSettingsJson(profile?: AiProfile): string {
     "autoAllowBashIfSandboxed": false
   }
 }`;
+
+  // Phase 31 (I2, ADR 0019): trusted-local shared Claude settings. This variant
+  // removes contradictory routine prompt requirements (empty `ask`,
+  // `defaultMode: acceptEdits`) and drops `disableBypassPermissionsMode`/
+  // `disableAutoMode` (which would block the separate personal trusted-local
+  // activation per ADR 0019), while PRESERVING the hard secret denials.
+  // `sandbox.enabled` is false because trusted-local carries requiresSandbox=false.
+  const trustedLocalSettings = `{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [],
+    "ask": [],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./**/secrets/**)"
+    ]
+  },
+  "sandbox": {
+    "enabled": false,
+    "failIfUnavailable": false,
+    "autoAllowBashIfSandboxed": false
+  }
+}`;
+
+  // Resolve the Claude client's posture from the canonical plan so shared
+  // generation never diverges from the resolver. Absent a profile (template
+  // source hashing), keep the restrictive baseline bytes.
+  const claudePosture = profile
+    ? resolvePermissionPosture(profile).clients.claude.posture
+    : undefined;
+  const base =
+    claudePosture === "trusted-local" ? trustedLocalSettings : baselineSettings;
 
   const roles = profile ? getSelectedAdvisoryHookRoles(profile) : [];
 

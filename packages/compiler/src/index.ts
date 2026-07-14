@@ -53,6 +53,17 @@ export {
   renderClaudeMd,
 } from "./compiler.js";
 export {
+  buildClientMappingReport,
+  CLIENT_MAPPING_VERSION,
+} from "./permission-mapping.js";
+export type {
+  ClientMappingClientId,
+  ClientMappingReport,
+  ClientMappingRow,
+  MappingStatus,
+  MappingSupportGrade,
+} from "./permission-mapping.js";
+export {
   resolveRoleMapping,
   SUBAGENT_MAPPING_VERSION,
 } from "./subagent-mapping.js";

@@ -3,6 +3,8 @@
 
 import type { AiProfile } from "@agent-profile/core";
 
+import type { ClientMappingReport } from "./permission-mapping.js";
+
 export type CompilerTargetId =
   | "agents-md"
   | "lockfile"
@@ -86,6 +88,9 @@ export type CompileResult =
       files: GeneratedFile[];
       templates: TemplateDescriptor[];
       notes?: CompileNote[];
+      // Phase 31 (I2): additive, versioned capability-graded client mapping
+      // metadata derived from the canonical posture plan. Not a generated file.
+      mappingReport?: ClientMappingReport;
     }
   | {
       ok: false;

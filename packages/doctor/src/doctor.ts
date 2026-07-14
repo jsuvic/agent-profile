@@ -1483,6 +1483,7 @@ async function checkPermissionPosture(
     profile,
     effective,
     autonomousSandbox,
+    intentionalHighAutonomy,
     issues,
   );
 
@@ -1508,13 +1509,23 @@ async function checkProjectPermissionConfig(
   profile: AiProfile,
   effective: AiProfileEffectivePermissions,
   autonomousSandbox: boolean,
+  intentionalHighAutonomy: boolean,
   issues: DoctorIssue[],
 ): Promise<boolean> {
+  // Codex keeps the narrower `autonomousSandbox` exemption (not
+  // `intentionalHighAutonomy`): trusted-local has no safe ignored project-local
+  // Codex activation surface (ADR 0019), so it is manual/session/profile work
+  // and must not loosen Codex config checks. Do not unify these two flags.
   const codexSandbox = profile.clients.codex.enabled
     ? await checkCodexConfig(rootDir, effective, autonomousSandbox, issues)
     : false;
   const claudeSandbox = profile.clients.claude.enabled
-    ? await checkClaudeConfig(rootDir, effective, autonomousSandbox, issues)
+    ? await checkClaudeConfig(
+        rootDir,
+        effective,
+        intentionalHighAutonomy,
+        issues,
+      )
     : false;
 
   return codexSandbox || claudeSandbox;
@@ -1637,7 +1648,12 @@ async function checkCodexConfig(
 async function checkClaudeConfig(
   rootDir: string,
   effective: AiProfileEffectivePermissions,
-  autonomousSandbox: boolean,
+  // Trusted-local shared settings intentionally omit the bypass/auto guards so
+  // a separate personal activation can take effect (ADR 0019). Like
+  // autonomous-sandbox, that intentional high autonomy is exempt from the
+  // LINT-PERM-004 auto/bypass guards below. Interim companion to the Phase 31 I1
+  // doctor exemption; full ownership-aware posture severity is Phase 31 I6.
+  intentionalHighAutonomy: boolean,
   issues: DoctorIssue[],
 ): Promise<boolean> {
   const project = await readJsonObject(
@@ -1678,7 +1694,7 @@ async function checkClaudeConfig(
     );
   }
 
-  if (defaultMode === "auto" && !autonomousSandbox) {
+  if (defaultMode === "auto" && !intentionalHighAutonomy) {
     issues.push(
       permissionIssue(
         "LINT-PERM-004",
@@ -1692,7 +1708,7 @@ async function checkClaudeConfig(
     );
   }
 
-  if (!autonomousSandbox && disableBypass !== "disable") {
+  if (!intentionalHighAutonomy && disableBypass !== "disable") {
     issues.push(
       permissionIssue(
         "LINT-PERM-004",
@@ -1706,7 +1722,7 @@ async function checkClaudeConfig(
     );
   }
 
-  if (!autonomousSandbox && disableAuto !== "disable") {
+  if (!intentionalHighAutonomy && disableAuto !== "disable") {
     issues.push(
       permissionIssue(
         "LINT-PERM-004",

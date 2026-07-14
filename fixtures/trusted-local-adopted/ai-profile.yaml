@@ -1,0 +1,25 @@
+version: 1
+profile:
+  name: trusted-local-adopted
+  description: Fixture exercising Phase 31 trusted-local shared generation for Claude, Codex, and Tabnine.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: trusted-local
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
