@@ -114,7 +114,7 @@ RED-first TDD implementation cycle.
 
 | Id  | Task                                                     | State     | Brief                                                                                                                                     |
 | --- | -------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| I1  | Canonical permission posture plan and compatibility seam | ready     | [001-canonical-permission-posture-plan.md](docs/specs/phase-31/issues/001-canonical-permission-posture-plan.md)                           |
+| I1  | Canonical permission posture plan and compatibility seam | done      | [001-canonical-permission-posture-plan.md](docs/specs/phase-31/issues/001-canonical-permission-posture-plan.md)                           |
 | I2  | Capability-graded client mapping and shared generation   | sequenced | [002-client-mapping-and-shared-generation.md](docs/specs/phase-31/issues/002-client-mapping-and-shared-generation.md)                     |
 | I3  | Permission-only inspection and reconciliation model      | sequenced | [003-permission-inspection-and-reconciliation-model.md](docs/specs/phase-31/issues/003-permission-inspection-and-reconciliation-model.md) |
 | I4  | State-aware configure and atomic shared reconciliation   | sequenced | [004-configure-and-shared-reconciliation-flow.md](docs/specs/phase-31/issues/004-configure-and-shared-reconciliation-flow.md)             |

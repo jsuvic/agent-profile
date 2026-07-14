@@ -262,6 +262,41 @@ safety:
   );
 });
 
+test("doctor treats trusted-local high autonomy as intentional, not dangerous auto-approval", async () => {
+  // Phase 31 I1 made `trusted-local` a schema-valid mode whose preset allows
+  // shell/writes with no sandbox requirement (ADR 0002 amendment: intentional,
+  // not drift). Doctor must not hard-error LINT-PERM-004 for it. Full
+  // ownership-aware posture severity lands in Phase 31 I6.
+  // No explicit shell/filesystem overrides, so the trusted-local preset drives
+  // shell.run=allow and filesystem.write=allow. The `permissions:` marker strips
+  // the minimal fixture's restrictive block; only the hard denials are retained.
+  const rootDir = await createGeneratedProject({
+    extraYaml: `
+safety:
+  mode: trusted-local
+  requiresSandbox: false
+permissions:
+  secrets:
+    access: deny
+  production:
+    access: deny
+`,
+  });
+  const result = await runDoctor({ rootDir });
+
+  assert.equal(
+    result.issues.some((issue) => issue.code === "LINT-PERM-004"),
+    false,
+    JSON.stringify(result.issues, null, 2),
+  );
+  // Hard denials are still enforced under trusted-local.
+  assert.equal(
+    result.issues.some((issue) => issue.code === "LINT-PERM-003"),
+    false,
+    JSON.stringify(result.issues, null, 2),
+  );
+});
+
 test("doctor reports Codex and Claude project config looser than effective permissions", async () => {
   const codexRoot = await createGeneratedProject();
   await writeFile(

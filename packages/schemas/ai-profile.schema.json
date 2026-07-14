@@ -223,6 +223,9 @@
       "properties": {
         "enabled": {
           "type": "boolean"
+        },
+        "permissionPosture": {
+          "$ref": "#/definitions/clientPermissionPosture"
         }
       }
     },
@@ -232,7 +235,11 @@
     },
     "safetyMode": {
       "type": "string",
-      "enum": ["guarded", "balanced", "autonomous", "plan-only"]
+      "enum": ["guarded", "balanced", "trusted-local", "autonomous", "plan-only"]
+    },
+    "clientPermissionPosture": {
+      "type": "string",
+      "enum": ["guarded", "balanced", "trusted-local", "plan-only", "inherit"]
     },
     "slug": {
       "type": "string",

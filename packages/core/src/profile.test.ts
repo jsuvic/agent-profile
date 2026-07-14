@@ -264,7 +264,7 @@ describe("profile schema validation", () => {
     assert.equal(result.ok, false);
     assert.deepEqual(getIssuePaths(result), ["/safety/mode"]);
     assert.deepEqual(getIssueExpectations(result), [
-      'one of ["guarded","balanced","autonomous","plan-only"]',
+      'one of ["guarded","balanced","trusted-local","autonomous","plan-only"]',
     ]);
   });
 

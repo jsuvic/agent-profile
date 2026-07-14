@@ -1382,6 +1382,14 @@ async function checkPermissionPosture(
   const preset = deriveEffectivePermissions({ safety: profile.safety });
   const autonomousSandbox =
     safety.mode === "autonomous" && safety.requiresSandbox;
+  // Trusted local declares intentional high autonomy (writes/shell allowed) with
+  // no sandbox requirement (ADR 0002 Phase 31 amendment: a posture declared
+  // through the approved Trusted local contract is intentional, not dangerous
+  // auto-approval). Exempt it from LINT-PERM-004 like autonomous-sandbox, while
+  // still enforcing hard denials (LINT-PERM-003) and reporting looser-than-preset
+  // overrides (LINT-PERM-005). Full ownership-aware posture severity is Phase 31 I6.
+  const intentionalHighAutonomy =
+    autonomousSandbox || safety.mode === "trusted-local";
 
   if (safety.mode === "guarded" && effective.shell.run === "allow") {
     issues.push(
@@ -1442,7 +1450,7 @@ async function checkPermissionPosture(
     );
   }
 
-  if (hasUnsafeAutoApproval(effective, safety.mode) && !autonomousSandbox) {
+  if (hasUnsafeAutoApproval(effective, safety.mode) && !intentionalHighAutonomy) {
     issues.push(
       permissionIssue(
         "LINT-PERM-004",
