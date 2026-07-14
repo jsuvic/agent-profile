@@ -171,3 +171,37 @@ Verified on 2026-07-02 against official documentation recorded in
 - Capability support remains separate from generation permission. Hooks,
   plugins, memory writes, executing loops, global writes, and auto-installation
   still require dedicated approved specs.
+
+## 2026-07-14 Phase 31 Accepted Amendment
+
+Permission-posture target mapping uses the existing capability-confidence rule
+and adds a user-facing mapping-status result:
+
+| Mapping status                 | Meaning                                                               |
+| ------------------------------ | --------------------------------------------------------------------- |
+| `configured-automatically`     | APC can generate the documented shared mapping.                       |
+| `personal-activation-required` | Shared intent is compatible; the developer must activate it locally.  |
+| `manual-setup-required`        | Official docs support the behavior only through a manual client flow. |
+| `unsupported`                  | Official behavior cannot represent the requested posture.             |
+| `blocked-by-policy`            | A visible managed/client policy prevents the posture.                 |
+| `unknown`                      | Effective state or support cannot be verified.                        |
+
+The mapping catalog records official source URL, verification date, support
+grade, and mapping version. Unknown/manual clients never prevent better-supported
+clients from using their faithful mappings, but APC must not claim all targets
+behave identically.
+
+Official evidence checked for the Phase 31 candidate on 2026-07-14:
+
+- Claude permissions and settings: `https://code.claude.com/docs/en/permissions`
+  and `https://code.claude.com/docs/en/settings`.
+- Codex approvals/configuration: current Codex manual plus
+  `https://learn.chatgpt.com/docs/agent-approvals-security` and
+  `https://learn.chatgpt.com/docs/config-file/config-basic`.
+- Tabnine Agent/CLI permissions:
+  `https://docs.tabnine.com/main/getting-started/tabnine-agent/agent-settings`
+  and
+  `https://docs.tabnine.com/main/getting-started/tabnine-cli/features/built-in-tools`.
+
+Implementation must reverify these sources before emitting or editing native
+client configuration.
