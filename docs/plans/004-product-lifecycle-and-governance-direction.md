@@ -10,7 +10,7 @@ The next direction is:
 2. add a repo-local active-work and artifact-navigation lifecycle;
 3. finish update, recovery, cleanup, and uninstall operations around lockfile ownership;
 4. evolve MCP from advisory recommendations to deterministic config-only declarations;
-5. finish read-only UI evidence surfaces and expose client parity honestly;
+5. harden and document the implemented local UI evidence surfaces, then expose client parity honestly;
 6. improve distribution through demos, examples, and generated capability metadata.
 
 Provider presets, authentication, credential brokerage, model routing, usage telemetry, automatic package installation, cloud memory, and default user-global writes are not part of this direction.
@@ -57,7 +57,7 @@ This is stronger than “configuration compiler” because it explains the user 
 3. Durable SDD artifacts exist without a simple active-task/resume/history experience.
 4. Update, restore, cleanup, and uninstall are not complete product lifecycles.
 5. MCP recommendations cannot yet become reviewable client configuration.
-6. The local UI does not yet include the approved artifact and doctor evidence views.
+6. The local UI implementation has outpaced its baseline documentation: artifact and doctor views exist, but their route contracts, conformance evidence, and user-facing description need reconciliation.
 7. Subagent benefits, limits, permissions, cost, and client parity are underexplained.
 8. Target documentation and marketing do not lead with lockfile/drift/trust advantages.
 9. UI/help/docs contain state drift, including the “read-only UI” label despite explicit profile/migration writes.
@@ -297,18 +297,18 @@ Near term means the next one or two coherent releases and avoids schema destabil
 - **Security:** never auto-invoke a model or bypass `human-gate`.
 - **Acceptance outcome:** after every stage, the user sees why it is complete and the only valid next actions.
 
-### N3 — Finish read-only evidence UI and correct UI contract (`P1`, `M`)
+### N3 — Harden implemented evidence UI and correct UI contract (`P1`, `M`)
 
-- **Problem:** approved artifact/doctor viewers are absent and CLI help mislabels existing write capability.
+- **Problem:** `/artifacts` and `/doctor` are implemented and linked in the local UI, while roadmap/spec status and CLI help no longer describe the complete current surface accurately.
 - **Benefit:** governance becomes visible without opening many files.
-- **Behavior:** implement approved `/artifacts` and `/doctor` read-only views or formally rescope them; correct `ui` help and document write routes.
-- **Why now:** closes existing approved specs and resolves trust-facing drift.
-- **Prerequisites:** revalidate Phase 6 specs against current UI/server safety.
+- **Behavior:** treat the existing `/artifacts` and `/doctor` routes as the implementation baseline; verify them against the approved viewer contracts, harden route-level loading/error/navigation tests where evidence is weak, correct `ui` help, and document every read-only and writable route.
+- **Why now:** resolves trust-facing documentation drift without scheduling duplicate route implementation.
+- **Prerequisites:** reconcile Phase 6 spec status with the current UI/server implementation and Phase 8/16 write routes.
 - **Affected packages:** `apps/web`, `apps/cli`, docs.
-- **Likely specs:** Phase 6 amendments if route/API contracts changed.
+- **Likely specs:** Phase 6 conformance/status amendment only where current behavior differs from the approved contracts; UI help/write-surface contract.
 - **Doctor:** reuse current JSON findings; no new mutation.
 - **Security:** loopback/root containment, CSRF for existing writes, no generic file endpoint.
-- **Acceptance outcome:** users can inspect planned/generated artifacts and doctor findings in UI; documentation accurately states every writable surface.
+- **Acceptance outcome:** existing artifact and doctor routes have focused conformance evidence, remain reachable through navigation, and documentation accurately states every read-only and writable surface.
 
 ### N4 — Plain-language ownership and recovery plan UX (`P0`, `M`)
 
@@ -535,7 +535,7 @@ Ordered by dependency:
 
 1. **Outcome-oriented capability descriptors and init packs** — approved behavior/copy/JSON contract.
 2. **Workflow lifecycle and next-action model** — stage derivation without new durable state.
-3. **Local UI evidence viewers and UI write-surface truth** — reconcile Phase 6/8/16.
+3. **Local UI evidence-route conformance and UI write-surface truth** — harden and document the implemented Phase 6 routes while reconciling Phase 8/16 writes.
 4. **Ownership/conflict language conformance** — preserve exact machine contracts.
 5. **Active-work/artifact lifecycle ADR and spec** — after lifecycle UX validation.
 6. **Owned remove and orphan-cleanup plan** — lockfile v2 evidence first.
@@ -593,7 +593,7 @@ Do not start MCP target adapters before the neutral trust/schema contract. Do no
 | Client formats drift                           | Broken output or false parity  | Versioned adapters, official-doc research, goldens, known-as-of metadata, unsupported notes. |
 | More skills increase cognitive load            | Lower adoption                 | Outcome packs, progressive disclosure, fewer defaults, lifecycle map.                        |
 | Subagents increase cost and permissions        | Unexpected resource/risk       | Off by default, visible limits, inherited-permission warning, bounded roles.                 |
-| UI expands write boundary                      | Local security regression      | Finish read-only evidence views first; constrained routes; CSRF/root/path tests.             |
+| UI expands write boundary                      | Local security regression      | Preserve read-only evidence routes; constrain write routes; require CSRF/root/path tests.    |
 | Adoption work makes unsupported claims         | Trust/marketing debt           | Generate parity docs from descriptors; final review against implementation tests.            |
 
 ## Success criteria
