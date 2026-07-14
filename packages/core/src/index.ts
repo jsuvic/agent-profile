@@ -43,6 +43,26 @@ export type {
   PermissionPostureLegacyStatus,
   PermissionPosturePlan,
 } from "./permission-posture.js";
+export { inspectPermissionPosture } from "./permission-inspection.js";
+export type {
+  ClientPermissionEvidence,
+  ConsentedPermissionSource,
+  ConsentedPermissionSourceId,
+  InspectionConfidence,
+  InspectionConsent,
+  PermissionDivergence,
+  PermissionEvidence,
+  PermissionEvidenceField,
+  PermissionInspectionResult,
+  PermissionSourceRef,
+  PermissionSourceScope,
+  PosturePosition,
+  ReconciliationAction,
+  ReconciliationOption,
+  ReconciliationOptions,
+  UnknownScope,
+  UnknownScopeNote,
+} from "./permission-inspection.js";
 export { containsSecretLikeLiteral } from "./security.js";
 export { REVIEWER_DEFINITIONS } from "./reviewer-definitions.js";
 export type { ReviewerDefinition } from "./reviewer-definitions.js";
