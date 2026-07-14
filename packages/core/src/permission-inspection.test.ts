@@ -6,11 +6,14 @@ import childProcess from "node:child_process";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
+import { syncBuiltinESMExports } from "node:module";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import fsPromises, {
+  lstat as namedLstat,
   mkdtemp,
   mkdir,
+  readFile as namedReadFile,
   rm,
   symlink,
   writeFile,
@@ -50,6 +53,7 @@ async function makeRoot(): Promise<string> {
 function baseProfile(
   overrides: {
     safety?: AiProfile["safety"];
+    permissions?: AiProfile["permissions"];
     clients?: Partial<{
       tabnine: {
         enabled: boolean;
@@ -81,6 +85,9 @@ function baseProfile(
     workflow: { sdd: true, tdd: true, finalReview: true },
   };
   if (overrides.safety !== undefined) profile.safety = overrides.safety;
+  if (overrides.permissions !== undefined) {
+    profile.permissions = overrides.permissions;
+  }
   return profile;
 }
 
@@ -160,6 +167,12 @@ function claudeEvidence(result: PermissionInspectionResult) {
   return evidence;
 }
 
+function codexEvidence(result: PermissionInspectionResult) {
+  const evidence = result.evidence.clients.find((c) => c.client === "codex");
+  assert.ok(evidence, "expected codex evidence");
+  return evidence;
+}
+
 // ---------------------------------------------------------------------------
 // fs read sentinel (mirrors packages/scanner/src/scanner.test.ts)
 // ---------------------------------------------------------------------------
@@ -210,6 +223,7 @@ async function withFileReadSentinel<T>(
     record("readdir", args[0]);
     return (originalReaddir as (...a: unknown[]) => Promise<unknown>)(...args);
   };
+  syncBuiltinESMExports();
 
   try {
     return { result: await callback(), reads };
@@ -217,8 +231,27 @@ async function withFileReadSentinel<T>(
     patchableFs.readFile = originalReadFile as never;
     patchableFs.lstat = originalLstat as never;
     patchableFs.readdir = originalReaddir as never;
+    syncBuiltinESMExports();
   }
 }
+
+describe("inspectPermissionPosture — filesystem read sentinel", () => {
+  it("intercepts the named fs bindings used by production", async () => {
+    const root = await makeRoot();
+    const marker = path.join(root, "marker.txt");
+    await writeFile(marker, "marker");
+
+    const { reads } = await withFileReadSentinel(root, async () => {
+      await namedLstat(marker);
+      await namedReadFile(marker);
+    });
+
+    assert.deepEqual(reads, [
+      { operation: "lstat", relativePath: "marker.txt" },
+      { operation: "readFile", relativePath: "marker.txt" },
+    ]);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // tests
@@ -285,6 +318,37 @@ describe("inspectPermissionPosture — source precedence and attribution", () =>
       false,
     );
   });
+
+  it("reports a generated Bash grant against declared plan-only permissions", async () => {
+    const root = await makeRoot();
+    await writeClaudeGenerated(root, {
+      ...RESTRICTIVE_GENERATED,
+      permissions: {
+        ...RESTRICTIVE_GENERATED.permissions,
+        allow: ["Bash"],
+        ask: ["Edit", "Write", "WebFetch"],
+      },
+    });
+    const plan = resolvePermissionPosture(
+      baseProfile({ safety: { mode: "plan-only" } }),
+    );
+
+    const result = await inspectPermissionPosture(root, plan, CONSENT_OFF);
+
+    const field = claudeEvidence(result).fields.find(
+      (candidate) => candidate.dimension === "permissions.tool.Bash",
+    );
+    assert.ok(field, "expected generated Bash divergence");
+    assert.equal(field.declared, "deny");
+    assert.equal(field.effective, "allow");
+    assert.equal(field.position, "looser");
+    assert.equal(field.source?.scope, "generated-project");
+    assert.ok(
+      result.reconciliation.divergences.some(
+        (divergence) => divergence.dimension === "permissions.tool.Bash",
+      ),
+    );
+  });
 });
 
 describe("inspectPermissionPosture — scalar posture classification", () => {
@@ -308,6 +372,47 @@ describe("inspectPermissionPosture — scalar posture classification", () => {
     assert.equal(field.effective, "acceptEdits");
     assert.equal(field.position, "aligned");
   });
+
+  for (const [label, profile] of [
+    [
+      "sandbox remains required",
+      baseProfile({
+        safety: { mode: "trusted-local", requiresSandbox: true },
+      }),
+    ],
+    [
+      "filesystem writes are denied",
+      baseProfile({
+        safety: { mode: "trusted-local" },
+        permissions: { filesystem: { write: "deny" } },
+      }),
+    ],
+  ] as const) {
+    it(`expects restrictive Claude defaultMode when ${label}`, async () => {
+      const root = await makeRoot();
+      await writeClaudeGenerated(root, RESTRICTIVE_GENERATED);
+
+      const result = await inspectPermissionPosture(
+        root,
+        resolvePermissionPosture(profile),
+        CONSENT_OFF,
+      );
+
+      const field = claudeEvidence(result).fields.find(
+        (candidate) => candidate.dimension === "defaultMode",
+      );
+      assert.ok(field);
+      assert.equal(field.declared, "default");
+      assert.equal(field.effective, "default");
+      assert.equal(field.position, "aligned");
+      assert.equal(
+        result.reconciliation.divergences.some(
+          (divergence) => divergence.dimension === "defaultMode",
+        ),
+        false,
+      );
+    });
+  }
 
   it("guarded declared + local bypass is looser", async () => {
     const root = await makeRoot();
@@ -731,6 +836,34 @@ describe("inspectPermissionPosture — Codex source precedence", () => {
     assert.ok(
       result.evidence.unknownScopes.some(
         (note) => note.scope === "session" && note.client === "all",
+      ),
+    );
+  });
+
+  it("reports workspace-write as looser when declared writes are denied", async () => {
+    const root = await makeRoot();
+    await mkdir(path.join(root, ".codex"), { recursive: true });
+    await writeFile(
+      path.join(root, ".codex", "config.toml"),
+      'sandbox_mode = "workspace-write"\n',
+    );
+    const plan = resolvePermissionPosture(
+      baseProfile({ safety: { mode: "plan-only" } }),
+    );
+
+    const result = await inspectPermissionPosture(root, plan, CONSENT_OFF);
+
+    const field = codexEvidence(result).fields.find(
+      (candidate) => candidate.dimension === "filesystem.write",
+    );
+    assert.ok(field, "expected workspace-write divergence");
+    assert.equal(field.declared, "deny");
+    assert.equal(field.effective, "workspace-write");
+    assert.equal(field.position, "looser");
+    assert.equal(field.source?.scope, "codex-project");
+    assert.ok(
+      result.reconciliation.divergences.some(
+        (divergence) => divergence.client === "codex",
       ),
     );
   });

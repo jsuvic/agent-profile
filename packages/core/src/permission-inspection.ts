@@ -329,11 +329,16 @@ function defaultModeLevel(mode: string): number | null {
     : null;
 }
 
-// The declared/expected Claude defaultMode for a resolved posture. The compiler
-// emits `acceptEdits` only for trusted-local shared settings; every other
-// posture keeps the restrictive `default` baseline.
-function expectedDefaultMode(posture: PermissionPosture): string {
-  return posture === "trusted-local" ? "acceptEdits" : "default";
+// Keep declared inspection intent aligned with the compiler's shared Claude
+// mapping: trusted-local can emit `acceptEdits` only when the plan does not
+// require a sandbox and effective file writes are allowed.
+function expectedDefaultMode(plan: PermissionPosturePlan): string {
+  const claude = plan.clients.claude;
+  return claude.posture === "trusted-local" &&
+    !plan.requiresSandbox &&
+    claude.effectivePermissions.filesystem.write === "allow"
+    ? "acceptEdits"
+    : "default";
 }
 
 // Detected effective behavior that maps losslessly onto a canonical posture, or
@@ -364,6 +369,25 @@ function gradeInScope(
   if (settings.allow.includes(tool)) return "allow";
   if (settings.ask.includes(tool)) return "ask";
   return null;
+}
+
+function declaredToolGrade(
+  plan: PermissionPosturePlan,
+  tool: string,
+): ToolGrade {
+  const effective = plan.clients.claude.effectivePermissions;
+  switch (tool) {
+    case "Bash":
+      return effective.shell.run;
+    case "Edit":
+    case "Write":
+      return effective.filesystem.write;
+    case "WebFetch":
+      return effective.network.external;
+    default:
+      // extractClaudeSettings admits only KNOWN_CLAUDE_TOOLS.
+      return "ask";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +467,6 @@ function evaluateClaude(
   local: ClaudeSettings | null,
   user: ObservedClaudeSettings | null,
 ): MutableField[] {
-  const posture = declaredPlan.clients.claude.posture;
   const fields: MutableField[] = [];
 
   // --- defaultMode scalar (local overrides generated) ---
@@ -452,7 +475,7 @@ function evaluateClaude(
     fields.push({
       client: "claude",
       dimension: "defaultMode",
-      declared: expectedDefaultMode(posture),
+      declared: expectedDefaultMode(declaredPlan),
       effective: "unknown",
       position: "unknown",
       confidence: "unknown",
@@ -488,7 +511,7 @@ function evaluateClaude(
           : (user?.source ?? claudeRef("generated-project"));
     }
 
-    const expected = expectedDefaultMode(posture);
+    const expected = expectedDefaultMode(declaredPlan);
     const effectiveLevel = defaultModeLevel(effectiveMode);
     const position = positionFromLevels(
       effectiveLevel,
@@ -520,6 +543,9 @@ function evaluateClaude(
     deny: [],
   };
   const tools = new Set<string>([
+    ...gen.allow,
+    ...gen.ask,
+    ...gen.deny,
     ...loc.allow,
     ...loc.ask,
     ...loc.deny,
@@ -528,7 +554,7 @@ function evaluateClaude(
     ...usr.deny,
   ]);
   for (const tool of [...tools].sort()) {
-    const genGrade = gradeInScope(gen, tool) ?? "ask";
+    const declaredGrade = declaredToolGrade(declaredPlan, tool);
     let effGrade: ToolGrade;
     let source: PermissionSourceRef;
     if (
@@ -566,21 +592,21 @@ function evaluateClaude(
       source = candidates[0]!.source;
     }
 
-    if (effGrade === genGrade) continue;
+    if (effGrade === declaredGrade) continue;
     const position: PosturePosition =
-      GRADE_RANK[effGrade] > GRADE_RANK[genGrade] ? "looser" : "stricter";
+      GRADE_RANK[effGrade] > GRADE_RANK[declaredGrade] ? "looser" : "stricter";
     fields.push({
       client: "claude",
       dimension: `permissions.tool.${tool}`,
-      declared: genGrade,
+      declared: declaredGrade,
       effective: effGrade,
       position,
       confidence: "observed",
       source,
       consequence:
         position === "looser"
-          ? `The ${tool} tool is auto-approved (${effGrade}) instead of prompting (${genGrade}).`
-          : `The ${tool} tool is more restricted (${effGrade}) than the declared ${genGrade} rule.`,
+          ? `The ${tool} tool is looser (${effGrade}) than the declared ${declaredGrade} rule.`
+          : `The ${tool} tool is more restricted (${effGrade}) than the declared ${declaredGrade} rule.`,
       // Per-tool client-local rules have no clean canonical posture.
       adoptTarget: null,
     });
@@ -639,11 +665,23 @@ function evaluateCodex(
         "Codex runs in a read-only sandbox; workspace writes are blocked.",
       adoptTarget: null,
     });
+  } else if (sandboxMode === "workspace-write" && declaredWrite === "deny") {
+    fields.push({
+      client: "codex",
+      dimension: "filesystem.write",
+      declared: declaredWrite,
+      effective: "workspace-write",
+      position: "looser",
+      confidence: "observed",
+      source: contributing.source,
+      consequence:
+        "Codex workspace-write permits workspace changes despite the declared write denial.",
+      adoptTarget: null,
+    });
   }
-  // `workspace-write` and unrecognized/absent values are ambiguous between
-  // allow and ask under Codex approval policy → left unmapped (unknown) rather
-  // than guessed as aligned. No field is emitted, so the codex rollup stays
-  // unknown for the common generated case.
+  // `workspace-write` remains ambiguous between allow and ask unless the
+  // declared plan denies writes; in that case either native outcome is
+  // definitively looser. Other unrecognized/absent values remain unknown.
   return fields;
 }
 
