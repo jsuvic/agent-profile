@@ -13,6 +13,12 @@ import type {
 
 // ---------------------------------------------------------------------------
 // Public type contract (frozen for reviewers).
+//
+// Extended once since I3: Phase 31 I4 added `PermissionDivergence.adoptPosture`
+// so the configure flow can name what an adopt would write without re-deriving
+// posture inference of its own (spec Decision Rule 8). These types are outputs
+// built only by `inspectPermissionPosture`, so adding a required field breaks
+// no caller. Extend the same way — additively, with a reason — or not at all.
 // ---------------------------------------------------------------------------
 
 export type ConsentedPermissionSourceId =
@@ -104,6 +110,14 @@ export type PermissionDivergence = Readonly<{
   effective: string;
   source: PermissionSourceRef | null;
   direction: "looser" | "stricter" | "unknown";
+  /**
+   * The canonical posture the detected behavior maps onto without loss, or
+   * `null` when it is not losslessly representable. This is the single source of
+   * truth for what an `adopt` option would write, so consumers never re-derive
+   * posture inference of their own. It is non-null exactly when `options`
+   * contains an `adopt` action.
+   */
+  adoptPosture: PermissionPosture | null;
   options: readonly ReconciliationOption[];
 }>;
 
@@ -995,6 +1009,10 @@ export async function inspectPermissionPosture(
         effective: field.effective,
         source: field.source,
         direction,
+        // Only a looser divergence is adoptable; a stricter one is repaired or
+        // left, never written back into the profile as intent.
+        adoptPosture:
+          direction === "looser" ? (field.adoptTarget ?? null) : null,
         options: buildOptions(declaredPlan, field, direction),
       });
     }

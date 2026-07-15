@@ -1117,3 +1117,99 @@ describe("inspectPermissionPosture — determinism and immutability", () => {
     assert.equal(Object.isFrozen(a.reconciliation), true);
   });
 });
+
+describe("adoptPosture (Phase 31 I4 extension)", () => {
+  // `adoptPosture` exists so a consumer never has to re-derive "which canonical
+  // posture does this native value mean?" for itself. Its docstring states the
+  // invariant these tests hold to: non-null exactly when an adopt option is
+  // offered.
+
+  it("names the canonical posture for a representable looser divergence", async () => {
+    const root = await makeRoot();
+    await writeClaudeGenerated(root, RESTRICTIVE_GENERATED);
+    await writeClaudeLocal(root, {
+      permissions: { defaultMode: "acceptEdits" },
+    });
+
+    const result = await inspectPermissionPosture(
+      root,
+      planFor("guarded"),
+      CONSENT_OFF,
+    );
+
+    const divergence = result.reconciliation.divergences.find(
+      (item) => item.dimension === "defaultMode",
+    );
+    assert.ok(divergence);
+    assert.equal(divergence.direction, "looser");
+    assert.equal(divergence.adoptPosture, "trusted-local");
+  });
+
+  it("is null for an unrepresentable divergence", async () => {
+    const root = await makeRoot();
+    await writeClaudeGenerated(root, RESTRICTIVE_GENERATED);
+    // bypassPermissions has no lossless canonical posture.
+    await writeClaudeLocal(root, {
+      permissions: { defaultMode: "bypassPermissions" },
+    });
+
+    const result = await inspectPermissionPosture(
+      root,
+      planFor("guarded"),
+      CONSENT_OFF,
+    );
+
+    const divergence = result.reconciliation.divergences.find(
+      (item) => item.dimension === "defaultMode",
+    );
+    assert.ok(divergence);
+    assert.equal(divergence.adoptPosture, null);
+  });
+
+  it("is null for a stricter divergence, which is repaired rather than adopted", async () => {
+    const root = await makeRoot();
+    await writeClaudeGenerated(root, RESTRICTIVE_GENERATED);
+    await writeClaudeLocal(root, { permissions: { defaultMode: "plan" } });
+
+    const result = await inspectPermissionPosture(
+      root,
+      planFor("trusted-local"),
+      CONSENT_OFF,
+    );
+
+    for (const divergence of result.reconciliation.divergences) {
+      if (divergence.direction !== "stricter") continue;
+      assert.equal(divergence.adoptPosture, null);
+    }
+  });
+
+  it("is non-null exactly when an adopt option is offered", async () => {
+    // The invariant must hold across every fixture, not just the happy path:
+    // the two are computed from the same condition and must not drift apart.
+    const modes = ["acceptEdits", "bypassPermissions", "plan", "default"];
+    for (const declared of ["guarded", "trusted-local"] as const) {
+      for (const mode of modes) {
+        const root = await makeRoot();
+        await writeClaudeGenerated(root, RESTRICTIVE_GENERATED);
+        await writeClaudeLocal(root, { permissions: { defaultMode: mode } });
+
+        const result = await inspectPermissionPosture(
+          root,
+          planFor(declared),
+          CONSENT_OFF,
+        );
+
+        for (const divergence of result.reconciliation.divergences) {
+          const offersAdopt = divergence.options.some(
+            (option) => option.action === "adopt",
+          );
+          assert.equal(
+            divergence.adoptPosture !== null,
+            offersAdopt,
+            `${declared}/${mode} ${divergence.dimension}: adoptPosture and the adopt option disagree`,
+          );
+        }
+      }
+    }
+  });
+});
