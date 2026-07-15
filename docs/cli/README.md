@@ -127,11 +127,25 @@ offers:
 Each option names the clients it does _not_ synchronize: a local override to
 one client is never described as applying to the others.
 
+`repair` only rewrites files agent-profile generates. If the difference comes
+from a developer-local file such as `.claude/settings.local.json`, that file
+keeps overriding the generated one, so repair would change nothing and is
+refused rather than reported as fixed — change it in the client, or adopt it.
+
+`adopt` is all-or-nothing. If any part of the detected behavior has no lossless
+profile form, or the behavior resolves to more than one posture, the whole
+adoption is refused rather than partly applied.
+
 ### Legacy Autonomous
 
 An existing `safety.mode: autonomous` profile is never reinterpreted. Configure
 offers to keep it (byte-identical, sandbox-required), migrate explicitly to
 Trusted local, choose another posture, or cancel. No branch migrates silently.
+
+Migrating to Trusted local also clears `safety.requiresSandbox`, because the
+sandbox requirement is part of the Autonomous contract being left behind and
+Trusted local does not carry one. Both fields change in the same previewed
+transaction. Choosing any other posture leaves the flag as your profile had it.
 
 ### Refusals and recovery
 
@@ -140,6 +154,7 @@ Trusted local, choose another posture, or cancel. No branch migrates silently.
 | `profile-missing`            | run `agent-profile init` first                                                                                        |
 | `profile-invalid`            | run `agent-profile doctor` and fix the reported issues                                                                |
 | `adoption-not-representable` | the detected behavior has no lossless profile form; keep it as a manual client setting or pick a posture explicitly   |
+| `repair-not-applicable`      | every difference comes from a file agent-profile does not write; change it in the client itself, or adopt it          |
 | `profile-edit-refused`       | `ai-profile.yaml` has a structure configure will not edit safely; change `safety.mode` by hand                        |
 | `generated-outputs-refused`  | resolve the reported ownership/marker conflict, then re-run                                                           |
 | `compile-failed`             | the profile is valid but its artifacts could not be generated; run `agent-profile compile` to see why                 |

@@ -126,6 +126,7 @@ export type ConfigurePreview = Readonly<{
 
 export type ConfigureRefusalReason =
   | "adoption-not-representable"
+  | "repair-not-applicable"
   | "profile-edit-refused"
   | "generated-outputs-refused"
   | "shared-write-failed"
@@ -375,10 +376,43 @@ type Decision =
   | {
       kind: "apply";
       action: ConfigureAction;
-      /** Profile edit to perform, or null to regenerate from existing intent. */
-      edit: ProfileEdit | null;
+      /**
+       * Profile edits to perform, applied in order, or empty to regenerate from
+       * existing intent. A list because one posture choice can require more than
+       * one field to stay coherent: migrating off legacy Autonomous must clear
+       * `safety.requiresSandbox` alongside `safety.mode`, and both belong in the
+       * same previewed transaction.
+       */
+      edits: readonly ProfileEdit[];
       targetPosture: PermissionPosture | null;
     };
+
+/**
+ * Edits that migrate a legacy Autonomous profile to `posture`.
+ *
+ * Legacy Autonomous is sandbox-required, and that flag is part of the legacy
+ * contract rather than an independent narrowing choice. Trusted local carries
+ * no sandbox requirement (ADR 0002 as amended), and the compiler only emits the
+ * loosened trusted-local Claude settings when `requiresSandbox` is false. So
+ * changing `safety.mode` alone would report "migrated to trusted-local" while
+ * still generating the restrictive sandbox-required file — exactly the
+ * declared-versus-actual gap this phase exists to remove. Clear the flag in the
+ * same previewed transaction.
+ *
+ * Only for migration off legacy: elsewhere an explicit `requiresSandbox: true`
+ * is a deliberate narrower override the resolver preserves, and silently
+ * clearing it would loosen the profile behind the user's back.
+ */
+function legacyMigrationEdits(
+  plan: ReturnType<typeof resolvePermissionPosture>,
+  posture: PermissionPosture,
+): ProfileEdit[] {
+  const edits: ProfileEdit[] = [{ kind: "safety-mode", posture }];
+  if (posture === "trusted-local" && plan.requiresSandbox) {
+    edits.push({ kind: "requires-sandbox", value: false });
+  }
+  return edits;
+}
 
 /** Resolve the user's intent. Read-only: performs no writes. */
 async function decide(
@@ -409,7 +443,7 @@ async function decide(
         choice === "migrate-trusted-local"
           ? "migrate-trusted-local"
           : "select-posture",
-      edit: { kind: "safety-mode", posture },
+      edits: legacyMigrationEdits(plan, posture),
       targetPosture: posture,
     };
   }
@@ -434,10 +468,26 @@ async function decide(
     if (action === "repair") {
       // Repair rewrites the shared generated artifacts back to declared intent.
       // It never edits a developer-local file: that stays manually owned.
+      //
+      // So when every divergence comes from a source this flow does not write,
+      // regenerating shared files cannot change the effective behavior — the
+      // local file keeps overriding it. Reporting that as "applied" would tell
+      // the user the mismatch was fixed while it is still there. Refuse and name
+      // the manual step instead.
+      const repairable = inspection.reconciliation.divergences.filter(
+        (divergence) => isSharedRepairableSource(divergence),
+      );
+      if (repairable.length === 0) {
+        return {
+          kind: "refuse",
+          action: "repair",
+          refusal: buildRepairRefusal(inspection.reconciliation.divergences),
+        };
+      }
       return {
         kind: "apply",
         action: "repair",
-        edit: null,
+        edits: [],
         targetPosture: null,
       };
     }
@@ -482,11 +532,13 @@ async function decide(
     return {
       kind: "apply",
       action: "adopt",
-      edit: {
-        kind: "client-posture",
-        client: intent.client,
-        posture: intent.posture,
-      },
+      edits: [
+        {
+          kind: "client-posture",
+          client: intent.client,
+          posture: intent.posture,
+        },
+      ],
       targetPosture: intent.posture,
     };
   }
@@ -502,7 +554,10 @@ async function decide(
   return {
     kind: "apply",
     action: "select-posture",
-    edit: { kind: "safety-mode", posture },
+    // Only the mode. A non-legacy `requiresSandbox: true` is a deliberate
+    // narrower override the resolver preserves, so it is never cleared behind
+    // the user's back; the result is stricter than declared, never looser.
+    edits: [{ kind: "safety-mode", posture }],
     targetPosture: posture,
   };
 }
@@ -515,10 +570,12 @@ async function applyDecision(
   decision: Extract<Decision, { kind: "apply" }>,
   profileSource: string,
 ): Promise<ConfigureReport> {
-  // --- Profile edit (surgical byte splice, never a whole-document re-render).
+  // --- Profile edits (surgical byte splices, never a whole-document re-render).
+  // Applied in order against the running source. Any refusal aborts the whole
+  // set, so a multi-field change can never land half-applied.
   let nextProfileSource = profileSource;
-  if (decision.edit) {
-    const edited = editProfile(profileSource, decision.edit);
+  for (const edit of decision.edits) {
+    const edited = editProfile(nextProfileSource, edit);
     if (!edited.ok) {
       return finish(prompts, {
         ...base,
@@ -529,7 +586,7 @@ async function applyDecision(
           reason: "profile-edit-refused",
           guidance: [
             `ai-profile.yaml could not be edited safely (${edited.reason}).`,
-            `Set ${describeEdit(decision.edit)} manually and re-run \`agent-profile compile --write\`.`,
+            `Set ${describeEdit(edit)} manually and re-run \`agent-profile compile --write\`.`,
           ],
         },
       });
@@ -553,7 +610,11 @@ async function applyDecision(
         reason: "profile-invalid",
         guidance: [
           "The edited ai-profile.yaml would not validate, so nothing was written.",
-          `Set ${decision.edit ? describeEdit(decision.edit) : "the posture"} manually instead.`,
+          `Set ${
+            decision.edits.length > 0
+              ? decision.edits.map(describeEdit).join(" and ")
+              : "the posture"
+          } manually instead.`,
         ],
       },
     });
@@ -621,30 +682,22 @@ async function applyDecision(
   const needsActivation = nextMapping.rows.some(
     (row) => row.status === "personal-activation-required",
   );
-  const gitignorePath = path.join(rootDir, ".gitignore");
-  // A symlinked .gitignore is never read or offered: the atomic writer would
-  // refuse it at commit time anyway, so offering it would promise a change that
-  // cannot happen. The rest of the flow proceeds without the prerequisite.
-  let gitignoreNext: string | undefined;
-  let gitignoreReadable = true;
-  try {
-    gitignoreNext = planGitignoreAppend(await readOptionalUtf8(gitignorePath), [
-      PERSONAL_ACTIVATION_IGNORE_LINE,
-    ]);
-  } catch (error) {
-    if (!(error instanceof SymlinkRefusedError)) throw error;
-    gitignoreReadable = false;
-  }
-
+  // Only touched when the chosen posture actually needs a later personal
+  // activation. Postures like guarded or balanced never write .gitignore, so an
+  // unreadable or symlinked one must not read, offer, or fail here — an
+  // unrelated .gitignore problem cannot block a shared posture change.
   let gitignoreSelected = false;
-  if (needsActivation && gitignoreReadable && gitignoreNext !== undefined) {
-    gitignoreSelected = await prompts.confirmIgnorePrerequisite({
-      path: ".gitignore",
-      line: PERSONAL_ACTIVATION_IGNORE_LINE,
-      default: false,
-    });
-    if (gitignoreSelected) {
-      writes.push({ path: ".gitignore", bytes: gitignoreNext });
+  if (needsActivation) {
+    const gitignoreNext = await planIgnorePrerequisite(rootDir);
+    if (gitignoreNext !== undefined) {
+      gitignoreSelected = await prompts.confirmIgnorePrerequisite({
+        path: ".gitignore",
+        line: PERSONAL_ACTIVATION_IGNORE_LINE,
+        default: false,
+      });
+      if (gitignoreSelected) {
+        writes.push({ path: ".gitignore", bytes: gitignoreNext });
+      }
     }
   }
 
@@ -876,6 +929,59 @@ function reconciliationOptions(
 }
 
 /**
+ * Plan the `.gitignore` prerequisite, or `undefined` when there is nothing to
+ * offer — the line is already ignored, or the file cannot be read safely.
+ *
+ * An unreadable or symlinked `.gitignore` is not an error here: the prerequisite
+ * is optional, the atomic writer would refuse a symlink at commit time anyway,
+ * and failing the whole posture change over it would block a decision that does
+ * not depend on it. Personal activation (I5) refuses separately when the
+ * destination is not ignored.
+ */
+async function planIgnorePrerequisite(
+  rootDir: string,
+): Promise<string | undefined> {
+  try {
+    return planGitignoreAppend(
+      await readOptionalUtf8(path.join(rootDir, ".gitignore")),
+      [PERSONAL_ACTIVATION_IGNORE_LINE],
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether regenerating the shared artifacts can actually change this
+ * divergence's effective value. Only agent-profile-generated project files
+ * qualify: a developer-local, user, or machine source keeps overriding the
+ * generated file, and this flow never writes any of them. An unknown source
+ * cannot be claimed as repairable either.
+ */
+function isSharedRepairableSource(divergence: PermissionDivergence): boolean {
+  const scope = divergence.source?.scope;
+  return scope === "generated-project" || scope === "codex-project";
+}
+
+/** Stable, redacted guidance for a repair that could not change anything. */
+function buildRepairRefusal(
+  divergences: readonly PermissionDivergence[],
+): ConfigureRefusal {
+  return {
+    reason: "repair-not-applicable",
+    guidance: [
+      "Refusing to repair: every difference comes from a file agent-profile does not write, so regenerating the shared settings would change nothing.",
+      ...divergences.map(
+        (divergence) =>
+          `- ${divergence.client} ${divergence.dimension}: declared ${divergence.declared}, effective ${divergence.effective}` +
+          `${divergence.source ? ` (source: ${divergence.source.path})` : " (source: unknown)"}`,
+      ),
+      "Edit or remove that setting in the client itself, or choose adopt to record the detected behavior as intent.",
+    ],
+  };
+}
+
+/**
  * Stable, redacted refusal guidance. Names the setting and the normalized
  * states only: no raw values from the inspected file and no unrelated content.
  */
@@ -982,6 +1088,7 @@ export function planGitignoreAppend(
 
 export type ProfileEdit =
   | { kind: "safety-mode"; posture: PermissionPosture }
+  | { kind: "requires-sandbox"; value: boolean }
   | {
       kind: "client-posture";
       client: PermissionPostureClientId;
@@ -998,6 +1105,30 @@ export type ProfileEditResult =
   | { ok: true; source: string }
   | { ok: false; reason: ProfileEditRefusalReason };
 
+/** Where an edit writes, and the value it must carry afterwards. */
+function editTarget(edit: ProfileEdit): {
+  parentPath: readonly string[];
+  field: string;
+  value: string | boolean;
+} {
+  switch (edit.kind) {
+    case "safety-mode":
+      return { parentPath: ["safety"], field: "mode", value: edit.posture };
+    case "requires-sandbox":
+      return {
+        parentPath: ["safety"],
+        field: "requiresSandbox",
+        value: edit.value,
+      };
+    default:
+      return {
+        parentPath: ["clients", edit.client],
+        field: "permissionPosture",
+        value: edit.posture,
+      };
+  }
+}
+
 export function editProfile(
   source: string,
   edit: ProfileEdit,
@@ -1007,40 +1138,33 @@ export function editProfile(
     return { ok: false, reason: "unparseable profile" };
   }
 
-  const result =
-    edit.kind === "safety-mode"
-      ? editScalarUnder(document, source, ["safety"], "mode", edit.posture)
-      : editScalarUnder(
-          document,
-          source,
-          ["clients", edit.client],
-          "permissionPosture",
-          edit.posture,
-        );
+  const { parentPath, field, value } = editTarget(edit);
+  const result = editScalarUnder(document, source, parentPath, field, value);
   if (!result.ok) return result;
 
   // Verify the edited document still parses and actually carries the value.
   const verification = parseDocument(result.source, { keepSourceTokens: true });
-  const expectedPath =
-    edit.kind === "safety-mode"
-      ? ["safety", "mode"]
-      : ["clients", edit.client, "permissionPosture"];
   if (
     verification.errors.length > 0 ||
-    verification.getIn(expectedPath) !== edit.posture
+    verification.getIn([...parentPath, field]) !== value
   ) {
     return { ok: false, reason: "unsafe target structure" };
   }
   return result;
 }
 
-/** Replace `parent.field` in place, or insert it when the field is absent. */
+/**
+ * Replace `parent.field` in place, or insert it when the field is absent.
+ *
+ * `value` is written as its plain YAML literal, so a boolean lands unquoted
+ * (`requiresSandbox: false`) and reads back as a boolean.
+ */
 function editScalarUnder(
   document: ReturnType<typeof parseDocument>,
   source: string,
   parentPath: readonly string[],
   field: string,
-  value: string,
+  value: string | boolean,
 ): ProfileEditResult {
   const parent = document.getIn(parentPath, true);
   if (parent === undefined) {
@@ -1122,9 +1246,8 @@ function detectLineEnding(source: string): "\n" | "\r\n" | "\r" {
 }
 
 function describeEdit(edit: ProfileEdit): string {
-  return edit.kind === "safety-mode"
-    ? `safety.mode: ${edit.posture}`
-    : `clients.${edit.client}.permissionPosture: ${edit.posture}`;
+  const { parentPath, field, value } = editTarget(edit);
+  return `${[...parentPath, field].join(".")}: ${value}`;
 }
 
 // ---------------------------------------------------------------------------
