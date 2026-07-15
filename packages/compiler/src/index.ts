@@ -108,6 +108,8 @@ export {
 export type { LoopSkillId, SkillId } from "./skill-selection.js";
 export {
   applyWritePlan,
+  applyWritePlanAtomic,
+  AtomicWritePlanError,
   computeFileEtag,
   planWrites,
   ProfileWriteError,
@@ -146,6 +148,7 @@ export type {
   TemplateDescriptor,
 } from "./types.js";
 export type {
+  AtomicWritePlanStage,
   PlannedWrite,
   ProfileWriteErrorCode,
   WritePlanAction,

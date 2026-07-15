@@ -85,6 +85,11 @@ import {
   planRegionAwareWrites,
 } from "./compile-plan.js";
 import type { DispatcherPrompts } from "./dispatch-clack.js";
+import {
+  runConfigurePermissionFlow,
+  type ConfigurePrompts,
+  type ConfigureReport,
+} from "./configure.js";
 import type { Presenter, TaskLogSink } from "./presentation.js";
 import {
   extractManualAdditions,
@@ -129,6 +134,7 @@ export type CliOptions = {
   upgradePrompts?: UpgradePrompts;
   reconcilePrompts?: ReconcilePrompts;
   dispatcherPrompts?: DispatcherPrompts;
+  configurePrompts?: ConfigurePrompts;
   nonInteractive?: boolean;
 };
 
@@ -416,12 +422,124 @@ export async function runCli(
           ? { nonInteractive: options.nonInteractive }
           : {}),
       });
+    case "configure":
+      return runConfigure(rest, cwd, io, {
+        ...(options.configurePrompts
+          ? { prompts: options.configurePrompts }
+          : {}),
+        ...(options.nonInteractive !== undefined
+          ? { nonInteractive: options.nonInteractive }
+          : {}),
+      });
     case "ui":
       return runUi(rest, cwd, io, options.launchUi ?? launchPublishedUi);
     default:
       io.stderr(`Unknown command: ${command ?? ""}\n\n${formatHelp()}`);
       return 2;
   }
+}
+
+type ParsedConfigureArgs =
+  | { ok: true; root: string; nonInteractive: boolean; help: boolean }
+  | { ok: false; message: string };
+
+function parseConfigureArgs(args: string[]): ParsedConfigureArgs {
+  let root = ".";
+  let nonInteractive = false;
+  let help = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    switch (arg) {
+      case "--root": {
+        const value = args[index + 1];
+        if (!value || value.startsWith("--")) {
+          return { ok: false, message: "--root requires a path." };
+        }
+        root = value;
+        index += 1;
+        break;
+      }
+      case "--non-interactive":
+        nonInteractive = true;
+        break;
+      case "--help":
+      case "-h":
+        help = true;
+        break;
+      default:
+        return { ok: false, message: `Unknown option: ${arg ?? ""}` };
+    }
+  }
+  return { ok: true, root, nonInteractive, help };
+}
+
+type RunConfigureOptions = {
+  prompts?: ConfigurePrompts;
+  nonInteractive?: boolean;
+};
+
+/**
+ * Thin entry point for `agent-profile configure`. Argument parsing and
+ * interactivity gating live here; every permission decision, preview, and write
+ * belongs to the canonical flow in `configure.ts`.
+ */
+async function runConfigure(
+  args: string[],
+  cwd: string,
+  io: CliIo,
+  options: RunConfigureOptions,
+): Promise<number> {
+  const parsed = parseConfigureArgs(args);
+  if (!parsed.ok) {
+    io.stderr(`${parsed.message}\n\n${formatHelp()}`);
+    return 2;
+  }
+  if (parsed.help) {
+    io.stdout(formatHelp());
+    return 0;
+  }
+
+  const rootDir = path.resolve(cwd, parsed.root);
+  const prompts = options.prompts;
+
+  // Posture is never adopted without an interactive choice. Without a TTY (or
+  // under --non-interactive / CI) configure explains itself and writes nothing,
+  // rather than silently picking a posture on the user's behalf.
+  const interactive =
+    prompts !== undefined ||
+    (options.nonInteractive !== true &&
+      parsed.nonInteractive !== true &&
+      isInteractiveTty(io));
+  if (!interactive) {
+    io.stdout(
+      [
+        "agent-profile configure is interactive: it changes the agent control",
+        "posture only from an explicit choice, so it adopts nothing in a",
+        "non-interactive environment and has written nothing.",
+        "",
+        "Run `agent-profile configure` in an interactive terminal to review the",
+        "current posture, per-client outcomes, and a preview before any write.",
+        "Run `agent-profile doctor` to report the current posture here.",
+        "",
+      ].join("\n"),
+    );
+    return 0;
+  }
+
+  const resolvedPrompts = await getConfigurePrompts(prompts);
+
+  let report: ConfigureReport;
+  try {
+    report = await runConfigurePermissionFlow({ rootDir }, resolvedPrompts);
+  } catch (error) {
+    if (error instanceof WizardCancelled) {
+      io.stdout("Cancelled - nothing was written.\n");
+      return 0;
+    }
+    throw error;
+  }
+
+  return report.outcome === "refused" ? 1 : 0;
 }
 
 type RunUpgradeOptions = {
@@ -673,6 +791,14 @@ async function getUpgradePrompts(
   if (override) return override;
   const { createUpgradeClackPrompts } = await import("./upgrade-clack.js");
   return createUpgradeClackPrompts(CLI_VERSION);
+}
+
+async function getConfigurePrompts(
+  override: ConfigurePrompts | undefined,
+): Promise<ConfigurePrompts> {
+  if (override) return override;
+  const { createConfigureClackPrompts } = await import("./configure-clack.js");
+  return createConfigureClackPrompts(CLI_VERSION);
 }
 
 function emitUpgradeReport(
@@ -3693,6 +3819,7 @@ Usage:
   agent-profile doctor [--root <path>] [--json] [--mcp-suggestions]
   agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
   agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--non-interactive] [--json]
+  agent-profile configure [--root <path>] [--non-interactive]
   agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 
 Commands:
@@ -3705,6 +3832,12 @@ Commands:
   init      Create a starting ai-profile.yaml (interactive wizard with no args).
   upgrade   Report or insert newly available capabilities (preview first).
             --write --adopt-recommended adopts all offered capabilities.
+  configure Change or reconcile the agent control posture (interactive).
+            Shows the current posture, what each client actually does, and a
+            preview before anything is written. The profile, generated files,
+            and any selected .gitignore prerequisite are written together or
+            not at all. Adopts nothing without an explicit choice, so it
+            writes nothing in a non-interactive environment.
   ui        Start the local read-only UI.
 
 Init wizard:

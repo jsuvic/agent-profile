@@ -106,6 +106,270 @@ export async function applyWritePlan(
   return plan;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 31 (I4): all-or-nothing multi-file write transaction.
+//
+// `applyWritePlan` above writes each file in a plain loop, so a mid-loop failure
+// leaves shared state partially updated. The permission-posture configure flow
+// commits `ai-profile.yaml`, generated artifacts, and an optional `.gitignore`
+// prerequisite together, which requires staging + rollback instead.
+//
+// `applyWritePlan` is intentionally left untouched for its existing callers.
+// ---------------------------------------------------------------------------
+
+export type AtomicWritePlanStage = "prepare" | "commit" | "rollback-incomplete";
+
+/**
+ * Raised when an atomic write plan could not be committed. The filesystem has
+ * been rolled back to its pre-transaction state on a best-effort basis before
+ * this is thrown.
+ */
+export class AtomicWritePlanError extends Error {
+  constructor(
+    public readonly stage: AtomicWritePlanStage,
+    message: string,
+    options?: {
+      cause?: unknown;
+      /**
+       * Paths whose pre-transaction bytes could NOT be restored. Non-empty only
+       * when `stage` is `rollback-incomplete`; callers must not describe these
+       * as unchanged.
+       */
+      unrestoredPaths?: readonly string[];
+    },
+  ) {
+    super(message, options);
+    this.name = "AtomicWritePlanError";
+    this.unrestoredPaths = options?.unrestoredPaths ?? [];
+  }
+
+  /** @see AtomicWritePlanError options.unrestoredPaths */
+  public readonly unrestoredPaths: readonly string[];
+}
+
+type AtomicTarget = {
+  readonly path: string;
+  readonly absolutePath: string;
+  readonly bytes: Uint8Array;
+  /** Pre-transaction bytes, or undefined when the target did not exist. */
+  backup: Uint8Array | undefined;
+  /** Staged temp file, cleared once renamed into place. */
+  tempPath: string | undefined;
+  renamed: boolean;
+};
+
+/**
+ * Apply a write plan as a single all-or-nothing transaction.
+ *
+ * Prepare phase: every path is validated for containment and symlink safety
+ * before anything is touched, existing targets are backed up in memory, and
+ * every write is staged as a temp file beside its target.
+ *
+ * Commit phase: each staged temp is renamed into place.
+ *
+ * On any failure in either phase, already-renamed targets are restored (or
+ * removed when they did not previously exist), leftover temps and directories
+ * created by this call are removed, and an `AtomicWritePlanError` is thrown.
+ * The net effect of a failed call is that the tree is untouched.
+ *
+ * `unchanged` files are skipped exactly as `applyWritePlan` skips them.
+ */
+export async function applyWritePlanAtomic(
+  request: WritePlanRequest,
+): Promise<WritePlanResult> {
+  const rootRealPath = await fsPromises.realpath(path.resolve(request.rootDir));
+
+  // Normalizing rejects unsafe path shapes and planning validates containment
+  // and refuses symlink targets — both for every write, before anything is
+  // staged, so an unsafe path fails with nothing touched. Both are surfaced as
+  // a `prepare` failure so callers see one error type for "nothing happened".
+  const targets: AtomicTarget[] = [];
+  const createdDirectories: string[] = [];
+  let plan: WritePlanResult;
+  try {
+    const writes = normalizeWrites(request.writes);
+    plan = await planWritesWithResolvedRoot(rootRealPath, writes);
+    const writesByPath = new Map(writes.map((write) => [write.path, write]));
+
+    for (const action of plan.actions) {
+      if (action.action === "unchanged") continue;
+      const write = writesByPath.get(action.path);
+      if (!write) continue;
+
+      // Re-resolve the path validated by planning above.
+      targets.push({
+        path: write.path,
+        absolutePath: await assertWritePathContained(rootRealPath, write.path),
+        bytes: write.bytes,
+        backup: undefined,
+        tempPath: undefined,
+        renamed: false,
+      });
+    }
+  } catch (error) {
+    throw new AtomicWritePlanError(
+      "prepare",
+      "Refusing to apply write plan: a planned write failed path validation.",
+      { cause: error },
+    );
+  }
+
+  if (targets.length === 0) return plan;
+
+  try {
+    // --- Prepare: back up existing targets in memory. ---------------------
+    for (const target of targets) {
+      target.backup = await readOptionalFile(target.absolutePath);
+    }
+
+    // --- Prepare: stage every write as a temp file beside its target. -----
+    for (const target of targets) {
+      const firstCreated = await fsPromises.mkdir(
+        path.dirname(target.absolutePath),
+        { recursive: true },
+      );
+      if (firstCreated !== undefined) createdDirectories.push(firstCreated);
+      target.tempPath = await writeTempBeside(
+        target.absolutePath,
+        target.bytes,
+      );
+    }
+  } catch (error) {
+    // Nothing is renamed yet in this phase, so rollback only clears staging.
+    await rollbackAtomicTargets(targets, createdDirectories);
+    throw new AtomicWritePlanError(
+      "prepare",
+      "Refusing to apply write plan: staging failed and nothing was written.",
+      { cause: error },
+    );
+  }
+
+  // --- Commit: rename each staged temp into place. ------------------------
+  try {
+    for (const target of targets) {
+      await fsPromises.rename(target.tempPath!, target.absolutePath);
+      target.tempPath = undefined;
+      target.renamed = true;
+    }
+    await fsyncParentDirectory(rootRealPath);
+  } catch (error) {
+    const unrestored = await rollbackAtomicTargets(targets, createdDirectories);
+    if (unrestored.length > 0) {
+      throw new AtomicWritePlanError(
+        "rollback-incomplete",
+        `Write plan failed during commit and could not be fully rolled back; ${unrestored.length} file(s) still hold new bytes.`,
+        { cause: error, unrestoredPaths: unrestored },
+      );
+    }
+    throw new AtomicWritePlanError(
+      "commit",
+      "Write plan failed during commit and was rolled back.",
+      { cause: error },
+    );
+  }
+
+  return plan;
+}
+
+/** Stage bytes next to their target so the commit is a same-directory rename. */
+async function writeTempBeside(
+  absoluteTarget: string,
+  bytes: Uint8Array,
+): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const tempPath = `${absoluteTarget}.tmp-${randomBytes(8).toString("hex")}`;
+    try {
+      const fd = await fsPromises.open(tempPath, "wx", 0o644);
+      try {
+        await fd.write(Buffer.from(bytes));
+        await fd.sync();
+      } finally {
+        await fd.close();
+      }
+      return tempPath;
+    } catch (error) {
+      // Only a name collision is retryable; anything else is a real failure.
+      if (isNodeError(error) && error.code === "EEXIST") continue;
+      throw error;
+    }
+  }
+
+  throw new Error(`Could not stage a temp file for ${absoluteTarget}`);
+}
+
+/**
+ * Restore to the pre-transaction state. Every step is individually guarded so
+ * one un-restorable target cannot abort the rest of the rollback.
+ *
+ * Returns the paths that could NOT be restored. A non-empty result means the
+ * tree is NOT back at its pre-transaction state, and the caller must report
+ * that rather than claiming the files are unchanged: the same condition that
+ * broke the commit (a lock, a permission change) can equally break the restore.
+ */
+async function rollbackAtomicTargets(
+  targets: readonly AtomicTarget[],
+  createdDirectories: readonly string[],
+): Promise<string[]> {
+  const unrestored: string[] = [];
+
+  for (const target of [...targets].reverse()) {
+    if (target.renamed) {
+      try {
+        if (target.backup === undefined) {
+          await fsPromises.rm(target.absolutePath, { force: true });
+        } else {
+          await fsPromises.writeFile(target.absolutePath, target.backup);
+        }
+      } catch {
+        // The target keeps the new bytes: record it instead of reporting a
+        // clean rollback.
+        unrestored.push(target.path);
+      }
+    }
+
+    if (target.tempPath !== undefined) {
+      try {
+        await fsPromises.rm(target.tempPath, { force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+
+  // Directories created by this call can only hold files this call staged: a
+  // path that did not exist before cannot have held a backup. So removing the
+  // tree cannot destroy pre-existing content, and for a target whose individual
+  // delete failed above this is simply the retry.
+  for (const directory of [...createdDirectories].reverse()) {
+    try {
+      await fsPromises.rm(directory, { recursive: true, force: true });
+    } catch {
+      // best-effort cleanup
+    }
+  }
+
+  // Only report what is still really there. The sweep above may have removed a
+  // target whose own delete failed, and claiming a file survived when it did
+  // not would send the user looking for nothing.
+  const stillPresent: string[] = [];
+  for (const relativePath of unrestored) {
+    const target = targets.find((item) => item.path === relativePath);
+    if (!target) continue;
+    if (await pathExists(target.absolutePath)) stillPresent.push(relativePath);
+  }
+
+  return stillPresent;
+}
+
+async function pathExists(absolutePath: string): Promise<boolean> {
+  try {
+    await fsPromises.lstat(absolutePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function normalizeWrites(writes: PlannedWrite[]): NormalizedWrite[] {
   return writes
     .map((write) => ({

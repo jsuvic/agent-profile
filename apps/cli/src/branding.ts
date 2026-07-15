@@ -15,7 +15,8 @@ import type { Writable } from "node:stream";
  * interactive branch by the caller (see `wizard-clack.ts`).
  */
 
-export type LogoCommand = "init" | "compile" | "doctor" | "upgrade" | "ui";
+export type LogoCommand =
+  "init" | "compile" | "configure" | "doctor" | "upgrade" | "ui";
 
 type StyleFormat = Parameters<typeof styleText>[0];
 

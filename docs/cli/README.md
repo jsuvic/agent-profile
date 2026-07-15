@@ -4,6 +4,7 @@ Implemented:
 
 - `agent-profile doctor`
 - `agent-profile compile`
+- `agent-profile configure`
 - `agent-profile init`
 - `agent-profile ui`
 
@@ -18,6 +19,7 @@ Deferred:
 ```bash
 agent-profile doctor [--root <path>] [--json]
 agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
+agent-profile configure [--root <path>] [--non-interactive]
 agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
 agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 ```
@@ -75,6 +77,82 @@ requires a separate approved spec.
 
 All write-capable commands must default to dry-run and use diff-before-write
 before mutating repository files.
+
+## Configure (Phase 31)
+
+`agent-profile configure` is the interactive flow for choosing or reconciling
+the **agent control posture**. It shows the current posture, what each enabled
+client will actually do, the denials that hold regardless of posture, and a
+preview of every change before anything is written.
+
+The normal postures are `guarded`, `balanced`, and `trusted-local`, plus
+`plan-only` for review work. The current posture is preselected, so pressing
+Enter changes nothing.
+
+Everything before the preview is read-only.
+
+### Shared vs personal
+
+`configure` writes **shared** repository intent only: `ai-profile.yaml`, the
+generated client artifacts, and — when you explicitly select it — the
+`.gitignore` line that a later personal activation requires
+(`.claude/settings.local.json`).
+
+Those files are written **together or not at all**. If any part of the write
+fails, the profile, generated artifacts, and `.gitignore` are all restored to
+their original bytes and the command reports a refusal.
+
+In the rare case where a file cannot be restored either — the same lock or
+permission change that broke the write can also block the undo — configure does
+not claim the repository is unchanged. It names the exact paths that still hold
+new bytes so you can review them against version control.
+
+Activating `trusted-local` on your own machine is a separate, developer-local
+step: shared files make the posture possible, but they never grant it to
+everyone who clones the repository (ADR 0019). `configure` never writes the
+personal activation file itself.
+
+### Reconciliation
+
+When actual client configuration differs from the declared posture, configure
+offers:
+
+| Choice   | Effect                                                         |
+| -------- | -------------------------------------------------------------- |
+| `repair` | regenerate shared settings back to the declared posture        |
+| `adopt`  | record the detected behavior as profile intent (lossless only) |
+| `review` | show the exact sources and consequences, change nothing        |
+| `leave`  | change nothing; doctor keeps reporting the mismatch            |
+
+Each option names the clients it does _not_ synchronize: a local override to
+one client is never described as applying to the others.
+
+### Legacy Autonomous
+
+An existing `safety.mode: autonomous` profile is never reinterpreted. Configure
+offers to keep it (byte-identical, sandbox-required), migrate explicitly to
+Trusted local, choose another posture, or cancel. No branch migrates silently.
+
+### Refusals and recovery
+
+| Reason                       | Recovery                                                                                                              |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `profile-missing`            | run `agent-profile init` first                                                                                        |
+| `profile-invalid`            | run `agent-profile doctor` and fix the reported issues                                                                |
+| `adoption-not-representable` | the detected behavior has no lossless profile form; keep it as a manual client setting or pick a posture explicitly   |
+| `profile-edit-refused`       | `ai-profile.yaml` has a structure configure will not edit safely; change `safety.mode` by hand                        |
+| `generated-outputs-refused`  | resolve the reported ownership/marker conflict, then re-run                                                           |
+| `compile-failed`             | the profile is valid but its artifacts could not be generated; run `agent-profile compile` to see why                 |
+| `shared-write-failed`        | fix the reported path condition and re-run. Nothing was written unless the refusal names paths it could not roll back |
+
+Refusals exit with code `1` and contain setting names and normalized states
+only — never secret-like values or unrelated configuration content.
+
+### Non-interactive use
+
+`configure` adopts a posture only from an explicit choice. Without a TTY, under
+`--non-interactive`, or in CI, it explains itself, writes nothing, and exits `0`.
+There is no flag that adopts a posture unattended.
 
 ## Init Wizard (Phase 26)
 
