@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import {
   chmod,
   mkdir,
@@ -16,10 +17,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import {
   buildClientMappingReport,
   CLIENT_MAPPING_VERSION,
+  type ClientMappingReport,
 } from "@agent-profile/compiler";
 import {
   inspectPermissionPosture,
@@ -29,6 +32,7 @@ import {
 
 import {
   runConfigurePermissionFlow,
+  runPostSharedPersonalActivation,
   type ConfigurePostureView,
   type ConfigurePreview,
   type ConfigurePrompts,
@@ -125,6 +129,8 @@ workflow:
 `;
 
 const IGNORE_LINE = ".claude/settings.local.json";
+const STAGING_IGNORE_LINE = ".claude/.agent-profile/";
+const execFileAsync = promisify(execFile);
 
 /**
  * Symlink creation needs elevation/developer mode on Windows. Detect it once so
@@ -181,6 +187,12 @@ async function createRoot(profile = GUARDED_PROFILE): Promise<string> {
   const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-cfg-"));
   await writeFile(path.join(rootDir, "ai-profile.yaml"), profile, "utf8");
   return rootDir;
+}
+
+async function initGit(rootDir: string): Promise<void> {
+  await execFileAsync("git", ["init", "--quiet", rootDir], {
+    windowsHide: true,
+  });
 }
 
 /** Materialize canonical generated outputs + lockfile. */
@@ -245,6 +257,8 @@ type Script = {
   reconciliation?: "repair" | "adopt" | "review" | "leave";
   ignorePrerequisite?: boolean;
   confirm?: boolean;
+  personalActivation?: boolean;
+  beforePersonalActivationConfirm?: () => void | Promise<void>;
   /** Prompt name at which the user hits ESC. */
   cancelAt?: string;
 };
@@ -281,7 +295,7 @@ function scriptPrompts(script: Script = {}): {
     if (script.cancelAt === name) throw new WizardCancelled();
   };
 
-  const prompts: ConfigurePrompts = {
+  const prompts = {
     begin() {
       gate("begin");
     },
@@ -320,6 +334,17 @@ function scriptPrompts(script: Script = {}): {
       gate("confirmApply");
       return script.confirm ?? false;
     },
+    showPersonalActivationPreview() {
+      gate("showPersonalActivationPreview");
+    },
+    async confirmPersonalActivation() {
+      gate("confirmPersonalActivation");
+      await script.beforePersonalActivationConfirm?.();
+      return script.personalActivation ?? false;
+    },
+    showPersonalActivationReport() {
+      gate("showPersonalActivationReport");
+    },
     showRefusal(refusal) {
       gate("showRefusal");
       recorded.refusals.push(refusal);
@@ -328,10 +353,650 @@ function scriptPrompts(script: Script = {}): {
       gate("end");
       recorded.reports.push(report);
     },
-  };
+  } as ConfigurePrompts;
 
   return { prompts, recorded };
 }
+
+test("shared success offers separate personal activation and decline stays pending", async () => {
+  const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+  try {
+    await initGit(rootDir);
+    await materialize(rootDir);
+    const { prompts, recorded } = scriptPrompts({
+      posture: "trusted-local",
+      ignorePrerequisite: true,
+      confirm: true,
+      personalActivation: false,
+    });
+
+    const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+    const personal = (
+      report as ConfigureReport & {
+        personalActivation?: { outcome: string };
+      }
+    ).personalActivation;
+
+    assert.equal(report.outcome, "applied", "shared intent stays applied");
+    assert.deepEqual(
+      recorded.events.filter((event) => event.includes("PersonalActivation")),
+      [
+        "showPersonalActivationPreview",
+        "confirmPersonalActivation",
+        "showPersonalActivationReport",
+      ],
+    );
+    assert.equal(personal?.outcome, "pending");
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("confirmed Claude activation preserves unrelated JSON bytes and reports verified active", async () => {
+  const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+  try {
+    await initGit(rootDir);
+    await materialize(rootDir);
+    await mkdir(path.join(rootDir, ".claude"), { recursive: true });
+    const before =
+      '\ufeff{\r\n\t"z": {"nested": [1, 2]},\r\n\t"permissions": {\r\n\t\t"allow": ["Read(docs/**)"],\r\n\t\t"defaultMode": "default"\r\n\t},\r\n\t"tail": true\r\n}\r\n';
+    await writeFile(
+      path.join(rootDir, ".claude", "settings.local.json"),
+      before,
+      "utf8",
+    );
+
+    const { prompts, recorded } = scriptPrompts({
+      posture: "trusted-local",
+      ignorePrerequisite: true,
+      confirm: true,
+      personalActivation: true,
+    });
+    const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+    const after = await readFile(
+      path.join(rootDir, ".claude", "settings.local.json"),
+      "utf8",
+    );
+
+    assert.equal(report.outcome, "applied");
+    assert.equal(report.personalActivation?.outcome, "active");
+    assert.equal(
+      after,
+      before.replace(
+        '"defaultMode": "default"',
+        '"defaultMode": "bypassPermissions"',
+      ),
+      "only the owned scalar edit span changes",
+    );
+    assert.deepEqual(
+      report.personalActivation?.clients.map((row) => ({
+        client: row.mapping.client,
+        state: row.state,
+        status: row.mapping.status,
+        source: row.mapping.source,
+        verifiedOn: row.mapping.verifiedOn,
+      })),
+      [
+        {
+          client: "claude",
+          state: "active",
+          status: "personal-activation-required",
+          source: "https://code.claude.com/docs/en/settings",
+          verifiedOn: "2026-07-02",
+        },
+        {
+          client: "codex",
+          state: "manual",
+          status: "manual-setup-required",
+          source: "https://developers.openai.com/codex/permissions",
+          verifiedOn: "2026-07-02",
+        },
+      ],
+    );
+    assert.ok(
+      recorded.events.indexOf("confirmApply") <
+        recorded.events.indexOf("showPersonalActivationPreview"),
+    );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("already-active Claude activation is idempotent and skips personal consent", async () => {
+  const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+  try {
+    await initGit(rootDir);
+    await materialize(rootDir);
+    await writeClaudeLocal(rootDir, "bypassPermissions");
+    await writeFile(
+      path.join(rootDir, ".gitignore"),
+      `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
+      "utf8",
+    );
+    const before = await readFile(
+      path.join(rootDir, ".claude", "settings.local.json"),
+      "utf8",
+    );
+    const { prompts, recorded } = scriptPrompts({ personalActivation: true });
+    const result = await runPostSharedPersonalActivation(
+      reportFixture({ outcome: "applied" }),
+      {
+        mappingVersion: CLIENT_MAPPING_VERSION,
+        rows: [
+          {
+            client: "claude",
+            posture: "trusted-local",
+            status: "personal-activation-required",
+            supportGrade: "confirmed-official",
+            source: "https://code.claude.com/docs/en/settings",
+            verifiedOn: "2026-07-02",
+          },
+        ],
+      },
+      { rootDir },
+      prompts,
+    );
+
+    assert.equal(result.outcome, "active");
+    assert.ok(
+      !recorded.events.includes("showPersonalActivationPreview") &&
+        !recorded.events.includes("confirmPersonalActivation"),
+    );
+    assert.equal(
+      await readFile(
+        path.join(rootDir, ".claude", "settings.local.json"),
+        "utf8",
+      ),
+      before,
+    );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("a destination symlink refuses through the post-shared seam", async (t) => {
+  const skip = symlinkSkipReason();
+  if (skip) return t.skip(skip);
+  const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+  const outside = await mkdtemp(path.join(tmpdir(), "agent-profile-i5-link-"));
+  try {
+    await initGit(rootDir);
+    await materialize(rootDir);
+    await writeFile(
+      path.join(rootDir, ".gitignore"),
+      `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
+      "utf8",
+    );
+    const outsideFile = path.join(outside, "settings.local.json");
+    await writeFile(outsideFile, "{}\n", "utf8");
+    await symlink(
+      outsideFile,
+      path.join(rootDir, ".claude", "settings.local.json"),
+      "file",
+    );
+    const { prompts } = scriptPrompts({
+      posture: "trusted-local",
+      confirm: true,
+      personalActivation: true,
+    });
+
+    const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+
+    assert.equal(report.outcome, "applied");
+    assert.equal(report.personalActivation?.outcome, "refused");
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("insertion preserves LF/CRLF, tabs/spaces, property order, and trailing-newline choice", async () => {
+  const rows = [
+    {
+      name: "LF spaces trailing",
+      before: '{\n  "first": true,\n  "tail": 1\n}\n',
+      eol: "\n",
+      indent: '  "permissions"',
+      trailing: true,
+    },
+    {
+      name: "CRLF tabs no trailing",
+      before: '{\r\n\t"first": true,\r\n\t"tail": 1\r\n}',
+      eol: "\r\n",
+      indent: '\t"permissions"',
+      trailing: false,
+    },
+  ] as const;
+  for (const row of rows) {
+    const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+    try {
+      await initGit(rootDir);
+      await materialize(rootDir);
+      await writeFile(
+        path.join(rootDir, ".gitignore"),
+        `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
+        "utf8",
+      );
+      const destination = path.join(rootDir, ".claude", "settings.local.json");
+      await writeFile(destination, row.before, "utf8");
+      const { prompts } = scriptPrompts({
+        posture: "trusted-local",
+        confirm: true,
+        personalActivation: true,
+      });
+
+      const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+      const after = await readFile(destination, "utf8");
+
+      assert.equal(report.personalActivation?.outcome, "active", row.name);
+      assert.ok(
+        after.includes(row.indent),
+        `${row.name}: indentation preserved`,
+      );
+      assert.ok(
+        after.indexOf('"first"') < after.indexOf('"tail"') &&
+          after.indexOf('"tail"') < after.indexOf('"permissions"'),
+        `${row.name}: existing order preserved`,
+      );
+      assert.equal(
+        after.endsWith(row.eol),
+        row.trailing,
+        `${row.name}: trailing newline`,
+      );
+      if (row.eol === "\r\n") assert.doesNotMatch(after, /(?<!\r)\n/u);
+      else assert.doesNotMatch(after, /\r/u);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("shared cancellation and refusal never enter or mutate the personal stage", async () => {
+  for (const row of ["cancelled", "refused"] as const) {
+    const rootDir = await createRoot(
+      row === "cancelled" ? PRESET_DRIVEN_PROFILE : "not: [valid\n",
+    );
+    try {
+      if (row === "cancelled") await materialize(rootDir);
+      await mkdir(path.join(rootDir, ".claude"), { recursive: true });
+      const destination = path.join(rootDir, ".claude", "settings.local.json");
+      const before = '{"manual":true}\n';
+      await writeFile(destination, before, "utf8");
+      const { prompts, recorded } = scriptPrompts({
+        posture: "trusted-local",
+        confirm: true,
+        personalActivation: true,
+        cancelAt: row === "cancelled" ? "confirmApply" : undefined,
+      });
+
+      const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+
+      assert.equal(report.outcome, row);
+      assert.ok(
+        recorded.events.every((event) => !event.includes("PersonalActivation")),
+      );
+      assert.equal(await readFile(destination, "utf8"), before);
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("personal activation invokes no client process or network surface", async () => {
+  const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+  const sentinelDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-i5-sentinel-"),
+  );
+  const originalPath = process.env.PATH;
+  const originalFetch = globalThis.fetch;
+  let networkTouched = false;
+  try {
+    for (const client of ["claude", "codex", "tabnine"] as const) {
+      const marker = path.join(sentinelDir, `${client}.invoked`);
+      await writeFile(
+        path.join(sentinelDir, `${client}.cmd`),
+        `@echo off\r\n> "${marker}" echo invoked\r\nexit /b 91\r\n`,
+        "utf8",
+      );
+    }
+    process.env.PATH = `${sentinelDir}${path.delimiter}${originalPath ?? ""}`;
+    globalThis.fetch = (async () => {
+      networkTouched = true;
+      throw new Error("network sentinel");
+    }) as typeof fetch;
+    await initGit(rootDir);
+    await materialize(rootDir);
+    await writeClaudeLocal(rootDir, "default");
+    await writeFile(
+      path.join(rootDir, ".gitignore"),
+      `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
+      "utf8",
+    );
+    const { prompts } = scriptPrompts({
+      posture: "trusted-local",
+      confirm: true,
+      personalActivation: true,
+    });
+
+    const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+
+    assert.equal(report.outcome, "applied");
+    assert.equal(report.personalActivation?.outcome, "active");
+    assert.equal(networkTouched, false);
+    assert.deepEqual(
+      (await readdir(sentinelDir)).filter((entry) =>
+        entry.endsWith(".invoked"),
+      ),
+      [],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    await rm(rootDir, { recursive: true, force: true });
+    await rm(sentinelDir, { recursive: true, force: true });
+  }
+});
+
+test("unignored destinations refuse after shared success without a local write", async () => {
+  for (const row of [{ name: "unignored", init: true }]) {
+    const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+    try {
+      if (row.init) await initGit(rootDir);
+      await materialize(rootDir);
+      await writeClaudeLocal(rootDir, "default");
+      await writeFile(
+        path.join(rootDir, ".gitignore"),
+        "node_modules\n",
+        "utf8",
+      );
+      const localBefore = await readFile(
+        path.join(rootDir, ".claude", "settings.local.json"),
+        "utf8",
+      );
+      const { prompts, recorded } = scriptPrompts({
+        posture: "trusted-local",
+        ignorePrerequisite: false,
+        confirm: true,
+        personalActivation: true,
+      });
+      const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+
+      assert.equal(report.outcome, "applied", `${row.name}: shared applied`);
+      assert.equal(report.personalActivation?.outcome, "refused", row.name);
+      assert.ok(
+        !recorded.events.includes("confirmPersonalActivation"),
+        `${row.name}: unsafe preview never reaches consent`,
+      );
+      assert.equal(
+        await readFile(
+          path.join(rootDir, ".claude", "settings.local.json"),
+          "utf8",
+        ),
+        localBefore,
+      );
+      assert.equal(
+        await readFile(path.join(rootDir, ".gitignore"), "utf8"),
+        "node_modules\n",
+      );
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("post-preview destination I/O failure preserves shared applied with personal failed", async () => {
+  const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+  try {
+    await initGit(rootDir);
+    await materialize(rootDir);
+    await writeClaudeLocal(rootDir, "default");
+    await writeFile(
+      path.join(rootDir, ".gitignore"),
+      `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
+      "utf8",
+    );
+    const destination = path.join(rootDir, ".claude", "settings.local.json");
+    const { prompts } = scriptPrompts({
+      posture: "trusted-local",
+      confirm: true,
+      personalActivation: true,
+      beforePersonalActivationConfirm: async () => {
+        await rm(destination, { force: true });
+        await mkdir(destination);
+      },
+    });
+
+    const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+
+    assert.equal(report.outcome, "applied");
+    assert.equal(report.personalActivation?.outcome, "failed");
+    assert.match(
+      report.personalActivation?.guidance.join("\n") ?? "",
+      /Shared intent remains applied/u,
+    );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("strict JSON safety rows refuse comments, trailing commas, duplicates, and nonobject permissions", async () => {
+  const rows = [
+    ["comment", '{"permissions": {/* no */ "defaultMode":"default"}}\n'],
+    ["trailing comma", '{"permissions":{"defaultMode":"default",}}\n'],
+    [
+      "duplicate permissions",
+      '{"permissions":{"defaultMode":"default"},"permissions":{"defaultMode":"default"}}\n',
+    ],
+    [
+      "duplicate defaultMode",
+      '{"permissions":{"defaultMode":"default","defaultMode":"default"}}\n',
+    ],
+    ["nonobject permissions", '{"permissions":[]}\n'],
+  ] as const;
+
+  for (const [name, localBytes] of rows) {
+    const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+    try {
+      await initGit(rootDir);
+      await materialize(rootDir);
+      await writeFile(
+        path.join(rootDir, ".gitignore"),
+        `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
+        "utf8",
+      );
+      await writeFile(
+        path.join(rootDir, ".claude", "settings.local.json"),
+        localBytes,
+        "utf8",
+      );
+      const { prompts } = scriptPrompts({
+        posture: "trusted-local",
+        confirm: true,
+        personalActivation: true,
+      });
+      const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+
+      assert.equal(report.outcome, "applied", `${name}: shared applied`);
+      assert.equal(report.personalActivation?.outcome, "refused", name);
+      assert.equal(
+        await readFile(
+          path.join(rootDir, ".claude", "settings.local.json"),
+          "utf8",
+        ),
+        localBytes,
+        `${name}: local bytes unchanged`,
+      );
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("malformed UTF-8 refuses activation and preserves destination bytes", async () => {
+  const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+  try {
+    await initGit(rootDir);
+    await materialize(rootDir);
+    await writeFile(
+      path.join(rootDir, ".gitignore"),
+      `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
+      "utf8",
+    );
+    const destination = path.join(rootDir, ".claude", "settings.local.json");
+    const malformed = Buffer.concat([
+      Buffer.from('{"note":"', "utf8"),
+      Buffer.from([0xc3, 0x28]),
+      Buffer.from('","permissions":{"defaultMode":"default"}}\n', "utf8"),
+    ]);
+    await writeFile(destination, malformed);
+    const ignoreBefore = await readFile(path.join(rootDir, ".gitignore"));
+    const { prompts, recorded } = scriptPrompts({
+      posture: "trusted-local",
+      confirm: true,
+      personalActivation: true,
+    });
+
+    const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+
+    assert.equal(report.outcome, "applied");
+    assert.equal(report.personalActivation?.outcome, "refused");
+    assert.ok(!recorded.events.includes("confirmPersonalActivation"));
+    assert.deepEqual(await readFile(destination), malformed);
+    assert.deepEqual(
+      await readFile(path.join(rootDir, ".gitignore")),
+      ignoreBefore,
+    );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("stale preview and ignore change at confirmation refuse without overwriting local bytes", async () => {
+  for (const change of ["local", "ignore"] as const) {
+    const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+    try {
+      await initGit(rootDir);
+      await materialize(rootDir);
+      await writeClaudeLocal(rootDir, "default");
+      await writeFile(
+        path.join(rootDir, ".gitignore"),
+        `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
+        "utf8",
+      );
+      const changedLocal = '{"manual":"changed-after-preview"}\n';
+      const changedIgnore = `!${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`;
+      const { prompts } = scriptPrompts({
+        posture: "trusted-local",
+        confirm: true,
+        personalActivation: true,
+        beforePersonalActivationConfirm: async () => {
+          await writeFile(
+            path.join(
+              rootDir,
+              change === "local" ? ".claude/settings.local.json" : ".gitignore",
+            ),
+            change === "local" ? changedLocal : changedIgnore,
+            "utf8",
+          );
+        },
+      });
+      const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+
+      assert.equal(report.outcome, "applied");
+      assert.equal(report.personalActivation?.outcome, "refused", change);
+      assert.equal(
+        await readFile(
+          path.join(rootDir, ".claude", "settings.local.json"),
+          "utf8",
+        ),
+        change === "local"
+          ? changedLocal
+          : `${JSON.stringify({ permissions: { defaultMode: "default" } }, null, 2)}\n`,
+      );
+    } finally {
+      await rm(rootDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("Codex manual and Tabnine unsupported states preserve mapping rows verbatim", async () => {
+  const rows: ClientMappingReport["rows"] = [
+    {
+      client: "codex",
+      posture: "trusted-local",
+      status: "manual-setup-required",
+      supportGrade: "confirmed-official",
+      source: "https://developers.openai.com/codex/permissions",
+      verifiedOn: "2026-07-02",
+    },
+    {
+      client: "tabnine",
+      posture: "trusted-local",
+      status: "unsupported",
+      supportGrade: "not-supported",
+      source:
+        "https://docs.tabnine.com/main/getting-started/tabnine-agent/agent-settings",
+      verifiedOn: "2026-07-02",
+    },
+  ];
+  const { prompts } = scriptPrompts();
+  const result = await runPostSharedPersonalActivation(
+    reportFixture({ outcome: "applied" }),
+    { mappingVersion: CLIENT_MAPPING_VERSION, rows },
+    { rootDir: "." },
+    prompts,
+  );
+
+  assert.equal(result.outcome, "not-required");
+  assert.deepEqual(
+    result.clients.map((row) => ({ state: row.state, mapping: row.mapping })),
+    [
+      { state: "manual", mapping: rows[0] },
+      { state: "unsupported", mapping: rows[1] },
+    ],
+  );
+  assert.match(result.clients[0]?.guidance ?? "", /session override|profile/u);
+  assert.match(result.clients[1]?.guidance ?? "", /does not support/u);
+});
+
+test("Tabnine manual and unknown guidance comes directly from mapping rows", async () => {
+  const rows: ClientMappingReport["rows"] = [
+    {
+      client: "tabnine",
+      posture: "trusted-local",
+      status: "manual-setup-required",
+      supportGrade: "confirmed-official",
+      source:
+        "https://docs.tabnine.com/main/getting-started/tabnine-agent/agent-settings",
+      verifiedOn: "2026-07-02",
+    },
+    {
+      client: "tabnine",
+      posture: "trusted-local",
+      status: "unknown",
+      supportGrade: "not-supported",
+      source:
+        "https://docs.tabnine.com/main/getting-started/tabnine-agent/agent-settings",
+      verifiedOn: "2026-07-02",
+    },
+  ];
+  const { prompts } = scriptPrompts();
+  const result = await runPostSharedPersonalActivation(
+    reportFixture({ outcome: "applied" }),
+    { mappingVersion: CLIENT_MAPPING_VERSION, rows },
+    { rootDir: "." },
+    prompts,
+  );
+
+  assert.deepEqual(
+    result.clients.map((row) => ({ state: row.state, mapping: row.mapping })),
+    [
+      { state: "manual", mapping: rows[0] },
+      { state: "unknown", mapping: rows[1] },
+    ],
+  );
+});
 
 // ---------------------------------------------------------------------------
 // AC: current posture is preselected; outcomes come from the versioned report
@@ -906,10 +1571,10 @@ test("selected .gitignore prerequisite is previewed and committed atomically", a
   assert.ok(preview);
   assert.ok(preview.actions.some((action) => action.path === ".gitignore"));
   assert.ok(report.writtenPaths.includes(".gitignore"));
-  // Appends the missing line only, preserving existing content + trailing newline.
+  // Appends both activation lines only, preserving existing content + trailing newline.
   assert.equal(
     await readFile(path.join(rootDir, ".gitignore"), "utf8"),
-    `node_modules\n${IGNORE_LINE}\n`,
+    `node_modules\n${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
   );
   await rm(rootDir, { recursive: true, force: true });
 });
@@ -946,7 +1611,7 @@ test("the .gitignore prerequisite is not offered when the line is already ignore
   await materialize(rootDir);
   await writeFile(
     path.join(rootDir, ".gitignore"),
-    `node_modules\n${IGNORE_LINE}\n`,
+    `node_modules\n${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
     "utf8",
   );
 
@@ -1581,6 +2246,7 @@ function reportFixture(over: Partial<ConfigureReport>): ConfigureReport {
     writtenPaths: [],
     unrestoredPaths: [],
     gitignorePrerequisiteSelected: false,
+    personalActivation: null,
     ...over,
   };
 }

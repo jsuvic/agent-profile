@@ -14,6 +14,8 @@ import type {
   ConfigurePostureView,
   ConfigurePreview,
   ConfigurePrompts,
+  PersonalActivationPreview,
+  PersonalActivationResult,
   ConfigureRefusal,
   ConfigureReport,
 } from "./configure.js";
@@ -161,6 +163,32 @@ export async function createConfigureClackPrompts(
       );
     },
 
+    showPersonalActivationPreview(preview) {
+      note(formatPersonalActivationPreview(preview), "Personal activation", {
+        output,
+      });
+    },
+
+    async confirmPersonalActivation(input) {
+      return unwrap(
+        await select<boolean>({
+          output,
+          message: "Apply the developer-local Claude activation now?",
+          initialValue: input.default,
+          options: [
+            { value: false, label: "Not now - keep activation pending" },
+            { value: true, label: "Activate Claude for this repository" },
+          ],
+        }),
+      );
+    },
+
+    showPersonalActivationReport(report) {
+      note(formatPersonalActivationReport(report), "Activation result", {
+        output,
+      });
+    },
+
     showRefusal(refusal: ConfigureRefusal) {
       note(refusal.guidance.join("\n"), "Not applied", { output });
     },
@@ -169,6 +197,29 @@ export async function createConfigureClackPrompts(
       outro(formatOutro(report), { output });
     },
   };
+}
+
+function formatPersonalActivationPreview(
+  preview: PersonalActivationPreview,
+): string {
+  return [
+    `Destination: ${preview.destination}`,
+    `Owned field: ${preview.field} -> ${preview.value}`,
+    "This is a separate developer-local decision after shared intent was applied.",
+  ].join("\n");
+}
+
+function formatPersonalActivationReport(
+  report: PersonalActivationResult,
+): string {
+  return [
+    `Outcome: ${report.outcome}`,
+    ...report.clients.map(
+      (row) =>
+        `- ${row.mapping.client}: ${row.state} - ${row.guidance} (${row.mapping.supportGrade}, verified ${row.mapping.verifiedOn}, ${row.mapping.source})`,
+    ),
+    ...report.guidance,
+  ].join("\n");
 }
 
 // ---------------------------------------------------------------------------

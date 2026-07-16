@@ -12,6 +12,7 @@ import {
   compileProfile,
   planWrites,
   type ClientMappingRow,
+  type ClientMappingReport,
   type MappingStatus,
   type MappingSupportGrade,
   type PlannedWrite,
@@ -31,6 +32,7 @@ import {
 import { isMap, isScalar, parseDocument, type Node } from "yaml";
 
 import { buildCompileWrites, planRegionAwareWrites } from "./compile-plan.js";
+import { createPersonalActivationService } from "./personal-activation.js";
 import { WizardCancelled } from "./wizard.js";
 
 // ---------------------------------------------------------------------------
@@ -43,6 +45,8 @@ import { WizardCancelled } from "./wizard.js";
  * prerequisite line; it never writes the local file itself (ADR 0019).
  */
 export const PERSONAL_ACTIVATION_IGNORE_LINE = ".claude/settings.local.json";
+export const PERSONAL_ACTIVATION_STAGING_IGNORE_LINE =
+  ".claude/.agent-profile/";
 
 /** Normal development postures plus the preserved audit posture. Legacy
  * `autonomous` is deliberately absent: it is only reachable by keeping an
@@ -124,6 +128,28 @@ export type ConfigurePreview = Readonly<{
   gitignorePrerequisite: boolean;
 }>;
 
+export type PersonalActivationClientState =
+  "active" | "pending" | "manual" | "unsupported" | "unknown";
+
+export type PersonalActivationClientResult = Readonly<{
+  mapping: ClientMappingRow;
+  state: PersonalActivationClientState;
+  guidance: string;
+}>;
+
+export type PersonalActivationPreview = Readonly<{
+  destination: ".claude/settings.local.json";
+  field: "permissions.defaultMode";
+  value: "bypassPermissions";
+  clients: readonly PersonalActivationClientResult[];
+}>;
+
+export type PersonalActivationResult = Readonly<{
+  outcome: "active" | "pending" | "refused" | "failed" | "not-required";
+  clients: readonly PersonalActivationClientResult[];
+  guidance: readonly string[];
+}>;
+
 export type ConfigureRefusalReason =
   | "adoption-not-representable"
   | "repair-not-applicable"
@@ -164,6 +190,7 @@ export type ConfigureReport = Readonly<{
    */
   unrestoredPaths: readonly string[];
   gitignorePrerequisiteSelected: boolean;
+  personalActivation: PersonalActivationResult | null;
 }>;
 
 /**
@@ -197,6 +224,9 @@ export type ConfigurePrompts = {
   }): Promise<boolean>;
   showPreview(preview: ConfigurePreview): void;
   confirmApply(input: { default: false }): Promise<boolean>;
+  showPersonalActivationPreview(preview: PersonalActivationPreview): void;
+  confirmPersonalActivation(input: { default: false }): Promise<boolean>;
+  showPersonalActivationReport(report: PersonalActivationResult): void;
   showRefusal(refusal: ConfigureRefusal): void;
   end(report: ConfigureReport): void;
 };
@@ -360,7 +390,13 @@ export async function runConfigurePermissionFlow(
       return report;
     }
 
-    return await applyDecision(prompts, rootDir, base, decision, profileSource);
+    return await applyDecision(
+      prompts,
+      { ...repoState, rootDir },
+      base,
+      decision,
+      profileSource,
+    );
   } catch (error) {
     if (error instanceof WizardCancelled) {
       return { ...base, outcome: "cancelled" };
@@ -565,11 +601,12 @@ async function decide(
 /** Build the write set, preview it, and commit it atomically on confirmation. */
 async function applyDecision(
   prompts: ConfigurePrompts,
-  rootDir: string,
+  repositoryState: ConfigureRepoState,
   base: ConfigureReport,
   decision: Extract<Decision, { kind: "apply" }>,
   profileSource: string,
 ): Promise<ConfigureReport> {
+  const rootDir = repositoryState.rootDir;
   // --- Profile edits (surgical byte splices, never a whole-document re-render).
   // Applied in order against the running source. Any refusal aborts the whole
   // set, so a multi-field change can never land half-applied.
@@ -775,7 +812,7 @@ async function applyDecision(
     });
   }
 
-  return finish(prompts, {
+  const sharedResult: ConfigureReport = {
     ...base,
     outcome: "applied",
     action: decision.action,
@@ -783,7 +820,197 @@ async function applyDecision(
     preview,
     gitignorePrerequisiteSelected: gitignoreSelected,
     writtenPaths: changed.map((action) => action.path),
+  };
+  const personalActivation = await runPostSharedPersonalActivation(
+    sharedResult,
+    nextMapping,
+    repositoryState,
+    prompts,
+  );
+  return finish(prompts, { ...sharedResult, personalActivation });
+}
+
+function personalClientResult(
+  row: ClientMappingRow,
+): PersonalActivationClientResult {
+  if (row.status === "configured-automatically") {
+    return {
+      mapping: row,
+      state: "active",
+      guidance: `${row.client} shared configuration is active.`,
+    };
+  }
+  if (row.status === "manual-setup-required") {
+    return {
+      mapping: row,
+      state: "manual",
+      guidance:
+        row.client === "codex"
+          ? "Use a documented Codex session override or profile setting; agent-profile does not write global Codex settings."
+          : "Configure each documented Tabnine IDE tool permission manually; Tabnine CLI activation remains tool-specific and agent-profile writes no undocumented setting.",
+    };
+  }
+  if (row.status === "unsupported") {
+    return {
+      mapping: row,
+      state: "unsupported",
+      guidance: `${row.client} does not support this mapped posture.`,
+    };
+  }
+  if (row.status === "personal-activation-required") {
+    return {
+      mapping: row,
+      state: "pending",
+      guidance: "Claude project-local personal activation is pending.",
+    };
+  }
+  return {
+    mapping: row,
+    state: "unknown",
+    guidance: `${row.client} activation could not be verified.`,
+  };
+}
+
+/**
+ * I5 post-shared orchestration seam. This stays CLI-internal: mapping truth is
+ * consumed verbatim from I2 and no compiler API is added for local mutation.
+ */
+export async function runPostSharedPersonalActivation(
+  sharedResult: ConfigureReport,
+  mappingReport: ClientMappingReport,
+  repositoryState: ConfigureRepoState,
+  prompts: ConfigurePrompts,
+): Promise<PersonalActivationResult> {
+  const clients = mappingReport.rows.map(personalClientResult);
+  if (sharedResult.outcome !== "applied") {
+    return { outcome: "not-required", clients, guidance: [] };
+  }
+  const claudePending = clients.some(
+    (row) => row.mapping.client === "claude" && row.state === "pending",
+  );
+  if (!claudePending) {
+    const report: PersonalActivationResult = {
+      outcome: "not-required",
+      clients,
+      guidance: [],
+    };
+    prompts.showPersonalActivationReport(report);
+    return report;
+  }
+
+  const activation = createPersonalActivationService();
+  let preparation;
+  try {
+    preparation = await activation.prepare(repositoryState.rootDir);
+  } catch {
+    const report: PersonalActivationResult = {
+      outcome: "refused",
+      clients,
+      guidance: [
+        "Claude personal activation was refused because the local preview could not be prepared safely.",
+        "Shared intent remains applied; retry personal activation after checking local repository access.",
+      ],
+    };
+    prompts.showPersonalActivationReport(report);
+    return report;
+  }
+  if (!preparation.ok) {
+    const report: PersonalActivationResult = {
+      outcome: "refused",
+      clients,
+      guidance: preparation.guidance,
+    };
+    prompts.showPersonalActivationReport(report);
+    return report;
+  }
+  if (preparation.unchanged) {
+    const activeClients = clients.map((row) =>
+      row.mapping.client === "claude"
+        ? {
+            ...row,
+            state: "active" as const,
+            guidance: "Claude project-local personal activation is active.",
+          }
+        : row,
+    );
+    const report: PersonalActivationResult = {
+      outcome: "active",
+      clients: activeClients,
+      guidance: ["Claude personal activation was already verified."],
+    };
+    prompts.showPersonalActivationReport(report);
+    return report;
+  }
+
+  prompts.showPersonalActivationPreview({
+    destination: ".claude/settings.local.json",
+    field: "permissions.defaultMode",
+    value: "bypassPermissions",
+    clients,
   });
+  let approved = false;
+  try {
+    approved = await prompts.confirmPersonalActivation({ default: false });
+  } catch (error) {
+    if (!(error instanceof WizardCancelled)) throw error;
+  }
+  if (!approved) {
+    const report: PersonalActivationResult = {
+      outcome: "pending",
+      clients,
+      guidance: [
+        "Shared intent was applied; Claude personal activation remains pending.",
+      ],
+    };
+    prompts.showPersonalActivationReport(report);
+    return report;
+  }
+
+  let committed;
+  try {
+    committed = await activation.commit(preparation.plan);
+  } catch {
+    committed = { outcome: "failed" as const, code: "write-failed" as const };
+  }
+  let reinspection;
+  try {
+    reinspection = await activation.prepare(repositoryState.rootDir);
+  } catch {
+    reinspection = undefined;
+  }
+  const active =
+    (committed.outcome === "applied" || committed.outcome === "unchanged") &&
+    reinspection?.ok === true &&
+    reinspection.unchanged;
+  const finalClients = clients.map((row) =>
+    row.mapping.client === "claude" && active
+      ? {
+          ...row,
+          state: "active" as const,
+          guidance: "Claude project-local personal activation is active.",
+        }
+      : row,
+  );
+  const report: PersonalActivationResult = active
+    ? {
+        outcome: "active",
+        clients: finalClients,
+        guidance: ["Claude personal activation was applied and verified."],
+      }
+    : {
+        outcome: committed.outcome === "refused" ? "refused" : "failed",
+        clients: finalClients,
+        guidance: [
+          "Shared intent remains applied, but Claude personal activation is incomplete.",
+          ...(committed.recoveryBackup
+            ? [
+                `Recovery backup retained at ${committed.recoveryBackup}. Restore it before retrying.`,
+              ]
+            : []),
+        ],
+      };
+  prompts.showPersonalActivationReport(report);
+  return report;
 }
 
 // ---------------------------------------------------------------------------
@@ -944,7 +1171,10 @@ async function planIgnorePrerequisite(
   try {
     return planGitignoreAppend(
       await readOptionalUtf8(path.join(rootDir, ".gitignore")),
-      [PERSONAL_ACTIVATION_IGNORE_LINE],
+      [
+        PERSONAL_ACTIVATION_IGNORE_LINE,
+        PERSONAL_ACTIVATION_STAGING_IGNORE_LINE,
+      ],
     );
   } catch {
     return undefined;
@@ -1269,6 +1499,7 @@ function emptyReport(): ConfigureReport {
     writtenPaths: [],
     unrestoredPaths: [],
     gitignorePrerequisiteSelected: false,
+    personalActivation: null,
   };
 }
 

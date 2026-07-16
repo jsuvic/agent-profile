@@ -33,6 +33,7 @@
     "@agent-profile/scanner": "0.2.0",
     "@agent-profile/web": "0.5.0",
     "@clack/prompts": "1.7.0",
+    "jsonc-parser": "3.3.1",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
