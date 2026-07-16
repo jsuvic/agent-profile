@@ -11,6 +11,7 @@ export type DispatchAction =
   | "init"
   | "compile-write"
   | "compile-reconcile"
+  | "configure"
   | "upgrade"
   | "ui"
   | "current";
@@ -49,7 +50,8 @@ export async function createClackDispatcher(
   version: string,
   options: ClackDispatcherOptions = {},
 ): Promise<DispatcherPrompts> {
-  const { confirm, intro, isCancel, note, select } = await import("@clack/prompts");
+  const { confirm, intro, isCancel, note, select } =
+    await import("@clack/prompts");
   const output = options.output ?? process.stdout;
   const unicode =
     process.platform !== "win32" ||

@@ -362,6 +362,15 @@ export async function runCli(
               ? { nonInteractive: options.nonInteractive }
               : {}),
           }),
+        configure: () =>
+          runConfigure([], cwd, io, {
+            ...(options.configurePrompts
+              ? { prompts: options.configurePrompts }
+              : {}),
+            ...(options.nonInteractive !== undefined
+              ? { nonInteractive: options.nonInteractive }
+              : {}),
+          }),
         ui: () => runUi([], cwd, io, options.launchUi ?? launchPublishedUi),
         "compile-write": () =>
           runCompile(["--write"], cwd, io, {

@@ -65,7 +65,9 @@ async function stampCurrentCatalog(root: string): Promise<void> {
 test("dispatcher state matrix: empty repository selects init", async () => {
   const root = await tempRoot();
   try {
-    assert.equal((await evaluateDispatchState(root)).actions[0], "init");
+    const actions = (await evaluateDispatchState(root)).actions;
+    assert.equal(actions[0], "init");
+    assert.ok(actions.includes("configure"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -213,7 +215,90 @@ test("dispatcher state matrix: current offers doctor and ui", async () => {
       "current",
       "doctor",
       "ui",
+      "configure",
     ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher recommends agent control for a client-local permission mismatch", async () => {
+  const root = await currentRoot();
+  try {
+    await stampCurrentCatalog(root);
+    await writeFile(
+      path.join(root, ".claude", "settings.local.json"),
+      `${JSON.stringify({ permissions: { defaultMode: "bypassPermissions" } }, null, 2)}\n`,
+    );
+
+    const actions = (await evaluateDispatchState(root)).actions;
+    assert.equal(actions[0], "configure");
+    assert.ok(actions.includes("doctor"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher recommends agent control for canonical legacy Autonomous status", async () => {
+  const root = await profileRoot();
+  try {
+    const profilePath = path.join(root, "ai-profile.yaml");
+    const source = await readFile(profilePath, "utf8");
+    await writeFile(
+      profilePath,
+      source.replace(
+        "  mode: guarded\n  requiresSandbox: false",
+        "  mode: autonomous\n  requiresSandbox: true",
+      ),
+    );
+
+    const actions = (await evaluateDispatchState(root)).actions;
+    assert.equal(actions[0], "configure");
+    assert.ok(actions.includes("compile-write"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher recommends agent control for incomplete personal activation", async () => {
+  const root = await currentRoot();
+  try {
+    const profilePath = path.join(root, "ai-profile.yaml");
+    const source = await readFile(profilePath, "utf8");
+    await writeFile(
+      profilePath,
+      source.replace(
+        "  mode: guarded\n  requiresSandbox: false",
+        "  mode: trusted-local\n  requiresSandbox: false",
+      ),
+    );
+    assert.equal(
+      await runCli(["compile", "--root", root, "--write", "--force"], {
+        io: { stdout: () => undefined, stderr: () => undefined },
+      }),
+      0,
+    );
+    await stampCurrentCatalog(root);
+
+    const actions = (await evaluateDispatchState(root)).actions;
+    assert.equal(actions[0], "configure");
+    assert.ok(actions.includes("doctor"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher keeps unrelated priority for a stricter-only permission warning", async () => {
+  const root = await currentRoot();
+  try {
+    await stampCurrentCatalog(root);
+    await writeFile(
+      path.join(root, ".claude", "settings.local.json"),
+      `${JSON.stringify({ permissions: { defaultMode: "plan" } }, null, 2)}\n`,
+    );
+
+    const actions = (await evaluateDispatchState(root)).actions;
+    assert.deepEqual(actions, ["current", "doctor", "ui", "configure"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -270,7 +355,7 @@ test("dispatcher state matrix: absent catalog with every capability enabled does
     );
     const actions = (await evaluateDispatchState(root)).actions;
     assert.equal(actions.includes("upgrade"), false);
-    assert.deepEqual(actions, ["current", "doctor", "ui"]);
+    assert.deepEqual(actions, ["current", "doctor", "ui", "configure"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -331,6 +416,7 @@ test("dispatcher passes through the selected command exit code", async () => {
       {
         doctor: noop,
         init: async () => 47,
+        configure: noop,
         upgrade: noop,
         ui: noop,
         "compile-write": noop,
@@ -339,6 +425,77 @@ test("dispatcher passes through the selected command exit code", async () => {
       "test",
     );
     assert.equal(code, 47);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("bare dispatcher routes Change agent control to the real configure flow", async () => {
+  const root = await tempRoot();
+  const events: string[] = [];
+  try {
+    const code = await runCli([], {
+      cwd: root,
+      io: { stdout: () => undefined, stderr: () => undefined },
+      dispatcherPrompts: {
+        choose: async () => "configure",
+        confirmNext: async () => false,
+      },
+      configurePrompts: {
+        showRefusal: () => events.push("refusal"),
+        end: () => events.push("end"),
+      },
+    } as never);
+
+    assert.equal(code, 1);
+    assert.deepEqual(events, ["refusal", "end"]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("dispatcher follow-up filters a consumed agent-control mismatch", async () => {
+  const root = await currentRoot();
+  try {
+    await stampCurrentCatalog(root);
+    await writeFile(
+      path.join(root, ".claude", "settings.local.json"),
+      `${JSON.stringify({ permissions: { defaultMode: "bypassPermissions" } }, null, 2)}\n`,
+    );
+    const confirmations: string[] = [];
+    const calls: string[] = [];
+    const noop = async () => 0;
+
+    const code = await runBareDispatcher(
+      root,
+      { stdout: () => undefined, stderr: () => undefined },
+      {
+        dispatcherPrompts: {
+          choose: async () => "configure",
+          confirmNext: async (input) => {
+            confirmations.push(input.action);
+            return false;
+          },
+        },
+      },
+      {
+        configure: async () => {
+          calls.push("configure");
+          return 0;
+        },
+        doctor: noop,
+        init: noop,
+        upgrade: noop,
+        ui: noop,
+        "compile-write": noop,
+        "compile-reconcile": noop,
+      },
+      "test",
+    );
+
+    assert.equal(code, 0);
+    assert.deepEqual(calls, ["configure"]);
+    assert.deepEqual(confirmations, ["doctor"]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -362,7 +519,8 @@ test("dispatcher chains past a persisting read-only doctor state with a fresh co
     }> = [];
     const notes: string[] = [];
     const calls: string[] = [];
-    let afterDoctor: Awaited<ReturnType<typeof evaluateDispatchState>> | undefined;
+    let afterDoctor:
+      Awaited<ReturnType<typeof evaluateDispatchState>> | undefined;
     const prompts: DispatcherPrompts & {
       confirmNext(input: {
         action: string;
@@ -402,6 +560,7 @@ test("dispatcher chains past a persisting read-only doctor state with a fresh co
           });
         },
         init: async () => 0,
+        configure: async () => 0,
         upgrade: async () => 0,
         ui: async () => 0,
         "compile-reconcile": async () => 0,
@@ -459,6 +618,7 @@ test("dispatcher menu is neutral and a routed doctor prints its logo once", asyn
           return 1;
         },
         init: async () => 0,
+        configure: async () => 0,
         upgrade: async () => 0,
         ui: async () => 0,
         "compile-write": async () => 0,
@@ -467,7 +627,10 @@ test("dispatcher menu is neutral and a routed doctor prints its logo once", asyn
       "test",
     );
     assert.match(text, /agent-profile.*vtest/u);
-    assert.equal((text.match(/agent-profile.*doctor.*vtest/gu) ?? []).length, 1);
+    assert.equal(
+      (text.match(/agent-profile.*doctor.*vtest/gu) ?? []).length,
+      1,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -490,6 +653,7 @@ test("dispatcher decline preserves the failing last completed action exit code",
           throw new Error("compile must not run after a declined offer");
         },
         init: async () => 0,
+        configure: async () => 0,
         upgrade: async () => 0,
         ui: async () => 0,
         "compile-reconcile": async () => 0,
@@ -531,6 +695,7 @@ test("dispatcher notes filtered exhaustion only after every non-current action i
       {
         doctor: async () => 0,
         init: async () => 0,
+        configure: async () => 0,
         "compile-write": async () => {
           events.push("run:compile-write");
           return 0;
@@ -550,6 +715,7 @@ test("dispatcher notes filtered exhaustion only after every non-current action i
       "run:compile-write",
       "confirm:upgrade",
       "run:upgrade",
+      "confirm:configure",
       "note:No further applicable actions remain. Address the reported issues, then run `agent-profile` again.",
     ]);
   } finally {
@@ -583,6 +749,7 @@ test("dispatcher cancel exits zero without running a command", async () => {
       {
         doctor: unexpected,
         init: unexpected,
+        configure: unexpected,
         upgrade: unexpected,
         ui: unexpected,
         "compile-write": unexpected,

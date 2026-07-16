@@ -12,6 +12,7 @@ import {
 import {
   computeOfferedCapabilities,
   parseProfileYaml,
+  resolvePermissionPosture,
 } from "@agent-profile/core";
 import { runDoctor } from "@agent-profile/doctor";
 
@@ -33,6 +34,7 @@ const LABELS: Record<DispatchAction, string> = {
   init: "Set up this repo",
   "compile-write": "Generate agent files",
   "compile-reconcile": "Review edited files",
+  configure: "Change agent control",
   upgrade: "Adopt new capabilities",
   current: "Everything up to date",
   ui: "Open the local UI",
@@ -43,6 +45,7 @@ const COMMANDS: Record<Exclude<DispatchAction, "current">, string> = {
   init: "init",
   "compile-write": "compile --write",
   "compile-reconcile": "compile",
+  configure: "configure",
   upgrade: "upgrade",
   ui: "ui",
 };
@@ -60,6 +63,14 @@ export async function evaluateDispatchState(
     stack: { languages: [], frameworks: [], packageManagers: [], testing: [] },
   });
   const doctor = await runDoctor({ rootDir });
+  let agentControlRecommended = doctor.issues.some(
+    (issue) =>
+      ["LINT-PERM-003", "LINT-PERM-004", "LINT-PERM-005"].includes(
+        issue.code,
+      ) ||
+      (issue.code === "LINT-PERM-007" &&
+        issue.path.endsWith("-personal-activation")),
+  );
   // Broken state routes to doctor. Doctor errors qualify unless they are
   // "missing" (a symlinked generated file reports as missing, so that signal
   // is unreliable for region conflicts) or the lock-age informational code.
@@ -83,16 +94,30 @@ export async function evaluateDispatchState(
     .catch(() => undefined);
   if (source === undefined) {
     actions.push("init");
-    return { actions: unique(actions) };
+    return { actions: withAgentControl(actions, agentControlRecommended) };
   }
 
   const lock = await readLockfileForRegions(rootDir);
   if (!lock) actions.push("compile-write");
 
   const profile = parseProfileYaml(source, { sourcePath: "ai-profile.yaml" });
-  if (!profile.ok) return { actions: unique(["doctor", ...actions]) };
+  if (!profile.ok)
+    return {
+      actions: withAgentControl(
+        ["doctor", ...actions],
+        agentControlRecommended,
+      ),
+    };
+  agentControlRecommended ||= resolvePermissionPosture(profile.profile).legacy
+    .isLegacyAutonomous;
   const compiled = compileProfile({ profile: profile.profile });
-  if (!compiled.ok) return { actions: unique(["doctor", ...actions]) };
+  if (!compiled.ok)
+    return {
+      actions: withAgentControl(
+        ["doctor", ...actions],
+        agentControlRecommended,
+      ),
+    };
 
   const plan = await planRegionAwareWrites(rootDir, compiled.files);
   const ownedDrift = lock
@@ -124,7 +149,16 @@ export async function evaluateDispatchState(
     actions.push("upgrade");
   }
   if (actions.length === 0) actions.push("current", "doctor", "ui");
-  return { actions: unique(actions) };
+  return { actions: withAgentControl(actions, agentControlRecommended) };
+}
+
+function withAgentControl(
+  actions: readonly DispatchAction[],
+  recommended: boolean,
+): DispatchAction[] {
+  return unique(
+    recommended ? ["configure", ...actions] : [...actions, "configure"],
+  );
 }
 
 function unique(actions: readonly DispatchAction[]): DispatchAction[] {
