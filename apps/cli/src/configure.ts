@@ -41,8 +41,9 @@ import { WizardCancelled } from "./wizard.js";
 
 /**
  * The `.gitignore` line that must already be present before I5 may write the
- * developer-local Claude activation file. Configure only offers to add the
- * prerequisite line; it never writes the local file itself (ADR 0019).
+ * developer-local Claude activation file. The shared stage may offer to add
+ * the prerequisite line; only a later, separately confirmed personal stage
+ * may write the bounded local permission field (ADR 0019).
  */
 export const PERSONAL_ACTIVATION_IGNORE_LINE = ".claude/settings.local.json";
 export const PERSONAL_ACTIVATION_STAGING_IGNORE_LINE =

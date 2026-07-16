@@ -8,5 +8,7 @@ inspecting, reconciling, activating, and validating agent permission posture.
 
 The spec and governing ADR amendments were approved on 2026-07-14. A same-day
 field-evidence amendment requires exact local permission-source attribution,
-consequence guidance, and explicit cross-client scope. I1 is ready for
-implementation through the required RED-first TDD workflow.
+consequence guidance, and explicit cross-client scope. I1-I7 provide the
+resolver, mappings, inspection, configure, activation, Doctor, and dispatcher
+slices. I8 assembles their published journey and records the final evidence in
+the [`spec-to-test matrix`](002-final-spec-to-test-matrix.md).

@@ -131,10 +131,10 @@ workflow:
 
 compiles into local files for each enabled tool:
 
-| Tool    | Generated output                                                              |
-| ------- | ----------------------------------------------------------------------------- |
-| Codex   | project config, `AGENTS.md`, and workflow skills (`.agents/skills/`)          |
-| Claude  | Claude project config, `CLAUDE.md`, and workflow skills (`.claude/skills/`)   |
+| Tool    | Generated output                                                                  |
+| ------- | --------------------------------------------------------------------------------- |
+| Codex   | project config, `AGENTS.md`, and workflow skills (`.agents/skills/`)              |
+| Claude  | Claude project config, `CLAUDE.md`, and workflow skills (`.claude/skills/`)       |
 | Tabnine | guidelines, MCP configuration, and the shared workflow skills (`.agents/skills/`) |
 
 Generated files are deterministic: the same profile and compiler version
@@ -168,6 +168,7 @@ bare invocation prints help and runs no detection):
 
 ```bash
 npx agent-profile init
+npx agent-profile configure
 npx agent-profile compile --dry-run
 npx agent-profile compile --write
 npx agent-profile doctor
@@ -184,14 +185,17 @@ The workflow is:
    bypass the wizard with explicit flags such as
    `init --client codex --write` or
    `init --import --strategy regions --write`.
-2. `compile --dry-run` previews the files that would be generated.
-3. `compile --write` writes generated files under the project root.
-4. `doctor` checks profile validity, drift, safety posture, and generated files.
+2. `configure` opens the interactive agent-control flow directly. It names
+   exact contributing configuration sources and offers repair, lossless adopt,
+   review, or leave; it has no unattended posture-adoption mode.
+3. `compile --dry-run` previews the files that would be generated.
+4. `compile --write` writes generated files under the project root.
+5. `doctor` checks profile validity, drift, safety posture, and generated files.
    With `--mcp-suggestions`, doctor also runs a fully offline, informational
    scan that flags npm dependencies newer than APC's pinned knowledge baseline
    and points to curated MCP candidate ids. It emits `info` findings only —
    it never installs, configures, fetches, or changes the exit code.
-5. `ui` starts a local browser UI on loopback. The UI can inspect the project
+6. `ui` starts a local browser UI on loopback. The UI can inspect the project
    and edit `ai-profile.yaml` through a diff-gated save flow; generated
    artifacts are still written only by the CLI.
 

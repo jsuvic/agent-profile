@@ -23,7 +23,10 @@ const trustedLocalFixtureDirPath = fileURLToPath(
   new URL("../../../fixtures/trusted-local-adopted/", import.meta.url),
 );
 const subagentsProfilePath = fileURLToPath(
-  new URL("../../../fixtures/subagents-enabled/ai-profile.yaml", import.meta.url),
+  new URL(
+    "../../../fixtures/subagents-enabled/ai-profile.yaml",
+    import.meta.url,
+  ),
 );
 
 function findClaudeSettings(
@@ -99,17 +102,23 @@ test("trusted-local compile returns a versioned client mapping report", async ()
   const rows = result.mappingReport?.rows ?? [];
   for (const row of rows) {
     assert.match(row.source, /^https:\/\//u, `${row.client} source is a URL`);
-    assert.equal(row.verifiedOn, "2026-07-02", `${row.client} verifiedOn`);
+    assert.equal(row.verifiedOn, "2026-07-16", `${row.client} verifiedOn`);
     assert.ok(
-      ["confirmed-official", "partial-official", "unknown", "not-supported"].includes(
-        row.supportGrade,
-      ),
+      [
+        "confirmed-official",
+        "partial-official",
+        "unknown",
+        "not-supported",
+      ].includes(row.supportGrade),
       `${row.client} supportGrade in closed set`,
     );
   }
   const claudeRow = rows.find((row) => row.client === "claude");
   assert.equal(claudeRow?.source, "https://code.claude.com/docs/en/settings");
   assert.equal(claudeRow?.supportGrade, "confirmed-official");
+  const codexRow = rows.find((row) => row.client === "codex");
+  assert.equal(codexRow?.source, "https://learn.chatgpt.com/docs/permissions");
+  assert.equal(codexRow?.supportGrade, "confirmed-official");
   const tabnineRow = rows.find((row) => row.client === "tabnine");
   assert.equal(tabnineRow?.supportGrade, "confirmed-official");
 });
