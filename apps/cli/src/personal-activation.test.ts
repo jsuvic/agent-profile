@@ -8,6 +8,7 @@ import {
   readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -83,6 +84,42 @@ test("unexpected prepare I/O rejects at the lower boundary without changing byte
     assert.deepEqual(await readFile(destination), before);
   } finally {
     await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("an ancestor symlink refuses at the lower activation boundary without changing external bytes", async (t) => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-personal-"));
+  const outside = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-personal-outside-"),
+  );
+  const outsideDestination = path.join(outside, "settings.local.json");
+  const original = Buffer.from(
+    '{"permissions":{"defaultMode":"default"}}\n',
+    "utf8",
+  );
+  try {
+    await writeFile(outsideDestination, original);
+    try {
+      await symlink(outside, path.join(rootDir, ".claude"), "junction");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES" || code === "ENOSYS") {
+        return t.skip("symlink creation is unsupported on this host");
+      }
+      throw error;
+    }
+    const service = createPersonalActivationService(ignoredIo());
+
+    const result = await service.prepare(rootDir);
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.code, "unsafe-path");
+    assert.deepEqual(await readFile(outsideDestination), original);
+    assert.deepEqual(await readdir(outside), ["settings.local.json"]);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });
 

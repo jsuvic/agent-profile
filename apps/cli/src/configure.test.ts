@@ -514,51 +514,39 @@ test("already-active Claude activation is idempotent and skips personal consent"
   }
 });
 
-test("destination and ancestor symlinks refuse through the post-shared seam", async (t) => {
+test("a destination symlink refuses through the post-shared seam", async (t) => {
   const skip = symlinkSkipReason();
   if (skip) return t.skip(skip);
-  for (const kind of ["destination", "ancestor"] as const) {
-    const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
-    const outside = await mkdtemp(
-      path.join(tmpdir(), "agent-profile-i5-link-"),
+  const rootDir = await createRoot(PRESET_DRIVEN_PROFILE);
+  const outside = await mkdtemp(path.join(tmpdir(), "agent-profile-i5-link-"));
+  try {
+    await initGit(rootDir);
+    await materialize(rootDir);
+    await writeFile(
+      path.join(rootDir, ".gitignore"),
+      `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
+      "utf8",
     );
-    try {
-      await initGit(rootDir);
-      await materialize(rootDir);
-      await writeFile(
-        path.join(rootDir, ".gitignore"),
-        `${IGNORE_LINE}\n${STAGING_IGNORE_LINE}\n`,
-        "utf8",
-      );
-      if (kind === "destination") {
-        const outsideFile = path.join(outside, "settings.local.json");
-        await writeFile(outsideFile, "{}\n", "utf8");
-        await symlink(
-          outsideFile,
-          path.join(rootDir, ".claude", "settings.local.json"),
-          "file",
-        );
-      } else {
-        await rm(path.join(rootDir, ".claude"), {
-          recursive: true,
-          force: true,
-        });
-        await symlink(outside, path.join(rootDir, ".claude"), "junction");
-      }
-      const { prompts } = scriptPrompts({
-        posture: "trusted-local",
-        confirm: true,
-        personalActivation: true,
-      });
+    const outsideFile = path.join(outside, "settings.local.json");
+    await writeFile(outsideFile, "{}\n", "utf8");
+    await symlink(
+      outsideFile,
+      path.join(rootDir, ".claude", "settings.local.json"),
+      "file",
+    );
+    const { prompts } = scriptPrompts({
+      posture: "trusted-local",
+      confirm: true,
+      personalActivation: true,
+    });
 
-      const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+    const report = await runConfigurePermissionFlow({ rootDir }, prompts);
 
-      assert.equal(report.outcome, "applied", kind);
-      assert.equal(report.personalActivation?.outcome, "refused", kind);
-    } finally {
-      await rm(rootDir, { recursive: true, force: true });
-      await rm(outside, { recursive: true, force: true });
-    }
+    assert.equal(report.outcome, "applied");
+    assert.equal(report.personalActivation?.outcome, "refused");
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });
 
