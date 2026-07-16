@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -14,12 +15,15 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 
 import {
   createNodePersonalActivationIo,
   createPersonalActivationService,
   type PersonalActivationIo,
 } from "./personal-activation.js";
+
+const execFileAsync = promisify(execFile);
 
 test("personal activation exposes its unmanaged local I/O boundary through a production factory", () => {
   assert.equal(typeof createPersonalActivationService, "function");
@@ -62,6 +66,55 @@ test("missing Git is a stable lower-boundary refusal", async () => {
       result.guidance.join("\n"),
       /definitely-missing|tmp|personal-/iu,
     );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("a tracked ignore-matching destination is refused while an untracked one is accepted", async () => {
+  const rootDir = await activationRoot();
+  const destination = path.join(rootDir, ".claude", "settings.local.json");
+  const gitignore = path.join(rootDir, ".gitignore");
+  try {
+    await writeFile(
+      gitignore,
+      ".claude/settings.local.json\n.claude/.agent-profile/\n",
+      "utf8",
+    );
+    await execFileAsync("git", ["-C", rootDir, "init", "--quiet"]);
+    await execFileAsync("git", [
+      "-C",
+      rootDir,
+      "add",
+      "-f",
+      "--",
+      ".claude/settings.local.json",
+    ]);
+    const destinationBefore = await readFile(destination);
+    const gitignoreBefore = await readFile(gitignore);
+    const service = createPersonalActivationService(
+      createNodePersonalActivationIo(),
+    );
+
+    const tracked = await service.prepare(rootDir);
+
+    assert.equal(tracked.ok, false);
+    if (tracked.ok) return;
+    assert.equal(tracked.code, "unignored-path");
+    assert.deepEqual(await readFile(destination), destinationBefore);
+    assert.deepEqual(await readFile(gitignore), gitignoreBefore);
+
+    await execFileAsync("git", [
+      "-C",
+      rootDir,
+      "rm",
+      "--cached",
+      "--quiet",
+      "--",
+      ".claude/settings.local.json",
+    ]);
+    const untracked = await service.prepare(rootDir);
+    assert.equal(untracked.ok, true);
   } finally {
     await rm(rootDir, { recursive: true, force: true });
   }

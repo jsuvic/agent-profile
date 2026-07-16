@@ -105,15 +105,7 @@ async function nodeCheckIgnored(
   try {
     await execFileAsync(
       gitExecutable,
-      [
-        "-C",
-        rootDir,
-        "check-ignore",
-        "--no-index",
-        "--quiet",
-        "--",
-        relativePath,
-      ],
+      ["-C", rootDir, "check-ignore", "--quiet", "--", relativePath],
       { windowsHide: true },
     );
     return "ignored";
@@ -174,7 +166,7 @@ async function proveIgnored(
             ? "unignored-path"
             : "ignore-unknown",
       guidance: [
-        "Claude personal activation was refused because repository ignore status could not be proved.",
+        "Claude personal activation was refused because every activation path could not be proved ignored and untracked.",
         "The local settings file and .gitignore are unchanged.",
         "Rerun the shared preview with both activation ignore prerequisites or update .gitignore manually.",
       ],
