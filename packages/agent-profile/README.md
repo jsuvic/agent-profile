@@ -31,10 +31,38 @@ Requirements: Node.js 24+ and npm 11+.
    now understand your project.
 
 Run `npx agent-profile` again any time: it checks your project and
-suggests the right next step itself (first setup, regenerating files,
-adopting new capabilities, or a health check). Explicit commands
-(`init`, `compile`, `upgrade`, `doctor`, `ui`) exist for scripts and CI -
-see the [full documentation](https://github.com/jsuvic/agent-profile#readme).
+suggests the right next step itself (first setup, changing agent control,
+regenerating files, adopting new capabilities, or a health check).
+
+Use `npx agent-profile configure` when you want to open the same interactive
+agent-control flow directly. Explicit commands (`init`, `compile`, `upgrade`,
+`doctor`, `ui`) remain the automation boundary for scripts and CI. A bare
+non-interactive command prints help without inspecting the repository, and
+`configure` never adopts a posture unattended.
+
+## Change Agent Control
+
+`npx agent-profile configure` shows the declared posture, each enabled
+client's detectable effective behavior, hard safety denials, mapping limits,
+and a preview before any shared write. Normal choices are Guarded, Balanced,
+Trusted local, and Plan-only. Legacy Autonomous is kept byte-identical until
+you explicitly migrate it.
+
+If client configuration differs from shared intent, choose to **repair**
+generated settings, **adopt** behavior only when it has a lossless profile
+form, **review** the exact contributing sources, or **leave** it unchanged.
+None of these choices mutates files before preview and confirmation.
+
+For example, when `.claude/settings.local.json` supplies Claude's effective
+behavior, the report names that exact source and explains its consequence.
+That local choice affects Claude only: Codex and Tabnine are not changed or
+synchronized. Shared intent is applied atomically; Trusted-local personal
+activation is a separate confirmation and writes only owned permission fields
+in an already ignored local file. Unsupported client behavior stays manual
+instead of being invented.
+
+See the [full documentation](https://github.com/jsuvic/agent-profile#readme)
+for client mappings, refusal recovery, and Doctor severities.
 
 ## From an Idea to a Reviewed Change
 
@@ -71,10 +99,10 @@ for which stages benefit from a stronger reasoning model.
 
 ## What Gets Generated
 
-| Tool    | Generated output                                                              |
-| ------- | ----------------------------------------------------------------------------- |
-| Codex   | project config, `AGENTS.md`, and workflow skills (`.agents/skills/`)          |
-| Claude  | Claude project config, `CLAUDE.md`, and workflow skills (`.claude/skills/`)   |
+| Tool    | Generated output                                                                  |
+| ------- | --------------------------------------------------------------------------------- |
+| Codex   | project config, `AGENTS.md`, and workflow skills (`.agents/skills/`)              |
+| Claude  | Claude project config, `CLAUDE.md`, and workflow skills (`.claude/skills/`)       |
 | Tabnine | guidelines, MCP configuration, and the shared workflow skills (`.agents/skills/`) |
 
 Generated files are deterministic - the same profile and compiler version

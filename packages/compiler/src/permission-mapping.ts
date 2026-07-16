@@ -34,10 +34,7 @@ export const CLIENT_MAPPING_VERSION = 1;
 export type ClientMappingClientId = PermissionPostureClientId;
 
 export type MappingSupportGrade =
-  | "confirmed-official"
-  | "partial-official"
-  | "unknown"
-  | "not-supported";
+  "confirmed-official" | "partial-official" | "unknown" | "not-supported";
 
 export type ClientMappingRow = {
   client: ClientMappingClientId;
@@ -46,7 +43,7 @@ export type ClientMappingRow = {
   supportGrade: MappingSupportGrade;
   /** Official documentation URL that verifies this mapping. */
   source: string;
-  /** ISO date the mapping source was verified, e.g. "2026-07-02". */
+  /** ISO date the mapping source was verified, e.g. "2026-07-16". */
   verifiedOn: string;
 };
 
@@ -55,11 +52,12 @@ export type ClientMappingReport = {
   rows: ClientMappingRow[];
 };
 
-// Official documentation sources reverified 2026-07-02 (hooks 2026-07-04) per
+// Official permission documentation reverified for Phase 31 I8 on 2026-07-16.
+// The broader capability inventory remains in
 // docs/research/008-current-agent-capabilities-2026-07.md.
-const VERIFIED_ON = "2026-07-02";
+const VERIFIED_ON = "2026-07-16";
 const CLAUDE_SOURCE = "https://code.claude.com/docs/en/settings";
-const CODEX_SOURCE = "https://developers.openai.com/codex/permissions";
+const CODEX_SOURCE = "https://learn.chatgpt.com/docs/permissions";
 const TABNINE_SOURCE =
   "https://docs.tabnine.com/main/getting-started/tabnine-agent/agent-settings";
 
@@ -80,9 +78,10 @@ function claudeStatus(posture: PermissionPosture): MappingStatus {
 }
 
 function codexStatus(posture: PermissionPosture): MappingStatus {
-  // Codex has no ignored project-local activation file (ADR 0019), so the
-  // higher trusted-local autonomy is manual/session/profile work rather than a
-  // safe shared write; other postures map onto documented shared config.
+  // Codex documents beta default_permissions/[permissions] profiles and keeps
+  // legacy sandbox_mode compatibility, but has no ignored project-local
+  // activation file owned by APC (ADR 0019). Trusted-local therefore remains
+  // manual profile/session work; existing shared mappings stay unchanged.
   return posture === "trusted-local"
     ? "manual-setup-required"
     : "configured-automatically";

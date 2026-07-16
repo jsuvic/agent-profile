@@ -442,14 +442,14 @@ test("confirmed Claude activation preserves unrelated JSON bytes and reports ver
           state: "active",
           status: "personal-activation-required",
           source: "https://code.claude.com/docs/en/settings",
-          verifiedOn: "2026-07-02",
+          verifiedOn: "2026-07-16",
         },
         {
           client: "codex",
           state: "manual",
           status: "manual-setup-required",
-          source: "https://developers.openai.com/codex/permissions",
-          verifiedOn: "2026-07-02",
+          source: "https://learn.chatgpt.com/docs/permissions",
+          verifiedOn: "2026-07-16",
         },
       ],
     );

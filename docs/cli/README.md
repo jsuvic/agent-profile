@@ -1,5 +1,18 @@
 # CLI Reference
 
+In an interactive terminal, start with the state-aware router:
+
+```bash
+npx agent-profile
+```
+
+It inspects the repository read-only, always lists **Change agent control**, and
+recommends the next applicable action. Use
+`npx agent-profile configure` to open that same permission-posture flow
+directly. A bare non-interactive, piped, or CI invocation prints stable help
+without detection. Scripts and automation should use the explicit commands
+below; `configure` never adopts a posture unattended.
+
 Implemented:
 
 - `agent-profile doctor`
@@ -93,7 +106,8 @@ Everything before the preview is read-only.
 
 ### Shared vs personal
 
-`configure` writes **shared** repository intent only: `ai-profile.yaml`, the
+The first configure stage writes **shared** repository intent only:
+`ai-profile.yaml`, the
 generated client artifacts, and — when you explicitly select it — the
 `.gitignore` line that a later personal activation requires
 (`.claude/settings.local.json`).
@@ -109,8 +123,12 @@ new bytes so you can review them against version control.
 
 Activating `trusted-local` on your own machine is a separate, developer-local
 step: shared files make the posture possible, but they never grant it to
-everyone who clones the repository (ADR 0019). `configure` never writes the
-personal activation file itself.
+everyone who clones the repository (ADR 0019). Only after the shared stage
+succeeds, `configure` may offer a second confirmation for bounded personal
+activation. That writer requires `.claude/settings.local.json` to already be
+ignored and untracked, changes only the owned permission field, preserves
+unrelated fields, and never edits `.gitignore`. Declining or failing this stage
+leaves the valid shared intent in place and reports activation as incomplete.
 
 ### Reconciliation
 

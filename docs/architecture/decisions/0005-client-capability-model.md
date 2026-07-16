@@ -205,3 +205,26 @@ Official evidence checked for the Phase 31 candidate on 2026-07-14:
 
 Implementation must reverify these sources before emitting or editing native
 client configuration.
+
+## 2026-07-16 Phase 31 Implementation Verification
+
+The I8 release review reverified the permission surfaces against current
+official documentation:
+
+- Claude settings and permissions still document
+  `.claude/settings.local.json` precedence, `defaultMode` including
+  `bypassPermissions`, and merged `ask`/`deny` rules. APC therefore keeps
+  shared generation separate from the bounded, ignored personal activation.
+- Codex's former `developers.openai.com/codex/permissions` URL now redirects to
+  the canonical `https://learn.chatgpt.com/docs/permissions`. That page
+  documents beta `default_permissions`/`[permissions]` profiles and explicit
+  compatibility with legacy `sandbox_mode`. APC keeps its existing generated
+  compatibility mapping and treats Trusted local as manual profile/session
+  work because APC owns no safe ignored project-local activation writer.
+- Tabnine still documents manual per-tool **Auto-approve**, **Ask first**, and
+  **Disable** controls for the IDE. APC reports these as manual setup and does
+  not invent a generated setting or claim deterministic CLI parity.
+
+The permission mapping catalog retains version 1 because the normalized
+statuses and generated behavior did not change; its source provenance and
+verification date now record this implementation-time check.
