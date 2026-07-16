@@ -7,6 +7,7 @@ import path from "node:path";
 
 import {
   compileProfile,
+  buildClientMappingReport,
   createLockfileFile,
   getAdvisoryHookTemplate,
   parseMixedFile,
@@ -33,6 +34,7 @@ import {
   deriveEffectivePermissions,
   getEnabledSubagents,
   getSelectedAdvisoryHookRoles,
+  inspectPermissionPosture,
   isSubagentBuiltinNameCollision,
   normalizeSafety,
   parseProfileYaml,
@@ -43,6 +45,7 @@ import {
 } from "@agent-profile/core";
 
 import { scanMcpSuggestions } from "./mcpSuggestions.js";
+import { evaluatePermissionDoctorIssues } from "./permission-doctor.js";
 import type {
   DoctorIssue,
   DoctorIssueCode,
@@ -166,6 +169,26 @@ export async function runDoctor(
   }
 
   await checkPermissionPosture(rootDir, profileResult.profile, issues);
+  const permissionPlan = resolvePermissionPosture(profileResult.profile);
+  const permissionInspection = await inspectPermissionPosture(
+    rootDir,
+    permissionPlan,
+    { inspectUserMachineScopes: false },
+  );
+  const permissionOwnership = lockfileV2
+    ? lockfileV2.outputs.map(({ path: outputPath, ownership }) => ({
+        path: outputPath,
+        ownership,
+      }))
+    : [];
+  issues.push(
+    ...evaluatePermissionDoctorIssues(
+      permissionPlan,
+      permissionInspection.evidence,
+      permissionOwnership,
+      compileResult.mappingReport ?? buildClientMappingReport(permissionPlan),
+    ).findings,
+  );
   await checkSubagentArtifacts({
     rootDir,
     profile: profileResult.profile,
@@ -326,9 +349,7 @@ function isTableSeparatorRow(row: string): boolean {
 }
 
 function tableCells(row: string): string[] {
-  const withoutEdges = row
-    .replace(/^\|/u, "")
-    .replace(/\|$/u, "");
+  const withoutEdges = row.replace(/^\|/u, "").replace(/\|$/u, "");
   return withoutEdges.split("|").map((cell) => cell.trim());
 }
 
@@ -1397,7 +1418,8 @@ async function checkPermissionPosture(
   // so an intentional per-client adoption is not misread as guarded drift.
   const claudeIntentionalHighAutonomy =
     autonomousSandbox ||
-    resolvePermissionPosture(profile).clients.claude.posture === "trusted-local";
+    resolvePermissionPosture(profile).clients.claude.posture ===
+      "trusted-local";
 
   if (safety.mode === "guarded" && effective.shell.run === "allow") {
     issues.push(
@@ -1444,21 +1466,10 @@ async function checkPermissionPosture(
     );
   }
 
-  if (safety.mode === "autonomous" && !safety.requiresSandbox) {
-    issues.push(
-      permissionIssue(
-        "LINT-PERM-004",
-        "error",
-        "/safety/requiresSandbox",
-        "true",
-        "false",
-        "Autonomous mode requires explicit sandbox intent.",
-        "Set safety.requiresSandbox: true only for isolated environments.",
-      ),
-    );
-  }
-
-  if (hasUnsafeAutoApproval(effective, safety.mode) && !intentionalHighAutonomy) {
+  if (
+    hasUnsafeAutoApproval(effective, safety.mode) &&
+    !intentionalHighAutonomy
+  ) {
     issues.push(
       permissionIssue(
         "LINT-PERM-004",
@@ -1476,7 +1487,7 @@ async function checkPermissionPosture(
     issues.push(
       permissionIssue(
         "LINT-PERM-005",
-        "warning",
+        "error",
         looser.path,
         looser.expected,
         looser.actual,
@@ -1486,7 +1497,7 @@ async function checkPermissionPosture(
     );
   }
 
-  const sandboxEvidence = await checkProjectPermissionConfig(
+  await checkProjectPermissionConfig(
     rootDir,
     profile,
     effective,
@@ -1495,21 +1506,8 @@ async function checkPermissionPosture(
     issues,
   );
 
-  if (autonomousSandbox && !sandboxEvidence) {
-    issues.push(
-      permissionIssue(
-        "LINT-PERM-004",
-        "warning",
-        "/safety/requiresSandbox",
-        "verifiable generated sandbox config",
-        "not verifiable",
-        "Autonomous mode declares sandbox intent, but doctor could not verify generated sandbox config.",
-        "Ensure generated Codex or Claude project config enforces sandboxing before using autonomous mode.",
-      ),
-    );
-  }
-
-  reportRuntimeUnverifiable(profile, issues);
+  // Runtime uncertainty, activation state, and client limitations are emitted
+  // once by the Phase 31 evaluator from canonical inspection/mapping evidence.
 }
 
 async function checkProjectPermissionConfig(
@@ -1564,7 +1562,7 @@ async function checkCodexConfig(
   if (config.unsupportedLines.length > 0) {
     issues.push(
       permissionIssue(
-        "LINT-PERM-005",
+        "LINT-PERM-006",
         "warning",
         ".codex/config.toml",
         "supported scalar TOML syntax",
@@ -1607,7 +1605,7 @@ async function checkCodexConfig(
     issues.push(
       permissionIssue(
         "LINT-PERM-005",
-        "warning",
+        "error",
         ".codex/config.toml",
         "current approval policy",
         "on-failure",
@@ -1633,19 +1631,6 @@ async function checkCodexConfig(
         ".codex/config.toml",
         "network ask/deny",
         "network_access = true",
-      ),
-    );
-  }
-
-  if (
-    sandboxMode === "workspace-write" &&
-    effective.filesystem.write === "deny"
-  ) {
-    issues.push(
-      configLooserIssue(
-        ".codex/config.toml",
-        "read-only filesystem posture",
-        "workspace-write",
       ),
     );
   }
@@ -1682,46 +1667,20 @@ async function checkClaudeConfig(
 
   const permissions = getRecord(merged.permissions);
   const sandbox = getRecord(merged.sandbox);
-  const defaultMode = permissions ? permissions.defaultMode : undefined;
   const disableBypass = permissions
     ? permissions.disableBypassPermissionsMode
     : undefined;
   const disableAuto = permissions ? permissions.disableAutoMode : undefined;
-
-  if (defaultMode === "bypassPermissions") {
-    issues.push(
-      permissionIssue(
-        "LINT-PERM-004",
-        "error",
-        ".claude/settings.json",
-        "non-bypass permission mode",
-        "bypassPermissions",
-        "Claude bypassPermissions cannot be a generated or project default.",
-        "Use default or plan mode and keep bypass mode disabled.",
-      ),
-    );
-  }
-
-  if (defaultMode === "auto" && !intentionalHighAutonomy) {
-    issues.push(
-      permissionIssue(
-        "LINT-PERM-004",
-        "error",
-        ".claude/settings.json",
-        "manual approval mode",
-        "auto",
-        "Claude auto mode is too loose without autonomous sandbox intent.",
-        "Use default mode for guarded or balanced profiles.",
-      ),
-    );
-  }
 
   if (!intentionalHighAutonomy && disableBypass !== "disable") {
     issues.push(
       permissionIssue(
         "LINT-PERM-004",
         "error",
-        ".claude/settings.json",
+        claudeSupplyingPath(local, [
+          "permissions",
+          "disableBypassPermissionsMode",
+        ]),
         'disableBypassPermissionsMode = "disable"',
         describeSetting(disableBypass),
         "Claude bypass mode guard is missing or not disabled.",
@@ -1735,59 +1694,11 @@ async function checkClaudeConfig(
       permissionIssue(
         "LINT-PERM-004",
         "error",
-        ".claude/settings.json",
+        claudeSupplyingPath(local, ["permissions", "disableAutoMode"]),
         'disableAutoMode = "disable"',
         describeSetting(disableAuto),
         "Claude auto mode guard is missing or not disabled.",
         'Set permissions.disableAutoMode to "disable".',
-      ),
-    );
-  }
-
-  const allowRules = getStringArray(permissions?.allow);
-  const askRules = getStringArray(permissions?.ask);
-  const denyRules = getStringArray(permissions?.deny);
-  const effectiveRuleSurface = evaluateClaudeRules(
-    denyRules,
-    askRules,
-    allowRules,
-  );
-
-  if (
-    effectiveRuleSurface.bash === "allow" &&
-    effective.shell.run !== "allow"
-  ) {
-    issues.push(
-      configLooserIssue(
-        ".claude/settings.json",
-        "Bash ask/deny",
-        "Bash allow rule",
-      ),
-    );
-  }
-
-  if (
-    effectiveRuleSurface.edit === "allow" &&
-    effective.filesystem.write !== "allow"
-  ) {
-    issues.push(
-      configLooserIssue(
-        ".claude/settings.json",
-        "file edits ask/deny",
-        "Edit/Write allow rule",
-      ),
-    );
-  }
-
-  if (
-    effectiveRuleSurface.webFetch === "allow" &&
-    effective.network.external !== "allow"
-  ) {
-    issues.push(
-      configLooserIssue(
-        ".claude/settings.json",
-        "WebFetch ask/deny",
-        "WebFetch allow rule",
       ),
     );
   }
@@ -1799,7 +1710,7 @@ async function checkClaudeConfig(
     ) {
       issues.push(
         configLooserIssue(
-          ".claude/settings.json",
+          claudeSupplyingPath(local, ["sandbox", "autoAllowBashIfSandboxed"]),
           "Bash ask/deny",
           "autoAllowBashIfSandboxed = true",
         ),
@@ -1810,49 +1721,90 @@ async function checkClaudeConfig(
       sandbox.enableWeakerNestedSandbox === true ||
       sandbox.enableWeakerNetworkIsolation === true
     ) {
-      issues.push(
-        configLooserIssue(
-          ".claude/settings.json",
-          "strong sandbox isolation",
-          "weaker sandbox flag",
-        ),
-      );
+      const sources = new Set<string>();
+      for (const key of [
+        "enableWeakerNestedSandbox",
+        "enableWeakerNetworkIsolation",
+      ]) {
+        const source = claudeEffectiveDangerSource(
+          project,
+          local,
+          ["sandbox", key],
+          (value) => value === true,
+        );
+        if (source !== undefined) sources.add(source);
+      }
+      for (const source of sources) {
+        issues.push(
+          configLooserIssue(
+            source,
+            "strong sandbox isolation",
+            "weaker sandbox flag",
+          ),
+        );
+      }
     }
 
     const filesystem = getRecord(sandbox.filesystem);
     const network = getRecord(sandbox.network);
 
-    if (
-      filesystem &&
-      getStringArray(filesystem.allowWrite).length > 0 &&
-      effective.filesystem.write !== "allow"
-    ) {
-      issues.push(
-        configLooserIssue(
-          ".claude/settings.json",
-          "file writes ask/deny",
-          "sandbox.filesystem.allowWrite",
-        ),
-      );
+    if (filesystem && effective.filesystem.write !== "allow") {
+      for (const source of claudeArrayDangerSources(project, local, [
+        "sandbox",
+        "filesystem",
+        "allowWrite",
+      ])) {
+        issues.push(
+          configLooserIssue(
+            source,
+            "file writes ask/deny",
+            "sandbox.filesystem.allowWrite",
+          ),
+        );
+      }
     }
 
     if (network) {
-      const broadNetwork =
-        getStringArray(network.allowedDomains).length > 0 ||
-        network.allowAllUnixSockets === true ||
-        network.allowLocalBinding === true ||
-        network.allowMachLookup === true ||
-        typeof network.httpProxyPort === "number" ||
-        typeof network.socksProxyPort === "number";
-
-      if (broadNetwork && effective.network.external !== "allow") {
-        issues.push(
-          configLooserIssue(
-            ".claude/settings.json",
-            "network ask/deny",
-            "broad sandbox.network setting",
-          ),
+      const sources = new Set<string>(
+        claudeArrayDangerSources(project, local, [
+          "sandbox",
+          "network",
+          "allowedDomains",
+        ]),
+      );
+      for (const key of [
+        "allowAllUnixSockets",
+        "allowLocalBinding",
+        "allowMachLookup",
+      ]) {
+        const source = claudeEffectiveDangerSource(
+          project,
+          local,
+          ["sandbox", "network", key],
+          (value) => value === true,
         );
+        if (source !== undefined) sources.add(source);
+      }
+      for (const key of ["httpProxyPort", "socksProxyPort"]) {
+        const source = claudeEffectiveDangerSource(
+          project,
+          local,
+          ["sandbox", "network", key],
+          (value) => typeof value === "number",
+        );
+        if (source !== undefined) sources.add(source);
+      }
+
+      if (effective.network.external !== "allow") {
+        for (const source of sources) {
+          issues.push(
+            configLooserIssue(
+              source,
+              "network ask/deny",
+              "broad sandbox.network setting",
+            ),
+          );
+        }
       }
     }
   }
@@ -1877,7 +1829,7 @@ async function readJsonObject(
   } catch {
     issues.push(
       permissionIssue(
-        "LINT-PERM-005",
+        "LINT-PERM-006",
         "warning",
         relativePath,
         "valid JSON",
@@ -1905,6 +1857,76 @@ function mergeClaudeSettings(
   return mergeRecords(project, local);
 }
 
+function claudeSupplyingPath(
+  local: Record<string, unknown> | undefined,
+  segments: readonly string[],
+): string {
+  return hasNestedOwn(local, segments)
+    ? ".claude/settings.local.json"
+    : ".claude/settings.json";
+}
+
+function hasNestedOwn(
+  value: Record<string, unknown> | undefined,
+  segments: readonly string[],
+): boolean {
+  let current: Record<string, unknown> | undefined = value;
+  for (const [index, segment] of segments.entries()) {
+    if (current === undefined || !Object.hasOwn(current, segment)) {
+      return false;
+    }
+    const next = current[segment];
+    if (index < segments.length - 1) {
+      current = getRecord(next);
+    }
+  }
+  return true;
+}
+
+function getNestedValue(
+  value: Record<string, unknown> | undefined,
+  segments: readonly string[],
+): unknown {
+  let current: unknown = value;
+  for (const segment of segments) {
+    const record = getRecord(current);
+    if (record === undefined) return undefined;
+    current = record[segment];
+  }
+  return current;
+}
+
+function claudeEffectiveDangerSource(
+  project: Record<string, unknown> | undefined,
+  local: Record<string, unknown> | undefined,
+  segments: readonly string[],
+  isDangerous: (value: unknown) => boolean,
+): string | undefined {
+  if (hasNestedOwn(local, segments)) {
+    return isDangerous(getNestedValue(local, segments))
+      ? ".claude/settings.local.json"
+      : undefined;
+  }
+  return isDangerous(getNestedValue(project, segments))
+    ? ".claude/settings.json"
+    : undefined;
+}
+
+function claudeArrayDangerSources(
+  project: Record<string, unknown> | undefined,
+  local: Record<string, unknown> | undefined,
+  segments: readonly string[],
+): string[] {
+  const sources: string[] = [];
+  if (getStringArray(getNestedValue(project, segments)).length > 0) {
+    sources.push(".claude/settings.json");
+  }
+  if (getStringArray(getNestedValue(local, segments)).length > 0) {
+    sources.push(".claude/settings.local.json");
+  }
+  return sources;
+}
+
 function mergeRecords(
   left: Record<string, unknown>,
   right: Record<string, unknown>,
@@ -1927,54 +1949,6 @@ function mergeRecords(
   }
 
   return result;
-}
-
-function evaluateClaudeRules(
-  denyRules: string[],
-  askRules: string[],
-  allowRules: string[],
-): { bash: PermissionMode; edit: PermissionMode; webFetch: PermissionMode } {
-  return {
-    bash: evaluateClaudeTool("Bash", denyRules, askRules, allowRules),
-    edit: looserMode(
-      evaluateClaudeTool("Edit", denyRules, askRules, allowRules),
-      evaluateClaudeTool("Write", denyRules, askRules, allowRules),
-    ),
-    webFetch: evaluateClaudeTool("WebFetch", denyRules, askRules, allowRules),
-  };
-}
-
-function evaluateClaudeTool(
-  tool: string,
-  denyRules: string[],
-  askRules: string[],
-  allowRules: string[],
-): PermissionMode {
-  if (denyRules.some((rule) => isBareClaudeToolRule(rule, tool))) {
-    return "deny";
-  }
-
-  if (askRules.some((rule) => isBareClaudeToolRule(rule, tool))) {
-    return "ask";
-  }
-
-  if (allowRules.some((rule) => matchesClaudeTool(rule, tool))) {
-    return "allow";
-  }
-
-  if (askRules.some((rule) => matchesClaudeTool(rule, tool))) {
-    return "ask";
-  }
-
-  return "ask";
-}
-
-function matchesClaudeTool(rule: string, tool: string): boolean {
-  return rule === tool || rule.startsWith(`${tool}(`);
-}
-
-function isBareClaudeToolRule(rule: string, tool: string): boolean {
-  return rule === tool;
 }
 
 type SimpleTomlParseResult = {
@@ -2135,13 +2109,6 @@ function isLooser(actual: PermissionMode, expected: PermissionMode): boolean {
   return permissionRank(actual) > permissionRank(expected);
 }
 
-function looserMode(
-  left: PermissionMode,
-  right: PermissionMode,
-): PermissionMode {
-  return permissionRank(left) >= permissionRank(right) ? left : right;
-}
-
 function permissionRank(mode: PermissionMode): number {
   switch (mode) {
     case "deny":
@@ -2150,53 +2117,6 @@ function permissionRank(mode: PermissionMode): number {
       return 1;
     case "allow":
       return 2;
-  }
-}
-
-function reportRuntimeUnverifiable(
-  profile: AiProfile,
-  issues: DoctorIssue[],
-): void {
-  if (profile.clients.tabnine.enabled) {
-    issues.push(
-      permissionIssue(
-        "LINT-PERM-006",
-        "info",
-        "tabnine-runtime",
-        "verified IDE Tool Permissions state",
-        "not verifiable",
-        "Tabnine IDE runtime tool permission state cannot be verified from project files.",
-        "Manually verify Tool Permissions in Tabnine IDE settings: Auto-approve, Ask first, or Disable.",
-      ),
-    );
-  }
-
-  if (profile.clients.codex.enabled) {
-    issues.push(
-      permissionIssue(
-        "LINT-PERM-006",
-        "info",
-        "codex-runtime",
-        "verified runtime approval and sandbox flags",
-        "not verifiable",
-        "Codex runtime flags or user configuration may override project config.",
-        "Verify the active Codex approval policy and sandbox mode before trusting runtime posture.",
-      ),
-    );
-  }
-
-  if (profile.clients.claude.enabled) {
-    issues.push(
-      permissionIssue(
-        "LINT-PERM-006",
-        "info",
-        "claude-runtime",
-        "verified CLI permission mode and merged user settings",
-        "not verifiable",
-        "Claude CLI flags and user settings may override project settings.",
-        "Verify the active Claude permission mode and settings scopes before trusting runtime posture.",
-      ),
-    );
   }
 }
 
@@ -2713,7 +2633,7 @@ function configLooserIssue(
 ): DoctorIssue {
   return permissionIssue(
     "LINT-PERM-005",
-    "warning",
+    "error",
     pathValue,
     expected,
     actual,

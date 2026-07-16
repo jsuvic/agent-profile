@@ -2,6 +2,12 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 export { runDoctor } from "./doctor.js";
+export { evaluatePermissionDoctorIssues } from "./permission-doctor.js";
+export type {
+  PermissionDoctorEvaluation,
+  PermissionDoctorOwnership,
+  PermissionDoctorSummary,
+} from "./permission-doctor.js";
 export {
   evaluateDependencyVersion,
   KNOWLEDGE_BASELINES,

@@ -1,17 +1,23 @@
 Agent Profile Doctor
-status: pass
+status: warn
 
-[info] LINT-PERM-006 claude-runtime
-Claude CLI flags and user settings may override project settings.
-expected: verified CLI permission mode and merged user settings
-actual: not verifiable
-Verify the active Claude permission mode and settings scopes before trusting runtime posture.
+[warning] LINT-PERM-006 claude-runtime
+claude has unobserved permission scopes, so its effective runtime posture is unverified.
+expected: configured posture
+actual: unknown
+Inspect the documented claude user, managed, and session scopes before treating this posture as aligned.
 
-[info] LINT-PERM-006 codex-runtime
-Codex runtime flags or user configuration may override project config.
-expected: verified runtime approval and sandbox flags
-actual: not verifiable
-Verify the active Codex approval policy and sandbox mode before trusting runtime posture.
+[warning] LINT-PERM-006 codex-runtime
+codex has unobserved permission scopes, so its effective runtime posture is unverified.
+expected: configured posture
+actual: unknown
+Inspect the documented codex user, managed, and session scopes before treating this posture as aligned.
+
+[warning] LINT-PERM-006 tabnine-runtime
+tabnine has unobserved permission scopes, so its effective runtime posture is unverified.
+expected: configured posture
+actual: unknown
+Inspect the documented tabnine user, managed, and session scopes before treating this posture as aligned.
 
 [info] MCP-SUGGEST-UNCOMPARABLE package.json/dependencies/express
 express version declaration is not comparable (range); no staleness claim is made.
@@ -25,8 +31,8 @@ expected: baseline 19.2.7 or older (as of 2026-07-04)
 actual: 999.0.0
 Consider curated MCP candidate ids: docs-current-frameworks. APC recommends only; install and configuration are deferred to the user.
 
-[info] LINT-PERM-006 tabnine-runtime
-Tabnine IDE runtime tool permission state cannot be verified from project files.
-expected: verified IDE Tool Permissions state
-actual: not verifiable
-Manually verify Tool Permissions in Tabnine IDE settings: Auto-approve, Ask first, or Disable.
+[info] LINT-PERM-008 tabnine-mapping
+tabnine has a documented manual permission-posture limitation.
+expected: configured posture
+actual: manual-setup-required
+Follow the documented tabnine setup guidance; Agent Profile Compiler does not claim this client is configured automatically.

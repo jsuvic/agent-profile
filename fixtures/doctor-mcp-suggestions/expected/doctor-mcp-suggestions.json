@@ -1,24 +1,33 @@
 {
   "ok": true,
-  "status": "pass",
+  "status": "warn",
   "issues": [
     {
       "code": "LINT-PERM-006",
-      "severity": "info",
+      "severity": "warning",
       "path": "claude-runtime",
-      "expected": "verified CLI permission mode and merged user settings",
-      "actual": "not verifiable",
-      "message": "Claude CLI flags and user settings may override project settings.",
-      "guidance": "Verify the active Claude permission mode and settings scopes before trusting runtime posture."
+      "expected": "configured posture",
+      "actual": "unknown",
+      "message": "claude has unobserved permission scopes, so its effective runtime posture is unverified.",
+      "guidance": "Inspect the documented claude user, managed, and session scopes before treating this posture as aligned."
     },
     {
       "code": "LINT-PERM-006",
-      "severity": "info",
+      "severity": "warning",
       "path": "codex-runtime",
-      "expected": "verified runtime approval and sandbox flags",
-      "actual": "not verifiable",
-      "message": "Codex runtime flags or user configuration may override project config.",
-      "guidance": "Verify the active Codex approval policy and sandbox mode before trusting runtime posture."
+      "expected": "configured posture",
+      "actual": "unknown",
+      "message": "codex has unobserved permission scopes, so its effective runtime posture is unverified.",
+      "guidance": "Inspect the documented codex user, managed, and session scopes before treating this posture as aligned."
+    },
+    {
+      "code": "LINT-PERM-006",
+      "severity": "warning",
+      "path": "tabnine-runtime",
+      "expected": "configured posture",
+      "actual": "unknown",
+      "message": "tabnine has unobserved permission scopes, so its effective runtime posture is unverified.",
+      "guidance": "Inspect the documented tabnine user, managed, and session scopes before treating this posture as aligned."
     },
     {
       "code": "MCP-SUGGEST-UNCOMPARABLE",
@@ -39,13 +48,13 @@
       "guidance": "Consider curated MCP candidate ids: docs-current-frameworks. APC recommends only; install and configuration are deferred to the user."
     },
     {
-      "code": "LINT-PERM-006",
+      "code": "LINT-PERM-008",
       "severity": "info",
-      "path": "tabnine-runtime",
-      "expected": "verified IDE Tool Permissions state",
-      "actual": "not verifiable",
-      "message": "Tabnine IDE runtime tool permission state cannot be verified from project files.",
-      "guidance": "Manually verify Tool Permissions in Tabnine IDE settings: Auto-approve, Ask first, or Disable."
+      "path": "tabnine-mapping",
+      "expected": "configured posture",
+      "actual": "manual-setup-required",
+      "message": "tabnine has a documented manual permission-posture limitation.",
+      "guidance": "Follow the documented tabnine setup guidance; Agent Profile Compiler does not claim this client is configured automatically."
     }
   ]
 }
