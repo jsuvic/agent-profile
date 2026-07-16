@@ -187,7 +187,7 @@ test("doctor --mcp-suggestions reports newer-than-baseline and non-comparable in
 
   // WS4-MCP-006: info-only findings never gate the run.
   assert.equal(result.ok, true);
-  assert.equal(result.status, "pass");
+  assert.equal(result.status, "warn");
 });
 
 test("doctor --mcp-suggestions reports non-comparable versions without echoing raw values", async () => {
@@ -352,9 +352,7 @@ test("mcp suggestion scan performs no network access", async () => {
   );
 
   assert.equal(
-    result.issues.some(
-      (issue) => issue.code === "MCP-SUGGEST-NEW-FRAMEWORK",
-    ),
+    result.issues.some((issue) => issue.code === "MCP-SUGGEST-NEW-FRAMEWORK"),
     true,
   );
 });

@@ -46,14 +46,14 @@ const PRESET_TEST_OPTIONS = {
   presetVerificationKeys: FIXTURE_PRESET_VERIFICATION_KEYS,
 } as const;
 
-test("doctor command prints pass status for the minimal fixture", async () => {
+test("doctor command prints warn status for the minimal fixture's unknown scopes", async () => {
   const rootDir = await createFixtureRoot();
   const output = createOutput();
   const code = await runCli(["doctor", "--root", rootDir], { io: output });
 
   assert.equal(code, 0);
   assert.match(output.stdoutText(), /Agent Profile Doctor/u);
-  assert.match(output.stdoutText(), /status: pass/u);
+  assert.match(output.stdoutText(), /status: warn/u);
 });
 
 test("doctor command prints stable JSON", async () => {
@@ -70,7 +70,7 @@ test("doctor command prints stable JSON", async () => {
 
   assert.equal(code, 0);
   assert.equal(parsed.ok, true);
-  assert.equal(parsed.status, "pass");
+  assert.equal(parsed.status, "warn");
   assert.equal(Array.isArray(parsed.issues), true);
 });
 
@@ -129,7 +129,8 @@ test("doctor --mcp-suggestions matches the golden text fixture and exits 0", asy
 
   assert.equal(code, 0);
   // Phase-19 golden fixture: full stdout is byte-stable, including the
-  // minimal fixture's LINT-PERM-006 info issues in doctor ordering, one
+  // minimal fixture's LINT-PERM-006 warnings and LINT-PERM-008 manual
+  // limitation in doctor ordering, one
   // MCP-SUGGEST-UNCOMPARABLE (express range) and one
   // MCP-SUGGEST-NEW-FRAMEWORK (react newer than baseline).
   assert.equal(
@@ -147,7 +148,7 @@ test("doctor --mcp-suggestions matches the golden text fixture and exits 0", asy
   assert.doesNotMatch(output.stdoutText(), /:\/\/|npm i |npx /u);
 });
 
-test("doctor --mcp-suggestions --json matches the golden fixture and stays pass", async () => {
+test("doctor --mcp-suggestions --json matches the warning-status golden fixture", async () => {
   const rootDir = await createMcpSuggestionsRoot();
   const output = createOutput();
   const code = await runCli(
@@ -175,7 +176,7 @@ test("doctor --mcp-suggestions --json matches the golden fixture and stays pass"
   };
 
   assert.equal(parsed.ok, true);
-  assert.equal(parsed.status, "pass");
+  assert.equal(parsed.status, "warn");
   const suggestion = parsed.issues.find(
     (issue) => issue.code === "MCP-SUGGEST-NEW-FRAMEWORK",
   );
@@ -760,9 +761,14 @@ test("init advice can be followed verbatim to a compiled, upgradable repository"
   });
 
   assert.equal(initCode, 0);
-  const advisedCommands = [...initOutput.stdoutText().matchAll(/`agent-profile ([^`]+)`/gu)]
+  const advisedCommands = [
+    ...initOutput.stdoutText().matchAll(/`agent-profile ([^`]+)`/gu),
+  ]
     .map((match) => match[1])
-    .filter((command) => command.startsWith("compile") || command.startsWith("upgrade"));
+    .filter(
+      (command) =>
+        command.startsWith("compile") || command.startsWith("upgrade"),
+    );
   assert.deepEqual(advisedCommands, ["compile --write", "upgrade"]);
 
   for (const command of advisedCommands) {
@@ -824,7 +830,10 @@ test("upgrade without a lockfile reports offers and defers the stamp on write", 
     writeOutput.stdoutText(),
     /Catalog version not stamped without a lockfile/u,
   );
-  assert.equal(await fileExists(path.join(writeRoot, "ai-profile.lock")), false);
+  assert.equal(
+    await fileExists(path.join(writeRoot, "ai-profile.lock")),
+    false,
+  );
 });
 
 test("init writes unknown when no supported language is detected", async () => {
@@ -2243,7 +2252,12 @@ test("bare interactive invocation routes an empty repository to init", async () 
   try {
     const code = await runCli([], {
       cwd: rootDir,
-      io: { stdout: (text: string) => { output += text; }, stderr: () => undefined },
+      io: {
+        stdout: (text: string) => {
+          output += text;
+        },
+        stderr: () => undefined,
+      },
       dispatcherPrompts: {
         async choose(input: { initialValue: string }) {
           selected = input.initialValue;
@@ -2262,7 +2276,10 @@ test("bare interactive invocation routes an empty repository to init", async () 
 test("bare non-TTY output is byte-identical to help and performs no detection", async () => {
   const bare = createOutput();
   const help = createOutput();
-  const missingRoot = path.join(tmpdir(), `agent-profile-missing-${Date.now()}`);
+  const missingRoot = path.join(
+    tmpdir(),
+    `agent-profile-missing-${Date.now()}`,
+  );
   assert.equal(await runCli([], { cwd: missingRoot, io: bare }), 0);
   assert.equal(await runCli(["--help"], { cwd: missingRoot, io: help }), 0);
   assert.equal(bare.stdoutText(), help.stdoutText());

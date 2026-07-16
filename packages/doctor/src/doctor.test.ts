@@ -23,19 +23,19 @@ const minimalProfilePath = fileURLToPath(
   new URL("../../../fixtures/minimal-valid/ai-profile.yaml", import.meta.url),
 );
 
-test("doctor passes the generated minimal fixture with runtime unverifiable info", async () => {
+test("doctor warns for unverified runtime scopes and reports manual limitations", async () => {
   const rootDir = await createGeneratedProject();
   const result = await runDoctor({ rootDir });
 
   assert.equal(result.ok, true);
-  assert.equal(result.status, "pass");
+  assert.equal(result.status, "warn");
   assert.equal(
     result.issues.some((issue) => issue.code.startsWith("LINT-STRUCT")),
     false,
   );
   assert.deepEqual(
     result.issues.map((issue) => issue.code),
-    ["LINT-PERM-006", "LINT-PERM-006", "LINT-PERM-006"],
+    ["LINT-PERM-006", "LINT-PERM-006", "LINT-PERM-006", "LINT-PERM-008"],
   );
 });
 
@@ -228,7 +228,7 @@ permissions:
   assertHasIssue(result, "LINT-PERM-005");
 });
 
-test("doctor enforces autonomous sandbox intent and warns when sandbox config is unverifiable", async () => {
+test("doctor enforces legacy autonomous sandbox intent and offers migration info", async () => {
   const noIntentRoot = await createGeneratedProject({
     extraYaml: `
 safety:
@@ -236,7 +236,18 @@ safety:
   requiresSandbox: false
 `,
   });
-  assertHasIssue(await runDoctor({ rootDir: noIntentRoot }), "LINT-PERM-004");
+  const noIntent = await runDoctor({ rootDir: noIntentRoot });
+  const sandboxIntentFindings = noIntent.issues.filter(
+    (issue) =>
+      issue.code === "LINT-PERM-004" &&
+      issue.path === "/safety/requiresSandbox" &&
+      issue.actual === "false",
+  );
+  assert.equal(
+    sandboxIntentFindings.length,
+    1,
+    JSON.stringify(noIntent.issues, null, 2),
+  );
 
   const noClientRoot = await createGeneratedProject({
     extraYaml: `
@@ -253,12 +264,41 @@ safety:
 `,
   });
   const result = await runDoctor({ rootDir: noClientRoot });
-  assertHasIssue(result, "LINT-PERM-004");
+  assertHasIssue(result, "LINT-PERM-008");
   assert.equal(
-    result.issues.some(
-      (issue) => issue.code === "LINT-PERM-004" && issue.severity === "warning",
-    ),
-    true,
+    result.issues.some((issue) => issue.code === "LINT-PERM-004"),
+    false,
+  );
+});
+
+test("doctor does not claim generated ownership when lockfile provenance is absent", async () => {
+  const rootDir = await createGeneratedProject({
+    extraYaml: `
+permissions:
+  filesystem:
+    write: deny
+`,
+  });
+  await rm(path.join(rootDir, "ai-profile.lock"));
+  await writeFile(
+    path.join(rootDir, ".codex", "config.toml"),
+    `approval_policy = "on-request"\nsandbox_mode = "workspace-write"\n`,
+    "utf8",
+  );
+
+  const result = await runDoctor({ rootDir });
+  assertHasIssue(result, "LINT-LOCK-001");
+  const drift = result.issues.find(
+    (issue) =>
+      issue.code === "LINT-PERM-005" &&
+      issue.path === ".codex/config.toml" &&
+      issue.actual === "workspace-write",
+  );
+  assert.ok(drift, JSON.stringify(result.issues, null, 2));
+  assert.doesNotMatch(drift.guidance, /agent-profile-owned|lockfile drift/i);
+  assert.match(
+    drift.guidance,
+    /ownership.*not.*proven|provenance.*unavailable/i,
   );
 });
 
@@ -324,6 +364,123 @@ clients:
   );
 });
 
+test("doctor attributes a dangerous Claude local override without reading secret files or invoking runtimes", async () => {
+  const rootDir = await createGeneratedProject();
+  await writeProjectFile(
+    rootDir,
+    ".claude/settings.local.json",
+    `${JSON.stringify({ permissions: { defaultMode: "bypassPermissions" } }, null, 2)}\n`,
+  );
+  await writeProjectFile(
+    rootDir,
+    ".env",
+    "SECRET_TOKEN=forbidden-doctor-value\n",
+  );
+
+  const result = await withExecutionSentinel(() => runDoctor({ rootDir }));
+  const bypassFindings = result.issues.filter(
+    (issue) =>
+      issue.code === "LINT-PERM-004" && issue.actual === "bypassPermissions",
+  );
+  assert.equal(
+    bypassFindings.length,
+    1,
+    JSON.stringify(result.issues, null, 2),
+  );
+  const finding = bypassFindings[0]!;
+
+  assert.equal(finding.severity, "error");
+  assert.equal(finding.path, ".claude/settings.local.json");
+  assert.equal(finding.actual, "bypassPermissions");
+  assert.match(finding.message, /bypasses routine permission prompts/i);
+  assert.match(
+    finding.guidance,
+    /does not configure Codex \(guarded posture\)/i,
+  );
+  assert.match(
+    finding.guidance,
+    /does not configure Tabnine \(guarded posture\)/i,
+  );
+  assert.equal(
+    result.issues.some(
+      (issue) =>
+        issue.code === "LINT-PERM-004" &&
+        issue.path === ".claude/settings.json" &&
+        issue.actual === "bypassPermissions",
+    ),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(result.issues).includes("forbidden-doctor-value"),
+    false,
+  );
+});
+
+test("doctor separates known permission drift from unverified parser state", async () => {
+  const unsupportedRoot = await createGeneratedProject();
+  await writeFile(
+    path.join(unsupportedRoot, ".codex", "config.toml"),
+    `approval_policy = "on-request"\ndisabled_tools = ["shell"]\n`,
+    "utf8",
+  );
+  const unsupported = await runDoctor({ rootDir: unsupportedRoot });
+  const unsupportedFinding = unsupported.issues.find(
+    (issue) =>
+      issue.code === "LINT-PERM-006" &&
+      issue.path === ".codex/config.toml" &&
+      issue.actual === "unsupported TOML syntax",
+  );
+  assert.ok(unsupportedFinding, JSON.stringify(unsupported.issues, null, 2));
+  assert.equal(unsupportedFinding.severity, "warning");
+  assert.match(unsupportedFinding.guidance, /before relying on this result/i);
+  assert.equal(
+    unsupported.issues.some(
+      (issue) =>
+        issue.code === "LINT-PERM-005" &&
+        issue.actual === "unsupported TOML syntax",
+    ),
+    false,
+  );
+
+  const deprecatedRoot = await createGeneratedProject();
+  await writeFile(
+    path.join(deprecatedRoot, ".codex", "config.toml"),
+    `approval_policy = "on-failure"\nsandbox_mode = "workspace-write"\n`,
+    "utf8",
+  );
+  const deprecated = await runDoctor({ rootDir: deprecatedRoot });
+  const deprecatedFinding = deprecated.issues.find(
+    (issue) => issue.code === "LINT-PERM-005" && issue.actual === "on-failure",
+  );
+  assert.ok(deprecatedFinding, JSON.stringify(deprecated.issues, null, 2));
+  assert.equal(deprecatedFinding.severity, "error");
+  assert.match(deprecatedFinding.guidance, /on-request/i);
+
+  const malformedRoot = await createGeneratedProject();
+  await writeFile(
+    path.join(malformedRoot, ".claude", "settings.json"),
+    "{ invalid-json\n",
+    "utf8",
+  );
+  const malformed = await runDoctor({ rootDir: malformedRoot });
+  const malformedFinding = malformed.issues.find(
+    (issue) =>
+      issue.code === "LINT-PERM-006" &&
+      issue.path === ".claude/settings.json" &&
+      issue.actual === "parse error",
+  );
+  assert.ok(malformedFinding, JSON.stringify(malformed.issues, null, 2));
+  assert.equal(malformedFinding.severity, "warning");
+  assert.match(malformedFinding.guidance, /fix the JSON/i);
+  assert.equal(
+    malformed.issues.some(
+      (issue) =>
+        issue.code === "LINT-PERM-005" && issue.actual === "parse error",
+    ),
+    false,
+  );
+});
+
 test("doctor reports Codex and Claude project config looser than effective permissions", async () => {
   const codexRoot = await createGeneratedProject();
   await writeFile(
@@ -351,7 +508,7 @@ disabled_tools = ["shell"]
   );
   assertHasIssue(
     await runDoctor({ rootDir: codexUnsupportedRoot }),
-    "LINT-PERM-005",
+    "LINT-PERM-006",
   );
 
   const claudeRoot = await createGeneratedProject();
@@ -454,6 +611,114 @@ test("doctor catches Claude guard, precedence, merge, and sandbox loosening case
     await runDoctor({ rootDir: weakerSandboxRoot }),
     "LINT-PERM-005",
   );
+});
+
+test("doctor attributes each effective Claude sandbox danger to its exact supplying source", async () => {
+  const generatedOnlyRoot = await createGeneratedProject();
+  const generatedPath = path.join(
+    generatedOnlyRoot,
+    ".claude",
+    "settings.json",
+  );
+  const generated = JSON.parse(await readFile(generatedPath, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  generated.sandbox = {
+    ...(generated.sandbox as Record<string, unknown>),
+    enableWeakerNestedSandbox: true,
+    network: {
+      allowedDomains: ["example.invalid"],
+    },
+  };
+  await writeFile(
+    generatedPath,
+    `${JSON.stringify(generated, null, 2)}\n`,
+    "utf8",
+  );
+  await writeProjectFile(
+    generatedOnlyRoot,
+    ".claude/settings.local.json",
+    `${JSON.stringify(
+      {
+        sandbox: {
+          enableWeakerNetworkIsolation: false,
+          network: { allowLocalBinding: false },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const generatedOnly = await runDoctor({ rootDir: generatedOnlyRoot });
+  assert.deepEqual(
+    generatedOnly.issues
+      .filter(
+        (issue) =>
+          issue.code === "LINT-PERM-005" &&
+          (issue.actual === "weaker sandbox flag" ||
+            issue.actual === "broad sandbox.network setting"),
+      )
+      .map(({ actual, path: issuePath }) => ({ actual, path: issuePath })),
+    [
+      {
+        actual: "weaker sandbox flag",
+        path: ".claude/settings.json",
+      },
+      {
+        actual: "broad sandbox.network setting",
+        path: ".claude/settings.json",
+      },
+    ],
+    JSON.stringify(generatedOnly.issues, null, 2),
+  );
+
+  const mixedRoot = await createGeneratedProject();
+  const mixedGeneratedPath = path.join(mixedRoot, ".claude", "settings.json");
+  const mixedGenerated = JSON.parse(
+    await readFile(mixedGeneratedPath, "utf8"),
+  ) as Record<string, unknown>;
+  mixedGenerated.sandbox = {
+    ...(mixedGenerated.sandbox as Record<string, unknown>),
+    enableWeakerNestedSandbox: true,
+    network: { allowedDomains: ["example.invalid"] },
+  };
+  await writeFile(
+    mixedGeneratedPath,
+    `${JSON.stringify(mixedGenerated, null, 2)}\n`,
+    "utf8",
+  );
+  await writeProjectFile(
+    mixedRoot,
+    ".claude/settings.local.json",
+    `${JSON.stringify(
+      {
+        sandbox: {
+          enableWeakerNetworkIsolation: true,
+          network: { allowLocalBinding: true },
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+
+  const mixed = await runDoctor({ rootDir: mixedRoot });
+  for (const actual of [
+    "broad sandbox.network setting",
+    "weaker sandbox flag",
+  ]) {
+    assert.deepEqual(
+      mixed.issues
+        .filter(
+          (issue) => issue.code === "LINT-PERM-005" && issue.actual === actual,
+        )
+        .map((issue) => issue.path),
+      [".claude/settings.json", ".claude/settings.local.json"],
+      JSON.stringify(mixed.issues, null, 2),
+    );
+  }
 });
 
 test("doctor reports skill size, trigger, and generic fact warnings", async () => {
@@ -1089,7 +1354,10 @@ test("phase-22 doctor flags a loop skill with an empty Approval Gate section", a
   const body = await readFile(skillPath, "utf8");
   await writeFile(
     skillPath,
-    body.replace(/## Approval Gate[\s\S]*?(?=## Safety)/u, "## Approval Gate\n\n"),
+    body.replace(
+      /## Approval Gate[\s\S]*?(?=## Safety)/u,
+      "## Approval Gate\n\n",
+    ),
     "utf8",
   );
 
@@ -1140,7 +1408,10 @@ States: \`ready | blocked | sequenced | parallel-safe | human-gate | in-progress
 | I2 | Second | ready | [002-second.md](docs/specs/phase-x/issues/002-second.md) |
 `;
 
-function ledgerNotes(result: DoctorResult, code: DoctorIssueCode): DoctorIssue[] {
+function ledgerNotes(
+  result: DoctorResult,
+  code: DoctorIssueCode,
+): DoctorIssue[] {
   return result.issues.filter((finding) => finding.code === code);
 }
 
@@ -1168,7 +1439,7 @@ test("phase-24 I5 doctor stays silent on a well-formed TASKS.md and CONTEXT.md",
   assert.equal(ledgerNotes(result, "LINT-LEDGER-002").length, 0);
   assert.equal(ledgerNotes(result, "LINT-CONTEXT-001").length, 0);
   // Exit behavior unchanged: no new error/warning.
-  assert.equal(result.status, "pass");
+  assert.equal(result.status, "warn");
   assert.equal(result.ok, true);
 });
 
@@ -1187,7 +1458,7 @@ test("phase-24 I5 doctor emits an informational note for an unknown ledger state
   assert.equal(notes[0].severity, "info");
   assert.equal(notes[0].path, "TASKS.md");
   // Informational: exit behavior is unaffected.
-  assert.equal(result.status, "pass");
+  assert.equal(result.status, "warn");
   assert.equal(result.ok, true);
 });
 
@@ -1204,7 +1475,7 @@ test("phase-24 I5 doctor emits an informational note for a ledger row missing a 
 
   assert.equal(notes.length, 1, JSON.stringify(result.issues, null, 2));
   assert.equal(notes[0].severity, "info");
-  assert.equal(result.status, "pass");
+  assert.equal(result.status, "warn");
   assert.equal(result.ok, true);
 });
 
@@ -1222,6 +1493,6 @@ test("phase-24 I5 doctor emits an informational note for non-glossary CONTEXT.md
   assert.equal(notes.length, 1, JSON.stringify(result.issues, null, 2));
   assert.equal(notes[0].severity, "info");
   assert.equal(notes[0].path, "CONTEXT.md");
-  assert.equal(result.status, "pass");
+  assert.equal(result.status, "warn");
   assert.equal(result.ok, true);
 });

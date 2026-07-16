@@ -22,6 +22,8 @@ export type DoctorIssueCode =
   | "LINT-PERM-004"
   | "LINT-PERM-005"
   | "LINT-PERM-006"
+  | "LINT-PERM-007"
+  | "LINT-PERM-008"
   | "LINT-SEC-001"
   | "LINT-SEC-002"
   | "LINT-SEC-003"
