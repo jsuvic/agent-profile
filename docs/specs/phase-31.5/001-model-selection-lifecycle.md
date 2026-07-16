@@ -229,7 +229,16 @@ policy. Known role overrides continue to win over preset defaults.
 
 ## Contracts
 
-### Default role-aware preset
+### Model presets
+
+Preset matrices are normative, immutable mapping-v3 catalog data. Resolution
+MUST read the selected table directly; it MUST NOT derive a missing row from
+model names, prices, provider ordering, or another preset at runtime. Every
+current role appears exactly once in each preset. Adding a role requires a
+versioned catalog/spec update that defines that role in all three matrices.
+Explicit role and target overrides continue to win over these defaults.
+
+#### `role-aware` (default)
 
 | Role/stage | Capability | Effort |
 | --- | --- | --- |
@@ -240,7 +249,35 @@ policy. Known role overrides continue to win over preset defaults.
 | `explorer` | efficient | low |
 | `mechanical` | efficient | medium |
 
-The mapping-v3 evidence expands this table to current Codex and Claude model
+#### `quality-first`
+
+This preset spends more capability and effort while preserving role
+differentiation; it does not collapse every task onto one execution tier.
+
+| Role/stage | Capability | Effort |
+| --- | --- | --- |
+| `grill`, `architect`, `critical-reviewer` | strongest | extra-high |
+| `spec-reviewer`, `quality-reviewer` | strongest | extra-high |
+| `complex-implementer`, `implementer` | strongest | extra-high |
+| `routine-implementer` | strongest | high |
+| `explorer` | balanced | medium |
+| `mechanical` | balanced | high |
+
+#### `cost-conscious`
+
+This preset reduces routine and discovery cost while keeping judgment-critical
+roles at a balanced/high floor.
+
+| Role/stage | Capability | Effort |
+| --- | --- | --- |
+| `grill`, `architect`, `critical-reviewer` | balanced | high |
+| `spec-reviewer`, `quality-reviewer` | balanced | medium |
+| `complex-implementer`, `implementer` | efficient | medium |
+| `routine-implementer` | efficient | low |
+| `explorer` | efficient | low |
+| `mechanical` | efficient | low |
+
+The mapping-v3 evidence expands these matrices to current Codex and Claude model
 candidates. Tabnine resolves only against an organization-visible exact model
 and never receives an invented effort.
 
@@ -305,6 +342,9 @@ over speculative classification.
 
 - Normal parse, compile, Doctor, UI, and non-interactive init make no provider
   or package-registry call.
+- Init probes are interactive-only in this phase. Non-interactive init exposes
+  no probe-enabling flag; an attempted `--probe-models` combination is rejected
+  before any client/provider/package process starts and before any write.
 - Probe/update check requires explicit consent immediately before the call.
 - Probe execution uses a new empty temporary directory outside the repository,
   a fixed content-free prompt, no session persistence where documented, a
@@ -326,7 +366,7 @@ over speculative classification.
 1. A profile without enabled v3 policy produces byte-identical current
    generated output and lockfile behavior; mapping-v2 profiles remain valid and
    unchanged until explicit upgrade.
-2. Parser/schema tests freeze the presets, role matrix, new
+2. Parser/schema tests freeze all three named preset matrices, the new
    `routine-implementer` role, open exact-override contract, size/control-
    character errors, precedence, and deep immutability.
 3. One shared pure catalog/resolver produces exact Codex, Claude, and Tabnine
@@ -343,7 +383,9 @@ over speculative classification.
    redaction, and zero provider/network calls in normal and CI paths.
 7. Init tests show exact names/efforts/statuses before consent and before write;
    decline/unsupported/auth/quota/unknown paths still reach a safe reviewable
-   result without source or secret access.
+   result without source or secret access. Non-interactive init remains offline,
+   and an attempted `--probe-models` combination fails before process launch,
+   network access, or filesystem mutation.
 8. Upgrade tests preserve v2/locked resolutions by default, compare exact
    old/new values, allow retain/adopt/customize, make update checking optional,
    and never install or silently remap.

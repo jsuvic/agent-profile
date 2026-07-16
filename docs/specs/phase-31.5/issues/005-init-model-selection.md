@@ -20,13 +20,14 @@ target outputs, and lock provenance in the existing preview/write flow.
 ## Non-goals
 
 - Automatic provider contact, client installation, login, or global writes.
-- Live probes in non-interactive init without an explicit flag.
+- Live probes in non-interactive init, including flag-based opt-in.
 - Hiding exact names behind only `strongest`/`balanced` labels.
 
 ## Acceptance criteria
 
-- Recommended, quality-first, and cost-conscious choices display expanded
-  exact model/effort/status tables before selection is committed.
+- `role-aware` (recommended), `quality-first`, and `cost-conscious` choices
+  display expanded exact model/effort/status tables before selection is
+  committed.
 - Role-aware is the default; advanced per-role and exact override entry is
   progressive disclosure.
 - Probe consent appears immediately before execution and declining preserves a
@@ -36,8 +37,9 @@ target outputs, and lock provenance in the existing preview/write flow.
 - Tabnine uses documented enumeration only or guided manual selection.
 - Cancellation and every failure state write nothing; final write uses existing
   exact diff, ownership, atomicity, and lockfile rules.
-- Non-interactive init remains offline unless `--probe-models` is explicitly
-  supplied and all required non-interactive choices are present.
+- Non-interactive init remains offline and exposes no probe-enabling flag in
+  this phase. An attempted `--probe-models` combination is rejected before any
+  client/provider/package process starts and before any filesystem write.
 
 ## Expected RED proof
 
@@ -47,7 +49,8 @@ probe branch, or v3 lock provenance.
 ## Expected GREEN proof
 
 Table-driven wizard tests pass for each preset, customize/unknown/Tabnine path,
-consent choice, probe result, cancellation, and write/no-write outcome.
+consent choice, probe result, cancellation, write/no-write outcome, and the
+non-interactive invalid-flag/no-call path.
 
 ## Seam under test
 
@@ -92,7 +95,7 @@ writes remain project-local, previewed, and explicit.
 ## Documentation impact
 
 First-run guide, exact preset examples, consent copy, Tabnine manual path, and
-non-interactive flags.
+the offline non-interactive/invalid-flag contract.
 
 ## Implementation context
 
