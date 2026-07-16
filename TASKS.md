@@ -127,11 +127,34 @@ Dependency map: I1 -> (I2 and I3); I1+I2+I3 -> I4; I2+I4 -> I5;
 I1+I2+I3 -> I6; I4+I6 -> I7; I2-I7 -> I8. I2 and I3 are mutually
 parallel-safe after I1 apart from shared canonical types.
 
+## phase-31.5: Model Selection Lifecycle (`docs/specs/phase-31.5/001-model-selection-lifecycle.md`)
+
+Approved 2026-07-16 from the completed model/effort grill. Sequenced after the
+completed Phase 31 I8 and before Phase 32 I1.
+
+| Id | Task | State | Brief |
+| --- | --- | --- | --- |
+| I1 | Shared model-policy domain and compatibility resolver | ready | [001-shared-model-policy-domain.md](docs/specs/phase-31.5/issues/001-shared-model-policy-domain.md) |
+| I2 | Codex and Claude exact model adapters | sequenced | [002-codex-claude-model-adapters.md](docs/specs/phase-31.5/issues/002-codex-claude-model-adapters.md) |
+| I3 | Tabnine historical, organization, and private models | sequenced | [003-tabnine-historical-private-models.md](docs/specs/phase-31.5/issues/003-tabnine-historical-private-models.md) |
+| I4 | Consented source-free model probes | sequenced | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md) |
+| I5 | Exact role-aware model selection during init | sequenced | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md) |
+| I6 | Explicit model upgrade and locked resolution lifecycle | sequenced | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
+| I7 | Offline Doctor model policy and explicit recheck | sequenced | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
+| I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
+| I9 | Published model-selection journey and final integration | sequenced | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
+
+Dependency map: I1 -> (I2, I3, I4); I2+I3+I4 -> I5;
+I1+I2+I3+I4 -> I6; I4+I6 -> I7; I2+I3+I5+I6+I7 -> I8;
+I1-I8 -> I9; I9 -> Phase 32 I1. I2, I3, and I4 are parallel-safe after
+I1 apart from shared exports and fixtures. I5 and I6 may proceed in parallel
+after their prerequisites with shared CLI-entrypoint merge coordination.
+
 ## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
 
 Approved 2026-07-14 from the repository-update field-test agreement. Phase 32
-is sequenced after Phase 31 I8 so it reuses the completed permission lifecycle
-instead of adding temporary manual guidance.
+is sequenced after Phase 31.5 I9 so it reuses the completed permission and
+model-selection lifecycles instead of adding temporary manual guidance.
 
 | Id  | Task                                                  | State     | Brief                                                                                                     |
 | --- | ----------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------- |
@@ -142,6 +165,6 @@ instead of adding temporary manual guidance.
 | I5  | Editable interactive upgrade review and atomic apply  | sequenced | [005-editable-upgrade-flow.md](docs/specs/phase-32/issues/005-editable-upgrade-flow.md)                   |
 | I6  | Published guided-update journey and final integration | sequenced | [006-published-update-journey.md](docs/specs/phase-32/issues/006-published-update-journey.md)             |
 
-Dependency map: Phase 31 I8 -> (I1, I3, I4); I1 -> I2; I3+I4 -> I5;
-I2+I5 -> I6. I1, I3, and I4 are parallel-safe after Phase 31; I6 is final
+Dependency map: Phase 31.5 I9 -> (I1, I3, I4); I1 -> I2; I3+I4 -> I5;
+I2+I5 -> I6. I1, I3, and I4 are parallel-safe after Phase 31.5; I6 is final
 integration only.

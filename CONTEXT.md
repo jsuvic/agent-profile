@@ -46,6 +46,36 @@ versioned client mapping. _Avoid:_ "model alias", "model tier".
 A metadata-only record of role resolution, context path, orchestration, and
 validation outcome. _Avoid:_ "telemetry", "prompt log".
 
+## Model Selection
+
+**Model preset**
+A named portable allocation of capability and effort across workflow roles.
+_Avoid:_ "model bundle", "provider preset".
+
+**Model catalog**
+Release-versioned reviewed data that relates portable role intent to exact
+client model identifiers, effort, lifecycle, and alternatives. _Avoid:_
+"live provider catalog", "remote model list".
+
+**Exact model resolution**
+The approved client-specific model and effort selected for one role and locked
+for deterministic reuse. _Avoid:_ "moving alias", "automatic latest".
+
+**Model capability status**
+The deterministic target-surface result `configured`, `advisory`,
+`unsupported`, or `unverified`. _Avoid:_ "available" when referring to
+account entitlement or runtime state.
+
+**Model availability probe**
+An explicitly consented, source-free, non-persistent client invocation that
+returns ephemeral account/environment evidence. _Avoid:_ "model detection",
+"background check".
+
+**Organization/private model**
+An exact model identifier supplied by an administrator or private deployment
+that Agent Profile preserves without ranking. _Avoid:_ "unsupported model",
+"unknown bad model".
+
 ## Logging
 
 **Debug output**

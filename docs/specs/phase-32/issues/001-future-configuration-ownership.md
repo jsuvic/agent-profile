@@ -66,11 +66,11 @@ verify:pack.
 
 ## Dependencies
 
-`sequenced` after Phase 31 I8.
+`sequenced` after Phase 31.5 I9.
 
 ## Parallelism notes
 
-Parallel-safe with Phase 32 I3 and I4 after Phase 31. Own the shared ownership
+Parallel-safe with Phase 32 I3 and I4 after Phase 31.5. Own the shared ownership
 decision before I2 consumes it.
 
 ## Contract impact

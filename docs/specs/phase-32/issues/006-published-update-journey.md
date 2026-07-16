@@ -12,7 +12,7 @@ tell a consistent user story.
 
 ## Behavior slice
 
-The packed CLI runs the field scenario end to end after Phase 31: exact local
+The packed CLI runs the field scenario end to end after Phase 31.5: exact local
 permission source routes to configure; valid custom MCP is preserved and
 explained; adopt-all enters editable review; supported YAML applies after
 consent; compile remains separately confirmed; final Doctor output contains

@@ -9,5 +9,6 @@ unsafe-insertion refusal.
 - Issue briefs: [`issues/`](issues/)
 
 The spec and governing ADR decisions were approved on 2026-07-14. Phase 32 is
-sequenced after Phase 31 so the update journey can reuse the completed
-permission lifecycle instead of introducing temporary manual guidance.
+sequenced after Phase 31.5 I9 so the update journey can reuse the completed
+permission and model-selection lifecycles instead of introducing temporary
+manual guidance.

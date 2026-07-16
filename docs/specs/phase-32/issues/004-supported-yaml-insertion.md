@@ -65,7 +65,7 @@ check, lint, and verify:pack.
 
 ## Dependencies
 
-`sequenced` after Phase 31 I8.
+`sequenced` after Phase 31.5 I9.
 
 ## Parallelism notes
 

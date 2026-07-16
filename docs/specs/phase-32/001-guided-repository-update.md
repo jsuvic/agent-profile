@@ -3,7 +3,8 @@
 ## Status
 
 Approved 2026-07-14 from the repository-update field-test agreement. Sequenced
-after Phase 31 Permission Posture Lifecycle.
+after Phase 31.5 Model Selection Lifecycle I9, which is itself sequenced after
+the completed Phase 31 Permission Posture Lifecycle.
 
 ## Problem
 
@@ -73,7 +74,7 @@ or safety contracts.
   filesystem orchestration changes.
 - ADR/spec conflicts: narrows the generated-destination assumption in ADR 0011
   without changing mixed-region ownership; governed by ADR 0020.
-- Dependency state: Phase 32 prerequisite; can start after Phase 31 I8.
+- Dependency state: Phase 32 prerequisite; can start after Phase 31.5 I9.
 
 ## Non-Goals
 
@@ -252,9 +253,9 @@ focused RED/GREEN cycle.
 
 See `docs/specs/phase-32/issues/` and `TASKS.md`.
 
-- I1 and I3 are parallel-safe after Phase 31 I8; I1 is the ownership
+- I1 and I3 are parallel-safe after Phase 31.5 I9; I1 is the ownership
   architecture prerequisite for I2.
-- I4 is parallel-safe with I1/I3 after Phase 31 and owns only the insertion
+- I4 is parallel-safe with I1/I3 after Phase 31.5 and owns only the insertion
   regression seam.
 - I2 depends on I1.
 - I5 depends on I3 and I4.
