@@ -63,11 +63,11 @@ lint, verify:pack, and package dry-run.
 
 ## Dependencies
 
-`sequenced` after Phase 31 I8.
+`sequenced` after Phase 31.5 I9.
 
 ## Parallelism notes
 
-Parallel-safe with Phase 32 I1 and I4 after Phase 31. Own catalog/review data;
+Parallel-safe with Phase 32 I1 and I4 after Phase 31.5. Own catalog/review data;
 I5 owns prompts and writes.
 
 ## Contract impact
