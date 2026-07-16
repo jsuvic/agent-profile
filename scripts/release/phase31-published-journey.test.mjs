@@ -22,20 +22,18 @@ const workspaces = [
   "@agent-profile/doctor",
   "@agent-profile/schemas",
 ];
+const buildWorkspaces = [
+  "@agent-profile/core",
+  "@agent-profile/compiler",
+  "@agent-profile/doctor",
+  "@agent-profile/cli",
+];
 
 function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), "utf8");
 }
 
-function npmPack(workspace, packDestination) {
-  const packArgs = [
-    "pack",
-    "--workspace",
-    workspace,
-    "--json",
-    "--pack-destination",
-    packDestination,
-  ];
+function runNpm(args) {
   const npmExecPath =
     process.env.npm_execpath ??
     (process.platform === "win32"
@@ -62,11 +60,27 @@ function npmPack(workspace, packDestination) {
         ].find((candidate) => fs.existsSync(candidate))
       : undefined);
   const npmCommand = npmExecPath ? process.execPath : "npm";
-  const args = npmExecPath ? [npmExecPath, ...packArgs] : packArgs;
-  const output = execFileSync(npmCommand, args, {
+  return execFileSync(npmCommand, npmExecPath ? [npmExecPath, ...args] : args, {
     cwd: root,
     encoding: "utf8",
   });
+}
+
+function buildPackedWorkspaces() {
+  for (const workspace of buildWorkspaces) {
+    runNpm(["run", "build", "--workspace", workspace]);
+  }
+}
+
+function npmPack(workspace, packDestination) {
+  const output = runNpm([
+    "pack",
+    "--workspace",
+    workspace,
+    "--json",
+    "--pack-destination",
+    packDestination,
+  ]);
   const [result] = JSON.parse(output);
   const tarball = path.join(packDestination, result.filename);
   assert.ok(fs.existsSync(tarball), `${workspace} concrete tarball exists`);
@@ -266,6 +280,7 @@ test("published Phase 31 journey joins real tarballs, state-aware configure, and
     /Codex[\s\S]*Tabnine[\s\S]*(not|does not|aren't|are not) (changed|synchronized)/i,
   );
 
+  buildPackedWorkspaces();
   const packed = new Map(
     workspaces.map((workspace) => [
       workspace,
