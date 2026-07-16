@@ -323,6 +323,37 @@ describe("evaluatePermissionDoctorIssues", () => {
     assert.equal(result.summary.aligned, true);
   });
 
+  it("requires local evidence before personal activation is confirmed", () => {
+    const result = evaluatePermissionDoctorIssues(
+      plan("trusted-local"),
+      evidence(
+        [
+          field({
+            dimension: "defaultMode",
+            declared: "bypassPermissions",
+            effective: "bypassPermissions",
+            source: {
+              client: "claude",
+              scope: "generated-project",
+              path: ".claude/settings.json",
+            },
+          }),
+        ],
+        "trusted-local",
+      ),
+      ownership,
+      mapping("personal-activation-required", "claude", "trusted-local"),
+    );
+    const activation = result.findings.find(
+      (item) =>
+        item.code === "LINT-PERM-007" &&
+        item.path === "claude-personal-activation",
+    );
+    assert.ok(activation, JSON.stringify(result, null, 2));
+    assert.equal(activation.severity, "warning");
+    assert.equal(result.summary.aligned, false);
+  });
+
   it("warns when declared personal activation is incomplete", () => {
     const result = evaluatePermissionDoctorIssues(
       plan("trusted-local"),
@@ -419,6 +450,47 @@ describe("evaluatePermissionDoctorIssues", () => {
       [{ code: "LINT-PERM-008", severity: "info" }],
     );
     assert.match(result.findings[0]!.guidance, /migrate/i);
+  });
+
+  it("honors sandboxed legacy auto mode while rejecting bypassPermissions", () => {
+    const sandboxedAuto = evaluatePermissionDoctorIssues(
+      plan("autonomous", true),
+      evidence([
+        field({
+          dimension: "defaultMode",
+          declared: "default",
+          effective: "auto",
+          position: "looser",
+        }),
+      ]),
+      ownership,
+      mapping(),
+    );
+    assert.deepEqual(
+      sandboxedAuto.findings.map(({ code, severity }) => ({ code, severity })),
+      [{ code: "LINT-PERM-008", severity: "info" }],
+    );
+
+    const bypass = evaluatePermissionDoctorIssues(
+      plan("autonomous", true),
+      evidence([
+        field({
+          dimension: "defaultMode",
+          declared: "default",
+          effective: "bypassPermissions",
+          position: "looser",
+        }),
+      ]),
+      ownership,
+      mapping(),
+    );
+    assert.deepEqual(
+      bypass.findings.map(({ code, severity }) => ({ code, severity })),
+      [
+        { code: "LINT-PERM-004", severity: "error" },
+        { code: "LINT-PERM-008", severity: "info" },
+      ],
+    );
   });
 
   it("orders findings deterministically and never calls unknown aligned", () => {

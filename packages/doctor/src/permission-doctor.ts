@@ -172,6 +172,7 @@ function evaluateField(
   findings: DoctorIssue[],
 ): void {
   if (item.position === "aligned") return;
+  if (isSandboxedLegacyAuto(plan, item)) return;
 
   const sourcePath = item.source?.path ?? `${item.client}-runtime`;
   const expected = safeValue(item.declared);
@@ -270,7 +271,7 @@ function evaluateMapping(
   if (
     status === "configured-automatically" ||
     (status === "personal-activation-required" &&
-      clientEvidence?.effectivePosition === "aligned")
+      hasConfirmedPersonalActivation(clientEvidence))
   ) {
     return;
   }
@@ -315,6 +316,33 @@ function evaluateMapping(
       `${client} mapping state cannot be verified.`,
       `Resolve the ${client} policy or mapping state before treating this posture as aligned.`,
     ),
+  );
+}
+
+function hasConfirmedPersonalActivation(
+  clientEvidence: PermissionEvidence["clients"][number] | undefined,
+): boolean {
+  return (
+    clientEvidence?.effectivePosition === "aligned" &&
+    clientEvidence.fields.some(
+      (item) =>
+        item.dimension === "defaultMode" &&
+        item.position === "aligned" &&
+        item.source?.scope === "local-project",
+    )
+  );
+}
+
+function isSandboxedLegacyAuto(
+  plan: PermissionPosturePlan,
+  item: PermissionEvidenceField,
+): boolean {
+  return (
+    plan.legacy.isLegacyAutonomous &&
+    plan.legacy.requiresSandbox &&
+    item.client === "claude" &&
+    item.dimension === "defaultMode" &&
+    item.effective === "auto"
   );
 }
 
