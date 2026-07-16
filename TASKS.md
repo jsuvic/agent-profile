@@ -120,7 +120,7 @@ RED-first TDD implementation cycle.
 | I4  | State-aware configure and atomic shared reconciliation   | done      | [004-configure-and-shared-reconciliation-flow.md](docs/specs/phase-31/issues/004-configure-and-shared-reconciliation-flow.md)             |
 | I5  | Personal activation and manual client guidance           | done      | [005-personal-activation-and-manual-guidance.md](docs/specs/phase-31/issues/005-personal-activation-and-manual-guidance.md)               |
 | I6  | Doctor posture severity and ownership-aware validation   | done      | [006-doctor-posture-severity-and-ownership.md](docs/specs/phase-31/issues/006-doctor-posture-severity-and-ownership.md)                   |
-| I7  | Dispatcher permission routing and legacy migration entry | sequenced | [007-dispatcher-permission-routing.md](docs/specs/phase-31/issues/007-dispatcher-permission-routing.md)                                   |
+| I7  | Dispatcher permission routing and legacy migration entry | done      | [007-dispatcher-permission-routing.md](docs/specs/phase-31/issues/007-dispatcher-permission-routing.md)                                   |
 | I8  | Published permission journey and final integration       | sequenced | [008-published-journey-and-final-integration.md](docs/specs/phase-31/issues/008-published-journey-and-final-integration.md)               |
 
 Dependency map: I1 -> (I2 and I3); I1+I2+I3 -> I4; I2+I4 -> I5;

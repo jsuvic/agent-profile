@@ -17,7 +17,7 @@ import fsPromises from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
@@ -2284,4 +2284,74 @@ test("bare non-TTY output is byte-identical to help and performs no detection", 
   assert.equal(await runCli(["--help"], { cwd: missingRoot, io: help }), 0);
   assert.equal(bare.stdoutText(), help.stdoutText());
   assert.equal(bare.stderrText(), "");
+});
+
+test("bare non-TTY help runs no detection, permission inspection, or presentation", async () => {
+  const scratch = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-bare-sentinel-"),
+  );
+  const probePath = path.join(scratch, "probe.mjs");
+  const mainPath = path.join(scratch, "main.mjs");
+  const missingRoot = path.join(scratch, "missing-root");
+  await writeFile(
+    probePath,
+    `export async function load(url, context, nextLoad) {
+  if (url.endsWith("/dispatch.js") || url.endsWith("/dispatch-clack.js") || url.endsWith("/presentation.js")) {
+    throw new Error("forbidden bare non-TTY subsystem loaded: " + url);
+  }
+  return nextLoad(url, context);
+}
+`,
+    "utf8",
+  );
+  await writeFile(
+    mainPath,
+    `import { register } from "node:module";
+register(process.env.PROBE_URL, import.meta.url);
+const { runCli } = await import(process.env.CLI_INDEX_URL);
+const fsPromises = (await import("node:fs/promises")).default;
+for (const name of ["access", "lstat", "open", "readFile", "readdir", "realpath", "stat"]) {
+  fsPromises[name] = async () => {
+    throw new Error("forbidden bare non-TTY filesystem inspection: " + name);
+  };
+}
+function output() {
+  const stdout = [];
+  const stderr = [];
+  return {
+    io: { stdout: (text) => stdout.push(text), stderr: (text) => stderr.push(text) },
+    stdout: () => stdout.join(""),
+    stderr: () => stderr.join(""),
+  };
+}
+const bare = output();
+const help = output();
+const bareCode = await runCli([], { cwd: process.env.CLI_ROOT, io: bare.io });
+const helpCode = await runCli(["--help"], { cwd: process.env.CLI_ROOT, io: help.io });
+if (bareCode !== 0 || helpCode !== 0 || bare.stdout() !== help.stdout() || bare.stderr() !== "") {
+  throw new Error("bare non-TTY help contract changed");
+}
+`,
+    "utf8",
+  );
+
+  try {
+    const child = spawnSync(process.execPath, ["--import", "tsx", mainPath], {
+      cwd: fileURLToPath(new URL("../", import.meta.url)),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CI: "true",
+        TSX_TSCONFIG_PATH: fileURLToPath(
+          new URL("../tsconfig.test.json", import.meta.url),
+        ),
+        PROBE_URL: pathToFileURL(probePath).href,
+        CLI_INDEX_URL: new URL("./index.js", import.meta.url).href,
+        CLI_ROOT: missingRoot,
+      },
+    });
+    assert.equal(child.status, 0, child.stderr ?? "sentinel child failed");
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 });
