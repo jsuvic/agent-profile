@@ -75,6 +75,22 @@ export type {
   ResolvedRoleMapping,
 } from "./subagent-mapping.js";
 export {
+  buildModelPolicyTargetTable,
+  CLAUDE_MODEL_POLICY_CATALOG,
+  CODEX_MODEL_POLICY_CATALOG,
+  deriveModelPolicyRoleOverrides,
+  MODEL_POLICY_PRIMARY_ROLE,
+  MODEL_POLICY_TARGET_CATALOG_VERSION,
+  resolveModelPolicyLockfile,
+  toLockModelPolicyFromTargetTable,
+} from "./model-policy-target-adapter.js";
+export type {
+  ModelPolicyRoleOverrides,
+  ModelPolicyTargetClientId,
+  ModelPolicyTargetClientResolution,
+  ModelPolicyTargetRow,
+} from "./model-policy-target-adapter.js";
+export {
   ADVISORY_HOOK_TEMPLATES,
   advisoryHookCommandViolatesForbiddenPatterns,
   buildClaudeAdvisoryHooksValue,

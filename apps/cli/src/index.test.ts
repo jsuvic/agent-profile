@@ -390,6 +390,28 @@ test("compile dry-run previews generated files without writing", async () => {
   });
 });
 
+test("compile --write persists v3 model-policy provenance in ai-profile.lock", async () => {
+  const rootDir = await createProfileOnlyRoot();
+  const profilePath = path.join(rootDir, "ai-profile.yaml");
+  await writeFile(
+    profilePath,
+    `${await readFile(profilePath, "utf8")}\nsubagentPolicy:\n  enabled: true\n  preset: role-aware\n`,
+    "utf8",
+  );
+
+  const output = createOutput();
+  const code = await runCli(["compile", "--root", rootDir, "--write"], {
+    io: output,
+  });
+  assert.equal(code, 0, output.stderrText());
+
+  const lockfile = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  ) as { modelPolicy?: { preset?: string; resolutions?: unknown[] } };
+  assert.equal(lockfile.modelPolicy?.preset, "role-aware");
+  assert.equal(lockfile.modelPolicy?.resolutions?.length, 20);
+});
+
 test("compile reports advisory hook notes for targets without verified hook generation", async () => {
   const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-hooks-"));
   await writeFile(

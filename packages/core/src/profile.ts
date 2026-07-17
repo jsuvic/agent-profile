@@ -25,21 +25,13 @@ import type { ModelPolicyPreset, ModelPolicyRoleId } from "./model-policy.js";
 
 export type PermissionMode = "allow" | "ask" | "deny";
 export type SafetyMode =
-  | "guarded"
-  | "balanced"
-  | "trusted-local"
-  | "autonomous"
-  | "plan-only";
+  "guarded" | "balanced" | "trusted-local" | "autonomous" | "plan-only";
 
 // Client-neutral posture adjustment (ADR 0004 Phase 31 amendment). `autonomous`
 // is intentionally excluded: it is a legacy baseline-only mode. `inherit` means
 // "use the baseline posture".
 export type ClientPermissionPosture =
-  | "guarded"
-  | "balanced"
-  | "trusted-local"
-  | "plan-only"
-  | "inherit";
+  "guarded" | "balanced" | "trusted-local" | "plan-only" | "inherit";
 
 export type AiProfileClient = {
   enabled: boolean;
@@ -452,18 +444,20 @@ export const SUBAGENT_POLICY_TARGET_MODELS = Object.freeze({
   }),
 });
 
-export type SubagentPolicyCodexModel =
-  (typeof SUBAGENT_POLICY_TARGET_MODELS.codex)[keyof typeof SUBAGENT_POLICY_TARGET_MODELS.codex];
-export type SubagentPolicyClaudeModel =
-  (typeof SUBAGENT_POLICY_TARGET_MODELS.claude)[keyof typeof SUBAGENT_POLICY_TARGET_MODELS.claude];
+// Mapping-v2 semantic validation still restricts these strings to the pinned
+// descriptor below. Mapping-v3 deliberately keeps the TypeScript surface open
+// so new/private exact identifiers accepted by runtime validation do not
+// require an unsafe cast before reaching the target adapter.
+export type SubagentPolicyCodexModel = string;
+export type SubagentPolicyClaudeModel = string;
 
 export function isSubagentPolicyCodexModel(
   value: unknown,
 ): value is SubagentPolicyCodexModel {
   return (
     typeof value === "string" &&
-    Object.values(SUBAGENT_POLICY_TARGET_MODELS.codex).includes(
-      value as SubagentPolicyCodexModel,
+    Object.values(SUBAGENT_POLICY_TARGET_MODELS.codex).some(
+      (model) => model === value,
     )
   );
 }
@@ -473,8 +467,8 @@ export function isSubagentPolicyClaudeModel(
 ): value is SubagentPolicyClaudeModel {
   return (
     typeof value === "string" &&
-    Object.values(SUBAGENT_POLICY_TARGET_MODELS.claude).includes(
-      value as SubagentPolicyClaudeModel,
+    Object.values(SUBAGENT_POLICY_TARGET_MODELS.claude).some(
+      (model) => model === value,
     )
   );
 }

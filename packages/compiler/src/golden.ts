@@ -8,6 +8,7 @@ import { readProfileFile } from "@agent-profile/core";
 
 import { compileProfile } from "./compiler.js";
 import { createLockfileFile } from "./lockfile.js";
+import { resolveModelPolicyLockfile } from "./model-policy-target-adapter.js";
 import { compareText } from "./shared.js";
 import type { GeneratedFile, GoldenFailure } from "./types.js";
 
@@ -56,10 +57,13 @@ export async function compareGoldenFixture(
     };
   }
 
+  const modelPolicy = resolveModelPolicyLockfile(profileResult.profile);
+
   const lockfile = createLockfileFile({
     profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
+    ...(modelPolicy === undefined ? {} : { modelPolicy }),
   });
   const generatedFiles = [...compileResult.files, lockfile].sort(
     (left, right) => compareText(left.path, right.path),

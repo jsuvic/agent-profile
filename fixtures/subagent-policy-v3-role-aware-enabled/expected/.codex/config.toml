@@ -1,0 +1,8 @@
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+allow_login_shell = false
+model = "organization-codex-model"
+model_reasoning_effort = "xhigh"
+
+[sandbox_workspace_write]
+network_access = false

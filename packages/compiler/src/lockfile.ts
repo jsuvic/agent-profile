@@ -3,7 +3,6 @@
 
 import {
   MODEL_POLICY_CAPABILITY_STATUSES,
-  MODEL_POLICY_EFFORTS,
   MODEL_POLICY_PRESETS,
   MODEL_POLICY_RESOLUTION_SOURCES,
   MODEL_POLICY_ROLE_IDS,
@@ -41,8 +40,15 @@ import type {
 // a future core role/preset addition or rename cannot silently desync from
 // this lockfile validator.
 const MODEL_POLICY_PRESET_SET = new Set<string>(MODEL_POLICY_PRESETS);
-const MODEL_POLICY_EFFORT_SET = new Set<string>(MODEL_POLICY_EFFORTS);
-const MODEL_POLICY_SOURCE_SET = new Set<string>(MODEL_POLICY_RESOLUTION_SOURCES);
+const MODEL_POLICY_TARGET_EFFORT_SET = new Set([
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+const MODEL_POLICY_SOURCE_SET = new Set<string>(
+  MODEL_POLICY_RESOLUTION_SOURCES,
+);
 const MODEL_POLICY_CAPABILITY_STATUS_SET = new Set<string>(
   MODEL_POLICY_CAPABILITY_STATUSES,
 );
@@ -470,9 +476,16 @@ function validateModelPolicyResolutions(
       );
     }
 
-    if (typeof item.role !== "string" || !MODEL_POLICY_ROLE_ID_SET.has(item.role)) {
+    if (
+      typeof item.role !== "string" ||
+      !MODEL_POLICY_ROLE_ID_SET.has(item.role)
+    ) {
       issues.push(
-        schemaIssue(`${path}/role`, "a known model-policy role id", describeValue(item.role)),
+        schemaIssue(
+          `${path}/role`,
+          "a known model-policy role id",
+          describeValue(item.role),
+        ),
       );
     }
 
@@ -480,12 +493,12 @@ function validateModelPolicyResolutions(
 
     if (
       typeof item.effort !== "string" ||
-      !MODEL_POLICY_EFFORT_SET.has(item.effort)
+      !MODEL_POLICY_TARGET_EFFORT_SET.has(item.effort)
     ) {
       issues.push(
         schemaIssue(
           `${path}/effort`,
-          'one of ["low","medium","high","extra-high"]',
+          'one of ["low","medium","high","xhigh"]',
           describeValue(item.effort),
         ),
       );
@@ -493,7 +506,11 @@ function validateModelPolicyResolutions(
 
     if (!Array.isArray(item.alternatives)) {
       issues.push(
-        schemaIssue(`${path}/alternatives`, "array", describeValue(item.alternatives)),
+        schemaIssue(
+          `${path}/alternatives`,
+          "array",
+          describeValue(item.alternatives),
+        ),
       );
     } else {
       item.alternatives.forEach((alternative, altIndex) => {
@@ -566,7 +583,9 @@ function validateModelPolicyExactString(
   }
 
   if (result.code === "empty") {
-    issues.push(schemaIssue(path, "non-empty exact model string", "empty string"));
+    issues.push(
+      schemaIssue(path, "non-empty exact model string", "empty string"),
+    );
     return;
   }
 
@@ -582,7 +601,11 @@ function validateModelPolicyExactString(
   }
 
   issues.push(
-    schemaIssue(path, "control-character-free exact model string", "control characters present"),
+    schemaIssue(
+      path,
+      "control-character-free exact model string",
+      "control characters present",
+    ),
   );
 }
 

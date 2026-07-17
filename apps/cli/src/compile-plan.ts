@@ -3,6 +3,7 @@
 
 import {
   createLockfileFile,
+  resolveModelPolicyLockfile,
   hasAllRegionMarkers,
   hasAnyRegionMarker,
   readLockfileForRegions,
@@ -19,6 +20,7 @@ import {
   type WritePlanResult,
   planWrites,
 } from "@agent-profile/compiler";
+import type { AiProfile } from "@agent-profile/core";
 
 export type RegionAwareRefusal = {
   path: string;
@@ -151,6 +153,7 @@ export function buildCompileWrites(input: {
   templates: TemplateDescriptor[];
   files: GeneratedFile[];
   regionPlan: RegionAwareWritePlan;
+  profile?: AiProfile;
   existingUpgrade?: { catalogVersion: number };
 }): PlannedWrite[] {
   let lockfile = createLockfileFile({
@@ -159,6 +162,9 @@ export function buildCompileWrites(input: {
     templates: input.templates,
     files: input.files,
     mixedOutputs: input.regionPlan.mixedOutputs,
+    ...(input.profile === undefined
+      ? {}
+      : { modelPolicy: resolveModelPolicyLockfile(input.profile) }),
   });
   if (input.regionPlan.manualOutputs.length > 0 || input.existingUpgrade) {
     const parsed = validateLockfileText(

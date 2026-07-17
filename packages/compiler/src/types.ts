@@ -215,12 +215,13 @@ export type AiProfileLockV1 = {
 // rather than redeclared here. `ModelPolicyClientId` has no core equivalent
 // yet (I2/I3 own target adapters) and legitimately stays compiler-local.
 export type ModelPolicyClientId = "tabnine" | "codex" | "claude";
+export type ModelPolicyTargetEffort = "low" | "medium" | "high" | "xhigh";
 
 export type LockModelPolicyResolutionV2 = {
   client: ModelPolicyClientId;
   role: ModelPolicyRoleId;
   model: string;
-  effort: ModelPolicyEffort;
+  effort: ModelPolicyTargetEffort;
   alternatives: string[];
   source: ModelPolicyResolutionSource;
   capabilityStatus: ModelPolicyCapabilityStatus;

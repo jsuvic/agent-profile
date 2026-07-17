@@ -60,6 +60,11 @@ import {
   renderSubagentPolicyTabnineGuideline,
 } from "./subagent-policy-guidance.js";
 import {
+  buildModelPolicyTargetTable,
+  deriveModelPolicyRoleOverrides,
+  MODEL_POLICY_PRIMARY_ROLE,
+} from "./model-policy-target-adapter.js";
+import {
   buildClaudeAdvisoryHooksValue,
   getAdvisoryHookNotes,
   getAdvisoryHookTemplateId,
@@ -1791,10 +1796,12 @@ Final implementation review is required for this project.
 }
 
 function renderCodexConfigToml(profile?: AiProfile): string {
+  const modelLines = renderCodexPrimaryModelLines(profile);
+
   const base = `approval_policy = "on-request"
 sandbox_mode = "workspace-write"
 allow_login_shell = false
-
+${modelLines}
 [sandbox_workspace_write]
 network_access = false
 `;
@@ -1809,6 +1816,44 @@ network_access = false
 [agents]
 max_threads = ${defaults.maxConcurrent}
 max_depth = ${defaults.maxDepth}
+`;
+}
+
+/**
+ * Phase 31.5 (I2): the project-local `.codex/config.toml` top-level default
+ * `model` / `model_reasoning_effort` fields, populated only for a v3-opted
+ * profile (`subagentPolicy.preset` set). This is the single, evidence-backed
+ * primary configuration surface Agent Profile actually writes; it always
+ * reflects `MODEL_POLICY_PRIMARY_ROLE`'s Codex resolution, never every role.
+ * A v2/legacy or disabled profile emits no lines here, preserving byte
+ * identity with the pre-I2 output.
+ */
+function renderCodexPrimaryModelLines(profile?: AiProfile): string {
+  const preset =
+    profile?.subagentPolicy?.enabled === true
+      ? profile.subagentPolicy.preset
+      : undefined;
+  if (preset === undefined) {
+    return "";
+  }
+
+  // Derive role overrides through the single shared helper so this write
+  // stays in agreement with the AGENTS.md/CLAUDE.md guidance table's
+  // `configured` claim and the lockfile's `modelPolicy` provenance for the
+  // same profile (see deriveModelPolicyRoleOverrides).
+  const roleOverrides = deriveModelPolicyRoleOverrides(
+    profile?.subagentPolicy?.enabled === true
+      ? profile.subagentPolicy.roles
+      : undefined,
+  );
+  const table = buildModelPolicyTargetTable(preset, roleOverrides);
+  const primaryRow = table.find((row) => row.role === MODEL_POLICY_PRIMARY_ROLE);
+  if (!primaryRow || primaryRow.codex.model === undefined) {
+    return "";
+  }
+
+  return `model = "${escapeTomlString(primaryRow.codex.model)}"
+model_reasoning_effort = "${escapeTomlString(primaryRow.codex.targetEffort)}"
 `;
 }
 
