@@ -10,6 +10,7 @@
 // `subagentPolicy` domain in ./profile.ts; it is purely additive.
 
 import {
+  DEFAULT_SUBAGENT_POLICY_ROLES,
   deepFreeze,
   type SubagentPolicyCapability,
   type SubagentPolicyEffort,
@@ -445,14 +446,19 @@ function resolvePresetRoleEffort(
   return legacyFallback[input.role]?.effort ?? "medium";
 }
 
-/** Generic mapping-v2 legacy fallback derived from the role-aware preset's
- * existing (non-`routine-implementer`) rows. `routine-implementer` is
- * v3-only and intentionally absent here. */
+/** Mapping-v2 legacy fallback, derived from the actual Phase 30
+ * `DEFAULT_SUBAGENT_POLICY_ROLES` defaults in ./profile.ts (NOT the v3
+ * `role-aware` preset, which uses different capability/effort values for
+ * several roles). A profile without an explicit v3 preset must keep
+ * resolving to these existing values until an explicit upgrade; deriving
+ * from the v3 preset would silently change enabled mapping-v2 policies.
+ * `routine-implementer` is v3-only and intentionally absent here. */
 export const DEFAULT_MODEL_POLICY_LEGACY_FALLBACK: ModelPolicyLegacyFallbackTable =
   deepFreeze(
     Object.fromEntries(
-      Object.entries(MODEL_POLICY_PRESET_TABLE["role-aware"]).filter(
-        ([role]) => role !== "routine-implementer",
-      ),
+      Object.entries(DEFAULT_SUBAGENT_POLICY_ROLES).map(([role, value]) => [
+        role,
+        { capability: value.capability, effort: value.effort },
+      ]),
     ),
   ) as ModelPolicyLegacyFallbackTable;

@@ -119,9 +119,30 @@ function toLockModelPolicy(modelPolicy: LockModelPolicyV2): LockModelPolicyV2 {
   return {
     catalogVersion: modelPolicy.catalogVersion,
     preset: modelPolicy.preset,
-    resolutions: [...modelPolicy.resolutions]
-      .map((resolution) => ({ ...resolution, alternatives: [...resolution.alternatives] }))
+    resolutions: modelPolicy.resolutions
+      .map(toLockModelPolicyResolution)
       .sort(compareModelPolicyResolutions),
+  };
+}
+
+/**
+ * Construct each resolution row from only the fields the lockfile schema
+ * allows. A caller's resolution object may originate from a richer
+ * probe/account-aware record; spreading it would leak extra fields (e.g.
+ * probeTimestamp, accountId) into ai-profile.lock and violate the
+ * model-policy provenance contract.
+ */
+function toLockModelPolicyResolution(
+  resolution: LockModelPolicyResolutionV2,
+): LockModelPolicyResolutionV2 {
+  return {
+    client: resolution.client,
+    role: resolution.role,
+    model: resolution.model,
+    effort: resolution.effort,
+    alternatives: [...resolution.alternatives],
+    source: resolution.source,
+    capabilityStatus: resolution.capabilityStatus,
   };
 }
 

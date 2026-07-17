@@ -20,6 +20,25 @@ import {
   type ModelPolicyResolutionPlan,
 } from "./index.js";
 
+// Independent literal snapshot of the actual Phase 30 mapping-v2 defaults
+// (packages/core/src/profile.ts DEFAULT_SUBAGENT_POLICY_ROLES), NOT derived
+// from MODEL_POLICY_PRESET_TABLE["role-aware"]. Several rows intentionally
+// differ from the v3 role-aware preset (e.g. implementer is balanced/medium
+// in v2 but balanced/high in v3 role-aware; explorer is balanced/low in v2
+// but efficient/low in v3 role-aware). This guards against the legacy
+// fallback silently being re-derived from the v3 preset table.
+const EXPECTED_V2_LEGACY_DEFAULTS = {
+  implementer: { capability: "balanced", effort: "medium" },
+  "complex-implementer": { capability: "balanced", effort: "high" },
+  explorer: { capability: "balanced", effort: "low" },
+  "spec-reviewer": { capability: "balanced", effort: "high" },
+  "quality-reviewer": { capability: "balanced", effort: "high" },
+  "critical-reviewer": { capability: "strongest", effort: "high" },
+  architect: { capability: "strongest", effort: "extra-high" },
+  grill: { capability: "strongest", effort: "high" },
+  mechanical: { capability: "efficient", effort: "medium" },
+} as const;
+
 describe("model-policy v3 preset table", () => {
   it("parses the frozen role-aware preset for every v3 role id, including routine-implementer", () => {
     const roleAware = MODEL_POLICY_PRESET_TABLE["role-aware"];
@@ -217,6 +236,26 @@ describe("resolveModelPolicy", () => {
     assert.equal(plan.source, "legacy");
     assert.notEqual(plan.model, undefined);
     assert.equal(plan.capabilityStatus, "configured");
+  });
+
+  it("matches the actual Phase 30 mapping-v2 defaults exactly, not the v3 role-aware preset", () => {
+    assert.deepEqual(
+      DEFAULT_MODEL_POLICY_LEGACY_FALLBACK,
+      EXPECTED_V2_LEGACY_DEFAULTS,
+    );
+    // Sanity check that this genuinely differs from the v3 role-aware
+    // preset for roles where the two tables diverge, so the assertion
+    // above cannot pass merely because both sides derive from the same
+    // v3 table.
+    const roleAware = MODEL_POLICY_PRESET_TABLE["role-aware"];
+    assert.notDeepEqual(
+      DEFAULT_MODEL_POLICY_LEGACY_FALLBACK.implementer,
+      roleAware.implementer,
+    );
+    assert.notDeepEqual(
+      DEFAULT_MODEL_POLICY_LEGACY_FALLBACK.explorer,
+      roleAware.explorer,
+    );
   });
 });
 

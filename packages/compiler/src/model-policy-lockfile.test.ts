@@ -96,6 +96,48 @@ test("lockfile v2 modelPolicy block stays optional", () => {
   );
 });
 
+test("lockfile v2 modelPolicy strips extra fields from a richer caller-supplied resolution object", () => {
+  // Simulate a resolution object sourced from a richer probe/account-aware
+  // record. buildLockfile must construct each row from only the allowed
+  // schema fields, not spread the source object, or these fields would leak
+  // into ai-profile.lock and violate the model-policy provenance contract.
+  const richResolution = {
+    ...MODEL_POLICY.resolutions[0]!,
+    probeTimestamp: "2026-07-17T00:00:00.000Z",
+    accountId: "acct_should_not_persist",
+    authToken: "secret_should_not_persist",
+  };
+
+  const lockfile = buildLockfile({
+    profileBytes: "version: 1\n",
+    templates: [FAKE_TEMPLATE],
+    files: [FAKE_FILE],
+    modelPolicy: {
+      ...MODEL_POLICY,
+      resolutions: [richResolution, MODEL_POLICY.resolutions[1]!],
+    },
+  });
+
+  const [firstResolution] = lockfile.modelPolicy!.resolutions;
+  assert.deepEqual(Object.keys(firstResolution!).sort(), [
+    "alternatives",
+    "capabilityStatus",
+    "client",
+    "effort",
+    "model",
+    "role",
+    "source",
+  ]);
+  assert.equal("probeTimestamp" in firstResolution!, false);
+  assert.equal("accountId" in firstResolution!, false);
+  assert.equal("authToken" in firstResolution!, false);
+
+  // The output must also independently pass the schema's own closed-world
+  // validation, not merely lack the extra keys by coincidence.
+  const result = validateLockfileValue(lockfile);
+  assert.equal(result.ok, true, JSON.stringify(result));
+});
+
 test("lockfile v2 modelPolicy rejects malformed and out-of-order shapes", () => {
   const base = buildLockfile({
     profileBytes: "version: 1\n",
