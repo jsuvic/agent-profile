@@ -158,6 +158,7 @@
         "role": "architect",
         "model": "claude-fable-5",
         "effort": "xhigh",
+        "effortStatus": "unverified",
         "alternatives": [
           "claude-opus-4-8"
         ],
@@ -169,6 +170,7 @@
         "role": "complex-implementer",
         "model": "claude-sonnet-5",
         "effort": "high",
+        "effortStatus": "unverified",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "unverified"
@@ -178,6 +180,7 @@
         "role": "critical-reviewer",
         "model": "claude-fable-5",
         "effort": "xhigh",
+        "effortStatus": "unverified",
         "alternatives": [
           "claude-opus-4-8"
         ],
@@ -189,6 +192,7 @@
         "role": "explorer",
         "model": "claude-haiku-4-5",
         "effort": "low",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -198,6 +202,7 @@
         "role": "grill",
         "model": "claude-fable-5",
         "effort": "xhigh",
+        "effortStatus": "unverified",
         "alternatives": [
           "claude-opus-4-8"
         ],
@@ -209,6 +214,7 @@
         "role": "implementer",
         "model": "claude-opus-4-8",
         "effort": "xhigh",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "explicit-override",
         "capabilityStatus": "advisory"
@@ -218,6 +224,7 @@
         "role": "mechanical",
         "model": "claude-haiku-4-5",
         "effort": "medium",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -227,6 +234,7 @@
         "role": "quality-reviewer",
         "model": "claude-fable-5",
         "effort": "high",
+        "effortStatus": "unverified",
         "alternatives": [
           "claude-opus-4-8"
         ],
@@ -238,6 +246,7 @@
         "role": "routine-implementer",
         "model": "claude-sonnet-5",
         "effort": "medium",
+        "effortStatus": "unverified",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "unverified"
@@ -247,6 +256,7 @@
         "role": "spec-reviewer",
         "model": "claude-fable-5",
         "effort": "high",
+        "effortStatus": "unverified",
         "alternatives": [
           "claude-opus-4-8"
         ],
@@ -258,6 +268,7 @@
         "role": "architect",
         "model": "gpt-5.6-sol",
         "effort": "xhigh",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -267,6 +278,7 @@
         "role": "complex-implementer",
         "model": "gpt-5.6-terra",
         "effort": "high",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -276,6 +288,7 @@
         "role": "critical-reviewer",
         "model": "gpt-5.6-sol",
         "effort": "xhigh",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -285,6 +298,7 @@
         "role": "explorer",
         "model": "gpt-5.6-luna",
         "effort": "low",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -294,6 +308,7 @@
         "role": "grill",
         "model": "gpt-5.6-sol",
         "effort": "xhigh",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -303,6 +318,7 @@
         "role": "implementer",
         "model": "organization-codex-model",
         "effort": "xhigh",
+        "effortStatus": "unverified",
         "alternatives": [],
         "source": "explicit-override",
         "capabilityStatus": "unverified"
@@ -312,6 +328,7 @@
         "role": "mechanical",
         "model": "gpt-5.6-luna",
         "effort": "medium",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -321,6 +338,7 @@
         "role": "quality-reviewer",
         "model": "gpt-5.6-sol",
         "effort": "high",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -330,6 +348,7 @@
         "role": "routine-implementer",
         "model": "gpt-5.6-terra",
         "effort": "medium",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -339,6 +358,7 @@
         "role": "spec-reviewer",
         "model": "gpt-5.6-sol",
         "effort": "high",
+        "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
         "capabilityStatus": "advisory"
@@ -470,7 +490,7 @@
       "target": "tabnine-guidelines",
       "templateId": "targets/tabnine-guidelines/87-subagent-task-capsules@1",
       "ownership": "generated-owned",
-      "sha256": "e739cba4b626d67519380057c4e00db7b86849757267740801de596a6d61ffeb"
+      "sha256": "bd76d8e26513aea860d26826104c6aa1661e4d0181eea31b37b2327e65fa2d62"
     },
     {
       "path": ".tabnine/guidelines/90-final-review.md",

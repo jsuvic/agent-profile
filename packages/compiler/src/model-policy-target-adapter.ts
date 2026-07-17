@@ -31,6 +31,10 @@ import {
 } from "@agent-profile/core";
 
 import type { LockModelPolicyV2, ModelPolicyTargetEffort } from "./types.js";
+import {
+  buildModelPolicyTabnineTargetTable,
+  toLockModelPolicyTabnineResolutions,
+} from "./model-policy-tabnine-adapter.js";
 
 export const MODEL_POLICY_TARGET_CATALOG_VERSION = MODEL_POLICY_CATALOG_VERSION;
 
@@ -405,6 +409,7 @@ export function toLockModelPolicyFromTargetTable(
     role: ModelPolicyRoleId;
     model: string;
     effort: ModelPolicyTargetEffort;
+    effortStatus: ModelPolicyCapabilityStatus;
     alternatives: string[];
     source: ModelPolicyResolutionSource;
     capabilityStatus: ModelPolicyCapabilityStatus;
@@ -415,6 +420,7 @@ export function toLockModelPolicyFromTargetTable(
     role: ModelPolicyRoleId;
     model: string;
     effort: ModelPolicyTargetEffort;
+    effortStatus: ModelPolicyCapabilityStatus;
     alternatives: string[];
     source: ModelPolicyResolutionSource;
     capabilityStatus: ModelPolicyCapabilityStatus;
@@ -436,6 +442,12 @@ export function toLockModelPolicyFromTargetTable(
         role: row.role,
         model: resolution.model,
         effort: resolution.targetEffort,
+        // Codex/Claude never report effort as a separately statused control
+        // today: the same write/guidance that resolves the model also
+        // resolves its effort, so `effortStatus` mirrors `capabilityStatus`
+        // for these two clients (Tabnine is the first client where the two
+        // diverge; see model-policy-tabnine-adapter.ts).
+        effortStatus: capabilityStatus,
         alternatives: [...resolution.alternatives],
         source: resolution.source,
         capabilityStatus,
@@ -451,7 +463,14 @@ export function toLockModelPolicyFromTargetTable(
 }
 
 /** Resolve optional v3 lock provenance from the same profile inputs as every
- * generated Codex/Claude surface. */
+ * generated Codex/Claude surface. Also merges in any Tabnine resolutions
+ * (Phase 31.5 I3): today the profile schema has no field that supplies an
+ * explicit Tabnine override, so `buildModelPolicyTabnineTargetTable` always
+ * resolves every role to guided manual selection (no exact model), and
+ * `toLockModelPolicyTabnineResolutions` emits no rows for that case. The
+ * merge is still wired end-to-end here so a future explicit Tabnine override
+ * source only needs to supply role overrides, not new lockfile plumbing. A
+ * Tabnine capability gap never blocks or alters the Codex/Claude rows. */
 export function resolveModelPolicyLockfile(
   profile: AiProfile,
 ): LockModelPolicyV2 | undefined {
@@ -460,11 +479,20 @@ export function resolveModelPolicyLockfile(
     return undefined;
   }
   const { preset } = policy;
-  return toLockModelPolicyFromTargetTable(
+  const codexClaude = toLockModelPolicyFromTargetTable(
     preset,
     buildModelPolicyTargetTable(
       preset,
       deriveModelPolicyRoleOverrides(policy.roles),
     ),
   );
+  const tabnine = toLockModelPolicyTabnineResolutions(
+    buildModelPolicyTabnineTargetTable(preset),
+  );
+
+  return {
+    catalogVersion: codexClaude.catalogVersion,
+    preset: codexClaude.preset,
+    resolutions: [...codexClaude.resolutions, ...tabnine],
+  };
 }

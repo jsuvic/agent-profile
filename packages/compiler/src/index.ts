@@ -90,6 +90,28 @@ export type {
   ModelPolicyTargetClientResolution,
   ModelPolicyTargetRow,
 } from "./model-policy-target-adapter.js";
+// Only the model-resolution-table surface (catalog, table builder, lockfile
+// row conversion) is part of the package's public API today, mirroring the
+// Codex/Claude adapter's exports. `planTabnineModelSettingsWrite` and its
+// supporting types/constants are deliberately NOT re-exported here: that
+// `.tabnine/agent/settings.json` ownership-aware write plan has no
+// production caller yet (it is not wired into any compile/write pipeline —
+// see docs/targets/subagent-policy.md's "Known scope narrowing (I3)"
+// section). They remain regular named exports of
+// ./model-policy-tabnine-adapter.js for direct/test use so the public
+// package entry point does not advertise an unwired write capability as a
+// stable, production-backed contract.
+export {
+  buildModelPolicyTabnineTargetTable,
+  MODEL_POLICY_TABNINE_CATALOG_VERSION,
+  TABNINE_MODEL_POLICY_CATALOG,
+  toLockModelPolicyTabnineResolutions,
+} from "./model-policy-tabnine-adapter.js";
+export type {
+  ModelPolicyTabnineResolution,
+  ModelPolicyTabnineRoleOverrides,
+  ModelPolicyTabnineRow,
+} from "./model-policy-tabnine-adapter.js";
 export {
   ADVISORY_HOOK_TEMPLATES,
   advisoryHookCommandViolatesForbiddenPatterns,

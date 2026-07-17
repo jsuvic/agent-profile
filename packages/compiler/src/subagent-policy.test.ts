@@ -311,6 +311,66 @@ test("Tabnine subagent guideline is portable-only, no model/MCP/subagent claim",
   assert.doesNotMatch(tabnine, /opus|sonnet|haiku|ultrathink/iu);
 });
 
+test("a v3-opted profile renders a Tabnine model/effort status section that keeps the task capsule content and never invents effort", () => {
+  const tabnine = fileText(
+    profileWithPolicy({ enabled: true, preset: "role-aware" }),
+    ".tabnine/guidelines/87-subagent-task-capsules.md",
+  );
+
+  // Existing portable task-capsule content is preserved unchanged.
+  assert.match(tabnine, /task capsule/iu);
+  assert.match(tabnine, /write ownership/iu);
+
+  // The new v3 section reports model and effort as independent controls:
+  // effort is always absent/unsupported, regardless of model status.
+  assert.match(tabnine, /unsupported/iu);
+  assert.match(tabnine, /\/model/u);
+  assert.match(tabnine, /\/about/u);
+  assert.doesNotMatch(tabnine, /"?effort"?\s*:\s*"(low|medium|high|xhigh)"/iu);
+});
+
+test("an uncatalogued Tabnine model cell renders the literal 'organization/private - unrated' phrase alongside its unverified status", async () => {
+  const { renderTabnineModelCell } = await import(
+    "./subagent-policy-guidance.js"
+  );
+  const cell = renderTabnineModelCell({
+    model: "org-acme-private-finetune-7",
+    lifecycle: "unrated",
+    source: "explicit-override",
+    alternatives: [],
+    modelStatus: "unverified",
+    effort: undefined,
+    effortStatus: "unsupported",
+  });
+  assert.equal(
+    cell,
+    "org-acme-private-finetune-7 / organization/private - unrated (unverified)",
+  );
+  assert.match(cell, /organization\/private - unrated/u);
+  assert.match(cell, /\(unverified\)/u);
+
+  // A catalogued (rated) lifecycle is rendered verbatim, not relabeled.
+  const catalogued = renderTabnineModelCell({
+    model: "gpt-5.4",
+    lifecycle: "current",
+    source: "explicit-override",
+    alternatives: [],
+    modelStatus: "advisory",
+    effort: undefined,
+    effortStatus: "unsupported",
+  });
+  assert.equal(catalogued, "gpt-5.4 / current (advisory)");
+});
+
+test("a v2/legacy profile (no v3 preset) keeps the Tabnine guideline byte-identical to the pre-I3 baseline", () => {
+  const withoutPreset = fileText(
+    profileWithPolicy(CANONICAL_POLICY),
+    ".tabnine/guidelines/87-subagent-task-capsules.md",
+  );
+  assert.doesNotMatch(withoutPreset, /unsupported/iu);
+  assert.doesNotMatch(withoutPreset, /catalog version/iu);
+});
+
 test("phase-30 subagent-policy-enabled fixture matches generated output", async () => {
   const fixtureDir = fileURLToPath(
     new URL("../../../fixtures/subagent-policy-enabled/", import.meta.url),

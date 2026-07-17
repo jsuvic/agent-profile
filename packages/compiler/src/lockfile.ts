@@ -145,7 +145,8 @@ function toLockModelPolicyResolution(
     client: resolution.client,
     role: resolution.role,
     model: resolution.model,
-    effort: resolution.effort,
+    ...(resolution.effort === undefined ? {} : { effort: resolution.effort }),
+    effortStatus: resolution.effortStatus,
     alternatives: [...resolution.alternatives],
     source: resolution.source,
     capabilityStatus: resolution.capabilityStatus,
@@ -455,12 +456,13 @@ function validateModelPolicyResolutions(
         "client",
         "role",
         "model",
-        "effort",
+        "effortStatus",
         "alternatives",
         "source",
         "capabilityStatus",
       ],
       issues,
+      ["effort"],
     );
 
     if (
@@ -491,15 +493,32 @@ function validateModelPolicyResolutions(
 
     validateModelPolicyExactString(item.model, `${path}/model`, issues);
 
+    // `effort` is optional (Phase 31.5 I3): absent when a target has no
+    // effective effort control (e.g. Tabnine). When present it must still be
+    // one of the known target-effort values.
     if (
-      typeof item.effort !== "string" ||
-      !MODEL_POLICY_TARGET_EFFORT_SET.has(item.effort)
+      Object.prototype.hasOwnProperty.call(item, "effort") &&
+      (typeof item.effort !== "string" ||
+        !MODEL_POLICY_TARGET_EFFORT_SET.has(item.effort))
     ) {
       issues.push(
         schemaIssue(
           `${path}/effort`,
           'one of ["low","medium","high","xhigh"]',
           describeValue(item.effort),
+        ),
+      );
+    }
+
+    if (
+      typeof item.effortStatus !== "string" ||
+      !MODEL_POLICY_CAPABILITY_STATUS_SET.has(item.effortStatus)
+    ) {
+      issues.push(
+        schemaIssue(
+          `${path}/effortStatus`,
+          'one of ["configured","advisory","unsupported","unverified"]',
+          describeValue(item.effortStatus),
         ),
       );
     }

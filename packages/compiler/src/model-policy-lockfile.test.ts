@@ -41,6 +41,7 @@ const MODEL_POLICY: LockModelPolicyV2 = {
       role: "architect",
       model: "example-strongest-current",
       effort: "xhigh",
+      effortStatus: "configured",
       alternatives: ["example-strongest-deprecated"],
       source: "catalog",
       capabilityStatus: "configured",
@@ -50,6 +51,7 @@ const MODEL_POLICY: LockModelPolicyV2 = {
       role: "architect",
       model: "example-strongest-current",
       effort: "xhigh",
+      effortStatus: "configured",
       alternatives: [],
       source: "catalog",
       capabilityStatus: "configured",
@@ -124,6 +126,7 @@ test("lockfile v2 modelPolicy strips extra fields from a richer caller-supplied 
     "capabilityStatus",
     "client",
     "effort",
+    "effortStatus",
     "model",
     "role",
     "source",
@@ -307,6 +310,69 @@ test("lockfile v2 modelPolicy rejects malformed and out-of-order shapes", () => 
       result.issues.some((issue) => issue.path.startsWith(expectedPathPrefix)),
       true,
       `expected an issue at ${expectedPathPrefix}, got ${JSON.stringify(result.issues)}`,
+    );
+  }
+});
+
+test("lockfile v2 modelPolicy rejects a resolution with a missing or invalid effortStatus, isolated from any other error", () => {
+  const base = buildLockfile({
+    profileBytes: "version: 1\n",
+    templates: [FAKE_TEMPLATE],
+    files: [FAKE_FILE],
+  });
+
+  // An otherwise fully valid resolution (mirrors a Tabnine row: no `effort`
+  // field, since it is optional) with `effortStatus` simply omitted.
+  const missingEffortStatus = {
+    client: "tabnine",
+    role: "architect",
+    model: "gpt-5.4",
+    alternatives: [],
+    source: "explicit-override",
+    capabilityStatus: "advisory",
+  };
+  const missingResult = validateLockfileValue({
+    ...base,
+    modelPolicy: {
+      catalogVersion: 3,
+      preset: "role-aware",
+      resolutions: [missingEffortStatus],
+    },
+  });
+  assert.equal(missingResult.ok, false);
+  if (!missingResult.ok) {
+    // A required-but-missing field reports its own "required
+    // property"/"does not match" issue pair (the same pattern every other
+    // required resolution field already uses, e.g. `capabilityStatus`); the
+    // isolation guarantee is that every issue points at effortStatus and
+    // nothing else on this otherwise fully valid resolution is flagged.
+    assert.ok(missingResult.issues.length > 0);
+    assert.ok(
+      missingResult.issues.every(
+        (issue) => issue.path === "/modelPolicy/resolutions/0/effortStatus",
+      ),
+      `expected every issue isolated to effortStatus, got ${JSON.stringify(missingResult.issues)}`,
+    );
+  }
+
+  // Same otherwise-valid resolution, but with an invalid effortStatus value.
+  const invalidEffortStatus = {
+    ...missingEffortStatus,
+    effortStatus: "entitled",
+  };
+  const invalidResult = validateLockfileValue({
+    ...base,
+    modelPolicy: {
+      catalogVersion: 3,
+      preset: "role-aware",
+      resolutions: [invalidEffortStatus],
+    },
+  });
+  assert.equal(invalidResult.ok, false);
+  if (!invalidResult.ok) {
+    assert.deepEqual(
+      invalidResult.issues.map((issue) => issue.path),
+      ["/modelPolicy/resolutions/0/effortStatus"],
     );
   }
 });
