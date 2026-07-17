@@ -1,7 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import type { AiProfile } from "@agent-profile/core";
+import type {
+  AiProfile,
+  ModelPolicyCapabilityStatus,
+  ModelPolicyEffort,
+  ModelPolicyPreset,
+  ModelPolicyResolutionSource,
+  ModelPolicyRoleId,
+} from "@agent-profile/core";
+
+export type {
+  ModelPolicyCapabilityStatus,
+  ModelPolicyEffort,
+  ModelPolicyPreset,
+  ModelPolicyResolutionSource,
+  ModelPolicyRoleId,
+} from "@agent-profile/core";
 
 import type { ClientMappingReport } from "./permission-mapping.js";
 
@@ -187,6 +202,36 @@ export type AiProfileLockV1 = {
   outputs: LockOutput[];
 };
 
+// Phase 31.5 (I1): optional mapping-v3 model-policy provenance. Additive to
+// the v2 lockfile; recorded only after explicit v3 adoption. It records
+// catalog version, selected preset, exact per-client/role resolutions,
+// target effort, ordered alternatives, resolution source, and capability
+// status. It MUST NOT contain installed client version, probe
+// timestamp/result, auth, entitlement, account, organization, quota,
+// endpoint, prompt, or response.
+// `ModelPolicyPreset`, `ModelPolicyEffort`, `ModelPolicyResolutionSource`,
+// `ModelPolicyCapabilityStatus`, and `ModelPolicyRoleId` are imported from
+// `@agent-profile/core` (single-owner vocabulary; see model-policy.ts)
+// rather than redeclared here. `ModelPolicyClientId` has no core equivalent
+// yet (I2/I3 own target adapters) and legitimately stays compiler-local.
+export type ModelPolicyClientId = "tabnine" | "codex" | "claude";
+
+export type LockModelPolicyResolutionV2 = {
+  client: ModelPolicyClientId;
+  role: ModelPolicyRoleId;
+  model: string;
+  effort: ModelPolicyEffort;
+  alternatives: string[];
+  source: ModelPolicyResolutionSource;
+  capabilityStatus: ModelPolicyCapabilityStatus;
+};
+
+export type LockModelPolicyV2 = {
+  catalogVersion: number;
+  preset: ModelPolicyPreset;
+  resolutions: LockModelPolicyResolutionV2[];
+};
+
 export type AiProfileLockV2 = {
   version: 2;
   profile: {
@@ -199,6 +244,7 @@ export type AiProfileLockV2 = {
   upgrade?: {
     catalogVersion: number;
   };
+  modelPolicy?: LockModelPolicyV2;
   outputs: LockOutputV2[];
 };
 
