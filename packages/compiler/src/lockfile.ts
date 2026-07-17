@@ -2,6 +2,15 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import {
+  MODEL_POLICY_CAPABILITY_STATUSES,
+  MODEL_POLICY_EFFORTS,
+  MODEL_POLICY_PRESETS,
+  MODEL_POLICY_RESOLUTION_SOURCES,
+  MODEL_POLICY_ROLE_IDS,
+  validateModelPolicyOverride,
+} from "@agent-profile/core";
+
+import {
   AGENT_PROFILE_COMPILER,
   compareText,
   createGeneratedTextFile,
@@ -18,12 +27,32 @@ import type {
   LockfileValidationResult,
   LockGeneratedOwnedOutputV2,
   LockMixedOutputV2,
+  LockModelPolicyResolutionV2,
+  LockModelPolicyV2,
   LockOutput,
   LockOutputV2,
   LockRegionV2,
   LockTemplate,
   TemplateDescriptor,
 } from "./types.js";
+
+// Single-owner vocabulary: derive validator Sets from `@agent-profile/core`'s
+// mapping-v3 model-policy tables rather than hand-copying literal unions, so
+// a future core role/preset addition or rename cannot silently desync from
+// this lockfile validator.
+const MODEL_POLICY_PRESET_SET = new Set<string>(MODEL_POLICY_PRESETS);
+const MODEL_POLICY_EFFORT_SET = new Set<string>(MODEL_POLICY_EFFORTS);
+const MODEL_POLICY_SOURCE_SET = new Set<string>(MODEL_POLICY_RESOLUTION_SOURCES);
+const MODEL_POLICY_CAPABILITY_STATUS_SET = new Set<string>(
+  MODEL_POLICY_CAPABILITY_STATUSES,
+);
+const MODEL_POLICY_ROLE_ID_SET = new Set<string>(MODEL_POLICY_ROLE_IDS);
+// `client` has no core equivalent yet (I2/I3 own target adapters); this stays
+// compiler-local, matching `ModelPolicyClientId` in ./types.ts.
+const MODEL_POLICY_CLIENT_IDS = new Set(["tabnine", "codex", "claude"]);
+// Exact-model-string shape validation (length/control-character rules) is
+// owned exclusively by `@agent-profile/core`'s `validateModelPolicyOverride`;
+// this file must not re-implement that check.
 
 export type MixedOutputDescriptor = {
   path: string;
@@ -42,13 +71,16 @@ export type BuildLockfileInput = {
   mixedOutputs?: MixedOutputDescriptor[];
   /** Optional capability-catalog provenance for upgrade-aware callers. */
   catalogVersion?: number;
+  /** Optional mapping-v3 model-policy provenance (Phase 31.5 I1). */
+  modelPolicy?: LockModelPolicyV2;
 };
 
 export type BuildLockfileV1Input = Omit<
   BuildLockfileInput,
-  "catalogVersion"
+  "catalogVersion" | "modelPolicy"
 > & {
   catalogVersion?: never;
+  modelPolicy?: never;
 };
 
 const SUPPORTED_VERSIONS = new Set([1, 2]);
@@ -74,10 +106,32 @@ export function buildLockfile(input: BuildLockfileInput): AiProfileLockV2 {
     ...(input.catalogVersion === undefined
       ? {}
       : { upgrade: { catalogVersion: input.catalogVersion } }),
+    ...(input.modelPolicy === undefined
+      ? {}
+      : { modelPolicy: toLockModelPolicy(input.modelPolicy) }),
     outputs: input.files
       .map((file) => toLockOutputV2(file, mixedByPath))
       .sort(compareLockOutputsV2),
   };
+}
+
+function toLockModelPolicy(modelPolicy: LockModelPolicyV2): LockModelPolicyV2 {
+  return {
+    catalogVersion: modelPolicy.catalogVersion,
+    preset: modelPolicy.preset,
+    resolutions: [...modelPolicy.resolutions]
+      .map((resolution) => ({ ...resolution, alternatives: [...resolution.alternatives] }))
+      .sort(compareModelPolicyResolutions),
+  };
+}
+
+function compareModelPolicyResolutions(
+  left: LockModelPolicyResolutionV2,
+  right: LockModelPolicyResolutionV2,
+): number {
+  return (
+    compareText(left.client, right.client) || compareText(left.role, right.role)
+  );
 }
 
 export function buildLockfileV1(input: BuildLockfileV1Input): AiProfileLockV1 {
@@ -259,7 +313,7 @@ function validateLockfileV2Object(
     "/",
     ["version", "profile", "compiler", "templates", "outputs"],
     issues,
-    ["upgrade"],
+    ["upgrade", "modelPolicy"],
   );
 
   if (value.version !== 2) {
@@ -273,6 +327,9 @@ function validateLockfileV2Object(
   validateTemplates(value.templates, issues);
   if (Object.prototype.hasOwnProperty.call(value, "upgrade")) {
     validateUpgrade(value.upgrade, issues);
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "modelPolicy")) {
+    validateModelPolicy(value.modelPolicy, issues);
   }
   validateOutputsV2(value.outputs, issues);
 }
@@ -298,6 +355,214 @@ function validateUpgrade(value: unknown, issues: LockfileIssue[]): void {
       ),
     );
   }
+}
+
+function validateModelPolicy(value: unknown, issues: LockfileIssue[]): void {
+  if (!isRecord(value)) {
+    issues.push(schemaIssue("/modelPolicy", "object", describeValue(value)));
+    return;
+  }
+
+  requireExactKeys(
+    value,
+    "/modelPolicy",
+    ["catalogVersion", "preset", "resolutions"],
+    issues,
+  );
+
+  if (
+    typeof value.catalogVersion !== "number" ||
+    !Number.isSafeInteger(value.catalogVersion) ||
+    value.catalogVersion < 1
+  ) {
+    issues.push(
+      schemaIssue(
+        "/modelPolicy/catalogVersion",
+        "positive safe integer",
+        describeValue(value.catalogVersion),
+      ),
+    );
+  }
+
+  if (
+    typeof value.preset !== "string" ||
+    !MODEL_POLICY_PRESET_SET.has(value.preset)
+  ) {
+    issues.push(
+      schemaIssue(
+        "/modelPolicy/preset",
+        'one of ["role-aware","quality-first","cost-conscious"]',
+        describeValue(value.preset),
+      ),
+    );
+  }
+
+  validateModelPolicyResolutions(value.resolutions, issues);
+}
+
+function validateModelPolicyResolutions(
+  value: unknown,
+  issues: LockfileIssue[],
+): void {
+  const pathPrefix = "/modelPolicy/resolutions";
+
+  if (!Array.isArray(value)) {
+    issues.push(schemaIssue(pathPrefix, "array", describeValue(value)));
+    return;
+  }
+
+  let previous: LockModelPolicyResolutionV2 | undefined;
+
+  value.forEach((item, index) => {
+    const path = `${pathPrefix}/${index}`;
+
+    if (!isRecord(item)) {
+      issues.push(schemaIssue(path, "object", describeValue(item)));
+      return;
+    }
+
+    requireExactKeys(
+      item,
+      path,
+      [
+        "client",
+        "role",
+        "model",
+        "effort",
+        "alternatives",
+        "source",
+        "capabilityStatus",
+      ],
+      issues,
+    );
+
+    if (
+      typeof item.client !== "string" ||
+      !MODEL_POLICY_CLIENT_IDS.has(item.client)
+    ) {
+      issues.push(
+        schemaIssue(
+          `${path}/client`,
+          'one of ["tabnine","codex","claude"]',
+          describeValue(item.client),
+        ),
+      );
+    }
+
+    if (typeof item.role !== "string" || !MODEL_POLICY_ROLE_ID_SET.has(item.role)) {
+      issues.push(
+        schemaIssue(`${path}/role`, "a known model-policy role id", describeValue(item.role)),
+      );
+    }
+
+    validateModelPolicyExactString(item.model, `${path}/model`, issues);
+
+    if (
+      typeof item.effort !== "string" ||
+      !MODEL_POLICY_EFFORT_SET.has(item.effort)
+    ) {
+      issues.push(
+        schemaIssue(
+          `${path}/effort`,
+          'one of ["low","medium","high","extra-high"]',
+          describeValue(item.effort),
+        ),
+      );
+    }
+
+    if (!Array.isArray(item.alternatives)) {
+      issues.push(
+        schemaIssue(`${path}/alternatives`, "array", describeValue(item.alternatives)),
+      );
+    } else {
+      item.alternatives.forEach((alternative, altIndex) => {
+        validateModelPolicyExactString(
+          alternative,
+          `${path}/alternatives/${altIndex}`,
+          issues,
+        );
+      });
+    }
+
+    if (
+      typeof item.source !== "string" ||
+      !MODEL_POLICY_SOURCE_SET.has(item.source)
+    ) {
+      issues.push(
+        schemaIssue(
+          `${path}/source`,
+          'one of ["catalog","explicit-override","legacy"]',
+          describeValue(item.source),
+        ),
+      );
+    }
+
+    if (
+      typeof item.capabilityStatus !== "string" ||
+      !MODEL_POLICY_CAPABILITY_STATUS_SET.has(item.capabilityStatus)
+    ) {
+      issues.push(
+        schemaIssue(
+          `${path}/capabilityStatus`,
+          'one of ["configured","advisory","unsupported","unverified"]',
+          describeValue(item.capabilityStatus),
+        ),
+      );
+    }
+
+    const current = item as unknown as LockModelPolicyResolutionV2;
+
+    if (previous && compareModelPolicyResolutions(previous, current) > 0) {
+      issues.push({
+        code: "lockfile_order_error",
+        path,
+        expected: "resolutions sorted by client then role",
+        actual: "out of order",
+        message: `${path} is not in deterministic order.`,
+      });
+    }
+
+    previous = current;
+  });
+}
+
+function validateModelPolicyExactString(
+  value: unknown,
+  path: string,
+  issues: LockfileIssue[],
+): void {
+  if (typeof value !== "string") {
+    issues.push(schemaIssue(path, "string", describeValue(value)));
+    return;
+  }
+
+  // Delegate exact-model-string shape rules (length/control-character
+  // validation) to the single owner: `@agent-profile/core`'s
+  // `validateModelPolicyOverride`. This file must not re-implement it.
+  const result = validateModelPolicyOverride(value);
+  if (result.ok) {
+    return;
+  }
+
+  if (result.code === "empty") {
+    issues.push(schemaIssue(path, "non-empty exact model string", "empty string"));
+    return;
+  }
+
+  if (result.code === "too_long") {
+    issues.push(
+      schemaIssue(
+        path,
+        "bounded exact model string",
+        `${value.length} characters`,
+      ),
+    );
+    return;
+  }
+
+  issues.push(
+    schemaIssue(path, "control-character-free exact model string", "control characters present"),
+  );
 }
 
 function validateProfile(value: unknown, issues: LockfileIssue[]): void {

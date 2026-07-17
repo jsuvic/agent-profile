@@ -134,7 +134,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 
 | Id | Task | State | Brief |
 | --- | --- | --- | --- |
-| I1 | Shared model-policy domain and compatibility resolver | ready | [001-shared-model-policy-domain.md](docs/specs/phase-31.5/issues/001-shared-model-policy-domain.md) |
+| I1 | Shared model-policy domain and compatibility resolver | done | [001-shared-model-policy-domain.md](docs/specs/phase-31.5/issues/001-shared-model-policy-domain.md) |
 | I2 | Codex and Claude exact model adapters | sequenced | [002-codex-claude-model-adapters.md](docs/specs/phase-31.5/issues/002-codex-claude-model-adapters.md) |
 | I3 | Tabnine historical, organization, and private models | sequenced | [003-tabnine-historical-private-models.md](docs/specs/phase-31.5/issues/003-tabnine-historical-private-models.md) |
 | I4 | Consented source-free model probes | sequenced | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md) |
