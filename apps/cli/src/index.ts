@@ -15,6 +15,7 @@ import {
   buildPhase14ImportReport,
   compileProfile,
   createLockfileFile,
+  resolveModelPolicyLockfile,
   getLocalRuntimeGitignoreFindings,
   parseMixedFile,
   planRootInstructionsAdoption,
@@ -1198,6 +1199,7 @@ async function runCompile(
           regionPlan,
           rootDriftPaths,
           otherDriftPaths,
+          profile: profileResult.profile,
           profilePath: safeProfilePath.path,
           profileBytes,
         });
@@ -1237,6 +1239,7 @@ async function runCompile(
     templates: compileResult.templates,
     files: compileResult.files,
     regionPlan,
+    profile: profileResult.profile,
   });
 
   if (parsed.write && !parsed.force) {
@@ -1422,6 +1425,7 @@ async function runDriftReconciliation(input: {
   write: boolean;
   prompts: ReconcilePrompts;
   compileResult: { files: GeneratedFile[]; templates: TemplateDescriptor[] };
+  profile: AiProfile;
   regionPlan: RegionAwareWritePlan;
   rootDriftPaths: readonly string[];
   otherDriftPaths: readonly string[];
@@ -1624,6 +1628,7 @@ async function runDriftReconciliation(input: {
       manualOutputs,
       refusals: [],
     },
+    profile: input.profile,
   });
 
   prompts.showSummary(formatReconciliationSummary(actions));
@@ -3541,12 +3546,14 @@ async function writeCompiledClientFiles(input: {
     };
   }
 
+  const modelPolicy = resolveModelPolicyLockfile(input.profile);
   const lockfile = createLockfileFile({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
     mixedOutputs: regionPlan.mixedOutputs,
+    ...(modelPolicy === undefined ? {} : { modelPolicy }),
   });
   const writes = [
     ...regionPlan.writes,

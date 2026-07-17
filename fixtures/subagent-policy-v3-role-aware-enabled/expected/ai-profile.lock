@@ -491,7 +491,7 @@
       "target": "agents-md",
       "templateId": "targets/agents-md@1",
       "ownership": "generated-owned",
-      "sha256": "8d257accd8b0abbe95e8ee6d4698df591337bb1fd87f4072b9c758a9ec3835e0"
+      "sha256": "b96a05988f4624664f82c3885c06786e36cf278ac9363c7d9b63703c82cf1900"
     },
     {
       "path": "CLAUDE.md",

@@ -39,14 +39,15 @@ Mapping version: 3 (v3 preset: role-aware; client evidence dated 2026-07-16). Ca
 
 | Role | Capability | Effort | Codex (model / reasoning) | Claude (model / effort) |
 | ---- | ---------- | ------ | ------------------------- | ------------------------- |
-| implementer | strongest | extra-high | organization-codex-model / xhigh (unverified) | claude-opus-4-8 / xhigh (advisory) |
-| complex-implementer | balanced | high | gpt-5.6-terra / high (advisory) | claude-sonnet-5 / high (unverified) |
-| explorer | efficient | low | gpt-5.6-luna / low (advisory) | claude-haiku-4-5 / low (advisory) |
+| grill | strongest | extra-high | gpt-5.6-sol / xhigh (advisory) | claude-fable-5 / xhigh (unverified; alternatives: claude-opus-4-8) |
+| architect | strongest | extra-high | gpt-5.6-sol / xhigh (advisory) | claude-fable-5 / xhigh (unverified; alternatives: claude-opus-4-8) |
+| critical-reviewer | strongest | extra-high | gpt-5.6-sol / xhigh (advisory) | claude-fable-5 / xhigh (unverified; alternatives: claude-opus-4-8) |
 | spec-reviewer | strongest | high | gpt-5.6-sol / high (advisory) | claude-fable-5 / high (unverified; alternatives: claude-opus-4-8) |
 | quality-reviewer | strongest | high | gpt-5.6-sol / high (advisory) | claude-fable-5 / high (unverified; alternatives: claude-opus-4-8) |
-| critical-reviewer | strongest | extra-high | gpt-5.6-sol / xhigh (advisory) | claude-fable-5 / xhigh (unverified; alternatives: claude-opus-4-8) |
-| architect | strongest | extra-high | gpt-5.6-sol / xhigh (advisory) | claude-fable-5 / xhigh (unverified; alternatives: claude-opus-4-8) |
-| grill | strongest | extra-high | gpt-5.6-sol / xhigh (advisory) | claude-fable-5 / xhigh (unverified; alternatives: claude-opus-4-8) |
+| complex-implementer | balanced | high | gpt-5.6-terra / high (advisory) | claude-sonnet-5 / high (unverified) |
+| implementer | strongest | extra-high | organization-codex-model / xhigh (unverified) | claude-opus-4-8 / xhigh (advisory) |
+| routine-implementer | balanced | medium | gpt-5.6-terra / medium (advisory) | claude-sonnet-5 / medium (unverified) |
+| explorer | efficient | low | gpt-5.6-luna / low (advisory) | claude-haiku-4-5 / low (advisory) |
 | mechanical | efficient | medium | gpt-5.6-luna / medium (advisory) | claude-haiku-4-5 / medium (advisory) |
 
 **Task Capsule Contract**

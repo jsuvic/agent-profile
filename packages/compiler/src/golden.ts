@@ -8,13 +8,9 @@ import { readProfileFile } from "@agent-profile/core";
 
 import { compileProfile } from "./compiler.js";
 import { createLockfileFile } from "./lockfile.js";
-import {
-  buildModelPolicyTargetTable,
-  deriveModelPolicyRoleOverrides,
-  toLockModelPolicyFromTargetTable,
-} from "./model-policy-target-adapter.js";
+import { resolveModelPolicyLockfile } from "./model-policy-target-adapter.js";
 import { compareText } from "./shared.js";
-import type { GeneratedFile, GoldenFailure, LockModelPolicyV2 } from "./types.js";
+import type { GeneratedFile, GoldenFailure } from "./types.js";
 
 export type GoldenFixtureResult =
   | {
@@ -61,26 +57,7 @@ export async function compareGoldenFixture(
     };
   }
 
-  const preset =
-    profileResult.profile.subagentPolicy?.enabled === true
-      ? profileResult.profile.subagentPolicy.preset
-      : undefined;
-  // Derive role overrides through the same shared helper used by the
-  // guidance table (subagent-policy-guidance.ts) and the .codex/config.toml
-  // writer (compiler.ts), so the lockfile's modelPolicy provenance can never
-  // independently disagree with what those two surfaces claim/write for the
-  // same profile.
-  const roleOverrides =
-    profileResult.profile.subagentPolicy?.enabled === true
-      ? deriveModelPolicyRoleOverrides(profileResult.profile.subagentPolicy.roles)
-      : undefined;
-  const modelPolicy: LockModelPolicyV2 | undefined =
-    preset === undefined
-      ? undefined
-      : toLockModelPolicyFromTargetTable(
-          preset,
-          buildModelPolicyTargetTable(preset, roleOverrides),
-        );
+  const modelPolicy = resolveModelPolicyLockfile(profileResult.profile);
 
   const lockfile = createLockfileFile({
     profileBytes,

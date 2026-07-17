@@ -81,6 +81,7 @@ export {
   deriveModelPolicyRoleOverrides,
   MODEL_POLICY_PRIMARY_ROLE,
   MODEL_POLICY_TARGET_CATALOG_VERSION,
+  resolveModelPolicyLockfile,
   toLockModelPolicyFromTargetTable,
 } from "./model-policy-target-adapter.js";
 export type {

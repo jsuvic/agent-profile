@@ -52,31 +52,34 @@ export function renderSubagentPolicyAgentsMdSection(
     preset === undefined
       ? undefined
       : buildModelPolicyTargetTable(preset, explicitRoleOverrides);
-  const v3RowsByRole = new Map((v3Table ?? []).map((row) => [row.role, row]));
-
-  const rows = Object.entries(effective.roles)
-    .map(([id, role]) => {
-      const v3Row = v3RowsByRole.get(id as keyof typeof effective.roles);
-      if (v3Row !== undefined) {
-        const codexCell = renderModelPolicyTargetCell(
-          v3Row.codex,
-          id === MODEL_POLICY_PRIMARY_ROLE ? "primaryStatus" : "skillStatus",
-        );
-        const claudeCell = renderModelPolicyTargetCell(
-          v3Row.claude,
-          "skillStatus",
-        );
-        return `| ${id} | ${v3Row.capability} | ${v3Row.effort} | ${codexCell} | ${claudeCell} |`;
-      }
-
-      const resolved = resolveRoleMapping(
-        role.capability,
-        role.effort,
-        role.overrides,
-      );
-      return `| ${id} | ${role.capability} | ${role.effort} | ${resolved.codex.model} / ${resolved.codex.reasoningEffort} | ${resolved.claude.model} / ${resolved.claude.effort} |`;
-    })
-    .join("\n");
+  const rows =
+    v3Table === undefined
+      ? Object.entries(effective.roles)
+          .map(([id, role]) => {
+            const resolved = resolveRoleMapping(
+              role.capability,
+              role.effort,
+              role.overrides,
+            );
+            return `| ${id} | ${role.capability} | ${role.effort} | ${resolved.codex.model} / ${resolved.codex.reasoningEffort} | ${resolved.claude.model} / ${resolved.claude.effort} |`;
+          })
+          .join("\n")
+      : v3Table
+          .map((v3Row) => {
+            const id = v3Row.role;
+            const codexCell = renderModelPolicyTargetCell(
+              v3Row.codex,
+              id === MODEL_POLICY_PRIMARY_ROLE
+                ? "primaryStatus"
+                : "skillStatus",
+            );
+            const claudeCell = renderModelPolicyTargetCell(
+              v3Row.claude,
+              "skillStatus",
+            );
+            return `| ${id} | ${v3Row.capability} | ${v3Row.effort} | ${codexCell} | ${claudeCell} |`;
+          })
+          .join("\n");
 
   const mappingVersionLine =
     preset === undefined

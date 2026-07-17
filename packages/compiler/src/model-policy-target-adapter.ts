@@ -26,10 +26,11 @@ import {
   type ModelPolicyResolutionSource,
   type ModelPolicyRoleId,
   type ModelPolicyRolePreset,
+  type AiProfile,
   type SubagentPolicyRoles,
 } from "@agent-profile/core";
 
-import type { ModelPolicyTargetEffort } from "./types.js";
+import type { LockModelPolicyV2, ModelPolicyTargetEffort } from "./types.js";
 
 export const MODEL_POLICY_TARGET_CATALOG_VERSION = MODEL_POLICY_CATALOG_VERSION;
 
@@ -128,6 +129,7 @@ function resolveClientCatalogRow(
   model: string | undefined;
   capability: ModelPolicyCapability;
   effort: ModelPolicyEffort;
+  targetEffort: ModelPolicyEffort;
   alternatives: readonly string[];
   lifecycle: ModelCatalogLifecycleStatus | "unrated";
   baseStatus: ModelPolicyCapabilityStatus;
@@ -143,6 +145,7 @@ function resolveClientCatalogRow(
     model: primary?.id,
     capability: capabilityEffort.capability,
     effort: capabilityEffort.effort,
+    targetEffort: capabilityEffort.effort,
     alternatives: Object.freeze(rest.map((entry) => entry.id)),
     lifecycle: primary?.status ?? "unrated",
     baseStatus: primary === undefined ? "unsupported" : "configured",
@@ -153,16 +156,27 @@ function resolveClientCatalogRow(
 function applyExactTargetOverride(
   resolved: ReturnType<typeof resolveClientCatalogRow>,
   catalog: readonly ModelCatalogEntry[],
-  model: string | undefined,
+  override:
+    Readonly<{ model?: string; effort?: ModelPolicyEffort }> | undefined,
 ): ReturnType<typeof resolveClientCatalogRow> {
-  if (model === undefined) {
+  if (override === undefined) {
     return resolved;
+  }
+
+  const model = override.model ?? resolved.model;
+  if (override.model === undefined) {
+    return {
+      ...resolved,
+      targetEffort: override.effort ?? resolved.targetEffort,
+      source: "explicit-override",
+    };
   }
 
   const catalogued = catalog.find((entry) => entry.id === model);
   return {
     ...resolved,
     model,
+    targetEffort: override.effort ?? resolved.targetEffort,
     alternatives: Object.freeze([]),
     lifecycle: catalogued?.status ?? "unrated",
     baseStatus: catalogued === undefined ? "unverified" : "configured",
@@ -254,7 +268,10 @@ export type ModelPolicyRoleOverrides = Partial<
     ModelPolicyRolePreset &
       Readonly<{
         overrides?: Partial<
-          Record<ModelPolicyTargetClientId, Readonly<{ model: string }>>
+          Record<
+            ModelPolicyTargetClientId,
+            Readonly<{ model?: string; effort?: ModelPolicyEffort }>
+          >
         >;
       }>
   >
@@ -287,17 +304,17 @@ export function deriveModelPolicyRoleOverrides(
     overrides[role as ModelPolicyRoleId] = {
       capability: value.capability,
       effort: value.effort,
-      ...(value.overrides?.codex?.model === undefined &&
-      value.overrides?.claude?.model === undefined
+      ...(value.overrides?.codex === undefined &&
+      value.overrides?.claude === undefined
         ? {}
         : {
             overrides: {
-              ...(value.overrides?.codex?.model === undefined
+              ...(value.overrides?.codex === undefined
                 ? {}
-                : { codex: { model: value.overrides.codex.model } }),
-              ...(value.overrides?.claude?.model === undefined
+                : { codex: value.overrides.codex }),
+              ...(value.overrides?.claude === undefined
                 ? {}
-                : { claude: { model: value.overrides.claude.model } }),
+                : { claude: value.overrides.claude }),
             },
           }),
     };
@@ -331,17 +348,17 @@ export function buildModelPolicyTargetTable(
     const codexResolved = applyExactTargetOverride(
       resolveClientCatalogRow(capabilityEffort, CODEX_MODEL_POLICY_CATALOG),
       CODEX_MODEL_POLICY_CATALOG,
-      roleOverrides?.[role]?.overrides?.codex?.model,
+      roleOverrides?.[role]?.overrides?.codex,
     );
     const claudeResolved = applyExactTargetOverride(
       resolveClientCatalogRow(capabilityEffort, CLAUDE_MODEL_POLICY_CATALOG),
       CLAUDE_MODEL_POLICY_CATALOG,
-      roleOverrides?.[role]?.overrides?.claude?.model,
+      roleOverrides?.[role]?.overrides?.claude,
     );
 
     const codex: ModelPolicyTargetClientResolution = Object.freeze({
       model: codexResolved.model,
-      targetEffort: TARGET_EFFORT[codexResolved.effort],
+      targetEffort: TARGET_EFFORT[codexResolved.targetEffort],
       alternatives: codexResolved.alternatives,
       lifecycle: codexResolved.lifecycle,
       source: codexResolved.source,
@@ -350,7 +367,7 @@ export function buildModelPolicyTargetTable(
 
     const claude: ModelPolicyTargetClientResolution = Object.freeze({
       model: claudeResolved.model,
-      targetEffort: TARGET_EFFORT[claudeResolved.effort],
+      targetEffort: TARGET_EFFORT[claudeResolved.targetEffort],
       alternatives: claudeResolved.alternatives,
       lifecycle: claudeResolved.lifecycle,
       source: claudeResolved.source,
@@ -360,7 +377,7 @@ export function buildModelPolicyTargetTable(
     return Object.freeze({
       role,
       capability: codexResolved.capability,
-      effort: codexResolved.effort,
+      effort: capabilityEffort.effort,
       codex,
       claude,
     });
@@ -431,4 +448,23 @@ export function toLockModelPolicyFromTargetTable(
     preset,
     resolutions,
   };
+}
+
+/** Resolve optional v3 lock provenance from the same profile inputs as every
+ * generated Codex/Claude surface. */
+export function resolveModelPolicyLockfile(
+  profile: AiProfile,
+): LockModelPolicyV2 | undefined {
+  const policy = profile.subagentPolicy;
+  if (policy?.enabled !== true || policy.preset === undefined) {
+    return undefined;
+  }
+  const { preset } = policy;
+  return toLockModelPolicyFromTargetTable(
+    preset,
+    buildModelPolicyTargetTable(
+      preset,
+      deriveModelPolicyRoleOverrides(policy.roles),
+    ),
+  );
 }

@@ -184,6 +184,34 @@ test("exact per-target overrides win with explicit provenance and honest known/u
   assert.equal(implementer.claude.targetEffort, "xhigh");
 });
 
+test("exact per-target effort overrides win over the role-level effort for both clients", () => {
+  const policy: AiProfileSubagentPolicy = {
+    enabled: true,
+    preset: "role-aware",
+    roles: {
+      implementer: {
+        capability: "strongest",
+        effort: "extra-high",
+        overrides: {
+          codex: { model: "gpt-5.6-sol", effort: "medium" },
+          claude: { model: "claude-opus-4-8", effort: "low" },
+        },
+      },
+    },
+  };
+  const table = buildModelPolicyTargetTable(
+    "role-aware",
+    deriveModelPolicyRoleOverrides(policy.roles),
+  );
+  const implementer = table.find((row) => row.role === "implementer");
+  assert.ok(implementer);
+
+  assert.equal(implementer.codex.model, "gpt-5.6-sol");
+  assert.equal(implementer.codex.targetEffort, "medium");
+  assert.equal(implementer.claude.model, "claude-opus-4-8");
+  assert.equal(implementer.claude.targetEffort, "low");
+});
+
 test("public catalogs and nested resolution alternatives resist runtime mutation", () => {
   const before = buildModelPolicyTargetTable("role-aware");
   const architectBefore = before.find((row) => row.role === "architect");
@@ -208,9 +236,9 @@ test("public catalogs and nested resolution alternatives resist runtime mutation
     );
   }, TypeError);
   assert.throws(() => {
-    (architectBefore.claude as unknown as { alternatives: string[] }).alternatives = [
-      "reassigned-alternative",
-    ];
+    (
+      architectBefore.claude as unknown as { alternatives: string[] }
+    ).alternatives = ["reassigned-alternative"];
   }, TypeError);
 
   const after = buildModelPolicyTargetTable("role-aware");

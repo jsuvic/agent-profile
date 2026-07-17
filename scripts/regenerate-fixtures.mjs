@@ -10,6 +10,7 @@ import { readProfileFile } from "../packages/core/dist/index.js";
 import {
   compileProfile,
   createLockfileFile,
+  resolveModelPolicyLockfile,
 } from "../packages/compiler/dist/index.js";
 
 const repoRoot = resolve(fileURLToPath(import.meta.url), "..", "..");
@@ -45,10 +46,12 @@ for (const name of fixtureDirs) {
     process.exit(1);
   }
 
+  const modelPolicy = resolveModelPolicyLockfile(profileResult.profile);
   const lockfile = createLockfileFile({
     profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
+    ...(modelPolicy === undefined ? {} : { modelPolicy }),
   });
 
   const allFiles = [...compileResult.files, lockfile];

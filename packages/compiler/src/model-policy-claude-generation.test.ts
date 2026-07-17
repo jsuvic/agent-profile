@@ -46,6 +46,18 @@ test("v3-opted policy renders exact Codex Sol/Terra/Luna and Claude Fable/Opus/S
   assert.equal(text.includes("claude-haiku-4-5"), true, text);
 });
 
+test("v3-opted policy renders the routine-implementer row from the complete v3 role table", () => {
+  const text = renderSubagentPolicyAgentsMdSection(V3_POLICY);
+  const row = text
+    .split("\n")
+    .find((line) => line.startsWith("| routine-implementer "));
+
+  assert.ok(row, text);
+  assert.match(row, /\| balanced \| medium \|/u);
+  assert.match(row, /gpt-5\.6-terra \/ medium/u);
+  assert.match(row, /claude-sonnet-5 \/ medium/u);
+});
+
 test("v3-opted policy labels Fable 5 / Sonnet 5 rows unverified and confirmed-official rows advisory, never labeling alternatives as a runtime fallback", () => {
   const text = renderSubagentPolicyAgentsMdSection(V3_POLICY);
   assert.equal(text.includes("unverified"), true, text);
