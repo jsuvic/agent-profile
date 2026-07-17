@@ -163,6 +163,23 @@ I1-I8 -> I9; I9 -> Phase 32 I1. I2, I3, and I4 are parallel-safe after
 I1 apart from shared exports and fixtures. I5 and I6 may proceed in parallel
 after their prerequisites with shared CLI-entrypoint merge coordination.
 
+I3 amendment 2026-07-17: I3 shipped `planTabnineModelSettingsWrite` as a
+pure, unit-tested ownership-aware write plan for
+`.tabnine/agent/settings.json` (ADR 0020 whole-file ownership, `model.id`
+only) but left it unwired from any real compile/write pipeline - a disclosed,
+reviewed scope reduction, not a defect. Confirmed I6-I9 as originally scoped
+never picked the gap back up (all describe Tabnine only as
+manual/advisory/guided). Per product decision the capability stays inside
+Phase 31.5 rather than moving to a separate phase: I5's brief now includes an
+explicit acceptance criterion wiring the write plan into init's real
+write-preview flow (the same seam that first builds Codex/Claude
+target-configuration write-preview), and I9's coverage list now names the
+write branch alongside the manual path. I6/I7/I8 are not amended: I6/I8 never
+claimed Tabnine target-file writes in scope, and I7 (Doctor) already covers
+"ownership" generically in its seam, so drift detection for the newly-real
+settings file needs no brief change - reassess only if I5's implementation
+reveals a genuine I7 gap.
+
 ## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
 
 Approved 2026-07-14 from the repository-update field-test agreement. Phase 32

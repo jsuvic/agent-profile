@@ -4,6 +4,27 @@
 
 `docs/specs/phase-31.5/001-model-selection-lifecycle.md`
 
+## Amendment (2026-07-17)
+
+I3 shipped `planTabnineModelSettingsWrite` (`packages/compiler/src/model-policy-tabnine-adapter.ts`)
+as a pure, fully unit-tested ownership-aware write-plan for
+`.tabnine/agent/settings.json`, but explicitly left it unwired from any real
+compile/write pipeline — I3's own brief scoped it as a "deterministic
+generator" slice (resolution plan -> artifacts/status table), not an
+orchestration slice with live filesystem integration. Both I3's spec and
+code-quality reviews confirmed this was a legitimate, disclosed scope
+reduction for that issue, not a defect, but flagged that the resulting
+product gap (Tabnine model selection stays advisory-only in practice) is not
+picked up by any other Phase 31.5 issue as originally scoped: I6-I9 all
+describe Tabnine only in "manual"/"advisory"/"guided" terms. Per product
+decision, this capability stays in Phase 31.5 rather than moving to a
+separate phase. I5 is the correct home because it already owns "compile/write
+plan integration" (see Likely file ownership) and is where the equivalent
+Codex/Claude target-configuration write-preview flow gets built for the first
+time — reusing that same seam avoids building project-local
+ownership-classification integration twice. See the added acceptance
+criterion below and the corresponding I9 amendment.
+
 ## Intent summary
 
 Let a new user understand and approve exact model/effort behavior at the moment
@@ -40,6 +61,17 @@ target outputs, and lock provenance in the existing preview/write flow.
 - Non-interactive init remains offline and exposes no probe-enabling flag in
   this phase. An attempted `--probe-models` combination is rejected before any
   client/provider/package process starts and before any filesystem write.
+- I3's `planTabnineModelSettingsWrite` is wired into init's real write-preview
+  flow: init classifies `.tabnine/agent/settings.json` ownership (absent,
+  Agent-Profile-generated, or unowned) at the existing planner boundary, and
+  when the exact selected model is known and ownership is absent or
+  generated-owned, the diff-before-write preview offers the deterministic
+  `model.id` write alongside the Codex/Claude target preview. An existing
+  unowned settings file is always preserved byte-for-byte and the CLI shows
+  advisory `/model`/`/about` guidance instead, using the same
+  ownership/preview/atomic-write/rollback contracts as every other target
+  file. No new JSON-merge or auto-detection heuristic is introduced beyond
+  I3's ADR-0020-based whole-file classification.
 
 ## Expected RED proof
 
