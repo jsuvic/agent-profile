@@ -383,12 +383,19 @@
         "enabled": {
           "type": "boolean"
         },
+        "preset": {
+          "type": "string",
+          "enum": ["role-aware", "quality-first", "cost-conscious"]
+        },
         "roles": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "implementer": { "$ref": "#/definitions/subagentPolicyRole" },
             "complex-implementer": {
+              "$ref": "#/definitions/subagentPolicyRole"
+            },
+            "routine-implementer": {
               "$ref": "#/definitions/subagentPolicyRole"
             },
             "explorer": { "$ref": "#/definitions/subagentPolicyRole" },

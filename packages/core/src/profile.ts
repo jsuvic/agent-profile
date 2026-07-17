@@ -12,6 +12,16 @@ import {
 import { parseDocument, stringify as yamlStringify } from "yaml";
 import aiProfileSchema from "@agent-profile/schemas/ai-profile.schema.json" with { type: "json" };
 import { REVIEWER_DEFINITIONS } from "./reviewer-definitions.js";
+// Phase 31.5 (I1R): type-only reuse of the v3 model-policy vocabulary.
+// IMPORTANT: only `import type` here. `model-policy.ts` has an unconditional
+// module-top-level dependency on this module's `DEFAULT_SUBAGENT_POLICY_ROLES`
+// export (used to build its legacy fallback table), so any *value*-level
+// import edge from this module back into `model-policy.ts` would create a
+// genuine ESM circular import and crash at module-load time with
+// "ReferenceError: Cannot access '...' before initialization" (verified).
+// `import type` is fully erased at compile time and creates no runtime
+// import, so it does not participate in that cycle.
+import type { ModelPolicyPreset, ModelPolicyRoleId } from "./model-policy.js";
 
 export type PermissionMode = "allow" | "ask" | "deny";
 export type SafetyMode =
@@ -493,8 +503,14 @@ export type SubagentPolicyRole = {
   overrides?: SubagentPolicyRoleOverrides;
 };
 
+// Phase 31.5 (I1R): widened to the v3 role vocabulary (adds
+// `routine-implementer`) so a v3-opted-in profile can carry that role entry.
+// This is additive/backward-compatible: every existing key still parses
+// identically; only the new key becomes newly acceptable. Do NOT widen
+// `SubagentPolicyRoleId`/`SUBAGENT_POLICY_ROLE_IDS` themselves — they remain
+// the closed v1/v2 vocabulary other code depends on.
 export type SubagentPolicyRoles = Partial<
-  Record<SubagentPolicyRoleId, SubagentPolicyRole>
+  Record<ModelPolicyRoleId, SubagentPolicyRole>
 >;
 
 export type SubagentPolicyOrchestration = {
@@ -525,6 +541,9 @@ export type SubagentPolicyEvidence = {
 
 export type AiProfileSubagentPolicy = {
   enabled: boolean;
+  // Phase 31.5 (I1R): additive opt-in into the v3 model-policy preset table.
+  // Absent retains mapping-v2 behavior byte-for-byte.
+  preset?: ModelPolicyPreset;
   roles?: SubagentPolicyRoles;
   orchestration?: SubagentPolicyOrchestration;
   context?: SubagentPolicyContext;
@@ -1092,35 +1111,89 @@ function validateSubagentPolicySemantics(
     });
   }
 
+  // Phase 31.5 (I1R): a profile that has opted into v3 (`preset` is set)
+  // validates exact overrides against the open, bounded
+  // length/control-character rules instead of the closed pinned-model
+  // allowlist. A profile without `preset` (v2/legacy, the common case) keeps
+  // the exact prior closed-list behavior, unchanged, to preserve byte-for-byte
+  // v2 compatibility and the existing error contract.
+  const isV3OptIn = policy.preset !== undefined;
+
   for (const [roleId, role] of Object.entries(policy.roles ?? {})) {
     const codexModel = role.overrides?.codex?.model;
-    if (codexModel !== undefined && !isSubagentPolicyCodexModel(codexModel)) {
-      issues.push({
-        code: "subagent_policy_override_model",
-        path: `/subagentPolicy/roles/${roleId}/overrides/codex/model`,
-        expected: "a pinned Codex model identifier",
-        actual: "unsupported model",
-        message:
-          "/subagentPolicy role override uses an unsupported pinned Codex model.",
-      });
+    if (codexModel !== undefined) {
+      if (isV3OptIn) {
+        if (!isValidOpenModelPolicyOverride(codexModel)) {
+          issues.push({
+            code: "subagent_policy_override_model",
+            path: `/subagentPolicy/roles/${roleId}/overrides/codex/model`,
+            expected:
+              "a non-empty string under 200 characters with no control characters",
+            actual: "invalid override string",
+            message:
+              "/subagentPolicy role override model must be a non-empty string under 200 characters with no control characters.",
+          });
+        }
+      } else if (!isSubagentPolicyCodexModel(codexModel)) {
+        issues.push({
+          code: "subagent_policy_override_model",
+          path: `/subagentPolicy/roles/${roleId}/overrides/codex/model`,
+          expected: "a pinned Codex model identifier",
+          actual: "unsupported model",
+          message:
+            "/subagentPolicy role override uses an unsupported pinned Codex model.",
+        });
+      }
     }
     const claudeModel = role.overrides?.claude?.model;
-    if (
-      claudeModel !== undefined &&
-      !isSubagentPolicyClaudeModel(claudeModel)
-    ) {
-      issues.push({
-        code: "subagent_policy_override_model",
-        path: `/subagentPolicy/roles/${roleId}/overrides/claude/model`,
-        expected: "a pinned Claude model identifier",
-        actual: "unsupported model",
-        message:
-          "/subagentPolicy role override uses an unsupported pinned Claude model.",
-      });
+    if (claudeModel !== undefined) {
+      if (isV3OptIn) {
+        if (!isValidOpenModelPolicyOverride(claudeModel)) {
+          issues.push({
+            code: "subagent_policy_override_model",
+            path: `/subagentPolicy/roles/${roleId}/overrides/claude/model`,
+            expected:
+              "a non-empty string under 200 characters with no control characters",
+            actual: "invalid override string",
+            message:
+              "/subagentPolicy role override model must be a non-empty string under 200 characters with no control characters.",
+          });
+        }
+      } else if (!isSubagentPolicyClaudeModel(claudeModel)) {
+        issues.push({
+          code: "subagent_policy_override_model",
+          path: `/subagentPolicy/roles/${roleId}/overrides/claude/model`,
+          expected: "a pinned Claude model identifier",
+          actual: "unsupported model",
+          message:
+            "/subagentPolicy role override uses an unsupported pinned Claude model.",
+        });
+      }
     }
   }
 
   return issues;
+}
+
+// Phase 31.5 (I1R): intentionally NOT imported from `./model-policy.js`'s
+// `validateModelPolicyOverride` (see the `import type` comment near the top
+// of this file for why a value import would create a circular-import crash).
+// This is kept in exact behavioral lockstep with that function (empty /
+// over-200-chars / control-character rejection) and is covered by a parity
+// test that fails if the two diverge.
+const OPEN_MODEL_POLICY_OVERRIDE_MAX_LENGTH = 200;
+// Matches any ASCII control character (including newlines, tabs, and DEL).
+// eslint-disable-next-line no-control-regex
+const OPEN_MODEL_POLICY_OVERRIDE_CONTROL_CHARACTER_PATTERN =
+  /[\u0000-\u001f\u007f-\u009f]/u;
+
+function isValidOpenModelPolicyOverride(value: string): boolean {
+  if (value.length === 0) return false;
+  if (value.length > OPEN_MODEL_POLICY_OVERRIDE_MAX_LENGTH) return false;
+  if (OPEN_MODEL_POLICY_OVERRIDE_CONTROL_CHARACTER_PATTERN.test(value)) {
+    return false;
+  }
+  return true;
 }
 
 export function normalizeSafety(

@@ -11,6 +11,7 @@ import {
   resolveEffectiveSubagentPolicy,
   SUBAGENT_POLICY_RETENTION_MAX,
   SUBAGENT_POLICY_ROLE_IDS,
+  validateModelPolicyOverride,
   validateProfileValue,
   type AiProfile,
   type AiProfileSubagentPolicy,
@@ -524,5 +525,211 @@ describe("subagentPolicy serializer round-trip", () => {
 
   it("omits subagentPolicy when absent", () => {
     assert.ok(!renderProfileYaml(BASE_PROFILE).includes("subagentPolicy:"));
+  });
+});
+
+// Phase 31.5 (I1R): wire the v3 additive fields (`subagentPolicy.preset`,
+// the `routine-implementer` role, and open exact-override validation once a
+// profile has opted into v3) into the real parser/validator. Before this
+// change, all three inputs below are rejected.
+describe("subagentPolicy v3 opt-in (preset, routine-implementer, open override)", () => {
+  it("accepts preset, routine-implementer, and an uncatalogued exact override", () => {
+    const result = validateProfileValue(
+      withPolicy({
+        enabled: true,
+        preset: "role-aware",
+        roles: {
+          "routine-implementer": { capability: "balanced", effort: "medium" },
+          implementer: {
+            capability: "balanced",
+            effort: "high",
+            overrides: { codex: { model: "some-uncatalogued-id" } },
+          },
+        },
+      }),
+    );
+    assert.equal(
+      result.ok,
+      true,
+      result.ok ? "" : JSON.stringify(result.issues, null, 2),
+    );
+  });
+
+  it("rejects an unknown preset literal", () => {
+    assert.equal(
+      firstCode(
+        withPolicy({
+          enabled: true,
+          preset: "nonsense-preset",
+          roles: {
+            implementer: { capability: "balanced", effort: "medium" },
+          },
+        }),
+      ),
+      "schema_validation_error",
+    );
+  });
+
+  it("rejects an empty override string even when preset is set", () => {
+    assert.equal(
+      firstCode(
+        withPolicy({
+          enabled: true,
+          preset: "role-aware",
+          roles: {
+            implementer: {
+              capability: "balanced",
+              effort: "medium",
+              overrides: { codex: { model: "" } },
+            },
+          },
+        }),
+      ),
+      "subagent_policy_override_model",
+    );
+  });
+
+  it("rejects an over-length override string even when preset is set", () => {
+    assert.equal(
+      firstCode(
+        withPolicy({
+          enabled: true,
+          preset: "role-aware",
+          roles: {
+            implementer: {
+              capability: "balanced",
+              effort: "medium",
+              overrides: { codex: { model: "x".repeat(201) } },
+            },
+          },
+        }),
+      ),
+      "subagent_policy_override_model",
+    );
+  });
+
+  it("rejects an override string containing a control character even when preset is set", () => {
+    assert.equal(
+      firstCode(
+        withPolicy({
+          enabled: true,
+          preset: "role-aware",
+          roles: {
+            implementer: {
+              capability: "balanced",
+              effort: "medium",
+              overrides: { codex: { model: "bad id" } },
+            },
+          },
+        }),
+      ),
+      "subagent_policy_override_model",
+    );
+  });
+
+  it("still rejects an unsupported pinned model when preset is absent (v2 branch untouched)", () => {
+    assert.equal(
+      firstCode(
+        withPolicy({
+          enabled: true,
+          roles: {
+            architect: {
+              capability: "strongest",
+              effort: "extra-high",
+              overrides: { codex: { model: "codex-latest" } },
+            },
+          },
+        }),
+      ),
+      "subagent_policy_override_model",
+    );
+  });
+
+  it("differentiates override validation between v2 (rejects) and v3 (accepts) for the same uncatalogued string", () => {
+    const v2Result = validateProfileValue(
+      withPolicy({
+        enabled: true,
+        roles: {
+          architect: {
+            capability: "strongest",
+            effort: "extra-high",
+            overrides: { codex: { model: "some-uncatalogued-id" } },
+          },
+        },
+      }),
+    );
+    assert.equal(v2Result.ok, false);
+
+    const v3Result = validateProfileValue(
+      withPolicy({
+        enabled: true,
+        preset: "role-aware",
+        roles: {
+          architect: {
+            capability: "strongest",
+            effort: "extra-high",
+            overrides: { codex: { model: "some-uncatalogued-id" } },
+          },
+        },
+      }),
+    );
+    assert.equal(
+      v3Result.ok,
+      true,
+      v3Result.ok ? "" : JSON.stringify(v3Result.issues, null, 2),
+    );
+  });
+
+  it("keeps validating the canonical v2-style profile as ok, with subagentPolicy untouched (no preset field)", () => {
+    const result = validateProfileValue({
+      ...BASE_PROFILE,
+      subagentPolicy: CANONICAL_POLICY,
+    });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.deepEqual(result.profile.subagentPolicy, CANONICAL_POLICY);
+    }
+  });
+
+  // profile.ts cannot import `validateModelPolicyOverride` as a value (it
+  // would create a real ESM circular-import crash; see the `import type`
+  // comment in profile.ts). It carries a local, behaviorally-identical copy
+  // of the same bounded-string check instead. This test proves parity by
+  // observing behavior through the two independent public entry points
+  // (model-policy.ts's exported validator, and the profile-level v3 override
+  // acceptance/rejection) for the same set of representative inputs.
+  it("keeps profile-level v3 override acceptance in parity with validateModelPolicyOverride", () => {
+    const samples = [
+      "",
+      "some-uncatalogued-id",
+      "gpt-5.2-codex",
+      "x".repeat(200),
+      "x".repeat(201),
+      "bad id",
+      "bad\tid",
+      "bad\nid",
+    ];
+
+    for (const sample of samples) {
+      const expectedOk = validateModelPolicyOverride(sample).ok;
+      const result = validateProfileValue(
+        withPolicy({
+          enabled: true,
+          preset: "role-aware",
+          roles: {
+            implementer: {
+              capability: "balanced",
+              effort: "medium",
+              overrides: { codex: { model: sample } },
+            },
+          },
+        }),
+      );
+      assert.equal(
+        result.ok,
+        expectedOk,
+        `mismatch for sample ${JSON.stringify(sample)}: validateModelPolicyOverride.ok=${expectedOk}, profile validation ok=${result.ok}`,
+      );
+    }
   });
 });
