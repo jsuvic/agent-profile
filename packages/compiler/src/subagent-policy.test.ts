@@ -11,6 +11,7 @@ import {
   SUBAGENT_POLICY_TARGET_MODELS,
   type AiProfile,
   type AiProfileSubagentPolicy,
+  type SubagentPolicyCodexModel,
 } from "@agent-profile/core";
 
 import {
@@ -208,6 +209,20 @@ test("explicit per-target override replaces the effort intent", () => {
   // Capability (model tier/class) is unchanged by an effort override.
   assert.equal(resolved.codex.model, "gpt-5.2-codex");
   assert.equal(resolved.claude.model, "claude-opus-4-1-20250805");
+});
+
+test("an uncatalogued Codex override model resolves a conservative reasoning effort instead of throwing", () => {
+  // Phase 31.5 I1R now lets profile validation accept an open, uncatalogued
+  // exact Codex override string once a v3 preset is selected (resolving
+  // unrated/unverified downstream). Until I2 wires a v3-aware render path,
+  // that same override still flows through this v2 resolver via
+  // renderSubagentPolicyAgentsMdSection, so it must degrade safely here
+  // rather than crash on an unrecognized model key.
+  const resolved = resolveRoleMapping("balanced", "extra-high", {
+    codex: { model: "gpt-6.0-nova" as SubagentPolicyCodexModel },
+  });
+  assert.equal(resolved.codex.model, "gpt-6.0-nova");
+  assert.equal(resolved.codex.reasoningEffort, "high");
 });
 
 test("resolved mapping is deeply immutable", () => {

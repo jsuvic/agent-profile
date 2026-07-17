@@ -135,6 +135,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | Id | Task | State | Brief |
 | --- | --- | --- | --- |
 | I1 | Shared model-policy domain and compatibility resolver | done | [001-shared-model-policy-domain.md](docs/specs/phase-31.5/issues/001-shared-model-policy-domain.md) |
+| I1R | Complete v3 profile-schema integration | done | [001r-v3-profile-schema-integration.md](docs/specs/phase-31.5/issues/001r-v3-profile-schema-integration.md) |
 | I2 | Codex and Claude exact model adapters | sequenced | [002-codex-claude-model-adapters.md](docs/specs/phase-31.5/issues/002-codex-claude-model-adapters.md) |
 | I3 | Tabnine historical, organization, and private models | sequenced | [003-tabnine-historical-private-models.md](docs/specs/phase-31.5/issues/003-tabnine-historical-private-models.md) |
 | I4 | Consented source-free model probes | sequenced | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md) |
@@ -144,7 +145,19 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
 | I9 | Published model-selection journey and final integration | sequenced | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
 
-Dependency map: I1 -> (I2, I3, I4); I2+I3+I4 -> I5;
+I1R added 2026-07-17: I1 was marked done but never wired `preset`, the
+`routine-implementer` role, or open exact-override acceptance into the public
+profile parser/schema (only the pure `model-policy.ts` resolver and lockfile
+side landed) - confirmed by three rejected parser probes. I2 depends on I1R
+instead of being split; its own seam (resolution plan -> Codex/Claude
+artifacts) remains one cohesive vertical slice, run as several focused
+RED->GREEN cycles inside one task (adapter/status table; Codex generation and
+ownership; Claude generation and ownership; combined goldens/legacy-identity/
+docs/verification). If I2 still proves too large after I1R, split it
+vertically by client (Codex end-to-end, then Claude end-to-end), not
+horizontally by layer.
+
+Dependency map: I1 -> (I1R, I3, I4); I1R -> I2; I2+I3+I4 -> I5;
 I1+I2+I3+I4 -> I6; I4+I6 -> I7; I2+I3+I5+I6+I7 -> I8;
 I1-I8 -> I9; I9 -> Phase 32 I1. I2, I3, and I4 are parallel-safe after
 I1 apart from shared exports and fixtures. I5 and I6 may proceed in parallel

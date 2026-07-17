@@ -118,12 +118,24 @@ const CODEX_SUPPORTED_EFFORTS: Readonly<
   ] as const),
 });
 
+/**
+ * Conservative fallback for a Codex model this table has no evidence for
+ * (Phase 31.5 I1R lets profile validation accept an open, uncatalogued exact
+ * Codex override once a profile selects a v3 preset; that override still
+ * flows through this v2 resolver until I2 wires a v3-aware render path).
+ * Matches the pinned mini model's supported set: no assumed `xhigh` support
+ * for an unverified model.
+ */
+const UNVERIFIED_CODEX_SUPPORTED_EFFORTS: readonly CodexReasoningEffort[] =
+  Object.freeze(["low", "medium", "high"] as const);
+
 function resolveCodexReasoningEffort(
   model: SubagentPolicyCodexModel,
   effort: SubagentPolicyEffort,
 ): CodexReasoningEffort {
   const requested = CODEX_REASONING_EFFORT[effort];
-  const supported = CODEX_SUPPORTED_EFFORTS[model];
+  const supported =
+    CODEX_SUPPORTED_EFFORTS[model] ?? UNVERIFIED_CODEX_SUPPORTED_EFFORTS;
   return supported.includes(requested) ? requested : supported.at(-1)!;
 }
 

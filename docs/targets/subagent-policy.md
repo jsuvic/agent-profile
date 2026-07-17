@@ -43,3 +43,36 @@ task-capsule and local-first conventions.
 
 `indexed.mode: off` omits indexed-first guidance and explicitly directs bounded
 native discovery. It neither installs nor indexes CCE.
+
+## Mapping-v3 opt-in (`preset`)
+
+An additive, optional `preset` field opts a profile into the mapping-v3
+model-policy resolver instead of the mapping-v2 allowlist above:
+
+```yaml
+subagentPolicy:
+  enabled: true
+  preset: role-aware # or: quality-first | cost-conscious
+  roles:
+    routine-implementer:
+      capability: balanced
+      effort: medium
+```
+
+- `preset` is one of `role-aware | quality-first | cost-conscious`. Omitting
+  it retains mapping-v2 behavior byte-for-byte; see
+  [Model Selection Lifecycle](../specs/phase-31.5/001-model-selection-lifecycle.md)
+  for the preset tables.
+- `routine-implementer` is a v3-only role: it is accepted alongside the
+  existing nine roles but has no mapping-v2 legacy resolution, so it is only
+  meaningful on a profile that also sets `preset`.
+- When `preset` is set, `overrides.codex.model` / `overrides.claude.model`
+  accept any non-empty, control-character-free string under 200 characters —
+  not only the pinned mapping-v2 allowlist above. An uncatalogued exact
+  identifier is accepted and resolves `unverified`/unrated rather than being
+  rejected; see the parent spec's target-capability-status contract.
+- Without `preset`, `overrides.codex.model` / `overrides.claude.model` are
+  still restricted to the pinned mapping-v2 allowlist.
+- This phase (I1R) only extends parsing/validation. Generated Codex/Claude/
+  Tabnine artifacts, YAML round-tripping of `preset`, and golden output for
+  a v3-opted-in profile are delivered by later Phase 31.5 issues (I2+).
