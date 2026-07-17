@@ -490,7 +490,7 @@
       "target": "tabnine-guidelines",
       "templateId": "targets/tabnine-guidelines/87-subagent-task-capsules@1",
       "ownership": "generated-owned",
-      "sha256": "bd76d8e26513aea860d26826104c6aa1661e4d0181eea31b37b2327e65fa2d62"
+      "sha256": "c97f10b0461066aff21e5833d3635b1592e0051507fd9443c80fc55adbbf0956"
     },
     {
       "path": ".tabnine/guidelines/90-final-review.md",

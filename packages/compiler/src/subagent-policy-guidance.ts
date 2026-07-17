@@ -16,12 +16,14 @@ import {
   deriveModelPolicyRoleOverrides,
   MODEL_POLICY_PRIMARY_ROLE,
   MODEL_POLICY_TARGET_CATALOG_VERSION,
+  type ModelPolicyRoleOverrides,
   type ModelPolicyTargetClientResolution,
 } from "./model-policy-target-adapter.js";
 import {
   buildModelPolicyTabnineTargetTable,
   MODEL_POLICY_TABNINE_CATALOG_VERSION,
   type ModelPolicyTabnineResolution,
+  type ModelPolicyTabnineRoleOverrides,
 } from "./model-policy-tabnine-adapter.js";
 
 /**
@@ -173,6 +175,40 @@ function renderModelPolicyTargetCell(
 }
 
 /**
+ * Project the shared `deriveModelPolicyRoleOverrides` output (the same
+ * single-owner conversion the Codex/Claude table above uses) into the
+ * Tabnine adapter's own role-overrides shape, so an explicit
+ * `policy.roles[id].capability`/`.effort` wins over the Tabnine table's
+ * preset row exactly like it does for Codex/Claude (see the parent spec's
+ * "Model presets" contract). `subagentPolicy.roles[id].overrides` has no
+ * `tabnine` sub-field in the profile schema yet (see
+ * model-policy-tabnine-adapter.ts's module comment); `model` is therefore
+ * always left undefined here until a future schema revision adds one to
+ * project through.
+ */
+function toModelPolicyTabnineRoleOverrides(
+  roleOverrides: ModelPolicyRoleOverrides | undefined,
+): ModelPolicyTabnineRoleOverrides | undefined {
+  if (roleOverrides === undefined) {
+    return undefined;
+  }
+
+  const tabnineOverrides: {
+    -readonly [K in keyof ModelPolicyTabnineRoleOverrides]: ModelPolicyTabnineRoleOverrides[K];
+  } = {};
+  for (const [role, value] of Object.entries(roleOverrides)) {
+    if (value === undefined) {
+      continue;
+    }
+    tabnineOverrides[role as keyof ModelPolicyTabnineRoleOverrides] = {
+      capability: value.capability,
+      effort: value.effort,
+    };
+  }
+  return tabnineOverrides;
+}
+
+/**
  * Tabnine receives only portable task-capsule conventions plus, for a
  * v3-opted profile (`preset` set), an honest per-role model/effort status
  * table (Phase 31.5 I3). A profile without `preset` (or with no policy at
@@ -212,7 +248,11 @@ See \`90-final-review.md\` for the shared final-review checklist.
     return base;
   }
 
-  const table = buildModelPolicyTabnineTargetTable(preset);
+  const explicitRoleOverrides = deriveModelPolicyRoleOverrides(policy?.roles);
+  const table = buildModelPolicyTabnineTargetTable(
+    preset,
+    toModelPolicyTabnineRoleOverrides(explicitRoleOverrides),
+  );
   const rows = table
     .map((row) => {
       const modelCell = renderTabnineModelCell(row.tabnine);

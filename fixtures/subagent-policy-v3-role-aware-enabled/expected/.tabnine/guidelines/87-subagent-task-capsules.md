@@ -36,7 +36,7 @@ Select the exact model with `/model` and verify the active selection with `/abou
 | spec-reviewer | strongest | high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
 | quality-reviewer | strongest | high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
 | complex-implementer | balanced | high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
-| implementer | balanced | high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| implementer | strongest | extra-high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
 | routine-implementer | balanced | medium | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
 | explorer | efficient | low | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
 | mechanical | efficient | medium | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |

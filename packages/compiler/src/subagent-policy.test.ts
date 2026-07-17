@@ -362,6 +362,21 @@ test("an uncatalogued Tabnine model cell renders the literal 'organization/priva
   assert.equal(catalogued, "gpt-5.4 / current (advisory)");
 });
 
+test("a v3-opted profile's Tabnine model/effort table honors a per-role capability/effort override, not just the preset default", () => {
+  const tabnine = fileText(
+    profileWithPolicy({
+      enabled: true,
+      preset: "role-aware",
+      roles: {
+        implementer: { capability: "strongest", effort: "extra-high" },
+      },
+    }),
+    ".tabnine/guidelines/87-subagent-task-capsules.md",
+  );
+  assert.match(tabnine, /\| implementer \| strongest \| extra-high \|/u);
+  assert.doesNotMatch(tabnine, /\| implementer \| balanced \| high \|/u);
+});
+
 test("a v2/legacy profile (no v3 preset) keeps the Tabnine guideline byte-identical to the pre-I3 baseline", () => {
   const withoutPreset = fileText(
     profileWithPolicy(CANONICAL_POLICY),

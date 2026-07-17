@@ -121,12 +121,25 @@ export type ModelPolicyTabnineRow = Readonly<{
   tabnine: ModelPolicyTabnineResolution;
 }>;
 
-/** Per-role exact Tabnine override input. Intentionally independent of the
- * profile schema in this issue: no `subagentPolicy.roles[id].overrides.tabnine`
- * field exists yet (see the I3 implementer report for the reasoning). Callers
+/** Per-role capability/effort and exact Tabnine override input. The
+ * `capability`/`effort` fields mirror the profile's own explicit
+ * `subagentPolicy.roles[id]` intent (see `deriveModelPolicyRoleOverrides` in
+ * model-policy-target-adapter.ts, this type's Codex/Claude sibling
+ * `ModelPolicyRoleOverrides`): when present, an explicit role capability/
+ * effort wins over the selected preset's row for that role, exactly like the
+ * Codex/Claude table. `model` is intentionally independent of the profile
+ * schema in this issue: no `subagentPolicy.roles[id].overrides.tabnine` field
+ * exists yet (see the I3 implementer report for the reasoning). Callers
  * supply this map directly. */
 export type ModelPolicyTabnineRoleOverrides = Partial<
-  Record<ModelPolicyRoleId, Readonly<{ model?: string }>>
+  Record<
+    ModelPolicyRoleId,
+    Readonly<{
+      capability?: ModelPolicyCapability;
+      effort?: ModelPolicyEffort;
+      model?: string;
+    }>
+  >
 >;
 
 const GUIDED_SELECTION_STATUS: ModelPolicyCapabilityStatus = "advisory";
@@ -185,13 +198,20 @@ export function buildModelPolicyTabnineTargetTable(
   catalog: readonly ModelCatalogEntry[] = TABNINE_MODEL_POLICY_CATALOG,
 ): readonly ModelPolicyTabnineRow[] {
   return MODEL_POLICY_ROLE_IDS.map((role) => {
-    const capabilityEffort = MODEL_POLICY_PRESET_TABLE[preset][role];
-    const tabnine = resolveTabnineRow(role, catalog, roleOverrides?.[role]);
+    const presetRow = MODEL_POLICY_PRESET_TABLE[preset][role];
+    const override = roleOverrides?.[role];
+    // Same precedence as the Codex/Claude sibling (`buildModelPolicyTargetTable`
+    // in model-policy-target-adapter.ts): an explicit role capability/effort
+    // wins over the preset's own row for that role, independently per field,
+    // falling back to the preset row when either is not further specified.
+    const capability = override?.capability ?? presetRow.capability;
+    const effort = override?.effort ?? presetRow.effort;
+    const tabnine = resolveTabnineRow(role, catalog, override);
 
     return Object.freeze({
       role,
-      capability: capabilityEffort.capability,
-      effort: capabilityEffort.effort,
+      capability,
+      effort,
       tabnine,
     });
   });

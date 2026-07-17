@@ -287,7 +287,57 @@ export function validateLockfileValue(
     return { ok: false, issues: issues.sort(compareLockfileIssues) };
   }
 
-  return { ok: true, lockfile: value as AiProfileLockV2, version: 2 };
+  return {
+    ok: true,
+    lockfile: backfillModelPolicyEffortStatus(value as AiProfileLockV2),
+    version: 2,
+  };
+}
+
+/**
+ * Migrate a validated v2 lockfile value that is missing `effortStatus` on
+ * one or more `modelPolicy.resolutions[]` rows (a pre-Phase-31.5-I3 v3
+ * lockfile: I2 shipped rows with `effort`/`capabilityStatus` only, before
+ * `effortStatus` existed). `LockModelPolicyResolutionV2.effortStatus` is a
+ * required, non-optional field in `types.ts`, so every downstream caller of
+ * a successful `validateLockfileValue` expects it to always be present and
+ * defined. A missing `effortStatus` is backfilled from that same row's
+ * `capabilityStatus` -- exactly what `toLockModelPolicyFromTargetTable`
+ * (model-policy-target-adapter.ts) already does for Codex/Claude today, so a
+ * pre-I3 row that only ever had one combined `capabilityStatus` is
+ * semantically correctly migrated by treating that same value as both
+ * statuses. Returns a new value; never mutates `lockfile`. A row that
+ * already has an explicit `effortStatus` is left unchanged, even if it
+ * differs from `capabilityStatus`.
+ */
+function backfillModelPolicyEffortStatus(
+  lockfile: AiProfileLockV2,
+): AiProfileLockV2 {
+  const { modelPolicy } = lockfile;
+  if (modelPolicy === undefined) {
+    return lockfile;
+  }
+
+  let changed = false;
+  const resolutions = modelPolicy.resolutions.map((resolution) => {
+    if (Object.prototype.hasOwnProperty.call(resolution, "effortStatus")) {
+      return resolution;
+    }
+    changed = true;
+    return {
+      ...resolution,
+      effortStatus: resolution.capabilityStatus,
+    };
+  });
+
+  if (!changed) {
+    return lockfile;
+  }
+
+  return {
+    ...lockfile,
+    modelPolicy: { ...modelPolicy, resolutions },
+  };
 }
 
 function toLockTemplate(template: TemplateDescriptor): LockTemplate {
@@ -456,13 +506,18 @@ function validateModelPolicyResolutions(
         "client",
         "role",
         "model",
-        "effortStatus",
         "alternatives",
         "source",
         "capabilityStatus",
       ],
       issues,
-      ["effort"],
+      // `effort` and `effortStatus` are both optional (Phase 31.5 I3): a
+      // pre-I3 v3 lockfile row never had `effortStatus` at all, and a
+      // Tabnine row has no `effort` (see the comment below). See
+      // `validateLockfileValue`'s migration/backfill for how a missing
+      // `effortStatus` is derived from `capabilityStatus` before this
+      // function's caller returns.
+      ["effort", "effortStatus"],
     );
 
     if (
@@ -510,9 +565,15 @@ function validateModelPolicyResolutions(
       );
     }
 
+    // `effortStatus` is optional (Phase 31.5 I3 bugfix): absent on a
+    // pre-I3 v3 lockfile row (I2 shipped rows with `capabilityStatus` only).
+    // `validateLockfileValue` backfills a missing `effortStatus` from that
+    // same row's `capabilityStatus` before returning. When present here it
+    // must still be one of the known capability-status values.
     if (
-      typeof item.effortStatus !== "string" ||
-      !MODEL_POLICY_CAPABILITY_STATUS_SET.has(item.effortStatus)
+      Object.prototype.hasOwnProperty.call(item, "effortStatus") &&
+      (typeof item.effortStatus !== "string" ||
+        !MODEL_POLICY_CAPABILITY_STATUS_SET.has(item.effortStatus))
     ) {
       issues.push(
         schemaIssue(
