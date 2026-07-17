@@ -40,7 +40,7 @@ const MODEL_POLICY: LockModelPolicyV2 = {
       client: "codex",
       role: "architect",
       model: "example-strongest-current",
-      effort: "extra-high",
+      effort: "xhigh",
       alternatives: ["example-strongest-deprecated"],
       source: "catalog",
       capabilityStatus: "configured",
@@ -49,7 +49,7 @@ const MODEL_POLICY: LockModelPolicyV2 = {
       client: "claude",
       role: "architect",
       model: "example-strongest-current",
-      effort: "extra-high",
+      effort: "xhigh",
       alternatives: [],
       source: "catalog",
       capabilityStatus: "configured",
@@ -146,13 +146,21 @@ test("lockfile v2 modelPolicy rejects malformed and out-of-order shapes", () => 
   });
 
   for (const [modelPolicy, expectedPathPrefix] of [
-    [{ catalogVersion: 0, preset: "role-aware", resolutions: [] }, "/modelPolicy/catalogVersion"],
+    [
+      { catalogVersion: 0, preset: "role-aware", resolutions: [] },
+      "/modelPolicy/catalogVersion",
+    ],
     [
       { catalogVersion: 3, preset: "unknown-preset", resolutions: [] },
       "/modelPolicy/preset",
     ],
     [
-      { catalogVersion: 3, preset: "role-aware", resolutions: [], surprise: true },
+      {
+        catalogVersion: 3,
+        preset: "role-aware",
+        resolutions: [],
+        surprise: true,
+      },
       "/modelPolicy/surprise",
     ],
     [

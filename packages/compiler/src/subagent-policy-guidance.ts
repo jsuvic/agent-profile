@@ -11,6 +11,13 @@ import {
   resolveRoleMapping,
   SUBAGENT_MAPPING_VERSION,
 } from "./subagent-mapping.js";
+import {
+  buildModelPolicyTargetTable,
+  deriveModelPolicyRoleOverrides,
+  MODEL_POLICY_PRIMARY_ROLE,
+  MODEL_POLICY_TARGET_CATALOG_VERSION,
+  type ModelPolicyTargetClientResolution,
+} from "./model-policy-target-adapter.js";
 
 /**
  * Render the shared Codex/Claude policy section exclusively from the frozen
@@ -24,8 +31,44 @@ export function renderSubagentPolicyAgentsMdSection(
     return "";
   }
 
+  // Phase 31.5 (I2): a v3-opted profile (`preset` set) renders exact Codex/
+  // Claude v3 identifiers and per-surface capability status from the target
+  // adapter instead of the mapping-v2 resolver. A profile without `preset`
+  // keeps rendering byte-identical mapping-v2 output. Per the parent spec's
+  // "Model presets" contract ("Explicit role ... overrides continue to win
+  // over these defaults"): an explicit `policy.roles[id].capability`/
+  // `.effort` wins over the selected preset's own row for that role; a role
+  // absent from `policy.roles` (the common case) resolves the preset's row.
+  // `deriveModelPolicyRoleOverrides` is the single-owner conversion shared
+  // with `renderCodexPrimaryModelLines` (compiler.ts) and the lockfile
+  // wiring (golden.ts), so this table, the actual `.codex/config.toml`
+  // write, and `ai-profile.lock`'s `modelPolicy` block can never
+  // independently disagree about the same profile. Exact target model
+  // overrides flow through that same conversion and table with explicit
+  // provenance and honest catalogued/unverified status.
+  const preset = policy.preset;
+  const explicitRoleOverrides = deriveModelPolicyRoleOverrides(policy.roles);
+  const v3Table =
+    preset === undefined
+      ? undefined
+      : buildModelPolicyTargetTable(preset, explicitRoleOverrides);
+  const v3RowsByRole = new Map((v3Table ?? []).map((row) => [row.role, row]));
+
   const rows = Object.entries(effective.roles)
     .map(([id, role]) => {
+      const v3Row = v3RowsByRole.get(id as keyof typeof effective.roles);
+      if (v3Row !== undefined) {
+        const codexCell = renderModelPolicyTargetCell(
+          v3Row.codex,
+          id === MODEL_POLICY_PRIMARY_ROLE ? "primaryStatus" : "skillStatus",
+        );
+        const claudeCell = renderModelPolicyTargetCell(
+          v3Row.claude,
+          "skillStatus",
+        );
+        return `| ${id} | ${v3Row.capability} | ${v3Row.effort} | ${codexCell} | ${claudeCell} |`;
+      }
+
       const resolved = resolveRoleMapping(
         role.capability,
         role.effort,
@@ -34,6 +77,11 @@ export function renderSubagentPolicyAgentsMdSection(
       return `| ${id} | ${role.capability} | ${role.effort} | ${resolved.codex.model} / ${resolved.codex.reasoningEffort} | ${resolved.claude.model} / ${resolved.claude.effort} |`;
     })
     .join("\n");
+
+  const mappingVersionLine =
+    preset === undefined
+      ? `Mapping version: ${SUBAGENT_MAPPING_VERSION} (client evidence dated 2026-07-13). Capability and effort are canonical intent; the resolved, version-pinned Codex and Claude controls come from the versioned client mapping. Verify override availability against the installed client's official documentation.`
+      : `Mapping version: ${MODEL_POLICY_TARGET_CATALOG_VERSION} (v3 preset: ${preset}; client evidence dated 2026-07-16). Capability and effort are canonical intent; the resolved, exact Codex and Claude identifiers come from the versioned v3 target catalog. Each cell's status states whether Agent Profile actually configures that exact surface (\`configured\`), offers guidance only (\`advisory\`), has no candidate (\`unsupported\`), or is client-verification-required (\`unverified\`); listed alternatives are ordered candidates, never a runtime fallback. Only the \`${MODEL_POLICY_PRIMARY_ROLE}\` role's Codex resolution is written into \`.codex/config.toml\`; every other cell is guidance only.`;
 
   const indexedGuidance =
     effective.context.indexed.mode === "preferred"
@@ -60,7 +108,7 @@ Use this policy when delegating work to subagents. It selects model capability a
 
 **Role Capability And Effort Matrix**
 
-Mapping version: ${SUBAGENT_MAPPING_VERSION} (client evidence dated 2026-07-13). Capability and effort are canonical intent; the resolved, version-pinned Codex and Claude controls come from the versioned client mapping. Verify override availability against the installed client's official documentation.
+${mappingVersionLine}
 
 | Role | Capability | Effort | Codex (model / reasoning) | Claude (model / effort) |
 | ---- | ---------- | ------ | ------------------------- | ------------------------- |
@@ -91,6 +139,29 @@ ${indexedGuidance}
 
 See the \`## Completion Checklist\` section for shared review steps.
 `;
+}
+
+/**
+ * Render one v3 target-adapter resolution as a single table cell: exact
+ * model, target effort, the given surface's capability status, and any
+ * ordered alternatives. Alternatives are labeled "alternatives", never
+ * "fallback" (ADR-aligned: Fable 5's documented safety routing is not an
+ * entitlement/quota fallback).
+ */
+function renderModelPolicyTargetCell(
+  resolution: ModelPolicyTargetClientResolution,
+  statusField: "primaryStatus" | "skillStatus",
+): string {
+  if (resolution.model === undefined) {
+    return "unsupported";
+  }
+
+  const status = resolution[statusField];
+  const alternatives =
+    resolution.alternatives.length > 0
+      ? `; alternatives: ${resolution.alternatives.join(", ")}`
+      : "";
+  return `${resolution.model} / ${resolution.targetEffort} (${status}${alternatives})`;
 }
 
 /** Tabnine receives only portable conventions; it has no claimed model or MCP control. */

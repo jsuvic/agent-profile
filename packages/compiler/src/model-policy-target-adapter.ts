@@ -1,0 +1,434 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Agent Profile Compiler contributors
+
+// Phase 31.5 (I2): Codex and Claude v3 target adapter. Consumes the pure,
+// provider-neutral resolver in `@agent-profile/core`'s `model-policy.ts` and
+// attaches the real, pinned Codex/Claude exact identifiers plus per-surface
+// capability status. This module is the single owner of the v3 Codex/Claude
+// exact catalogs; nothing else in the compiler package may hand-roll a v3
+// exact model identifier.
+//
+// Evidence: docs/research/012-model-policy-mapping-v3-evidence.md (verified
+// 2026-07-16). Do not add or change an exact identifier here without
+// refreshing that evidence note.
+
+import {
+  getOrdinaryModelCatalogCandidates,
+  MODEL_POLICY_CATALOG_VERSION,
+  MODEL_POLICY_PRESET_TABLE,
+  MODEL_POLICY_ROLE_IDS,
+  type ModelCatalogEntry,
+  type ModelCatalogLifecycleStatus,
+  type ModelPolicyCapability,
+  type ModelPolicyCapabilityStatus,
+  type ModelPolicyEffort,
+  type ModelPolicyPreset,
+  type ModelPolicyResolutionSource,
+  type ModelPolicyRoleId,
+  type ModelPolicyRolePreset,
+  type SubagentPolicyRoles,
+} from "@agent-profile/core";
+
+import type { ModelPolicyTargetEffort } from "./types.js";
+
+export const MODEL_POLICY_TARGET_CATALOG_VERSION = MODEL_POLICY_CATALOG_VERSION;
+
+/**
+ * The canonical role treated as the "primary workflow stage" default. Only
+ * this role's Codex resolution is actually written into the project-local
+ * `.codex/config.toml` top-level `model` / `model_reasoning_effort` fields
+ * (that file has one project default, not a per-role selection). Every other
+ * role/surface is guidance-only until a target adds a documented per-role
+ * configuration surface.
+ */
+export const MODEL_POLICY_PRIMARY_ROLE: ModelPolicyRoleId = "implementer";
+
+// ---------------------------------------------------------------------------
+// Real vendor catalogs (mapping/catalog version 3). Evidence-pinned; do not
+// invent identifiers or reorder within a capability (catalog order determines
+// which entry is `model` vs an ordered alternative).
+// ---------------------------------------------------------------------------
+
+function freezeTargetCatalog(
+  entries: readonly ModelCatalogEntry[],
+): readonly ModelCatalogEntry[] {
+  return Object.freeze(entries.map((entry) => Object.freeze({ ...entry })));
+}
+
+export const CODEX_MODEL_POLICY_CATALOG = freezeTargetCatalog([
+  { id: "gpt-5.6-sol", capability: "strongest", status: "current" },
+  { id: "gpt-5.6-terra", capability: "balanced", status: "current" },
+  { id: "gpt-5.6-luna", capability: "efficient", status: "current" },
+]);
+
+export const CLAUDE_MODEL_POLICY_CATALOG = freezeTargetCatalog([
+  // Strongest capability: Fable 5 is the preferred candidate, Opus 4.8 is an
+  // ordered alternative (never described as a runtime/entitlement fallback).
+  { id: "claude-fable-5", capability: "strongest", status: "current" },
+  { id: "claude-opus-4-8", capability: "strongest", status: "current" },
+  { id: "claude-sonnet-5", capability: "balanced", status: "current" },
+  { id: "claude-haiku-4-5", capability: "efficient", status: "current" },
+]);
+
+/**
+ * Exact Claude identifiers whose Claude Code effort/frontmatter behavior is
+ * `client-verification-required` per the pinned evidence note, not a
+ * completed implementation fact. Every surface for these models reports
+ * `unverified`, regardless of whether Agent Profile could otherwise claim
+ * `configured`/`advisory`.
+ */
+const CLAUDE_CLIENT_VERIFICATION_REQUIRED_MODELS: ReadonlySet<string> = new Set(
+  ["claude-fable-5", "claude-sonnet-5"],
+);
+
+const TARGET_EFFORT: Readonly<
+  Record<ModelPolicyEffort, ModelPolicyTargetEffort>
+> = Object.freeze({
+  low: "low",
+  medium: "medium",
+  high: "high",
+  "extra-high": "xhigh",
+});
+
+export type ModelPolicyTargetClientId = "codex" | "claude";
+
+export type ModelPolicyTargetClientResolution = Readonly<{
+  model: string | undefined;
+  targetEffort: ModelPolicyTargetEffort;
+  alternatives: readonly string[];
+  lifecycle: ModelCatalogLifecycleStatus | "unrated";
+  source: ModelPolicyResolutionSource;
+  /** Status for the single project-local primary-default configuration
+   * surface (e.g. `.codex/config.toml` top-level model/effort). */
+  primaryStatus: ModelPolicyCapabilityStatus;
+  /** Status for per-workflow/skill guidance surfaces. */
+  skillStatus: ModelPolicyCapabilityStatus;
+  /** Status for per-subagent guidance surfaces. */
+  subagentStatus: ModelPolicyCapabilityStatus;
+}>;
+
+export type ModelPolicyTargetRow = Readonly<{
+  role: ModelPolicyRoleId;
+  capability: ModelPolicyCapability;
+  effort: ModelPolicyEffort;
+  codex: ModelPolicyTargetClientResolution;
+  claude: ModelPolicyTargetClientResolution;
+}>;
+
+/**
+ * Resolve one client's catalog candidate for a role, given the role's
+ * already-decided canonical capability/effort (either the selected preset's
+ * row, or an explicit per-role override — see `buildModelPolicyTargetTable`
+ * for the precedence between the two).
+ */
+function resolveClientCatalogRow(
+  capabilityEffort: ModelPolicyRolePreset,
+  catalog: readonly ModelCatalogEntry[],
+): {
+  model: string | undefined;
+  capability: ModelPolicyCapability;
+  effort: ModelPolicyEffort;
+  alternatives: readonly string[];
+  lifecycle: ModelCatalogLifecycleStatus | "unrated";
+  baseStatus: ModelPolicyCapabilityStatus;
+  source: ModelPolicyResolutionSource;
+} {
+  const candidates = getOrdinaryModelCatalogCandidates(
+    catalog,
+    capabilityEffort.capability,
+  );
+  const [primary, ...rest] = candidates;
+
+  return {
+    model: primary?.id,
+    capability: capabilityEffort.capability,
+    effort: capabilityEffort.effort,
+    alternatives: Object.freeze(rest.map((entry) => entry.id)),
+    lifecycle: primary?.status ?? "unrated",
+    baseStatus: primary === undefined ? "unsupported" : "configured",
+    source: "catalog",
+  };
+}
+
+function applyExactTargetOverride(
+  resolved: ReturnType<typeof resolveClientCatalogRow>,
+  catalog: readonly ModelCatalogEntry[],
+  model: string | undefined,
+): ReturnType<typeof resolveClientCatalogRow> {
+  if (model === undefined) {
+    return resolved;
+  }
+
+  const catalogued = catalog.find((entry) => entry.id === model);
+  return {
+    ...resolved,
+    model,
+    alternatives: Object.freeze([]),
+    lifecycle: catalogued?.status ?? "unrated",
+    baseStatus: catalogued === undefined ? "unverified" : "configured",
+    source: "explicit-override",
+  };
+}
+
+function computeCodexStatuses(
+  role: ModelPolicyRoleId,
+  baseStatus: ModelPolicyCapabilityStatus,
+): Pick<
+  ModelPolicyTargetClientResolution,
+  "primaryStatus" | "skillStatus" | "subagentStatus"
+> {
+  if (baseStatus === "unsupported") {
+    return {
+      primaryStatus: "unsupported",
+      skillStatus: "unsupported",
+      subagentStatus: "unsupported",
+    };
+  }
+
+  if (baseStatus === "unverified") {
+    return {
+      primaryStatus: "unverified",
+      skillStatus: "unverified",
+      subagentStatus: "unverified",
+    };
+  }
+
+  // Codex documents per-agent `model`/`model_reasoning_effort` and
+  // interactive `/model` selection, but Agent Profile only writes the single
+  // project-local `.codex/config.toml` top-level default today (for the
+  // designated primary role). Skill and subagent surfaces remain guidance
+  // only until a target adds a verified per-role Codex write surface.
+  return {
+    primaryStatus:
+      role === MODEL_POLICY_PRIMARY_ROLE ? "configured" : "advisory",
+    skillStatus: "advisory",
+    subagentStatus: "advisory",
+  };
+}
+
+function computeClaudeStatuses(
+  model: string | undefined,
+  baseStatus: ModelPolicyCapabilityStatus,
+): Pick<
+  ModelPolicyTargetClientResolution,
+  "primaryStatus" | "skillStatus" | "subagentStatus"
+> {
+  if (baseStatus === "unsupported") {
+    return {
+      primaryStatus: "unsupported",
+      skillStatus: "unsupported",
+      subagentStatus: "unsupported",
+    };
+  }
+
+  if (baseStatus === "unverified") {
+    return {
+      primaryStatus: "unverified",
+      skillStatus: "unverified",
+      subagentStatus: "unverified",
+    };
+  }
+
+  // Claude Code has no documented project-local file Agent Profile writes to
+  // select an exact model/effort per role today, so every surface is
+  // guidance only ("advisory") for confirmed-official identities. Fable 5
+  // and Sonnet 5 are `client-verification-required` per the pinned evidence
+  // note: every surface for those identities reports `unverified` instead,
+  // regardless of the confirmed/advisory distinction that would otherwise
+  // apply.
+  const status: ModelPolicyCapabilityStatus =
+    model !== undefined && CLAUDE_CLIENT_VERIFICATION_REQUIRED_MODELS.has(model)
+      ? "unverified"
+      : "advisory";
+
+  return { primaryStatus: status, skillStatus: status, subagentStatus: status };
+}
+
+/**
+ * Per-role capability/effort and exact target override input, keyed the same
+ * way as a profile's `subagentPolicy.roles`.
+ */
+export type ModelPolicyRoleOverrides = Partial<
+  Record<
+    ModelPolicyRoleId,
+    ModelPolicyRolePreset &
+      Readonly<{
+        overrides?: Partial<
+          Record<ModelPolicyTargetClientId, Readonly<{ model: string }>>
+        >;
+      }>
+  >
+>;
+
+/**
+ * Single-owner conversion from a profile's raw `subagentPolicy.roles` into
+ * the `ModelPolicyRoleOverrides` shape `buildModelPolicyTargetTable` and
+ * `toLockModelPolicyFromTargetTable` consume. Every v3 render/write/lockfile
+ * call site (the shared `AGENTS.md`/`CLAUDE.md` guidance table, the
+ * `.codex/config.toml` primary-default writer, and the `ai-profile.lock`
+ * `modelPolicy` block) MUST derive its override map through this one
+ * function so the three surfaces can never independently drift out of
+ * agreement about which role/capability/effort/exact model is authoritative (see the
+ * parent spec's Target Capability Status contract: `configured` must match
+ * what Agent Profile actually wrote).
+ */
+export function deriveModelPolicyRoleOverrides(
+  roles: SubagentPolicyRoles | undefined,
+): ModelPolicyRoleOverrides | undefined {
+  if (roles === undefined) {
+    return undefined;
+  }
+
+  const overrides: ModelPolicyRoleOverrides = {};
+  for (const [role, value] of Object.entries(roles)) {
+    if (value === undefined) {
+      continue;
+    }
+    overrides[role as ModelPolicyRoleId] = {
+      capability: value.capability,
+      effort: value.effort,
+      ...(value.overrides?.codex?.model === undefined &&
+      value.overrides?.claude?.model === undefined
+        ? {}
+        : {
+            overrides: {
+              ...(value.overrides?.codex?.model === undefined
+                ? {}
+                : { codex: { model: value.overrides.codex.model } }),
+              ...(value.overrides?.claude?.model === undefined
+                ? {}
+                : { claude: { model: value.overrides.claude.model } }),
+            },
+          }),
+    };
+  }
+  return overrides;
+}
+
+/**
+ * Build the deterministic v3 Codex/Claude resolution table for every role in
+ * `MODEL_POLICY_ROLE_IDS`, given a selected v3 preset. Pure and
+ * deterministic: no filesystem/network/clock access.
+ *
+ * Precedence (per the parent spec's "Model presets" contract and Decision
+ * Rule 4: "Explicit role ... overrides continue to win over these
+ * defaults"): when `roleOverrides[role]` supplies an explicit
+ * `capability`/`effort`, that value is used for the role's capability/effort
+ * instead of `MODEL_POLICY_PRESET_TABLE[preset][role]`; the catalog lookup
+ * (model/alternatives/status) always proceeds the same way from whichever
+ * capability/effort won. Exact target overrides then replace that client's
+ * catalog candidate, with explicit provenance and no invented alternatives.
+ * A role absent from `roleOverrides` (the common case) always resolves the
+ * selected preset's own row.
+ */
+export function buildModelPolicyTargetTable(
+  preset: ModelPolicyPreset,
+  roleOverrides?: ModelPolicyRoleOverrides,
+): readonly ModelPolicyTargetRow[] {
+  return MODEL_POLICY_ROLE_IDS.map((role) => {
+    const capabilityEffort =
+      roleOverrides?.[role] ?? MODEL_POLICY_PRESET_TABLE[preset][role];
+    const codexResolved = applyExactTargetOverride(
+      resolveClientCatalogRow(capabilityEffort, CODEX_MODEL_POLICY_CATALOG),
+      CODEX_MODEL_POLICY_CATALOG,
+      roleOverrides?.[role]?.overrides?.codex?.model,
+    );
+    const claudeResolved = applyExactTargetOverride(
+      resolveClientCatalogRow(capabilityEffort, CLAUDE_MODEL_POLICY_CATALOG),
+      CLAUDE_MODEL_POLICY_CATALOG,
+      roleOverrides?.[role]?.overrides?.claude?.model,
+    );
+
+    const codex: ModelPolicyTargetClientResolution = Object.freeze({
+      model: codexResolved.model,
+      targetEffort: TARGET_EFFORT[codexResolved.effort],
+      alternatives: codexResolved.alternatives,
+      lifecycle: codexResolved.lifecycle,
+      source: codexResolved.source,
+      ...computeCodexStatuses(role, codexResolved.baseStatus),
+    });
+
+    const claude: ModelPolicyTargetClientResolution = Object.freeze({
+      model: claudeResolved.model,
+      targetEffort: TARGET_EFFORT[claudeResolved.effort],
+      alternatives: claudeResolved.alternatives,
+      lifecycle: claudeResolved.lifecycle,
+      source: claudeResolved.source,
+      ...computeClaudeStatuses(claudeResolved.model, claudeResolved.baseStatus),
+    });
+
+    return Object.freeze({
+      role,
+      capability: codexResolved.capability,
+      effort: codexResolved.effort,
+      codex,
+      claude,
+    });
+  });
+}
+
+/**
+ * Convert the adapter's per-role resolution table into the lockfile v2
+ * `modelPolicy` provenance shape (Phase 31.5 I1 lockfile contract, wired for
+ * the first time in I2). Emits one row per (role, client) pair whose catalog
+ * resolved a model. The recorded `capabilityStatus` uses the surface that is
+ * actually authoritative for that row: the primary-default status for the
+ * designated primary role's Codex row (the one surface Agent Profile
+ * literally writes into `.codex/config.toml`), and the skill/guidance status
+ * for every other row.
+ */
+export function toLockModelPolicyFromTargetTable(
+  preset: ModelPolicyPreset,
+  table: readonly ModelPolicyTargetRow[],
+): {
+  catalogVersion: number;
+  preset: ModelPolicyPreset;
+  resolutions: {
+    client: ModelPolicyTargetClientId;
+    role: ModelPolicyRoleId;
+    model: string;
+    effort: ModelPolicyTargetEffort;
+    alternatives: string[];
+    source: ModelPolicyResolutionSource;
+    capabilityStatus: ModelPolicyCapabilityStatus;
+  }[];
+} {
+  const resolutions: {
+    client: ModelPolicyTargetClientId;
+    role: ModelPolicyRoleId;
+    model: string;
+    effort: ModelPolicyTargetEffort;
+    alternatives: string[];
+    source: ModelPolicyResolutionSource;
+    capabilityStatus: ModelPolicyCapabilityStatus;
+  }[] = [];
+
+  for (const row of table) {
+    for (const client of ["codex", "claude"] as const) {
+      const resolution = row[client];
+      if (resolution.model === undefined) {
+        continue;
+      }
+      const capabilityStatus =
+        client === "codex" && row.role === MODEL_POLICY_PRIMARY_ROLE
+          ? resolution.primaryStatus
+          : resolution.skillStatus;
+
+      resolutions.push({
+        client,
+        role: row.role,
+        model: resolution.model,
+        effort: resolution.targetEffort,
+        alternatives: [...resolution.alternatives],
+        source: resolution.source,
+        capabilityStatus,
+      });
+    }
+  }
+
+  return {
+    catalogVersion: MODEL_POLICY_TARGET_CATALOG_VERSION,
+    preset,
+    resolutions,
+  };
+}

@@ -1,0 +1,52 @@
+version: 1
+profile:
+  name: subagent-policy-v3-role-aware-enabled
+  description: AI-agent setup that opts into the mapping-v3 role-aware model-policy preset.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: true
+  codex:
+    enabled: true
+  claude:
+    enabled: true
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    implementer:
+      capability: strongest
+      effort: extra-high
+      overrides:
+        codex:
+          model: organization-codex-model
+        claude:
+          model: claude-opus-4-8
+  orchestration:
+    maxConcurrentThreads: 3
+    maxDepth: 1
+    parallelWrites: false
+  context:
+    handoff: task-capsule
+    memory: targeted
+    indexed:
+      mode: preferred
+      provider: cce
+  evidence:
+    summary: required
+    localTrace:
+      enabled: false
+      retention: 20
