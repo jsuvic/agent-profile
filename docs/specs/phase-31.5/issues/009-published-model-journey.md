@@ -4,6 +4,16 @@
 
 `docs/specs/phase-31.5/001-model-selection-lifecycle.md`
 
+## Amendment (2026-07-17)
+
+See the matching amendment in `docs/specs/phase-31.5/issues/005-init-model-selection.md`:
+I5 now wires I3's ownership-aware Tabnine settings-file write plan into the
+real init write-preview flow. This issue's packed journey and final
+spec-to-test matrix must therefore exercise the write branch (absent and
+generated-owned ownership reaching an actual `.tabnine/agent/settings.json`
+write) in addition to the manual/advisory branch (unowned settings, or no
+exact model resolved), not the manual path alone.
+
 ## Intent summary
 
 Prove that consumers of the packed packages receive one coherent model
@@ -27,8 +37,10 @@ provenance. Complete the spec-to-test matrix and release documentation.
   the packed artifacts in an isolated fixture.
 - The journey uses fake clients and proves zero external network/provider calls.
 - It covers role-aware default, exact table/status, probe decline and one
-  normalized probe path, Tabnine organization/private manual path, normal
-  compile lock reuse, upgrade retain/adopt, and offline Doctor.
+  normalized probe path, Tabnine organization/private manual path, Tabnine's
+  ownership-aware settings-file write path (absent and generated-owned
+  reaching a real write; unowned staying preserved/advisory), normal compile
+  lock reuse, upgrade retain/adopt, and offline Doctor.
 - Published help/docs/schema/package contents include every required runtime
   asset and no test-only catalog/probe fixture.
 - Full tests, goldens, check, Doctor, pack verification, and documentation links

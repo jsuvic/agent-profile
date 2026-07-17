@@ -217,4 +217,127 @@ for the mapping-v2 byte-identity regression case (no `preset`, no
 - Global/user configuration outside the project-local files above.
 - Runtime fallback orchestration between the primary model and its listed
   alternatives, or any credential/provider configuration.
-- Tabnine's mapping-v3 catalog (Phase 31.5 I3).
+
+## Mapping-v3 Tabnine historical/organization/private model lifecycle (Phase 31.5 I3)
+
+When `preset` is set, the generated `.tabnine/guidelines/87-subagent-task-capsules.md`
+gains a `## Tabnine Model And Effort Status` section after the existing
+task-capsule content. A profile without `preset` (or with `subagentPolicy`
+disabled) keeps that file byte-identical to the pre-I3 output.
+
+Evidence: [Model Policy Mapping v3 Evidence](../research/012-model-policy-mapping-v3-evidence.md)
+"## Tabnine" section (verified 2026-07-16), plus a 2026-07-17 field-observed
+`model.name` note recorded in
+[issue 003](../specs/phase-31.5/issues/003-tabnine-historical-private-models.md)
+that remains locally unverified and does not establish cross-version support.
+
+### Why Tabnine never auto-selects a "best" model
+
+Unlike Codex/Claude, Tabnine's exact available models are organization/
+admin-controlled and documented to "change frequently." Agent Profile
+therefore never ranks or auto-selects a default model for a role from the
+bundled catalog (an explicit non-goal of I3). Without an explicit exact
+override, every role's Tabnine model status is `advisory`: no exact model is
+claimed, and guidance points to interactive `/model` selection, verified with
+`/about`.
+
+### Tabnine compatibility-history catalog
+
+`TABNINE_MODEL_POLICY_CATALOG`
+(`packages/compiler/src/model-policy-tabnine-adapter.ts`) retains every
+previously known exact Tabnine identifier and marks each `current`,
+`supported-legacy`, `deprecated`, or `retired`, mirroring the same lifecycle
+vocabulary and generic catalog helpers
+(`findModelCatalogEntry`/`getOrdinaryModelCatalogCandidates`) already proven
+for Codex/Claude. Retired entries are excluded from ordinary candidate
+filtering but remain addressable for parsing, provenance, migration, and
+explicit selection (Decision Rule 11); no output implies that an older
+admin-approved model is unhealthy.
+
+### Explicit organization/private exact overrides
+
+An explicit exact Tabnine model identifier — catalogued or organization/
+private — is never rejected merely for being new, private, or historical
+(Decision Rule 5):
+
+- a catalogued identifier (current, supported-legacy, deprecated, or even
+  retired) resolves its recorded lifecycle and an `advisory` model status;
+- an uncatalogued identifier renders as `organization/private - unrated` and
+  `unverified`, not invalid or outdated.
+
+This issue does not yet add a `subagentPolicy.roles[id].overrides.tabnine`
+profile-schema field; `buildModelPolicyTabnineTargetTable`'s `roleOverrides`
+parameter accepts an explicit override directly for adapter-level callers and
+tests. See "Known scope narrowing" below.
+
+### Model and effort are independent per-control statuses
+
+Tabnine has no confirmed effort/reasoning control ("do not invent a Tabnine
+effort control" — evidence note), so every row's effort is always `undefined`
+with a permanent `unsupported` `effortStatus`, regardless of the model
+surface's status (`configured`/`advisory`/`unverified`). This mixed outcome
+is represented without collapsing into one scalar status:
+
+- `ModelPolicyTabnineResolution` (compiler package) carries `modelStatus` and
+  `effortStatus` as two independent fields instead of Codex/Claude's single
+  `primaryStatus`/`skillStatus`/`subagentStatus` triad.
+- The lockfile v2 `modelPolicy.resolutions[]` row shape
+  (`LockModelPolicyResolutionV2`) makes `effort` optional and adds a required
+  `effortStatus` field alongside the existing `capabilityStatus` (which now
+  unambiguously describes the model surface only). Codex/Claude rows always
+  still set `effort` and set `effortStatus` equal to `capabilityStatus`
+  (their effort and model surfaces have never been independently statused),
+  so every existing Codex/Claude lockfile row and golden fixture stays
+  byte-identical. A Tabnine row that resolved an exact model (via an explicit
+  override) omits `effort` entirely and sets `effortStatus: "unsupported"`.
+- A Tabnine capability gap never blocks or alters Codex/Claude resolution:
+  mixed-client tests
+  (`packages/compiler/src/model-policy-tabnine-adapter.test.ts`) prove Codex/
+  Claude proceed with their own fully resolved rows while Tabnine's row omits
+  effort independently.
+
+### `.tabnine/agent/settings.json` ownership-aware write plan (adapter-level, not yet wired into compile/write)
+
+`packages/compiler/src/model-policy-tabnine-adapter.ts` also exports
+`planTabnineModelSettingsWrite`, a pure, ownership-injected planning function
+following ADR 0020's whole-file-ownership discipline (never structural JSON
+merge):
+
+- the only reviewed, versioned write-safe shape is a top-level `model.id`
+  string (`TABNINE_SETTINGS_WRITE_SAFE_PROPERTY`, adapter version
+  `TABNINE_SETTINGS_ADAPTER_VERSION`), per the confirmed official settings
+  documentation;
+- a `model.name` shape (field-observed 2026-07-17) is recorded as a
+  documented-but-unverified alternate shape
+  (`TABNINE_SETTINGS_UNVERIFIED_ALTERNATE_PROPERTY`) and is never written;
+- given injected ownership state (`"absent" | "generated-owned" | "unowned"`)
+  and a resolved exact model, the function only ever proposes a write when
+  ownership is `absent` or `generated-owned`; an `unowned` file is always
+  preserved and the function returns advisory `/model`/`/about` guidance
+  instead, regardless of model;
+- when no exact model is available (the common default case, absent an
+  explicit override) the function always returns advisory guidance, never a
+  write.
+
+**This function is intentionally not yet wired into `compileProfile` or the
+CLI's real write/preview pipeline.** Determining real on-disk ownership for
+`.tabnine/agent/settings.json` requires the same kind of filesystem-scanning
+integration `apps/cli/src/wizard.ts` already performs for other root files,
+which was judged too large to land safely in this same bounded change. Until
+that integration lands, Agent Profile's real Tabnine output for this file
+remains advisory-only (`/model`, `/about` guidance in the guideline file);
+`planTabnineModelSettingsWrite` is proven correct at the unit level
+(`packages/compiler/src/model-policy-tabnine-adapter.test.ts`) and is ready
+for that future integration.
+
+### Known scope narrowing (I3)
+
+- No `subagentPolicy.roles[id].overrides.tabnine` profile-schema field exists
+  yet; an explicit Tabnine override is only reachable through
+  `buildModelPolicyTabnineTargetTable`'s `roleOverrides` parameter at the
+  adapter level, not through `ai-profile.yaml`. `resolveModelPolicyLockfile`
+  is wired to merge Tabnine resolutions into `ai-profile.lock`'s
+  `modelPolicy` block, but with today's profile schema that merge always
+  contributes zero rows in practice.
+- `.tabnine/agent/settings.json` is never written by the real compile/write
+  pipeline in this issue; see the ownership-aware write plan section above.

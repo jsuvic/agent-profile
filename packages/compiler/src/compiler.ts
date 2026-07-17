@@ -971,7 +971,7 @@ function renderTabnineGuidelines(profile: AiProfile): GeneratedFile[] {
         ".tabnine/guidelines/87-subagent-task-capsules.md",
         common.target,
         "targets/tabnine-guidelines/87-subagent-task-capsules@1",
-        renderSubagentPolicyTabnineGuideline(),
+        renderSubagentPolicyTabnineGuideline(profile.subagentPolicy),
       ),
     );
   }

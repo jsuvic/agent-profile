@@ -21,3 +21,22 @@ When you hand off a bounded task, pass a portable task capsule and follow local-
 - Keep work local: do not upload source or secrets.
 
 See `90-final-review.md` for the shared final-review checklist.
+
+## Tabnine Model And Effort Status
+
+Catalog version: 3 (preset: role-aware; Tabnine evidence dated 2026-07-16). Tabnine's exact available models are organization/admin-controlled and change frequently, so Agent Profile never ranks or auto-selects a "best" model for a role. Model and effort are reported as independent controls: a row's model status may be `configured`, `advisory`, or `unverified`, while effort is always absent with status `unsupported` -- Tabnine has no confirmed effort/reasoning control, and no generated artifact ever receives an invented effort value. An older organization-approved model is never reported as unhealthy merely for being historical (`supported-legacy`/`deprecated`/`retired` are compatibility-history labels, not health signals); retired identifiers are hidden from ordinary onboarding but remain valid for explicit selection. An organization/private identifier that is not in the bundled catalog renders as `organization/private - unrated` and `unverified`, never as invalid or outdated.
+
+Select the exact model with `/model` and verify the active selection with `/about`. Agent Profile only ever writes a project-local `.tabnine/agent/settings.json` through a release-reviewed, versioned adapter mapping for one exact property (`model.id`) at an absent or previously generated-owned file; an existing unowned settings file is always preserved, and guidance stays advisory in that case.
+
+| Role | Capability | Effort (canonical intent) | Model (exact / lifecycle / status) | Effort (target / status) |
+| ---- | ---------- | -------------------------- | ----------------------------------- | ------------------------- |
+| grill | strongest | extra-high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| architect | strongest | extra-high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| critical-reviewer | strongest | extra-high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| spec-reviewer | strongest | high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| quality-reviewer | strongest | high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| complex-implementer | balanced | high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| implementer | strongest | extra-high | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| routine-implementer | balanced | medium | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| explorer | efficient | low | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |
+| mechanical | efficient | medium | advisory (no exact model resolved; select via `/model`, verify via `/about`) | absent (unsupported) |

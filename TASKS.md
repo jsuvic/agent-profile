@@ -137,7 +137,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I1 | Shared model-policy domain and compatibility resolver | done | [001-shared-model-policy-domain.md](docs/specs/phase-31.5/issues/001-shared-model-policy-domain.md) |
 | I1R | Complete v3 profile-schema integration | done | [001r-v3-profile-schema-integration.md](docs/specs/phase-31.5/issues/001r-v3-profile-schema-integration.md) |
 | I2 | Codex and Claude exact model adapters | done | [002-codex-claude-model-adapters.md](docs/specs/phase-31.5/issues/002-codex-claude-model-adapters.md) |
-| I3 | Tabnine historical, organization, and private models | sequenced | [003-tabnine-historical-private-models.md](docs/specs/phase-31.5/issues/003-tabnine-historical-private-models.md) |
+| I3 | Tabnine historical, organization, and private models | done | [003-tabnine-historical-private-models.md](docs/specs/phase-31.5/issues/003-tabnine-historical-private-models.md) |
 | I4 | Consented source-free model probes | sequenced | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md) |
 | I5 | Exact role-aware model selection during init | sequenced | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md) |
 | I6 | Explicit model upgrade and locked resolution lifecycle | sequenced | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
@@ -162,6 +162,23 @@ I1+I2+I3+I4 -> I6; I4+I6 -> I7; I2+I3+I5+I6+I7 -> I8;
 I1-I8 -> I9; I9 -> Phase 32 I1. I2, I3, and I4 are parallel-safe after
 I1 apart from shared exports and fixtures. I5 and I6 may proceed in parallel
 after their prerequisites with shared CLI-entrypoint merge coordination.
+
+I3 amendment 2026-07-17: I3 shipped `planTabnineModelSettingsWrite` as a
+pure, unit-tested ownership-aware write plan for
+`.tabnine/agent/settings.json` (ADR 0020 whole-file ownership, `model.id`
+only) but left it unwired from any real compile/write pipeline - a disclosed,
+reviewed scope reduction, not a defect. Confirmed I6-I9 as originally scoped
+never picked the gap back up (all describe Tabnine only as
+manual/advisory/guided). Per product decision the capability stays inside
+Phase 31.5 rather than moving to a separate phase: I5's brief now includes an
+explicit acceptance criterion wiring the write plan into init's real
+write-preview flow (the same seam that first builds Codex/Claude
+target-configuration write-preview), and I9's coverage list now names the
+write branch alongside the manual path. I6/I7/I8 are not amended: I6/I8 never
+claimed Tabnine target-file writes in scope, and I7 (Doctor) already covers
+"ownership" generically in its seam, so drift detection for the newly-real
+settings file needs no brief change - reassess only if I5's implementation
+reveals a genuine I7 gap.
 
 ## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
 

@@ -41,6 +41,7 @@ const MODEL_POLICY: LockModelPolicyV2 = {
       role: "architect",
       model: "example-strongest-current",
       effort: "xhigh",
+      effortStatus: "configured",
       alternatives: ["example-strongest-deprecated"],
       source: "catalog",
       capabilityStatus: "configured",
@@ -50,6 +51,7 @@ const MODEL_POLICY: LockModelPolicyV2 = {
       role: "architect",
       model: "example-strongest-current",
       effort: "xhigh",
+      effortStatus: "configured",
       alternatives: [],
       source: "catalog",
       capabilityStatus: "configured",
@@ -124,6 +126,7 @@ test("lockfile v2 modelPolicy strips extra fields from a richer caller-supplied 
     "capabilityStatus",
     "client",
     "effort",
+    "effortStatus",
     "model",
     "role",
     "source",
@@ -308,6 +311,114 @@ test("lockfile v2 modelPolicy rejects malformed and out-of-order shapes", () => 
       true,
       `expected an issue at ${expectedPathPrefix}, got ${JSON.stringify(result.issues)}`,
     );
+  }
+});
+
+test("lockfile v2 modelPolicy rejects a resolution with an invalid (but present) effortStatus, isolated from any other error", () => {
+  const base = buildLockfile({
+    profileBytes: "version: 1\n",
+    templates: [FAKE_TEMPLATE],
+    files: [FAKE_FILE],
+  });
+
+  // An otherwise fully valid resolution (mirrors a Tabnine row: no `effort`
+  // field, since it is optional) with an invalid `effortStatus` value.
+  // `effortStatus` itself is optional (Phase 31.5 I3 bugfix: see the
+  // "backfills a missing effortStatus" test below for the omitted case) but
+  // an explicitly *present* value must still be one of the known statuses.
+  const invalidEffortStatus = {
+    client: "tabnine",
+    role: "architect",
+    model: "gpt-5.4",
+    alternatives: [],
+    source: "explicit-override",
+    capabilityStatus: "advisory",
+    effortStatus: "entitled",
+  };
+  const invalidResult = validateLockfileValue({
+    ...base,
+    modelPolicy: {
+      catalogVersion: 3,
+      preset: "role-aware",
+      resolutions: [invalidEffortStatus],
+    },
+  });
+  assert.equal(invalidResult.ok, false);
+  if (!invalidResult.ok) {
+    assert.deepEqual(
+      invalidResult.issues.map((issue) => issue.path),
+      ["/modelPolicy/resolutions/0/effortStatus"],
+    );
+  }
+});
+
+test("lockfile v2 modelPolicy backfills a missing effortStatus from capabilityStatus (pre-I3 v3 lockfile migration)", () => {
+  const base = buildLockfile({
+    profileBytes: "version: 1\n",
+    templates: [FAKE_TEMPLATE],
+    files: [FAKE_FILE],
+  });
+
+  // A hand-built pre-Phase-31.5-I3-shaped v3 resolution row: I2 shipped
+  // `effort` + `capabilityStatus` but `effortStatus` did not exist yet, so a
+  // repository's pre-existing `ai-profile.lock` never has this key.
+  const preI3Resolution = {
+    client: "codex",
+    role: "architect",
+    model: "example-strongest-current",
+    effort: "xhigh",
+    alternatives: ["example-strongest-deprecated"],
+    source: "catalog",
+    capabilityStatus: "configured",
+  };
+
+  const result = validateLockfileValue({
+    ...base,
+    modelPolicy: {
+      catalogVersion: 3,
+      preset: "role-aware",
+      resolutions: [preI3Resolution],
+    },
+  });
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  if (result.ok && result.lockfile.version === 2) {
+    const [resolution] = result.lockfile.modelPolicy!.resolutions;
+    // The backfill actually happened, not merely "validation stopped
+    // erroring": the migrated row's `effortStatus` equals that same row's
+    // `capabilityStatus`.
+    assert.equal(resolution!.effortStatus, preI3Resolution.capabilityStatus);
+  }
+
+  // A fresh I2/I3-shaped row that already has both `effort` and an explicit
+  // `effortStatus` round-trips unchanged: the backfill must never overwrite
+  // an explicitly present `effortStatus`, even when it differs from
+  // `capabilityStatus`.
+  const explicitResolution = {
+    client: "claude",
+    role: "architect",
+    model: "example-strongest-current",
+    effort: "xhigh",
+    effortStatus: "unverified",
+    alternatives: [],
+    source: "catalog",
+    capabilityStatus: "advisory",
+  };
+
+  const explicitResult = validateLockfileValue({
+    ...base,
+    modelPolicy: {
+      catalogVersion: 3,
+      preset: "role-aware",
+      resolutions: [explicitResolution],
+    },
+  });
+
+  assert.equal(explicitResult.ok, true, JSON.stringify(explicitResult));
+  if (explicitResult.ok && explicitResult.lockfile.version === 2) {
+    const [resolution] = explicitResult.lockfile.modelPolicy!.resolutions;
+    assert.equal(resolution!.effortStatus, "unverified");
+    assert.notEqual(resolution!.effortStatus, resolution!.capabilityStatus);
   }
 });
 

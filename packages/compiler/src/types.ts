@@ -217,11 +217,21 @@ export type AiProfileLockV1 = {
 export type ModelPolicyClientId = "tabnine" | "codex" | "claude";
 export type ModelPolicyTargetEffort = "low" | "medium" | "high" | "xhigh";
 
+// Phase 31.5 (I3): `effort` becomes optional and `effortStatus` is added so a
+// target row can represent model and effort as independently statused
+// controls (e.g. Tabnine: a model may be `configured`/`advisory`/`unverified`
+// while effort stays permanently absent and `unsupported`). `capabilityStatus`
+// keeps its existing name/meaning unchanged for backward compatibility: it
+// now unambiguously describes the model surface only. Every existing
+// Codex/Claude producer must keep setting `effort` (still required for those
+// clients in practice) and a matching `effortStatus`, so existing lockfile
+// rows/goldens stay byte-identical.
 export type LockModelPolicyResolutionV2 = {
   client: ModelPolicyClientId;
   role: ModelPolicyRoleId;
   model: string;
-  effort: ModelPolicyTargetEffort;
+  effort?: ModelPolicyTargetEffort;
+  effortStatus: ModelPolicyCapabilityStatus;
   alternatives: string[];
   source: ModelPolicyResolutionSource;
   capabilityStatus: ModelPolicyCapabilityStatus;
