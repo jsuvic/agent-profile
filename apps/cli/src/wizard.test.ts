@@ -56,7 +56,10 @@ type PromptCall =
       default: boolean;
       entries: ReadonlyArray<string>;
     }
-  | { kind: "confirmWritePlan"; default: boolean };
+  | { kind: "confirmWritePlan"; default: boolean }
+  | { kind: "selectModelPreset"; default: string }
+  | { kind: "confirmModelProbe"; default: boolean; calls: number }
+  | { kind: "selectAdvancedOverrides"; tabnineSelected: boolean };
 
 type ScriptedPrompts = CliPrompts & {
   calls: PromptCall[];
@@ -76,6 +79,15 @@ function scriptedPrompts(options: {
   >;
   reviewerSubagents?: boolean;
   advisoryHooks?: boolean;
+  modelPreset?: "role-aware" | "quality-first" | "cost-conscious";
+  probeConsent?: boolean;
+  /** Omitted entirely by default so the advanced-override step stays absent
+   * (progressive disclosure): scripted tests that do not opt in never see
+   * `selectAdvancedOverrides` in the prompt sequence, matching the additive/
+   * backward-compatible contract `selectModelPreset`/`confirmModelProbe`
+   * already established. */
+  advancedOverrides?: { tabnineModel?: string } | undefined;
+  includeAdvancedOverridesPrompt?: boolean;
 }): ScriptedPrompts {
   const calls: PromptCall[] = [];
   let manualLanguageIndex = 0;
@@ -134,6 +146,25 @@ function scriptedPrompts(options: {
       calls.push({ kind: "confirmWritePlan", default: def });
       return options.confirm;
     },
+    async selectModelPreset({ default: def }) {
+      calls.push({ kind: "selectModelPreset", default: def });
+      return options.modelPreset ?? def;
+    },
+    async confirmModelProbe({ default: def, calls: n }) {
+      calls.push({ kind: "confirmModelProbe", default: def, calls: n });
+      return options.probeConsent ?? def;
+    },
+    ...(options.includeAdvancedOverridesPrompt
+      ? {
+          async selectAdvancedOverrides({ tabnineSelected }) {
+            calls.push({
+              kind: "selectAdvancedOverrides",
+              tabnineSelected,
+            });
+            return options.advancedOverrides;
+          },
+        }
+      : {}),
   };
 }
 
@@ -707,6 +738,8 @@ test("interactive wizard prompts in deterministic order with .gitignore prompt",
     "selectClients",
     "selectSetupProfile",
     "selectCapabilities",
+    "selectModelPreset",
+    "confirmModelProbe",
     "confirmGitignore",
     "confirmWritePlan",
   ]);
@@ -733,6 +766,7 @@ test("interactive wizard skips .gitignore prompt when no recommendation is missi
     "selectClients",
     "selectSetupProfile",
     "selectCapabilities",
+    "selectModelPreset",
     "confirmWritePlan",
   ]);
 });
@@ -799,9 +833,18 @@ test("interactive regions flow produces same files as explicit --strategy region
 
   // The profile name is derived from the tmpdir basename and propagates into
   // AGENTS.md/CLAUDE.md generated regions. Normalize that line before
-  // comparing.
+  // comparing. Also strip the "Subagent Execution Policy" section: only the
+  // interactive wizard offers model-preset selection (Phase 31.5 I5), so it
+  // persists `subagentPolicy` and the explicit `--strategy regions --write`
+  // path (which never runs the wizard) intentionally does not. This is a
+  // real, documented divergence, not something the two paths should match.
   const normalize = (text: string): string =>
-    text.replace(/Name: agent-profile-wizard-[^\n]+/u, "Name: <NAME>");
+    text
+      .replace(/Name: agent-profile-wizard-[^\n]+/u, "Name: <NAME>")
+      .replace(
+        /## Subagent Execution Policy\n[\s\S]*?\n\n(?=## |<!-- agent-profile:generated:end -->)/u,
+        "",
+      );
   for (const relative of ["AGENTS.md", "CLAUDE.md"]) {
     const wizardText = (
       await readFile(path.join(wizardRoot, relative))
@@ -1626,4 +1669,387 @@ test("--non-interactive flag bypasses wizard prompts even when prompts are injec
   assert.equal(code, 0);
   assert.equal(prompts.calls.length, 0);
   assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 31.5 (I5): role-aware exact model selection during init.
+// ---------------------------------------------------------------------------
+
+test("interactive wizard prompts for a model preset with the default recommendation and preview tables", async () => {
+  const rootDir = await createTsRoot("model-preset-prompt");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex", "claude"],
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+
+  const presetCall = prompts.calls.find(
+    (call) => call.kind === "selectModelPreset",
+  );
+  assert.ok(presetCall, "selectModelPreset must be called");
+  assert.equal(
+    (presetCall as { default: string }).default,
+    "role-aware",
+    "role-aware must be the recommended default",
+  );
+});
+
+test("interactive wizard renders the write plan with exact per-client model/effort/status rows for the selected preset", async () => {
+  const rootDir = await createTsRoot("model-preset-preview");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex", "claude"],
+    modelPreset: "quality-first",
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  const text = output.stdoutText();
+  assert.match(text, /Model preset: quality-first/u);
+  assert.match(text, /Model catalog version: \d+/u);
+  // quality-first resolves the implementer role to the strongest Codex/Claude
+  // exact identifiers; exact names must appear, never only capability labels.
+  assert.match(text, /Codex \(implementer\): gpt-5\.6-sol \[current, configured\]/u);
+  assert.match(
+    text,
+    /Claude \(implementer\): claude-fable-5 \[current, unverified\]/u,
+  );
+});
+
+test("a confirmed non-default model preset is persisted into ai-profile.yaml and the lockfile's modelPolicy provenance", async () => {
+  const rootDir = await createTsRoot("model-preset-persisted");
+  const prompts = scriptedPrompts({
+    confirm: true,
+    clients: ["codex", "claude"],
+    modelPreset: "quality-first",
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+
+  const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
+  assert.match(profile, /subagentPolicy:\n {2}enabled: true\n {2}preset: quality-first/u);
+
+  const lockfile = await readWizardV2Lockfile(rootDir);
+  assert.equal(lockfile.modelPolicy?.preset, "quality-first");
+  assert.ok(
+    (lockfile.modelPolicy?.resolutions.length ?? 0) > 0,
+    "expected non-empty modelPolicy resolutions for the selected preset",
+  );
+});
+
+test("interactive wizard renders a Tabnine guided-manual-selection line when Tabnine is selected", async () => {
+  const rootDir = await createTsRoot("model-preset-tabnine");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["tabnine"],
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: guided manual selection \(documented enumeration only/u,
+  );
+});
+
+test("interactive wizard asks probe consent immediately before execution and declining runs zero processes", async () => {
+  const rootDir = await createTsRoot("model-probe-decline");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex"],
+    probeConsent: false,
+  });
+  let runnerCalls = 0;
+  const output = createOutput();
+
+  // Drive through runCli so the exact production wiring (dispatchInitWizard ->
+  // runInitWizard) is exercised, with a fake probe runner injected via
+  // RunInitOptions.
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+    probeRunner: {
+      async run() {
+        runnerCalls += 1;
+        return {
+          exitCode: 0,
+          stdout: "OK",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    },
+  } as Parameters<typeof runCli>[1]);
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(runnerCalls, 0, "declining consent must start zero processes");
+  const probeCall = prompts.calls.find(
+    (call) => call.kind === "confirmModelProbe",
+  );
+  assert.ok(probeCall, "confirmModelProbe must be called before any execution");
+  assert.match(
+    output.stdoutText(),
+    /Model probe: declined - exact models remain unverified against a live provider/u,
+  );
+});
+
+test("interactive wizard runs the consented probe and reflects a result in the write plan", async () => {
+  const rootDir = await createTsRoot("model-probe-consent");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex"],
+    probeConsent: true,
+  });
+  let runnerCalls = 0;
+  const output = createOutput();
+
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+    probeRunner: {
+      async run() {
+        runnerCalls += 1;
+        return {
+          exitCode: 0,
+          stdout: "OK",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    },
+  } as Parameters<typeof runCli>[1]);
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(runnerCalls > 0, "consenting must run at least one probe call");
+  assert.match(
+    output.stdoutText(),
+    /Model probe: consented \(\d+ result\(s\)\)/u,
+  );
+});
+
+test("cancelling the interactive wizard before the write-plan confirm writes nothing regardless of the model step", async () => {
+  const rootDir = await createTsRoot("model-preset-cancel");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex", "claude"],
+    modelPreset: "cost-conscious",
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 31.5 (I5R): advanced per-role/exact-override entry, and Tabnine
+// write-plan wiring end to end through the real init pipeline.
+// ---------------------------------------------------------------------------
+
+test("the advanced-override step is off by default (progressive disclosure): omitted entirely when the prompt is not injected", async () => {
+  const rootDir = await createTsRoot("advanced-override-absent");
+  const prompts = scriptedPrompts({ confirm: false, clients: ["tabnine"] });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(
+    prompts.calls.some((call) => call.kind === "selectAdvancedOverrides"),
+    false,
+  );
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: guided manual selection \(documented enumeration only/u,
+  );
+});
+
+test("the advanced-override step is skipped entirely when Tabnine is not a selected client", async () => {
+  const rootDir = await createTsRoot("advanced-override-no-tabnine");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex"],
+    includeAdvancedOverridesPrompt: true,
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  const call = prompts.calls.find(
+    (item) => item.kind === "selectAdvancedOverrides",
+  );
+  assert.ok(call);
+  assert.equal((call as { tabnineSelected: boolean }).tabnineSelected, false);
+});
+
+test("declining the advanced-override step keeps the default guided-manual-selection path unchanged", async () => {
+  const rootDir = await createTsRoot("advanced-override-declined");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["tabnine"],
+    includeAdvancedOverridesPrompt: true,
+    advancedOverrides: undefined,
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: guided manual selection \(documented enumeration only/u,
+  );
+});
+
+test("a catalogued exact Tabnine override is written to .tabnine/agent/settings.json when the file is absent", async () => {
+  const rootDir = await createTsRoot("advanced-override-write");
+  const prompts = scriptedPrompts({
+    confirm: true,
+    clients: ["tabnine"],
+    includeAdvancedOverridesPrompt: true,
+    advancedOverrides: { tabnineModel: "gpt-5.4" },
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: exact override gpt-5\.4 \[catalogued\]/u,
+  );
+  const settingsPath = path.join(
+    rootDir,
+    ".tabnine",
+    "agent",
+    "settings.json",
+  );
+  const written = JSON.parse(await readFile(settingsPath, "utf8")) as {
+    model: { id: string };
+  };
+  assert.deepEqual(written, { model: { id: "gpt-5.4" } });
+});
+
+test("an uncatalogued exact Tabnine override is accepted, written, and labelled unverified/uncatalogued in the preview", async () => {
+  const rootDir = await createTsRoot("advanced-override-uncatalogued");
+  const prompts = scriptedPrompts({
+    confirm: true,
+    clients: ["tabnine"],
+    includeAdvancedOverridesPrompt: true,
+    advancedOverrides: { tabnineModel: "org-acme-private-finetune-7" },
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: exact override org-acme-private-finetune-7 \[unverified, uncatalogued\]/u,
+  );
+  const settingsPath = path.join(
+    rootDir,
+    ".tabnine",
+    "agent",
+    "settings.json",
+  );
+  const written = JSON.parse(await readFile(settingsPath, "utf8")) as {
+    model: { id: string };
+  };
+  assert.deepEqual(written, { model: { id: "org-acme-private-finetune-7" } });
+});
+
+test("an existing unowned .tabnine/agent/settings.json is preserved byte-for-byte even when an exact override is entered", async () => {
+  const rootDir = await createTsRoot("advanced-override-unowned-preserved");
+  await mkdir(path.join(rootDir, ".tabnine", "agent"), { recursive: true });
+  const originalBytes = '{"userWroteThis": true}\n';
+  const settingsPath = path.join(
+    rootDir,
+    ".tabnine",
+    "agent",
+    "settings.json",
+  );
+  await writeFile(settingsPath, originalBytes, "utf8");
+
+  const prompts = scriptedPrompts({
+    confirm: true,
+    clients: ["tabnine"],
+    includeAdvancedOverridesPrompt: true,
+    advancedOverrides: { tabnineModel: "gpt-5.4" },
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+
+  const afterBytes = await readFile(settingsPath, "utf8");
+  assert.equal(afterBytes, originalBytes);
+
+  // The advisory outcome (file untouched, guidance to use /model and /about)
+  // must actually reach the user, not just be computed and discarded.
+  assert.match(
+    output.stdoutText(),
+    /\.tabnine\/agent\/settings\.json left untouched: .*\/model.*\/about/u,
+  );
+});
+
+test("cancelling at the advanced-override step writes nothing", async () => {
+  const rootDir = await createTsRoot("advanced-override-cancel");
+  const prompts: ScriptedPrompts = {
+    ...scriptedPrompts({
+      confirm: true,
+      clients: ["tabnine"],
+    }),
+  };
+  prompts.selectAdvancedOverrides = async () => {
+    const { WizardCancelled } = await import("./wizard.js");
+    throw new WizardCancelled();
+  };
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);
+  assert.match(output.stdoutText(), /Cancelled - no files written\./u);
 });

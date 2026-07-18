@@ -11,6 +11,9 @@ import { Readable, Writable } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
+import { buildModelPolicyTargetTable } from "@agent-profile/compiler";
+import type { ModelPolicyPreset } from "@agent-profile/core";
+
 import { runCli } from "./index.js";
 import { createClackPrompts } from "./wizard-clack.js";
 import {
@@ -106,6 +109,88 @@ test("selectSetupProfile returns the navigated profile id", async () => {
   // Second option in phase-12 order is balanced-solo.
   await press(input, [DOWN, ENTER]);
   assert.equal(await result, "balanced-solo");
+});
+
+test("selectModelPreset renders the expanded exact per-role model/effort/status table before the choice commits (Phase 31.5 I5, AC1)", async () => {
+  const { input, output, prompts } = await harness();
+  assert.ok(prompts.selectModelPreset);
+  const tables: Readonly<
+    Record<ModelPolicyPreset, ReadonlyArray<ReturnType<typeof buildModelPolicyTargetTable>[number]>>
+  > = {
+    "role-aware": buildModelPolicyTargetTable("role-aware"),
+    "quality-first": buildModelPolicyTargetTable("quality-first"),
+    "cost-conscious": buildModelPolicyTargetTable("cost-conscious"),
+  };
+  const result = prompts.selectModelPreset({
+    default: "role-aware",
+    tables,
+  });
+  await press(input, [ENTER]);
+  assert.equal(await result, "role-aware");
+
+  const rendered = output.text();
+  // The expanded table for a NON-default preset (quality-first) must already
+  // be visible before the select prompt is answered — proving the choice is
+  // never made behind only a `strongest`/`balanced` label.
+  const qualityFirstRow = tables["quality-first"].find(
+    (row) => row.role === "implementer",
+  );
+  assert.ok(qualityFirstRow);
+  assert.match(rendered, /Quality-first/u);
+  assert.match(rendered, new RegExp(`implementer:.*codex=${qualityFirstRow.codex.model}`, "u"));
+  assert.match(rendered, new RegExp(`effort=${qualityFirstRow.codex.targetEffort}`, "u"));
+  assert.match(rendered, new RegExp(`lifecycle=${qualityFirstRow.codex.lifecycle}`, "u"));
+  assert.match(rendered, new RegExp(`status=${qualityFirstRow.codex.primaryStatus}`, "u"));
+});
+
+test("selectAdvancedOverrides skips entirely (returns undefined without prompting) when Tabnine is not selected", async () => {
+  const { output, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = await prompts.selectAdvancedOverrides({
+    tabnineSelected: false,
+  });
+  assert.equal(result, undefined);
+  assert.equal(output.text(), "", "no prompt output when Tabnine is not selected");
+});
+
+test("selectAdvancedOverrides is off by default: declining the customize confirm returns undefined", async () => {
+  const { input, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = prompts.selectAdvancedOverrides({ tabnineSelected: true });
+  // The confirm defaults to false (progressive disclosure); pressing enter
+  // accepts the default and skips the text-entry step entirely.
+  await press(input, [ENTER]);
+  assert.equal(await result, undefined);
+});
+
+test("selectAdvancedOverrides accepts an exact Tabnine model id when the user opts in", async () => {
+  const { input, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = prompts.selectAdvancedOverrides({ tabnineSelected: true });
+  // Toggle the confirm to true, then type an exact id.
+  await press(input, [DOWN, ENTER]);
+  await press(input, ["gpt-5.4", ENTER]);
+  assert.deepEqual(await result, { tabnineModel: "gpt-5.4" });
+});
+
+test("selectAdvancedOverrides accepts an uncatalogued/private model id unchanged (never rejected)", async () => {
+  const { input, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = prompts.selectAdvancedOverrides({ tabnineSelected: true });
+  await press(input, [DOWN, ENTER]);
+  await press(input, ["org-acme-private-finetune-7", ENTER]);
+  assert.deepEqual(await result, {
+    tabnineModel: "org-acme-private-finetune-7",
+  });
+});
+
+test("selectAdvancedOverrides returns undefined when the user opts in but leaves the entry blank", async () => {
+  const { input, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = prompts.selectAdvancedOverrides({ tabnineSelected: true });
+  await press(input, [DOWN, ENTER]);
+  await press(input, [ENTER]);
+  assert.equal(await result, undefined);
 });
 
 test("confirmWritePlan keeps preview first and default (returns false on enter)", async () => {
@@ -376,6 +461,12 @@ function fakePrompts(overrides: Partial<CliPrompts>): CliPrompts {
     async confirmWritePlan() {
       return true;
     },
+    async selectModelPreset({ default: value }) {
+      return value;
+    },
+    async confirmModelProbe({ default: value }) {
+      return value;
+    },
     ...overrides,
   };
 }
@@ -452,6 +543,7 @@ const CANCELLABLE_STEPS: ReadonlyArray<keyof CliPrompts> = [
   "selectClients",
   "selectSetupProfile",
   "selectCapabilities",
+  "selectModelPreset",
   "confirmGitignore",
   "confirmWritePlan",
 ];
@@ -512,6 +604,57 @@ for (const step of [
     );
   });
 }
+
+test("cancel at confirmModelProbe exits 0, prints the cancel line, and writes nothing", async () => {
+  // Reach the probe-consent step by selecting codex (whose primary role
+  // resolves to an exact model), so `confirmModelProbe` is actually invoked
+  // before cancelling — not just generically covered via a different step.
+  const rootDir = await createFreshRoot();
+  const output = createOutput();
+  const prompts = fakePrompts({
+    selectClients: async () => ["codex"],
+    confirmModelProbe: () => {
+      throw new WizardCancelled();
+    },
+  });
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /Cancelled - no files written\./u);
+  assert.equal(
+    existsSync(path.join(rootDir, "ai-profile.yaml")),
+    false,
+    "cancelling must not write ai-profile.yaml",
+  );
+});
+
+test("cancel at selectAdvancedOverrides exits 0, prints the cancel line, and writes nothing", async () => {
+  // Reach the advanced-override step by selecting tabnine (the step is a
+  // no-op otherwise), then cancel there.
+  const rootDir = await createFreshRoot();
+  const output = createOutput();
+  const prompts = fakePrompts({
+    selectClients: async () => ["tabnine"],
+    selectAdvancedOverrides: () => {
+      throw new WizardCancelled();
+    },
+  });
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /Cancelled - no files written\./u);
+  assert.equal(
+    existsSync(path.join(rootDir, "ai-profile.yaml")),
+    false,
+    "cancelling must not write ai-profile.yaml",
+  );
+});
 
 // --- Runtime sentinel: non-interactive runs never evaluate the clack module --
 

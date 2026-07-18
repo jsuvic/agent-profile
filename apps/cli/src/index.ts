@@ -14,8 +14,6 @@ import {
   applyWritePlan,
   buildPhase14ImportReport,
   compileProfile,
-  createLockfileFile,
-  resolveModelPolicyLockfile,
   getLocalRuntimeGitignoreFindings,
   parseMixedFile,
   planRootInstructionsAdoption,
@@ -40,6 +38,7 @@ import {
   type ImportStrategy,
   type LockOutputV2,
   type MixedOutputDescriptor,
+  type ModelPolicyTabnineSettingsPlan,
   type Phase14ImportReport,
   type PlannedWrite,
   type TemplateDescriptor,
@@ -49,6 +48,7 @@ import type {
   AiProfile,
   AiProfileSkillPackId,
   CapabilityCatalogEntry,
+  ModelPolicyPreset,
   SafetyMode,
 } from "@agent-profile/core";
 import {
@@ -84,6 +84,7 @@ import {
   findLockfileOwnedDrift,
   planCompileDryRun,
   planRegionAwareWrites,
+  resolveTabnineModelSettings,
 } from "./compile-plan.js";
 import type { DispatcherPrompts } from "./dispatch-clack.js";
 import {
@@ -106,6 +107,7 @@ import {
   type RootChoice,
 } from "./reconcile.js";
 import { planProfileInsertions } from "./upgrade-editor.js";
+import type { ModelProbeProcessRunner } from "./model-probe.js";
 import {
   formatWizardDeclined,
   isNonInteractive,
@@ -137,6 +139,10 @@ export type CliOptions = {
   dispatcherPrompts?: DispatcherPrompts;
   configurePrompts?: ConfigurePrompts;
   nonInteractive?: boolean;
+  /** Test-only seam (Phase 31.5 I5): injects a fake probe process runner into
+   * the interactive init model-probe step so tests never spawn a real client
+   * process. Production callers omit this and get the real Node runner. */
+  probeRunner?: ModelProbeProcessRunner;
 };
 
 export type UpgradeStrategy = "keep" | "adopt-recommended" | "customize";
@@ -261,6 +267,18 @@ type ParsedInitArgs =
       ok: false;
       message: string;
     };
+
+/**
+ * Phase 31.5 (I5): `--probe-models` is not a supported flag-based opt-in in
+ * this phase (non-goal: "Live probes in non-interactive init, including
+ * flag-based opt-in"). Rejected unconditionally in `parseInitArgs`, before
+ * `runInit` resolves `rootDir`, reads any file, or dispatches the wizard —
+ * so an attempted combination never starts a client/provider/package process
+ * and never touches the filesystem.
+ */
+const PROBE_MODELS_REJECTION_MESSAGE =
+  "--probe-models is not supported: this phase only offers a consented, " +
+  "interactive-only model probe (no flag-based non-interactive opt-in).";
 
 type LoopbackHost = "127.0.0.1" | "localhost" | "::1";
 
@@ -424,6 +442,7 @@ export async function runCli(
         ...(options.nonInteractive !== undefined
           ? { nonInteractive: options.nonInteractive }
           : {}),
+        ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
       });
     case "upgrade":
       return runUpgrade(rest, cwd, io, {
@@ -1233,13 +1252,19 @@ async function runCompile(
     return 3;
   }
 
-  const writes = buildCompileWrites({
+  const tabnineModelSettings = await resolveTabnineModelSettings(
+    rootDir,
+    profileResult.profile,
+  );
+
+  const { writes } = buildCompileWrites({
     profilePath: safeProfilePath.path,
     profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
     regionPlan,
     profile: profileResult.profile,
+    ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
   if (parsed.write && !parsed.force) {
@@ -1614,7 +1639,12 @@ async function runDriftReconciliation(input: {
     }
   }
 
-  const writes = buildCompileWrites({
+  const tabnineModelSettings = await resolveTabnineModelSettings(
+    input.rootDir,
+    input.profile,
+  );
+
+  const { writes } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: input.compileResult.templates,
@@ -1629,6 +1659,7 @@ async function runDriftReconciliation(input: {
       refusals: [],
     },
     profile: input.profile,
+    ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
   prompts.showSummary(formatReconciliationSummary(actions));
@@ -1681,6 +1712,7 @@ type RunInitOptions = {
   presetVerificationKeys?: readonly PresetVerificationKey[];
   prompts?: CliPrompts;
   nonInteractive?: boolean;
+  probeRunner?: ModelProbeProcessRunner;
 };
 
 /**
@@ -1781,6 +1813,8 @@ async function runInit(
   let wizardSkillPacks: ReadonlyArray<AiProfileSkillPackId> | undefined;
   let wizardReviewerSubagents = false;
   let wizardAdvisoryHooks = false;
+  let wizardModelPreset: ModelPolicyPreset | undefined;
+  let wizardTabnineModelOverride: string | undefined;
   if (isWizardEligibleArgs(args) && presetPayload === undefined) {
     const dispatch = await dispatchInitWizard({
       args: parsed,
@@ -1790,6 +1824,7 @@ async function runInit(
       io,
       promptsOverride: options.prompts,
       nonInteractiveOverride: options.nonInteractive,
+      probeRunner: options.probeRunner,
     });
     if (dispatch.kind === "declined") {
       if (existingProfileBytes && !parsed.json && !parsed.quiet) {
@@ -1808,6 +1843,8 @@ async function runInit(
       wizardSkillPacks = dispatch.skillPacks;
       wizardReviewerSubagents = dispatch.reviewerSubagents;
       wizardAdvisoryHooks = dispatch.advisoryHooks;
+      wizardModelPreset = dispatch.modelPreset;
+      wizardTabnineModelOverride = dispatch.tabnineModelOverride;
     }
   }
 
@@ -1945,6 +1982,9 @@ async function runInit(
             advisoryHooks: wizardAdvisoryHooks,
           },
         }),
+    ...(wizardModelPreset === undefined
+      ? {}
+      : { modelPreset: wizardModelPreset }),
   });
   const validation = parseProfileYaml(profileText, {
     sourcePath: safeProfilePath.path,
@@ -2009,6 +2049,7 @@ async function runInit(
 
   let plan: WritePlanResult | undefined;
   let clientWritePlan: WritePlanResult | undefined;
+  let clientTabninePlan: ModelPolicyTabnineSettingsPlan | undefined;
   let gitignoreUpdated = false;
 
   const profileRefusal = (
@@ -2066,6 +2107,9 @@ async function runInit(
       profilePath: safeProfilePath.path,
       profile: validation.profile,
       profileBytes: Buffer.from(profileText, "utf8"),
+      ...(wizardTabnineModelOverride === undefined
+        ? {}
+        : { tabnineModelOverride: wizardTabnineModelOverride }),
     });
     if (!clientWrite.ok) {
       return {
@@ -2075,6 +2119,7 @@ async function runInit(
       };
     }
     clientWritePlan = clientWrite.plan;
+    clientTabninePlan = clientWrite.tabnine;
     return undefined;
   };
 
@@ -2176,6 +2221,7 @@ async function runInit(
     wouldWrite: !parsed.write && plan.counts.create + plan.counts.change > 0,
     wrote: parsed.write && plan.counts.create + plan.counts.change > 0,
     clientWritePlan,
+    ...(clientTabninePlan ? { clientTabninePlan } : {}),
     gitignoreUpdated,
     clients,
     clientsEnabled: enabledClients(clients),
@@ -2200,6 +2246,7 @@ type DispatchInitWizardInput = {
   io: CliIo;
   promptsOverride: CliPrompts | undefined;
   nonInteractiveOverride: boolean | undefined;
+  probeRunner: ModelProbeProcessRunner | undefined;
 };
 
 type DispatchInitWizardResult =
@@ -2213,11 +2260,21 @@ type DispatchInitWizardResult =
       skillPacks: ReadonlyArray<AiProfileSkillPackId>;
       reviewerSubagents: boolean;
       advisoryHooks: boolean;
+      modelPreset: ModelPolicyPreset;
+      tabnineModelOverride?: string;
     }
   | { kind: "declined" };
 
 type ClientFileWriteResult =
-  | { ok: true; plan: WritePlanResult }
+  | {
+      ok: true;
+      plan: WritePlanResult;
+      /** The computed Tabnine write/advisory decision (Phase 31.5 I5R),
+       * present whenever Tabnine is an enabled client. Callers must surface
+       * an `advisory` plan to the user -- it means the settings file was
+       * intentionally left untouched, not that nothing happened. */
+      tabnine?: ModelPolicyTabnineSettingsPlan;
+    }
   | { ok: false; code: number; message: string };
 
 async function dispatchInitWizard(
@@ -2314,6 +2371,8 @@ async function dispatchInitWizard(
         });
         return toWizardImportReport(refreshed);
       },
+      repoRootDir: input.rootDir,
+      ...(input.probeRunner ? { probeRunner: input.probeRunner } : {}),
     });
   } catch (error) {
     if (error instanceof WizardCancelled) {
@@ -2349,6 +2408,10 @@ async function dispatchInitWizard(
     skillPacks: outcome.skillPacks,
     reviewerSubagents: outcome.reviewerSubagents,
     advisoryHooks: outcome.advisoryHooks,
+    modelPreset: outcome.modelPreset,
+    ...(outcome.tabnineModelOverride === undefined
+      ? {}
+      : { tabnineModelOverride: outcome.tabnineModelOverride }),
   };
 }
 
@@ -2679,6 +2742,8 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
       case "--non-interactive":
         nonInteractive = true;
         break;
+      case "--probe-models":
+        return { ok: false, message: PROBE_MODELS_REJECTION_MESSAGE };
       case "--interactive":
         return {
           ok: false,
@@ -2926,6 +2991,12 @@ function renderInitialProfile(input: {
     reviewerSubagents: boolean;
     advisoryHooks: boolean;
   };
+  /** The wizard's resolved model-policy preset (Phase 31.5 I5), or
+   * `undefined` outside the interactive wizard. Persisted as
+   * `subagentPolicy.preset` so the compiler's real Codex/Claude target
+   * output and lock provenance reflect what the write-plan preview showed,
+   * instead of silently falling back to legacy mapping-v2 resolution. */
+  modelPreset?: ModelPolicyPreset;
 }): string {
   const safety = input.preferences?.safety ?? {
     mode: input.wizardCapabilities?.safetyMode ?? "guarded",
@@ -2942,6 +3013,10 @@ function renderInitialProfile(input: {
   const capabilities = input.wizardCapabilities
     ? renderInitialCapabilities(input.wizardCapabilities)
     : "";
+  const subagentPolicy =
+    input.modelPreset === undefined
+      ? ""
+      : `subagentPolicy:\n  enabled: true\n  preset: ${input.modelPreset}\n`;
 
   return `version: 1
 profile:
@@ -2967,7 +3042,7 @@ workflow:
   sdd: ${String(workflow.sdd)}
   tdd: ${String(workflow.tdd)}
   finalReview: ${String(workflow.finalReview)}
-${capabilities}permissions:
+${capabilities}${subagentPolicy}permissions:
   filesystem:
     read: ${permissions.filesystem.read}
     write: ${permissions.filesystem.write}
@@ -3021,6 +3096,7 @@ type InitReport = {
   wouldWrite: boolean;
   wrote: boolean;
   clientWritePlan?: WritePlanResult;
+  clientTabninePlan?: ModelPolicyTabnineSettingsPlan;
   gitignoreUpdated?: boolean;
   clients: ClientMatrix;
   clientsEnabled: ClientId[];
@@ -3114,6 +3190,10 @@ function toInitJson(report: InitReport): Record<string, unknown> {
 
   if (report.import) {
     summary.import = report.import;
+  }
+
+  if (report.clientTabninePlan) {
+    summary.tabnineModelSettings = report.clientTabninePlan;
   }
 
   return summary;
@@ -3479,6 +3559,13 @@ async function writeCompiledClientFiles(input: {
   profilePath: string;
   profile: AiProfile;
   profileBytes: Uint8Array;
+  /** Explicit exact Tabnine model override entered via the wizard's
+   * progressive-disclosure advanced entry step (Phase 31.5 I5R). `undefined`
+   * (the default) keeps Tabnine's guided-manual-selection default: no model
+   * is auto-selected, and any existing `.tabnine/agent/settings.json` is only
+   * ever written when Agent Profile already owns it or it does not yet
+   * exist. */
+  tabnineModelOverride?: string;
 }): Promise<ClientFileWriteResult> {
   const compileResult = compileProfile({ profile: input.profile });
 
@@ -3546,24 +3633,27 @@ async function writeCompiledClientFiles(input: {
     };
   }
 
-  const modelPolicy = resolveModelPolicyLockfile(input.profile);
-  const lockfile = createLockfileFile({
+  const tabnineModelSettings = await resolveTabnineModelSettings(
+    input.rootDir,
+    input.profile,
+    input.tabnineModelOverride,
+  );
+
+  const { writes, tabnine } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
-    mixedOutputs: regionPlan.mixedOutputs,
-    ...(modelPolicy === undefined ? {} : { modelPolicy }),
+    regionPlan,
+    profile: input.profile,
+    ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
-  const writes = [
-    ...regionPlan.writes,
-    { path: lockfile.path, bytes: lockfile.bytes },
-  ];
 
   try {
     return {
       ok: true,
       plan: await applyWritePlan({ rootDir: input.rootDir, writes }),
+      ...(tabnine ? { tabnine } : {}),
     };
   } catch {
     return {
@@ -4038,6 +4128,14 @@ function formatInitOutcomeSummary(input: InitReport): string[] {
     if (clientChanges.length > 0) {
       lines.push(`- generated ${String(clientChanges.length)} client files`);
     }
+  }
+
+  if (input.clientTabninePlan?.action === "write") {
+    lines.push("- wrote .tabnine/agent/settings.json");
+  } else if (input.clientTabninePlan?.action === "advisory") {
+    lines.push(
+      `- .tabnine/agent/settings.json left untouched: ${input.clientTabninePlan.guidance}`,
+    );
   }
 
   if (input.gitignoreUpdated) {

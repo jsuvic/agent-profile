@@ -4,7 +4,13 @@
 import process from "node:process";
 import type { Readable, Writable } from "node:stream";
 
-import type { AiProfileSkillPackId } from "@agent-profile/core";
+import type { ModelPolicyTargetRow } from "@agent-profile/compiler";
+import { MODEL_POLICY_PRIMARY_ROLE } from "@agent-profile/compiler";
+import {
+  validateModelPolicyOverride,
+  type AiProfileSkillPackId,
+  type ModelPolicyPreset,
+} from "@agent-profile/core";
 
 import {
   accent,
@@ -106,6 +112,59 @@ const CAPABILITY_OPTIONAL: ReadonlyArray<CapabilityOption> = [
     label: "Automation loop skills (Claude/Codex only)",
   },
 ];
+
+const MODEL_PRESET_OPTIONS: ReadonlyArray<{
+  value: ModelPolicyPreset;
+  label: string;
+}> = [
+  { value: "role-aware", label: "Role-aware (recommended)" },
+  { value: "quality-first", label: "Quality-first" },
+  { value: "cost-conscious", label: "Cost-conscious" },
+];
+
+/** Progressive-disclosure hint: the exact primary-role Codex/Claude model ids
+ * for this preset, so a choice is never made behind only a
+ * `strongest`/`balanced` label (acceptance criterion 1). */
+function formatModelPresetHint(table: readonly ModelPolicyTargetRow[]): string {
+  const primary = table.find((row) => row.role === MODEL_POLICY_PRIMARY_ROLE);
+  if (!primary) return "";
+  const codex = primary.codex.model ?? "(none)";
+  const claude = primary.claude.model ?? "(none)";
+  return `Codex: ${codex}; Claude: ${claude}`;
+}
+
+/**
+ * Render one preset's expanded exact per-role table: model, effort, lifecycle,
+ * and capability status for both Codex and Claude, for every role. This is the
+ * "expanded exact model/effort/status table" acceptance criterion 1 requires
+ * to be visible BEFORE the preset is committed — not only the write-plan
+ * preview shown after commit.
+ */
+function formatModelPresetTableBody(
+  label: string,
+  table: readonly ModelPolicyTargetRow[],
+): string {
+  const lines = [`${label}:`];
+  for (const row of table) {
+    lines.push(
+      `  ${row.role}: codex=${row.codex.model ?? "(none)"} ` +
+        `[effort=${row.codex.targetEffort}, lifecycle=${row.codex.lifecycle}, status=${row.codex.primaryStatus}]; ` +
+        `claude=${row.claude.model ?? "(none)"} ` +
+        `[effort=${row.claude.targetEffort}, lifecycle=${row.claude.lifecycle}, status=${row.claude.primaryStatus}]`,
+    );
+  }
+  return lines.join("\n");
+}
+
+/** Every preset's expanded table, stacked, so all three are visible before the
+ * select prompt commits a choice. */
+function formatModelPresetTables(
+  tables: Readonly<Record<ModelPolicyPreset, ReadonlyArray<ModelPolicyTargetRow>>>,
+): string {
+  return MODEL_PRESET_OPTIONS.map((option) =>
+    formatModelPresetTableBody(option.label, tables[option.value]),
+  ).join("\n\n");
+}
 
 /**
  * Build a `CliPrompts` implementation rendered by `@clack/prompts`. This is a
@@ -353,6 +412,74 @@ export async function createClackPrompts(
         },
       });
       return unwrap(value);
+    },
+
+    async selectModelPreset({ default: def, tables }) {
+      // Render the expanded exact per-role model/effort/status table for every
+      // preset BEFORE the select prompt, so the choice is never made behind
+      // only a `strongest`/`balanced` label (acceptance criterion 1: "display
+      // expanded exact model/effort/status tables ... before selection is
+      // committed").
+      note(formatModelPresetTables(tables), "Model presets", { output: io.output });
+      const value = await select<ModelPolicyPreset>({
+        ...io,
+        message: "Choose the model preset (exact models shown per option)",
+        initialValue: def,
+        options: MODEL_PRESET_OPTIONS.map((option) => ({
+          value: option.value,
+          label: option.label,
+          hint: formatModelPresetHint(tables[option.value]),
+        })),
+      });
+      return unwrap(value);
+    },
+
+    async confirmModelProbe({ default: def, calls }) {
+      const value = await confirm({
+        ...io,
+        message:
+          `Run a live model probe now? At most ${calls} client call(s) will run, ` +
+          "may contact the provider, and may consume account quota. No repository " +
+          "content, credentials, or account data is read or sent. Declining keeps " +
+          "every selection unverified.",
+        initialValue: def,
+      });
+      return unwrap(value);
+    },
+
+    async selectAdvancedOverrides({ tabnineSelected }) {
+      // Progressive disclosure: skip entirely when Tabnine is not selected
+      // (nothing to customize), and off by default otherwise -- the confirm
+      // below defaults to false, so declining is the ordinary path.
+      if (!tabnineSelected) return undefined;
+
+      const wantsAdvanced = unwrap(
+        await confirm({
+          ...io,
+          message:
+            "Customize further? Enter an exact Tabnine model id (advanced, optional).",
+          initialValue: false,
+        }),
+      );
+      if (!wantsAdvanced) return undefined;
+
+      const raw = unwrap(
+        await text({
+          ...io,
+          message:
+            "Exact Tabnine model id (organization/private ids are accepted; leave blank to skip)",
+          validate: (value) => {
+            const trimmed = (value ?? "").trim();
+            if (trimmed === "") return undefined;
+            const validation = validateModelPolicyOverride(trimmed);
+            return validation.ok
+              ? undefined
+              : `Invalid model id (${validation.code}).`;
+          },
+        }),
+      );
+      const trimmed = raw.trim();
+      return trimmed === "" ? undefined : { tabnineModel: trimmed };
     },
   };
 }

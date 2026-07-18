@@ -705,7 +705,7 @@ async function applyDecision(
       templates: compiled.templates,
       files: compiled.files,
       regionPlan,
-    }),
+    }).writes,
   ];
   if (profileChanged) {
     writes.push({ path: "ai-profile.yaml", bytes: nextProfileBytes });

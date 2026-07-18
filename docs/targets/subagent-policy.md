@@ -296,9 +296,9 @@ is represented without collapsing into one scalar status:
   Claude proceed with their own fully resolved rows while Tabnine's row omits
   effort independently.
 
-### `.tabnine/agent/settings.json` ownership-aware write plan (adapter-level, not yet wired into compile/write)
+### `.tabnine/agent/settings.json` ownership-aware write plan (wired into compile/init, Phase 31.5 I5R)
 
-`packages/compiler/src/model-policy-tabnine-adapter.ts` also exports
+`packages/compiler/src/model-policy-tabnine-adapter.ts` exports
 `planTabnineModelSettingsWrite`, a pure, ownership-injected planning function
 following ADR 0020's whole-file-ownership discipline (never structural JSON
 merge):
@@ -319,25 +319,61 @@ merge):
   explicit override) the function always returns advisory guidance, never a
   write.
 
-**This function is intentionally not yet wired into `compileProfile` or the
-CLI's real write/preview pipeline.** Determining real on-disk ownership for
-`.tabnine/agent/settings.json` requires the same kind of filesystem-scanning
-integration `apps/cli/src/wizard.ts` already performs for other root files,
-which was judged too large to land safely in this same bounded change. Until
-that integration lands, Agent Profile's real Tabnine output for this file
-remains advisory-only (`/model`, `/about` guidance in the guideline file);
-`planTabnineModelSettingsWrite` is proven correct at the unit level
-(`packages/compiler/src/model-policy-tabnine-adapter.test.ts`) and is ready
-for that future integration.
+**This function is wired into the real compile/init write pipeline
+(Phase 31.5 I5R).** `apps/cli/src/compile-plan.ts`'s
+`classifyTabnineSettingsOwnership(rootDir)` reads the real on-disk state of
+`.tabnine/agent/settings.json` and `ai-profile.lock` to compute the same
+three-state ownership (`absent` when the file does not exist; `generated-owned`
+when the file exists and `ai-profile.lock` records it as an Agent-Profile
+`generated-owned` output; `unowned` for any other existing file, including a
+symlink, which is always treated as unwritable). `buildCompileWrites`'s
+optional `tabnineModelSettings` input calls `planTabnineModelSettingsWrite`
+with that real ownership and includes its `write` or `advisory` outcome in the
+same `PlannedWrite[]`/diff-before-write/atomic-write/rollback flow used for
+every other generated file; a `write` outcome also records the file's new
+`generated-owned` provenance in `ai-profile.lock`, so a later run correctly
+reclassifies it. This is called from `agent-profile compile --write`, the
+interactive drift-reconciliation write path, and `agent-profile init --write`'s
+client-file step.
 
-### Known scope narrowing (I3)
+In practice this means:
+
+- `agent-profile compile --write` has no source of an exact Tabnine override
+  today (see "Known scope narrowing" below), so its Tabnine branch always
+  resolves `advisory` — an existing unowned settings file is preserved
+  byte-for-byte and a missing one is never created.
+- `agent-profile init`'s interactive wizard is the only path that can resolve
+  an exact model for Tabnine, via the advanced-override entry point described
+  in `docs/cli/README.md`'s "Model Selection" section. Selecting a client that
+  is `tabnine`-only or alongside Codex/Claude, and then opting into the
+  advanced override with a typed model id, causes `writeCompiledClientFiles`
+  to classify ownership and pass that model to `buildCompileWrites`, producing
+  a real `write` when the file is absent or already Agent-Profile-owned.
+- `planTabnineModelSettingsWrite` itself is still proven correct at the unit
+  level (`packages/compiler/src/model-policy-tabnine-adapter.test.ts`); the
+  wiring above is proven at the integration level in
+  `apps/cli/src/compile-plan.test.ts` and `apps/cli/src/wizard.test.ts`,
+  including a real-filesystem test that an unowned settings file survives the
+  atomic write pipeline byte-for-byte.
+
+### Known scope narrowing (I3 / I5R)
 
 - No `subagentPolicy.roles[id].overrides.tabnine` profile-schema field exists
-  yet; an explicit Tabnine override is only reachable through
-  `buildModelPolicyTabnineTargetTable`'s `roleOverrides` parameter at the
-  adapter level, not through `ai-profile.yaml`. `resolveModelPolicyLockfile`
-  is wired to merge Tabnine resolutions into `ai-profile.lock`'s
-  `modelPolicy` block, but with today's profile schema that merge always
-  contributes zero rows in practice.
-- `.tabnine/agent/settings.json` is never written by the real compile/write
-  pipeline in this issue; see the ownership-aware write plan section above.
+  yet; an explicit Tabnine override supplied through `ai-profile.yaml` is not
+  possible. `buildModelPolicyTabnineTargetTable`'s `roleOverrides` parameter
+  still accepts an explicit override directly for adapter-level callers and
+  tests, and the interactive init wizard's advanced-override entry point
+  (Phase 31.5 I5R) supplies an ephemeral, non-persisted override at write time
+  — it is not recorded back into `ai-profile.yaml`, so a later
+  `agent-profile compile --write` without going back through the wizard does
+  not repeat it. `resolveModelPolicyLockfile` is wired to merge Tabnine
+  resolutions into `ai-profile.lock`'s `modelPolicy` block, but with today's
+  profile schema that merge still always contributes zero rows in practice.
+- The advanced-override entry point (Phase 31.5 I5R) offers a single exact
+  Tabnine model override, not full per-role Codex/Claude customization beyond
+  the three named presets; per-role Codex/Claude overrides remain
+  adapter/test-level only, matching the point above.
+- No Doctor or drift-detection integration exists yet for
+  `.tabnine/agent/settings.json`; Doctor does not currently flag a
+  Agent-Profile-owned settings file that has drifted from its recorded hash,
+  the way it does for region-aware root instruction files.
