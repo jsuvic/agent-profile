@@ -1,8 +1,31 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import { getCapabilityArtifactPaths } from "@agent-profile/compiler";
-import type { AiProfileSkillPackId, SafetyMode } from "@agent-profile/core";
+import process from "node:process";
+
+import {
+  buildModelPolicyTargetTable,
+  MODEL_POLICY_PRIMARY_ROLE,
+  MODEL_POLICY_TARGET_CATALOG_VERSION,
+  getCapabilityArtifactPaths,
+  type ModelPolicyTargetRow,
+} from "@agent-profile/compiler";
+import {
+  DEFAULT_MODEL_POLICY_PRESET,
+  MODEL_POLICY_PRESETS,
+  type AiProfileSkillPackId,
+  type ModelPolicyPreset,
+  type SafetyMode,
+} from "@agent-profile/core";
+
+import {
+  buildModelProbePlan,
+  createNodeModelProbeProcessRunner,
+  runModelProbe,
+  type ModelProbeProcessRunner,
+  type ModelProbeReport,
+  type ModelProbeSelection,
+} from "./model-probe.js";
 
 /**
  * Signals that the user aborted an interactive prompt (Ctrl+C or an aborted
@@ -127,6 +150,19 @@ export type WizardOutcome = {
   skillPacks: ReadonlyArray<AiProfileSkillPackId>;
   reviewerSubagents: boolean;
   advisoryHooks: boolean;
+  /** Selected v3 model-policy preset (Phase 31.5 I5). Always populated, even
+   * when no model-selection prompt ran (the guarded existing-profile branch),
+   * so downstream consumers can rely on a single field. */
+  modelPreset: ModelPolicyPreset;
+  /** Exact per-role Codex/Claude resolution table for `modelPreset`, built by
+   * the real `buildModelPolicyTargetTable` resolver (never hand-rolled here). */
+  modelPolicyTable: ReadonlyArray<ModelPolicyTargetRow>;
+  /** Whether the user consented to a live, source-free model probe. */
+  modelProbeConsent: boolean;
+  /** The probe outcome. `executed: false` (with `reason: "consent-declined"`)
+   * when consent was withheld or no probe-eligible client/model existed;
+   * declining always preserves this complete, honestly-unverified path. */
+  modelProbeReport: ModelProbeReport;
 };
 
 export type StrategyPrompt = (options: {
@@ -162,6 +198,29 @@ export type CapabilityPrompt = (options: {
 }) => Promise<WizardCapabilitySelection>;
 
 /**
+ * Recommends the role-aware preset (progressive disclosure: exact per-role
+ * model/effort/status tables for every preset are provided so the choice can
+ * be made with full exact-model visibility before committing, per acceptance
+ * criterion 1 — never hidden behind only `strongest`/`balanced` labels).
+ */
+export type ModelPresetPrompt = (options: {
+  default: ModelPolicyPreset;
+  tables: Readonly<Record<ModelPolicyPreset, ReadonlyArray<ModelPolicyTargetRow>>>;
+}) => Promise<ModelPolicyPreset>;
+
+/**
+ * Consent gate immediately before any probe execution. `calls` discloses the
+ * bounded worst-case call count so consent is informed. Declining preserves a
+ * complete unverified path: `runInitWizard` still calls the real
+ * `runModelProbe`, which returns `executed: false` without starting any
+ * process when consent is withheld.
+ */
+export type ModelProbeConsentPrompt = (options: {
+  default: boolean;
+  calls: number;
+}) => Promise<boolean>;
+
+/**
  * Optional presentation framing for the interactive wizard. Rendering-only: a
  * `CliPrompts` implementation that provides `framing` (the clack adapter) draws
  * the logo, intro/outro bars, and the detected/plan notes; an implementation
@@ -194,6 +253,15 @@ export type CliPrompts = {
   confirmWritePlan: ConfirmPrompt;
   /** Present only in the interactive clack adapter; absent in the text path. */
   framing?: WizardFraming;
+  /**
+   * Optional (Phase 31.5 I5): model-preset selection and probe-consent
+   * prompts. Additive and backward compatible — a `CliPrompts` implementation
+   * that omits these (existing scripted-test doubles, `initPreviewPrompts`
+   * fakes elsewhere) still works; `runInitWizard` falls back to the default
+   * preset with no probe when either is absent.
+   */
+  selectModelPreset?: ModelPresetPrompt;
+  confirmModelProbe?: ModelProbeConsentPrompt;
 };
 
 export type ManualLanguageParseResult =
@@ -730,6 +798,9 @@ export function formatWizardPlan(
         "Note: Tabnine Agent Skills discovery of .agents/skills/ requires a current Tabnine CLI generation.",
       );
     }
+    lines.push(
+      ...formatModelPolicySummary(outcome, MODEL_POLICY_TARGET_CATALOG_VERSION),
+    );
   }
   lines.push(`Update .gitignore: ${outcome.updateGitignore ? "yes" : "no"}`);
   lines.push("");
@@ -746,6 +817,14 @@ export async function runInitWizard(input: {
   prompts: CliPrompts;
   rebuildReport?: (strategy: WizardStrategy) => Promise<WizardImportReport>;
   recommendation?: WizardRecommendation;
+  /**
+   * Probe port (Phase 31.5 I5). Defaults to the real Node process runner in
+   * production; tests inject a fake runner. Only ever invoked when the user
+   * grants consent — `runModelProbe` gates on consent before touching this
+   * seam, so declining never starts a process regardless of this default.
+   */
+  probeRunner?: ModelProbeProcessRunner;
+  repoRootDir?: string;
 }): Promise<WizardOutcome> {
   const recommendation =
     input.recommendation ?? recommendStrategy(input.context.report);
@@ -814,6 +893,15 @@ export async function runInitWizard(input: {
     reviewerSubagents: false,
     advisoryHooks: false,
   };
+  let modelPreset: ModelPolicyPreset = DEFAULT_MODEL_POLICY_PRESET;
+  let modelPolicyTable: readonly ModelPolicyTargetRow[] =
+    buildModelPolicyTargetTable(modelPreset);
+  let modelProbeConsent = false;
+  let modelProbeReport: ModelProbeReport = Object.freeze({
+    executed: false,
+    reason: "consent-declined",
+    results: Object.freeze([]),
+  });
   if (!context.hasExistingProfile) {
     setupProfile = await input.prompts.selectSetupProfile({
       default: "guarded-corporate",
@@ -826,6 +914,44 @@ export async function runInitWizard(input: {
       reviewerSubagentsAvailable: hookCapableClientSelected,
       advisoryHooksAvailable: hookCapableClientSelected,
     });
+
+    if (input.prompts.selectModelPreset) {
+      const tables = Object.freeze(
+        Object.fromEntries(
+          MODEL_POLICY_PRESETS.map((preset) => [
+            preset,
+            buildModelPolicyTargetTable(preset),
+          ]),
+        ),
+      ) as Readonly<Record<ModelPolicyPreset, readonly ModelPolicyTargetRow[]>>;
+      modelPreset = await input.prompts.selectModelPreset({
+        default: DEFAULT_MODEL_POLICY_PRESET,
+        tables,
+      });
+      modelPolicyTable = tables[modelPreset];
+    }
+
+    if (input.prompts.confirmModelProbe) {
+      const selections = buildModelProbeSelections(
+        modelPolicyTable,
+        normalizedClients,
+      );
+      if (selections.length > 0) {
+        const plan = buildModelProbePlan(selections);
+        modelProbeConsent = await input.prompts.confirmModelProbe({
+          default: false,
+          calls: plan.maxCalls,
+        });
+        modelProbeReport = await runModelProbe(
+          plan,
+          { granted: modelProbeConsent },
+          {
+            runner: input.probeRunner ?? createNodeModelProbeProcessRunner(),
+            repoRootDir: input.repoRootDir ?? process.cwd(),
+          },
+        );
+      }
+    }
   }
 
   const missingGitignore = missingGitignoreEntries(context);
@@ -848,6 +974,10 @@ export async function runInitWizard(input: {
     skillPacks: capabilities.skillPacks,
     reviewerSubagents: capabilities.reviewerSubagents,
     advisoryHooks: capabilities.advisoryHooks,
+    modelPreset,
+    modelPolicyTable,
+    modelProbeConsent,
+    modelProbeReport,
   };
 
   const plan = formatWizardPlan(context, outcomeDraft);
@@ -958,6 +1088,83 @@ function formatClientDisplayList(
   if (labels.length === 1) return labels[0];
   if (labels.length === 2) return `${labels[0]} and ${labels[1]}`;
   return `${labels.slice(0, -1).join(", ")}, and ${labels.at(-1)}`;
+}
+
+/**
+ * Exact-model preview + lock provenance summary appended to the write plan
+ * (acceptance criteria 1 and 8). Never labels a choice by only
+ * `strongest`/`balanced`: the primary role's exact model id, lifecycle, and
+ * capability status are always shown per selected client.
+ */
+function formatModelPolicySummary(
+  outcome: WizardOutcome,
+  catalogVersion: number,
+): string[] {
+  const lines: string[] = [];
+  lines.push(`Model preset: ${outcome.modelPreset}`);
+  lines.push(`Model catalog version: ${catalogVersion}`);
+  const primaryRow = outcome.modelPolicyTable.find(
+    (row) => row.role === MODEL_POLICY_PRIMARY_ROLE,
+  );
+  if (primaryRow) {
+    if (outcome.clients.includes("codex")) {
+      lines.push(
+        `  Codex (${primaryRow.role}): ${primaryRow.codex.model ?? "(none)"} ` +
+          `[${primaryRow.codex.lifecycle}, ${primaryRow.codex.primaryStatus}]`,
+      );
+    }
+    if (outcome.clients.includes("claude")) {
+      lines.push(
+        `  Claude (${primaryRow.role}): ${primaryRow.claude.model ?? "(none)"} ` +
+          `[${primaryRow.claude.lifecycle}, ${primaryRow.claude.primaryStatus}]`,
+      );
+    }
+  }
+  if (outcome.clients.includes("tabnine")) {
+    lines.push(
+      "  Tabnine: guided manual selection (documented enumeration only; " +
+        "select the exact model with /model and verify with /about)",
+    );
+  }
+  lines.push(
+    outcome.modelProbeConsent
+      ? `Model probe: consented (${outcome.modelProbeReport.results.length} result(s))`
+      : "Model probe: declined - exact models remain unverified against a live provider",
+  );
+  return lines;
+}
+
+/**
+ * Selections for the consented probe: the primary role's exact model per
+ * selected codex/claude client, when the resolver produced one. Never
+ * probes Tabnine (no documented source-free one-shot invocation; see
+ * `apps/cli/src/model-probe.ts`'s invocation-contract table).
+ */
+function buildModelProbeSelections(
+  table: readonly ModelPolicyTargetRow[],
+  clients: ReadonlyArray<WizardClientId>,
+): ModelProbeSelection[] {
+  const primaryRow = table.find((row) => row.role === MODEL_POLICY_PRIMARY_ROLE);
+  if (!primaryRow) return [];
+
+  const selections: ModelProbeSelection[] = [];
+  if (clients.includes("codex") && primaryRow.codex.model !== undefined) {
+    selections.push({
+      client: "codex",
+      model: primaryRow.codex.model,
+      effort: primaryRow.effort,
+      alternatives: primaryRow.codex.alternatives,
+    });
+  }
+  if (clients.includes("claude") && primaryRow.claude.model !== undefined) {
+    selections.push({
+      client: "claude",
+      model: primaryRow.claude.model,
+      effort: primaryRow.effort,
+      alternatives: primaryRow.claude.alternatives,
+    });
+  }
+  return selections;
 }
 
 function missingGitignoreEntries(context: WizardContext): string[] {

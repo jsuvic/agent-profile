@@ -56,7 +56,9 @@ type PromptCall =
       default: boolean;
       entries: ReadonlyArray<string>;
     }
-  | { kind: "confirmWritePlan"; default: boolean };
+  | { kind: "confirmWritePlan"; default: boolean }
+  | { kind: "selectModelPreset"; default: string }
+  | { kind: "confirmModelProbe"; default: boolean; calls: number };
 
 type ScriptedPrompts = CliPrompts & {
   calls: PromptCall[];
@@ -76,6 +78,8 @@ function scriptedPrompts(options: {
   >;
   reviewerSubagents?: boolean;
   advisoryHooks?: boolean;
+  modelPreset?: "role-aware" | "quality-first" | "cost-conscious";
+  probeConsent?: boolean;
 }): ScriptedPrompts {
   const calls: PromptCall[] = [];
   let manualLanguageIndex = 0;
@@ -133,6 +137,14 @@ function scriptedPrompts(options: {
     async confirmWritePlan({ default: def }) {
       calls.push({ kind: "confirmWritePlan", default: def });
       return options.confirm;
+    },
+    async selectModelPreset({ default: def }) {
+      calls.push({ kind: "selectModelPreset", default: def });
+      return options.modelPreset ?? def;
+    },
+    async confirmModelProbe({ default: def, calls: n }) {
+      calls.push({ kind: "confirmModelProbe", default: def, calls: n });
+      return options.probeConsent ?? def;
     },
   };
 }
@@ -707,6 +719,8 @@ test("interactive wizard prompts in deterministic order with .gitignore prompt",
     "selectClients",
     "selectSetupProfile",
     "selectCapabilities",
+    "selectModelPreset",
+    "confirmModelProbe",
     "confirmGitignore",
     "confirmWritePlan",
   ]);
@@ -733,6 +747,7 @@ test("interactive wizard skips .gitignore prompt when no recommendation is missi
     "selectClients",
     "selectSetupProfile",
     "selectCapabilities",
+    "selectModelPreset",
     "confirmWritePlan",
   ]);
 });
@@ -1625,5 +1640,173 @@ test("--non-interactive flag bypasses wizard prompts even when prompts are injec
   });
   assert.equal(code, 0);
   assert.equal(prompts.calls.length, 0);
+  assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 31.5 (I5): role-aware exact model selection during init.
+// ---------------------------------------------------------------------------
+
+test("interactive wizard prompts for a model preset with the default recommendation and preview tables", async () => {
+  const rootDir = await createTsRoot("model-preset-prompt");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex", "claude"],
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+
+  const presetCall = prompts.calls.find(
+    (call) => call.kind === "selectModelPreset",
+  );
+  assert.ok(presetCall, "selectModelPreset must be called");
+  assert.equal(
+    (presetCall as { default: string }).default,
+    "role-aware",
+    "role-aware must be the recommended default",
+  );
+});
+
+test("interactive wizard renders the write plan with exact per-client model/effort/status rows for the selected preset", async () => {
+  const rootDir = await createTsRoot("model-preset-preview");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex", "claude"],
+    modelPreset: "quality-first",
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  const text = output.stdoutText();
+  assert.match(text, /Model preset: quality-first/u);
+  assert.match(text, /Model catalog version: \d+/u);
+  // quality-first resolves the implementer role to the strongest Codex/Claude
+  // exact identifiers; exact names must appear, never only capability labels.
+  assert.match(text, /Codex \(implementer\): gpt-5\.6-sol \[current, configured\]/u);
+  assert.match(
+    text,
+    /Claude \(implementer\): claude-fable-5 \[current, unverified\]/u,
+  );
+});
+
+test("interactive wizard renders a Tabnine guided-manual-selection line when Tabnine is selected", async () => {
+  const rootDir = await createTsRoot("model-preset-tabnine");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["tabnine"],
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: guided manual selection \(documented enumeration only/u,
+  );
+});
+
+test("interactive wizard asks probe consent immediately before execution and declining runs zero processes", async () => {
+  const rootDir = await createTsRoot("model-probe-decline");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex"],
+    probeConsent: false,
+  });
+  let runnerCalls = 0;
+  const output = createOutput();
+
+  // Drive through runCli so the exact production wiring (dispatchInitWizard ->
+  // runInitWizard) is exercised, with a fake probe runner injected via
+  // RunInitOptions.
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+    probeRunner: {
+      async run() {
+        runnerCalls += 1;
+        return {
+          exitCode: 0,
+          stdout: "OK",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    },
+  } as Parameters<typeof runCli>[1]);
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(runnerCalls, 0, "declining consent must start zero processes");
+  const probeCall = prompts.calls.find(
+    (call) => call.kind === "confirmModelProbe",
+  );
+  assert.ok(probeCall, "confirmModelProbe must be called before any execution");
+  assert.match(
+    output.stdoutText(),
+    /Model probe: declined - exact models remain unverified against a live provider/u,
+  );
+});
+
+test("interactive wizard runs the consented probe and reflects a result in the write plan", async () => {
+  const rootDir = await createTsRoot("model-probe-consent");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex"],
+    probeConsent: true,
+  });
+  let runnerCalls = 0;
+  const output = createOutput();
+
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+    probeRunner: {
+      async run() {
+        runnerCalls += 1;
+        return {
+          exitCode: 0,
+          stdout: "OK",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    },
+  } as Parameters<typeof runCli>[1]);
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(runnerCalls > 0, "consenting must run at least one probe call");
+  assert.match(
+    output.stdoutText(),
+    /Model probe: consented \(\d+ result\(s\)\)/u,
+  );
+});
+
+test("cancelling the interactive wizard before the write-plan confirm writes nothing regardless of the model step", async () => {
+  const rootDir = await createTsRoot("model-preset-cancel");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex", "claude"],
+    modelPreset: "cost-conscious",
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
   assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);
 });

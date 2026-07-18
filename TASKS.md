@@ -139,7 +139,8 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I2 | Codex and Claude exact model adapters | done | [002-codex-claude-model-adapters.md](docs/specs/phase-31.5/issues/002-codex-claude-model-adapters.md) |
 | I3 | Tabnine historical, organization, and private models | done | [003-tabnine-historical-private-models.md](docs/specs/phase-31.5/issues/003-tabnine-historical-private-models.md) |
 | I4 | Consented source-free model probes | done | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md) |
-| I5 | Exact role-aware model selection during init | sequenced | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md) |
+| I5 | Exact role-aware model selection during init | done | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md) |
+| I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | ready | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
 | I6 | Explicit model upgrade and locked resolution lifecycle | sequenced | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
 | I7 | Offline Doctor model policy and explicit recheck | sequenced | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
 | I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
@@ -157,11 +158,12 @@ docs/verification). If I2 still proves too large after I1R, split it
 vertically by client (Codex end-to-end, then Claude end-to-end), not
 horizontally by layer.
 
-Dependency map: I1 -> (I1R, I3, I4); I1R -> I2; I2+I3+I4 -> I5;
+Dependency map: I1 -> (I1R, I3, I4); I1R -> I2; I2+I3+I4 -> I5; I5 -> I5R;
 I1+I2+I3+I4 -> I6; I4+I6 -> I7; I2+I3+I5+I6+I7 -> I8;
-I1-I8 -> I9; I9 -> Phase 32 I1. I2, I3, and I4 are parallel-safe after
+I1-I8+I5R -> I9; I9 -> Phase 32 I1. I2, I3, and I4 are parallel-safe after
 I1 apart from shared exports and fixtures. I5 and I6 may proceed in parallel
 after their prerequisites with shared CLI-entrypoint merge coordination.
+I5R may proceed in parallel with I6 once I5's wizard/preview seam is stable.
 
 I3 amendment 2026-07-17: I3 shipped `planTabnineModelSettingsWrite` as a
 pure, unit-tested ownership-aware write plan for
@@ -179,6 +181,21 @@ claimed Tabnine target-file writes in scope, and I7 (Doctor) already covers
 "ownership" generically in its seam, so drift detection for the newly-real
 settings file needs no brief change - reassess only if I5's implementation
 reveals a genuine I7 gap.
+
+I5 completed 2026-07-18 via one RED-first implement-next cycle as a
+disclosed partial slice: the wizard's model-preset step (role-aware default,
+exact per-role model/effort/status tables rendered before commit per AC1),
+the consented probe step, and the offline `--probe-models` rejection are
+implemented, tested, and passed spec/code-quality review. Three of I5's own
+acceptance criteria were explicitly deferred rather than delivered - AC2/AC4
+(advanced per-role/exact-override entry UI) and AC5/AC8 (I3's
+`planTabnineModelSettingsWrite` still not wired into any real write
+pipeline) - plus I5's documentation-impact section. Spec review confirmed
+these as genuine, disclosed gaps (not silently dropped) and recommended
+tracking them as follow-up rather than blocking I5's closure, the same
+precedent already set for I3's disclosed Tabnine-wiring scope reduction.
+I5R carries that remaining scope; I9's final-integration coverage list
+should account for I5R, not just I5, when it runs.
 
 ## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
 

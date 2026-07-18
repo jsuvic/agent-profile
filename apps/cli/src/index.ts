@@ -106,6 +106,7 @@ import {
   type RootChoice,
 } from "./reconcile.js";
 import { planProfileInsertions } from "./upgrade-editor.js";
+import type { ModelProbeProcessRunner } from "./model-probe.js";
 import {
   formatWizardDeclined,
   isNonInteractive,
@@ -137,6 +138,10 @@ export type CliOptions = {
   dispatcherPrompts?: DispatcherPrompts;
   configurePrompts?: ConfigurePrompts;
   nonInteractive?: boolean;
+  /** Test-only seam (Phase 31.5 I5): injects a fake probe process runner into
+   * the interactive init model-probe step so tests never spawn a real client
+   * process. Production callers omit this and get the real Node runner. */
+  probeRunner?: ModelProbeProcessRunner;
 };
 
 export type UpgradeStrategy = "keep" | "adopt-recommended" | "customize";
@@ -261,6 +266,18 @@ type ParsedInitArgs =
       ok: false;
       message: string;
     };
+
+/**
+ * Phase 31.5 (I5): `--probe-models` is not a supported flag-based opt-in in
+ * this phase (non-goal: "Live probes in non-interactive init, including
+ * flag-based opt-in"). Rejected unconditionally in `parseInitArgs`, before
+ * `runInit` resolves `rootDir`, reads any file, or dispatches the wizard —
+ * so an attempted combination never starts a client/provider/package process
+ * and never touches the filesystem.
+ */
+const PROBE_MODELS_REJECTION_MESSAGE =
+  "--probe-models is not supported: this phase only offers a consented, " +
+  "interactive-only model probe (no flag-based non-interactive opt-in).";
 
 type LoopbackHost = "127.0.0.1" | "localhost" | "::1";
 
@@ -424,6 +441,7 @@ export async function runCli(
         ...(options.nonInteractive !== undefined
           ? { nonInteractive: options.nonInteractive }
           : {}),
+        ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
       });
     case "upgrade":
       return runUpgrade(rest, cwd, io, {
@@ -1681,6 +1699,7 @@ type RunInitOptions = {
   presetVerificationKeys?: readonly PresetVerificationKey[];
   prompts?: CliPrompts;
   nonInteractive?: boolean;
+  probeRunner?: ModelProbeProcessRunner;
 };
 
 /**
@@ -1790,6 +1809,7 @@ async function runInit(
       io,
       promptsOverride: options.prompts,
       nonInteractiveOverride: options.nonInteractive,
+      probeRunner: options.probeRunner,
     });
     if (dispatch.kind === "declined") {
       if (existingProfileBytes && !parsed.json && !parsed.quiet) {
@@ -2200,6 +2220,7 @@ type DispatchInitWizardInput = {
   io: CliIo;
   promptsOverride: CliPrompts | undefined;
   nonInteractiveOverride: boolean | undefined;
+  probeRunner: ModelProbeProcessRunner | undefined;
 };
 
 type DispatchInitWizardResult =
@@ -2314,6 +2335,8 @@ async function dispatchInitWizard(
         });
         return toWizardImportReport(refreshed);
       },
+      repoRootDir: input.rootDir,
+      ...(input.probeRunner ? { probeRunner: input.probeRunner } : {}),
     });
   } catch (error) {
     if (error instanceof WizardCancelled) {
@@ -2679,6 +2702,8 @@ function parseInitArgs(args: string[]): ParsedInitArgs {
       case "--non-interactive":
         nonInteractive = true;
         break;
+      case "--probe-models":
+        return { ok: false, message: PROBE_MODELS_REJECTION_MESSAGE };
       case "--interactive":
         return {
           ok: false,

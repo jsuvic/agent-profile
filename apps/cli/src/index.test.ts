@@ -1652,6 +1652,24 @@ test("compile doctor and ui reject preset as an unknown option", async () => {
   }
 });
 
+test("init --probe-models is rejected before any client/provider/package process starts or any filesystem write (Phase 31.5 I5)", async () => {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-probe-models-reject-"),
+  );
+  const output = createOutput();
+  const code = await runCli(
+    ["init", "--root", rootDir, "--write", "--probe-models"],
+    { io: output, nonInteractive: true },
+  );
+
+  assert.equal(code, 2);
+  assert.match(output.stderrText(), /--probe-models is not supported/u);
+  // Rejected during arg parsing, before rootDir is even resolved: the
+  // temp directory must remain exactly as created (no ai-profile.yaml,
+  // lockfile, or any other generated output).
+  assert.deepEqual(await readdir(rootDir), []);
+});
+
 test("init preset reports token errors without scanning or writing", async () => {
   const rootDir = await createTypescriptRoot();
   const expired = signFixturePresetToken(
