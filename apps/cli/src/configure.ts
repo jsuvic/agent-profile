@@ -11,6 +11,7 @@ import {
   CLIENT_MAPPING_VERSION,
   compileProfile,
   planWrites,
+  readLockfileForRegions,
   type ClientMappingRow,
   type ClientMappingReport,
   type MappingStatus,
@@ -659,7 +660,19 @@ async function applyDecision(
   }
 
   // --- Regenerated shared artifacts, through the existing compile planner. --
-  const compiled = compileProfile({ profile: parsedNext.profile });
+  // Read the prior lock's `modelPolicy` block so the generated files (e.g.
+  // AGENTS.md, .codex/config.toml) reconcile against it the same way every
+  // other compile call site does (Phase 31.5 I6 fix). Note: the
+  // `buildCompileWrites` call below still omits `profile`, so this run's
+  // lockfile write does not itself record a `modelPolicy` block (a disclosed,
+  // accepted gap from the prior cycle, unrelated to this fix) -- only the
+  // generated-file rendering is corrected here.
+  const previousLockForCompile = await readLockfileForRegions(rootDir);
+  const previousModelPolicy = previousLockForCompile?.modelPolicy;
+  const compiled = compileProfile({
+    profile: parsedNext.profile,
+    ...(previousModelPolicy ? { previousModelPolicy } : {}),
+  });
   if (!compiled.ok) {
     return finish(prompts, {
       ...base,

@@ -30,7 +30,11 @@ import {
   type SubagentPolicyRoles,
 } from "@agent-profile/core";
 
-import type { LockModelPolicyV2, ModelPolicyTargetEffort } from "./types.js";
+import type {
+  LockModelPolicyResolutionV2,
+  LockModelPolicyV2,
+  ModelPolicyTargetEffort,
+} from "./types.js";
 import {
   buildModelPolicyTabnineTargetTable,
   toLockModelPolicyTabnineResolutions,
@@ -95,6 +99,19 @@ const TARGET_EFFORT: Readonly<
   "extra-high": "xhigh",
 });
 
+// Reverse of `TARGET_EFFORT`, needed when a prior lock's already-target-
+// shaped `effort` (`ModelPolicyTargetEffort`) must be replayed back through
+// `resolveClientCatalogRow`/`applyExactTargetOverride`'s canonical
+// `ModelPolicyEffort` vocabulary (Phase 31.5 I6 lock-reuse fix).
+const REVERSE_TARGET_EFFORT: Readonly<
+  Record<ModelPolicyTargetEffort, ModelPolicyEffort>
+> = Object.freeze({
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "extra-high",
+});
+
 export type ModelPolicyTargetClientId = "codex" | "claude";
 
 export type ModelPolicyTargetClientResolution = Readonly<{
@@ -110,6 +127,11 @@ export type ModelPolicyTargetClientResolution = Readonly<{
   skillStatus: ModelPolicyCapabilityStatus;
   /** Status for per-subagent guidance surfaces. */
   subagentStatus: ModelPolicyCapabilityStatus;
+  /** The catalog version that actually produced/last-confirmed this row
+   * (Phase 31.5 I6 Finding 3): the current
+   * `MODEL_POLICY_TARGET_CATALOG_VERSION` for a freshly-resolved row, or the
+   * prior lock's own recorded catalog version for a retained/reused row. */
+  catalogVersion: number;
 }>;
 
 export type ModelPolicyTargetRow = Readonly<{
@@ -138,6 +160,11 @@ function resolveClientCatalogRow(
   lifecycle: ModelCatalogLifecycleStatus | "unrated";
   baseStatus: ModelPolicyCapabilityStatus;
   source: ModelPolicyResolutionSource;
+  /** The catalog version that produced this row (Phase 31.5 I6 Finding 3):
+   * always the current `MODEL_POLICY_TARGET_CATALOG_VERSION` for a fresh
+   * resolution. A lock-reuse override (`applyExactTargetOverride`) may
+   * replace this with the retained row's own original catalog version. */
+  catalogVersion: number;
 } {
   const candidates = getOrdinaryModelCatalogCandidates(
     catalog,
@@ -154,25 +181,54 @@ function resolveClientCatalogRow(
     lifecycle: primary?.status ?? "unrated",
     baseStatus: primary === undefined ? "unsupported" : "configured",
     source: "catalog",
+    catalogVersion: MODEL_POLICY_TARGET_CATALOG_VERSION,
   };
 }
 
+/**
+ * Apply an exact per-client override on top of a fresh catalog resolution.
+ * `source` defaults to `"explicit-override"` (the real-user-override case
+ * every existing caller relies on); `buildModelPolicyTargetTable`'s
+ * lock-reuse path (Phase 31.5 I6) supplies the retained row's own original
+ * `source` instead, so a reused catalog-derived row is never mislabeled as an
+ * explicit override the user never actually chose this compile. `alternatives`
+ * likewise defaults to none (correct for a genuine exact override, which
+ * never carries invented alternatives) but the lock-reuse path supplies the
+ * retained row's own recorded alternatives so guidance fidelity is preserved
+ * for a reused catalog pick.
+ */
 function applyExactTargetOverride(
   resolved: ReturnType<typeof resolveClientCatalogRow>,
   catalog: readonly ModelCatalogEntry[],
   override:
-    Readonly<{ model?: string; effort?: ModelPolicyEffort }> | undefined,
+    | Readonly<{
+        model?: string;
+        effort?: ModelPolicyEffort;
+        source?: ModelPolicyResolutionSource;
+        alternatives?: readonly string[];
+        /** The lock-reuse path (Phase 31.5 I6 Finding 3) supplies the
+         * retained row's own original catalog version here so a reused row
+         * never falsely claims the current `MODEL_POLICY_TARGET_CATALOG_VERSION`
+         * as its provenance. A real user-supplied exact override omits this,
+         * keeping `resolved.catalogVersion` (the current version, since an
+         * explicit override is always freshly applied this compile). */
+        catalogVersion?: number;
+      }>
+    | undefined,
 ): ReturnType<typeof resolveClientCatalogRow> {
   if (override === undefined) {
     return resolved;
   }
 
+  const source = override.source ?? "explicit-override";
+  const catalogVersion = override.catalogVersion ?? resolved.catalogVersion;
   const model = override.model ?? resolved.model;
   if (override.model === undefined) {
     return {
       ...resolved,
       targetEffort: override.effort ?? resolved.targetEffort,
-      source: "explicit-override",
+      source,
+      catalogVersion,
     };
   }
 
@@ -181,10 +237,11 @@ function applyExactTargetOverride(
     ...resolved,
     model,
     targetEffort: override.effort ?? resolved.targetEffort,
-    alternatives: Object.freeze([]),
+    alternatives: override.alternatives ?? Object.freeze([]),
+    catalogVersion,
     lifecycle: catalogued?.status ?? "unrated",
     baseStatus: catalogued === undefined ? "unverified" : "configured",
-    source: "explicit-override",
+    source,
   };
 }
 
@@ -327,9 +384,62 @@ export function deriveModelPolicyRoleOverrides(
 }
 
 /**
+ * Derive the "locked" client override for one role/client pair from a prior
+ * lock's `modelPolicy` rows (Phase 31.5 I6: "ordinary compile reuses the
+ * lock"). Only applies when the previous lock exists, was written under the
+ * *same* preset, and the previous row's own `source` was not
+ * `"explicit-override"` -- a stale explicit override the profile has since
+ * removed must re-resolve fresh instead of being carried forward forever
+ * (Finding 2 correctness fix: without this check, removing an override could
+ * never return a role to the preset's own resolution through ordinary
+ * compile). Callers must also skip calling this at all for a role the
+ * profile's own `roleOverrides` intent already touches (see
+ * `buildModelPolicyTargetTable`).
+ */
+function deriveLockedClientOverride(
+  previous: LockModelPolicyV2 | undefined,
+  preset: ModelPolicyPreset,
+  role: ModelPolicyRoleId,
+  client: ModelPolicyTargetClientId,
+):
+  | Readonly<{
+      model: string;
+      effort: ModelPolicyEffort;
+      source: ModelPolicyResolutionSource;
+      alternatives: readonly string[];
+      catalogVersion: number;
+    }>
+  | undefined {
+  if (previous === undefined || previous.preset !== preset) {
+    return undefined;
+  }
+
+  const previousRow = previous.resolutions.find(
+    (candidate) => candidate.client === client && candidate.role === role,
+  );
+  if (previousRow === undefined || previousRow.source === "explicit-override") {
+    return undefined;
+  }
+
+  return {
+    model: previousRow.model,
+    effort: REVERSE_TARGET_EFFORT[previousRow.effort ?? "medium"],
+    source: previousRow.source,
+    alternatives: previousRow.alternatives,
+    // Phase 31.5 I6 Finding 3: a reused row keeps carrying forward its own
+    // recorded catalog version, never the current one -- a pre-this-change
+    // lock row (no per-row `catalogVersion` yet) falls back to the previous
+    // lock's block-level `catalogVersion` as the best available
+    // approximation (mirrors `backfillModelPolicyEffortStatus`'s precedent in
+    // lockfile.ts).
+    catalogVersion: previousRow.catalogVersion ?? previous.catalogVersion,
+  };
+}
+
+/**
  * Build the deterministic v3 Codex/Claude resolution table for every role in
  * `MODEL_POLICY_ROLE_IDS`, given a selected v3 preset. Pure and
- * deterministic: no filesystem/network/clock access.
+ * deterministic given its inputs: no filesystem/network/clock access.
  *
  * Precedence (per the parent spec's "Model presets" contract and Decision
  * Rule 4: "Explicit role ... overrides continue to win over these
@@ -341,23 +451,57 @@ export function deriveModelPolicyRoleOverrides(
  * catalog candidate, with explicit provenance and no invented alternatives.
  * A role absent from `roleOverrides` (the common case) always resolves the
  * selected preset's own row.
+ *
+ * `previousModelPolicy` (Phase 31.5 I6) is the prior `ai-profile.lock`'s
+ * `modelPolicy` block, if any. This is the single seam every generated
+ * surface (this table, the `.codex/config.toml` primary-default write, the
+ * `AGENTS.md`/`CLAUDE.md` guidance table, and `ai-profile.lock`'s own
+ * `modelPolicy` block) shares, so a retained role/client resolution can never
+ * disagree between the generated files and the lock that claims to describe
+ * them: for a role the profile's own `roleOverrides` intent does not touch,
+ * and only when the previous lock was written under the same preset, the
+ * previous row's model/effort/alternatives/source win over whatever the live
+ * bundled catalog constants would resolve today (lifecycle/status are still
+ * always recomputed against the *current* catalog, so a retained model that
+ * has since been removed from the catalog honestly reports
+ * `unverified`/`unrated` instead of a stale `configured`/known-lifecycle
+ * claim).
  */
 export function buildModelPolicyTargetTable(
   preset: ModelPolicyPreset,
   roleOverrides?: ModelPolicyRoleOverrides,
+  previousModelPolicy?: LockModelPolicyV2,
 ): readonly ModelPolicyTargetRow[] {
   return MODEL_POLICY_ROLE_IDS.map((role) => {
     const capabilityEffort =
       roleOverrides?.[role] ?? MODEL_POLICY_PRESET_TABLE[preset][role];
+    const hasRoleOverride = roleOverrides?.[role] !== undefined;
+
+    const codexOverride =
+      roleOverrides?.[role]?.overrides?.codex ??
+      (hasRoleOverride
+        ? undefined
+        : deriveLockedClientOverride(previousModelPolicy, preset, role, "codex"));
+    const claudeOverride =
+      roleOverrides?.[role]?.overrides?.claude ??
+      (hasRoleOverride
+        ? undefined
+        : deriveLockedClientOverride(
+            previousModelPolicy,
+            preset,
+            role,
+            "claude",
+          ));
+
     const codexResolved = applyExactTargetOverride(
       resolveClientCatalogRow(capabilityEffort, CODEX_MODEL_POLICY_CATALOG),
       CODEX_MODEL_POLICY_CATALOG,
-      roleOverrides?.[role]?.overrides?.codex,
+      codexOverride,
     );
     const claudeResolved = applyExactTargetOverride(
       resolveClientCatalogRow(capabilityEffort, CLAUDE_MODEL_POLICY_CATALOG),
       CLAUDE_MODEL_POLICY_CATALOG,
-      roleOverrides?.[role]?.overrides?.claude,
+      claudeOverride,
     );
 
     const codex: ModelPolicyTargetClientResolution = Object.freeze({
@@ -366,6 +510,7 @@ export function buildModelPolicyTargetTable(
       alternatives: codexResolved.alternatives,
       lifecycle: codexResolved.lifecycle,
       source: codexResolved.source,
+      catalogVersion: codexResolved.catalogVersion,
       ...computeCodexStatuses(role, codexResolved.baseStatus),
     });
 
@@ -375,6 +520,7 @@ export function buildModelPolicyTargetTable(
       alternatives: claudeResolved.alternatives,
       lifecycle: claudeResolved.lifecycle,
       source: claudeResolved.source,
+      catalogVersion: claudeResolved.catalogVersion,
       ...computeClaudeStatuses(claudeResolved.model, claudeResolved.baseStatus),
     });
 
@@ -413,6 +559,7 @@ export function toLockModelPolicyFromTargetTable(
     alternatives: string[];
     source: ModelPolicyResolutionSource;
     capabilityStatus: ModelPolicyCapabilityStatus;
+    catalogVersion: number;
   }[];
 } {
   const resolutions: {
@@ -424,6 +571,7 @@ export function toLockModelPolicyFromTargetTable(
     alternatives: string[];
     source: ModelPolicyResolutionSource;
     capabilityStatus: ModelPolicyCapabilityStatus;
+    catalogVersion: number;
   }[] = [];
 
   for (const row of table) {
@@ -451,6 +599,11 @@ export function toLockModelPolicyFromTargetTable(
         alternatives: [...resolution.alternatives],
         source: resolution.source,
         capabilityStatus,
+        // Phase 31.5 I6 Finding 3: per-row catalog provenance, not just the
+        // block-level value -- a retained/reused row (see
+        // `deriveLockedClientOverride`) keeps its own original catalog
+        // version instead of falsely claiming the current one.
+        catalogVersion: resolution.catalogVersion,
       });
     }
   }
@@ -470,21 +623,33 @@ export function toLockModelPolicyFromTargetTable(
  * `toLockModelPolicyTabnineResolutions` emits no rows for that case. The
  * merge is still wired end-to-end here so a future explicit Tabnine override
  * source only needs to supply role overrides, not new lockfile plumbing. A
- * Tabnine capability gap never blocks or alters the Codex/Claude rows. */
+ * Tabnine capability gap never blocks or alters the Codex/Claude rows.
+ *
+ * `previousModelPolicy` is the prior `ai-profile.lock`'s `modelPolicy` block
+ * (`undefined` for a first compile or when no prior lock exists). It is
+ * forwarded straight into `buildModelPolicyTargetTable`, the same
+ * single-owner table every other generated Codex/Claude surface
+ * (`.codex/config.toml`'s primary-default write, the `AGENTS.md`/`CLAUDE.md`
+ * guidance table) builds from, so this lockfile block and those generated
+ * files can never disagree about a retained role/client resolution (Phase
+ * 31.5 I6 fix: previously this reconciliation happened only here, after the
+ * generated files had already been rendered from the live catalog). Tabnine
+ * rows are unaffected (Phase 31.5 I3's Tabnine adapter is out of this
+ * cycle's scope).
+ */
 export function resolveModelPolicyLockfile(
   profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
 ): LockModelPolicyV2 | undefined {
   const policy = profile.subagentPolicy;
   if (policy?.enabled !== true || policy.preset === undefined) {
     return undefined;
   }
   const { preset } = policy;
+  const roleOverrides = deriveModelPolicyRoleOverrides(policy.roles);
   const codexClaude = toLockModelPolicyFromTargetTable(
     preset,
-    buildModelPolicyTargetTable(
-      preset,
-      deriveModelPolicyRoleOverrides(policy.roles),
-    ),
+    buildModelPolicyTargetTable(preset, roleOverrides, previousModelPolicy),
   );
   const tabnine = toLockModelPolicyTabnineResolutions(
     buildModelPolicyTabnineTargetTable(preset),

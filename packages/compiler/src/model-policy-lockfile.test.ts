@@ -45,6 +45,7 @@ const MODEL_POLICY: LockModelPolicyV2 = {
       alternatives: ["example-strongest-deprecated"],
       source: "catalog",
       capabilityStatus: "configured",
+      catalogVersion: 3,
     },
     {
       client: "claude",
@@ -55,6 +56,7 @@ const MODEL_POLICY: LockModelPolicyV2 = {
       alternatives: [],
       source: "catalog",
       capabilityStatus: "configured",
+      catalogVersion: 3,
     },
   ],
 };
@@ -124,6 +126,7 @@ test("lockfile v2 modelPolicy strips extra fields from a richer caller-supplied 
   assert.deepEqual(Object.keys(firstResolution!).sort(), [
     "alternatives",
     "capabilityStatus",
+    "catalogVersion",
     "client",
     "effort",
     "effortStatus",
@@ -419,6 +422,86 @@ test("lockfile v2 modelPolicy backfills a missing effortStatus from capabilitySt
     const [resolution] = explicitResult.lockfile.modelPolicy!.resolutions;
     assert.equal(resolution!.effortStatus, "unverified");
     assert.notEqual(resolution!.effortStatus, resolution!.capabilityStatus);
+  }
+});
+
+test("lockfile v2 modelPolicy backfills a missing per-row catalogVersion from the block-level value (pre-I6 v3 lockfile migration)", () => {
+  const base = buildLockfile({
+    profileBytes: "version: 1\n",
+    templates: [FAKE_TEMPLATE],
+    files: [FAKE_FILE],
+  });
+
+  // A hand-built pre-Phase-31.5-I6-shaped v3 resolution row: no producer
+  // stamped a per-row `catalogVersion` before this fix, so a repository's
+  // pre-existing `ai-profile.lock` never has this key on any row.
+  const preI6Resolution = {
+    client: "codex",
+    role: "architect",
+    model: "example-strongest-current",
+    effort: "xhigh",
+    effortStatus: "configured",
+    alternatives: ["example-strongest-deprecated"],
+    source: "catalog",
+    capabilityStatus: "configured",
+  };
+
+  const result = validateLockfileValue({
+    ...base,
+    modelPolicy: {
+      catalogVersion: 4,
+      preset: "role-aware",
+      resolutions: [preI6Resolution],
+    },
+  });
+
+  assert.equal(result.ok, true, JSON.stringify(result));
+  if (result.ok && result.lockfile.version === 2) {
+    const [resolution] = result.lockfile.modelPolicy!.resolutions;
+    // The backfill actually happened: the migrated row's `catalogVersion`
+    // equals the block-level `modelPolicy.catalogVersion` (the best
+    // available approximation for a pre-this-change lock, which had no
+    // per-row granularity).
+    assert.equal(resolution!.catalogVersion, 4);
+  }
+
+  // (a) A fresh row already stamps the current catalog version.
+  const freshRow = MODEL_POLICY.resolutions[0]!;
+  assert.equal(freshRow.catalogVersion, 3);
+
+  // (b) A row that already has an explicit (possibly older, retained)
+  // `catalogVersion` round-trips unchanged: the backfill must never
+  // overwrite an explicitly present value, even when it differs from the
+  // block-level `catalogVersion`.
+  const retainedResolution = {
+    client: "claude",
+    role: "architect",
+    model: "example-strongest-current",
+    effort: "xhigh",
+    effortStatus: "advisory",
+    alternatives: [],
+    source: "catalog",
+    capabilityStatus: "advisory",
+    catalogVersion: 2,
+  };
+
+  const retainedResult = validateLockfileValue({
+    ...base,
+    modelPolicy: {
+      catalogVersion: 4,
+      preset: "role-aware",
+      resolutions: [retainedResolution],
+    },
+  });
+
+  assert.equal(retainedResult.ok, true, JSON.stringify(retainedResult));
+  if (retainedResult.ok && retainedResult.lockfile.version === 2) {
+    const [resolution] = retainedResult.lockfile.modelPolicy!.resolutions;
+    assert.equal(resolution!.catalogVersion, 2);
+    assert.notEqual(
+      resolution!.catalogVersion,
+      retainedResult.lockfile.modelPolicy!.catalogVersion,
+    );
   }
 });
 

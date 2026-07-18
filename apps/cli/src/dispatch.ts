@@ -110,7 +110,10 @@ export async function evaluateDispatchState(
     };
   agentControlRecommended ||= resolvePermissionPosture(profile.profile).legacy
     .isLegacyAutonomous;
-  const compiled = compileProfile({ profile: profile.profile });
+  const compiled = compileProfile({
+    profile: profile.profile,
+    ...(lock?.modelPolicy ? { previousModelPolicy: lock.modelPolicy } : {}),
+  });
   if (!compiled.ok)
     return {
       actions: withAgentControl(
@@ -137,6 +140,12 @@ export async function evaluateDispatchState(
       files: compiled.files,
       regionPlan: plan,
       ...(lock.upgrade ? { existingUpgrade: lock.upgrade } : {}),
+      // Inert today: this call omits `profile`, so `resolveModelPolicyLockfile`
+      // never runs here regardless (see compile-plan.ts). Kept for forward
+      // compatibility if this call site is ever wired to pass a profile.
+      ...(lock.modelPolicy
+        ? { previousModelPolicy: lock.modelPolicy }
+        : {}),
     });
     const dryRun = await planCompileDryRun(rootDir, writes);
     if (dryRun.counts.create > 0 || dryRun.counts.change > 0)

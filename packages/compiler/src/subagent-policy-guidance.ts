@@ -19,6 +19,7 @@ import {
   type ModelPolicyRoleOverrides,
   type ModelPolicyTargetClientResolution,
 } from "./model-policy-target-adapter.js";
+import type { LockModelPolicyV2 } from "./types.js";
 import {
   buildModelPolicyTabnineTargetTable,
   MODEL_POLICY_TABNINE_CATALOG_VERSION,
@@ -32,6 +33,7 @@ import {
  */
 export function renderSubagentPolicyAgentsMdSection(
   policy: AiProfileSubagentPolicy,
+  previousModelPolicy?: LockModelPolicyV2,
 ): string {
   const effective = resolveEffectiveSubagentPolicy(policy);
   if (effective === undefined) {
@@ -58,7 +60,11 @@ export function renderSubagentPolicyAgentsMdSection(
   const v3Table =
     preset === undefined
       ? undefined
-      : buildModelPolicyTargetTable(preset, explicitRoleOverrides);
+      : buildModelPolicyTargetTable(
+          preset,
+          explicitRoleOverrides,
+          previousModelPolicy,
+        );
   const rows =
     v3Table === undefined
       ? Object.entries(effective.roles)

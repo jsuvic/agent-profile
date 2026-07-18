@@ -46,6 +46,7 @@ import type {
   CompileRequest,
   CompileResult,
   GeneratedFile,
+  LockModelPolicyV2,
   TemplateDescriptor,
 } from "./types.js";
 import {
@@ -443,7 +444,7 @@ export function compileProfile(request: CompileRequest): CompileResult {
   }
 
   const files = targets.flatMap((target) =>
-    renderTarget(target, request.profile),
+    renderTarget(target, request.profile, request.previousModelPolicy),
   );
   const requiredTemplateIds = getRequiredTemplateIdSet(
     targets,
@@ -589,7 +590,10 @@ export function getSubagentTemplates(profile: AiProfile): TemplateDescriptor[] {
   return templates;
 }
 
-export function renderAgentsMd(profile: AiProfile): string {
+export function renderAgentsMd(
+  profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
+): string {
   const effectivePermissions = deriveEffectivePermissions(profile);
   const enabledClients = renderEnabledClients(profile);
   const reactSection = profile.stack.frameworks.includes("react")
@@ -619,7 +623,7 @@ export function renderAgentsMd(profile: AiProfile): string {
       : "";
   const subagentPolicySection =
     profile.subagentPolicy?.enabled === true
-      ? `\n${renderSubagentPolicyAgentsMdSection(profile.subagentPolicy)}`
+      ? `\n${renderSubagentPolicyAgentsMdSection(profile.subagentPolicy, previousModelPolicy)}`
       : "";
 
   return normalizeGeneratedText(`# AGENTS.md
@@ -721,6 +725,7 @@ The shared project rules are imported from \`AGENTS.md\` above. This file only a
 function renderTarget(
   target: CompilerTargetId,
   profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
 ): GeneratedFile[] {
   switch (target) {
     case "agents-md":
@@ -729,7 +734,7 @@ function renderTarget(
           "AGENTS.md",
           "agents-md",
           "targets/agents-md@1",
-          renderAgentsMd(profile),
+          renderAgentsMd(profile, previousModelPolicy),
         ),
       ];
     case "tabnine-guidelines":
@@ -751,7 +756,7 @@ function renderTarget(
           ".codex/config.toml",
           "codex-config",
           "targets/codex-config@1",
-          renderCodexConfigToml(profile),
+          renderCodexConfigToml(profile, previousModelPolicy),
         ),
       ];
     case "codex-hooks": {
@@ -1795,8 +1800,11 @@ Final implementation review is required for this project.
 `;
 }
 
-function renderCodexConfigToml(profile?: AiProfile): string {
-  const modelLines = renderCodexPrimaryModelLines(profile);
+function renderCodexConfigToml(
+  profile?: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
+): string {
+  const modelLines = renderCodexPrimaryModelLines(profile, previousModelPolicy);
 
   const base = `approval_policy = "on-request"
 sandbox_mode = "workspace-write"
@@ -1828,7 +1836,10 @@ max_depth = ${defaults.maxDepth}
  * A v2/legacy or disabled profile emits no lines here, preserving byte
  * identity with the pre-I2 output.
  */
-function renderCodexPrimaryModelLines(profile?: AiProfile): string {
+function renderCodexPrimaryModelLines(
+  profile?: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
+): string {
   const preset =
     profile?.subagentPolicy?.enabled === true
       ? profile.subagentPolicy.preset
@@ -1840,13 +1851,20 @@ function renderCodexPrimaryModelLines(profile?: AiProfile): string {
   // Derive role overrides through the single shared helper so this write
   // stays in agreement with the AGENTS.md/CLAUDE.md guidance table's
   // `configured` claim and the lockfile's `modelPolicy` provenance for the
-  // same profile (see deriveModelPolicyRoleOverrides).
+  // same profile (see deriveModelPolicyRoleOverrides). `previousModelPolicy`
+  // (Phase 31.5 I6 fix) is forwarded to the same shared table builder so a
+  // retained role/client resolution matches the lockfile's own `modelPolicy`
+  // block instead of silently drifting to the live catalog.
   const roleOverrides = deriveModelPolicyRoleOverrides(
     profile?.subagentPolicy?.enabled === true
       ? profile.subagentPolicy.roles
       : undefined,
   );
-  const table = buildModelPolicyTargetTable(preset, roleOverrides);
+  const table = buildModelPolicyTargetTable(
+    preset,
+    roleOverrides,
+    previousModelPolicy,
+  );
   const primaryRow = table.find((row) => row.role === MODEL_POLICY_PRIMARY_ROLE);
   if (!primaryRow || primaryRow.codex.model === undefined) {
     return "";

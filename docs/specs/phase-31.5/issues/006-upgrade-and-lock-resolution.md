@@ -100,6 +100,32 @@ legacy mapping-v2 behavior.
 Do not overload `upgrade.catalogVersion`; model catalog/resolution provenance
 is a separate lockfile concern with its own version.
 
+2026-07-18: First RED-first cycle landed the "ordinary compile reuses the
+lock" primitive: `resolveModelPolicyLockfile` (`packages/compiler/src/
+model-policy-target-adapter.ts`) now accepts an optional `previousModelPolicy`
+and reuses a prior lock's exact per-role/per-client row verbatim when the
+preset is unchanged and that role has no explicit per-role override; a
+changed preset or an explicit override still forces fresh catalog resolution.
+Wired into the real compile path at `apps/cli/src/compile-plan.ts`
+(`planRegionAwareWrites` surfaces `lockfile.modelPolicy` as
+`previousModelPolicy`, no new file read) and threaded through the 3
+`buildCompileWrites` call sites in `index.ts` that actually pass a `profile`
+(the real `compile`/`init` write paths) — these meaningfully participate in
+the reuse guarantee and are covered by an end-to-end regression test
+(`apps/cli/src/compile-plan.test.ts`). Two call sites remain non-participating,
+both pre-existing gaps rather than regressions: `dispatch.ts`'s
+`buildCompileWrites` call was also given a `previousModelPolicy` argument, but
+since that call never passes `profile` either, `resolveModelPolicyLockfile` is
+never invoked there and the wiring is presently inert (harmless, but does not
+extend the guarantee to the dispatcher's dry-run write-count check).
+`configure.ts:702` remains fully unwired: that call site does not pass a
+`profile` to `buildCompileWrites` at all today, so no `modelPolicy` is
+resolved there regardless.
+Still outstanding for future cycles: the CLI `upgrade` command's model-aware
+retain/adopt/customize UX, the metadata-only registry check, probe-consent
+separation, and Tabnine reconciliation (all of I6's remaining acceptance
+criteria).
+
 ## Review expectations
 
 Inspect no-silent-remap proof, exact comparison completeness, consent

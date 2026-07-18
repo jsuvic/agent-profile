@@ -234,6 +234,7 @@ export function toLockModelPolicyTabnineResolutions(
   alternatives: string[];
   source: ModelPolicyResolutionSource;
   capabilityStatus: ModelPolicyCapabilityStatus;
+  catalogVersion: number;
 }[] {
   const resolutions: {
     client: "tabnine";
@@ -243,6 +244,7 @@ export function toLockModelPolicyTabnineResolutions(
     alternatives: string[];
     source: ModelPolicyResolutionSource;
     capabilityStatus: ModelPolicyCapabilityStatus;
+    catalogVersion: number;
   }[] = [];
 
   for (const row of table) {
@@ -263,6 +265,11 @@ export function toLockModelPolicyTabnineResolutions(
       // same value under a locally clearer name, so it maps 1:1 onto
       // `capabilityStatus` here.
       capabilityStatus: row.tabnine.modelStatus,
+      // Phase 31.5 I6 Finding 3 (schema consistency only -- Tabnine
+      // reconciliation against a prior lock remains out of scope): every
+      // Tabnine row is always freshly resolved, so it always stamps the
+      // current Tabnine catalog version.
+      catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
     });
   }
 
