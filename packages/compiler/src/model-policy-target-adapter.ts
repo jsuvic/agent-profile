@@ -30,7 +30,11 @@ import {
   type SubagentPolicyRoles,
 } from "@agent-profile/core";
 
-import type { LockModelPolicyV2, ModelPolicyTargetEffort } from "./types.js";
+import type {
+  LockModelPolicyResolutionV2,
+  LockModelPolicyV2,
+  ModelPolicyTargetEffort,
+} from "./types.js";
 import {
   buildModelPolicyTabnineTargetTable,
   toLockModelPolicyTabnineResolutions,
@@ -462,6 +466,46 @@ export function toLockModelPolicyFromTargetTable(
   };
 }
 
+/**
+ * Reconcile a freshly-derived Codex/Claude resolution table against the
+ * prior lockfile's `modelPolicy` rows (Phase 31.5 I6 foundational seam:
+ * "ordinary compile reuses the lock"). For every (role, client) row whose
+ * role the profile's own preset/role-override intent did not touch (no
+ * explicit `roleOverrides[role]`), and only when the previous lock was
+ * written under the *same* preset, the previous row wins verbatim instead
+ * of whatever the live bundled catalog constants would resolve today. This
+ * is what keeps a future catalog bump from silently remapping a role's
+ * exact model/effort/alternatives/source/status the next time someone runs
+ * an ordinary compile -- that can only happen through an explicit upgrade
+ * action. A role the profile *does* explicitly customize, a changed preset,
+ * or the absence of any previous lock all fall through to the fresh
+ * resolution unchanged.
+ */
+function reconcileWithPreviousModelPolicy(
+  fresh: {
+    catalogVersion: number;
+    preset: ModelPolicyPreset;
+    resolutions: LockModelPolicyResolutionV2[];
+  },
+  roleOverrides: ModelPolicyRoleOverrides | undefined,
+  previous: LockModelPolicyV2 | undefined,
+): LockModelPolicyResolutionV2[] {
+  if (previous === undefined || previous.preset !== fresh.preset) {
+    return fresh.resolutions;
+  }
+
+  return fresh.resolutions.map((row) => {
+    if (roleOverrides?.[row.role] !== undefined) {
+      return row;
+    }
+    const previousRow = previous.resolutions.find(
+      (candidate) =>
+        candidate.client === row.client && candidate.role === row.role,
+    );
+    return previousRow ?? row;
+  });
+}
+
 /** Resolve optional v3 lock provenance from the same profile inputs as every
  * generated Codex/Claude surface. Also merges in any Tabnine resolutions
  * (Phase 31.5 I3): today the profile schema has no field that supplies an
@@ -470,21 +514,27 @@ export function toLockModelPolicyFromTargetTable(
  * `toLockModelPolicyTabnineResolutions` emits no rows for that case. The
  * merge is still wired end-to-end here so a future explicit Tabnine override
  * source only needs to supply role overrides, not new lockfile plumbing. A
- * Tabnine capability gap never blocks or alters the Codex/Claude rows. */
+ * Tabnine capability gap never blocks or alters the Codex/Claude rows.
+ *
+ * `previousModelPolicy` is the prior `ai-profile.lock`'s `modelPolicy` block
+ * (`undefined` for a first compile or when no prior lock exists). When
+ * supplied, it is reconciled against the fresh Codex/Claude rows per
+ * `reconcileWithPreviousModelPolicy` above; Tabnine rows are unaffected
+ * (Phase 31.5 I3's Tabnine adapter is out of this cycle's scope).
+ */
 export function resolveModelPolicyLockfile(
   profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
 ): LockModelPolicyV2 | undefined {
   const policy = profile.subagentPolicy;
   if (policy?.enabled !== true || policy.preset === undefined) {
     return undefined;
   }
   const { preset } = policy;
+  const roleOverrides = deriveModelPolicyRoleOverrides(policy.roles);
   const codexClaude = toLockModelPolicyFromTargetTable(
     preset,
-    buildModelPolicyTargetTable(
-      preset,
-      deriveModelPolicyRoleOverrides(policy.roles),
-    ),
+    buildModelPolicyTargetTable(preset, roleOverrides),
   );
   const tabnine = toLockModelPolicyTabnineResolutions(
     buildModelPolicyTabnineTargetTable(preset),
@@ -493,6 +543,13 @@ export function resolveModelPolicyLockfile(
   return {
     catalogVersion: codexClaude.catalogVersion,
     preset: codexClaude.preset,
-    resolutions: [...codexClaude.resolutions, ...tabnine],
+    resolutions: [
+      ...reconcileWithPreviousModelPolicy(
+        codexClaude,
+        roleOverrides,
+        previousModelPolicy,
+      ),
+      ...tabnine,
+    ],
   };
 }

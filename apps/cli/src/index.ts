@@ -36,6 +36,7 @@ import {
   type AiProfileLockV2,
   type GeneratedFile,
   type ImportStrategy,
+  type LockModelPolicyV2,
   type LockOutputV2,
   type MixedOutputDescriptor,
   type ModelPolicyTabnineSettingsPlan,
@@ -1264,6 +1265,9 @@ async function runCompile(
     files: compileResult.files,
     regionPlan,
     profile: profileResult.profile,
+    ...(regionPlan.previousModelPolicy
+      ? { previousModelPolicy: regionPlan.previousModelPolicy }
+      : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
@@ -1659,6 +1663,9 @@ async function runDriftReconciliation(input: {
       refusals: [],
     },
     profile: input.profile,
+    ...(input.regionPlan.previousModelPolicy
+      ? { previousModelPolicy: input.regionPlan.previousModelPolicy }
+      : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
@@ -3646,6 +3653,9 @@ async function writeCompiledClientFiles(input: {
     files: compileResult.files,
     regionPlan,
     profile: input.profile,
+    ...(regionPlan.previousModelPolicy
+      ? { previousModelPolicy: regionPlan.previousModelPolicy }
+      : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
@@ -4557,6 +4567,7 @@ export type RegionAwareWritePlan = {
   mixedOutputs: MixedOutputDescriptor[];
   manualOutputs: LockOutputV2[];
   refusals: RegionAwareRefusal[];
+  previousModelPolicy?: LockModelPolicyV2;
 };
 
 const REGION_AWARE_PATHS = new Set(["AGENTS.md", "CLAUDE.md"]);

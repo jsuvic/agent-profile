@@ -141,7 +141,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I4 | Consented source-free model probes | done | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md) |
 | I5 | Exact role-aware model selection during init | done | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md) |
 | I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | done | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
-| I6 | Explicit model upgrade and locked resolution lifecycle | sequenced | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
+| I6 | Explicit model upgrade and locked resolution lifecycle | ready | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
 | I7 | Offline Doctor model policy and explicit recheck | sequenced | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
 | I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
 | I9 | Published model-selection journey and final integration | sequenced | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
@@ -196,6 +196,16 @@ tracking them as follow-up rather than blocking I5's closure, the same
 precedent already set for I3's disclosed Tabnine-wiring scope reduction.
 I5R carries that remaining scope; I9's final-integration coverage list
 should account for I5R, not just I5, when it runs.
+
+I6 first RED-first cycle completed 2026-07-18 (spec + code-quality review
+passed): landed only the "ordinary compile reuses the lock" primitive for
+v3 Codex/Claude model resolutions (see the dated addendum in I6's own issue
+brief for exact scope, files, and the one disclosed/accepted gap at
+`configure.ts`). I6 remains `ready`, not `done` - the rest of its acceptance
+criteria (upgrade command retain/adopt/customize UX, metadata-only registry
+check, probe consent, Tabnine reconciliation, rollback) are still open and
+require further RED-first cycles, per the same "several focused cycles
+inside one task" pattern already used for I2.
 
 ## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
 

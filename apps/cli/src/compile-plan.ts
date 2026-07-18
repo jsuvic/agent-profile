@@ -14,6 +14,7 @@ import {
   toLockfileV2View,
   validateLockfileText,
   type GeneratedFile,
+  type LockModelPolicyV2,
   type LockOutputV2,
   type ModelPolicyTabnineSettingsPlan,
   type MixedOutputDescriptor,
@@ -40,6 +41,14 @@ export type RegionAwareWritePlan = {
   mixedOutputs: MixedOutputDescriptor[];
   manualOutputs: LockOutputV2[];
   refusals: RegionAwareRefusal[];
+  /** The prior `ai-profile.lock`'s `modelPolicy` block, if any, surfaced from
+   * the lockfile read `planRegionAwareWrites` already performs internally
+   * (Phase 31.5 I6 foundational seam). Callers that already hold a
+   * `RegionAwareWritePlan` can forward this straight into
+   * `buildCompileWrites`'s `previousModelPolicy` input without any
+   * additional file read, so an ordinary compile reuses the lock instead of
+   * silently re-deriving every row from the live catalog constants. */
+  previousModelPolicy?: LockModelPolicyV2;
 };
 
 export type LockfileOwnedDrift = { region: string[]; other: string[] };
@@ -220,7 +229,15 @@ export async function planRegionAwareWrites(
     }
     refusals.push({ path: file.path, reason: "unknown-ownership" });
   }
-  return { writes, mixedOutputs, manualOutputs, refusals };
+  return {
+    writes,
+    mixedOutputs,
+    manualOutputs,
+    refusals,
+    ...(lockfile?.modelPolicy
+      ? { previousModelPolicy: lockfile.modelPolicy }
+      : {}),
+  };
 }
 
 export type CompileWritesResult = {
@@ -241,6 +258,15 @@ export function buildCompileWrites(input: {
   regionPlan: RegionAwareWritePlan;
   profile?: AiProfile;
   existingUpgrade?: { catalogVersion: number };
+  /** The prior `ai-profile.lock`'s `modelPolicy` block, if any (Phase 31.5
+   * I6 foundational seam: "ordinary compile reuses the lock"). When
+   * supplied alongside `profile`, `resolveModelPolicyLockfile` reconciles
+   * the fresh Codex/Claude rows against it so an unchanged role never
+   * silently remaps to whatever the live bundled catalog constants say
+   * today; only an explicit per-role profile edit or preset change
+   * re-resolves that role fresh. Omitting this (the default) keeps today's
+   * always-fresh behavior. */
+  previousModelPolicy?: LockModelPolicyV2;
   /** Real on-disk ownership (from `classifyTabnineSettingsOwnership`) and the
    * resolved exact model (`undefined` when no explicit Tabnine override was
    * supplied -- guided manual selection stays the default, matching I3's
@@ -260,7 +286,12 @@ export function buildCompileWrites(input: {
     mixedOutputs: input.regionPlan.mixedOutputs,
     ...(input.profile === undefined
       ? {}
-      : { modelPolicy: resolveModelPolicyLockfile(input.profile) }),
+      : {
+          modelPolicy: resolveModelPolicyLockfile(
+            input.profile,
+            input.previousModelPolicy,
+          ),
+        }),
   });
 
   let tabninePlan: ModelPolicyTabnineSettingsPlan | undefined;

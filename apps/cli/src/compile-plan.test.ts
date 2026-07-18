@@ -396,3 +396,130 @@ test("agent-profile compile --write does not create .tabnine/agent/settings.json
   const settingsPath = path.join(rootDir, ".tabnine", "agent", "settings.json");
   await assert.rejects(readFile(settingsPath, "utf8"));
 });
+
+// ---------------------------------------------------------------------------
+// Phase 31.5 (I6 foundational seam): "ordinary compile reuses the lock" wired
+// end-to-end through the real `agent-profile compile --write` command, not
+// just the pure `resolveModelPolicyLockfile` unit. `buildCompileWrites` now
+// reconciles fresh Codex/Claude modelPolicy rows against
+// `regionPlan.previousModelPolicy`, which `planRegionAwareWrites` already
+// surfaces from the lockfile read it performs internally.
+// ---------------------------------------------------------------------------
+
+const SUBAGENT_POLICY_PROFILE = `version: 1
+profile:
+  name: i6-reuse-compile
+  description: Phase 31.5 I6 foundational-seam reuse compile test profile.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine:
+    enabled: false
+  codex:
+    enabled: true
+  claude:
+    enabled: false
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+subagentPolicy:
+  enabled: true
+  preset: role-aware
+permissions:
+  filesystem:
+    read: allow
+    write: ask
+  shell:
+    run: ask
+  secrets:
+    access: deny
+  dependencies:
+    install: ask
+  network:
+    external: ask
+  production:
+    access: deny
+`;
+
+test("agent-profile compile --write reuses a prior lock's modelPolicy row across two real compiles when nothing changed", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    SUBAGENT_POLICY_PROFILE,
+    "utf8",
+  );
+
+  const first = compileOutput();
+  const firstCode = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: first.io },
+  );
+  assert.equal(firstCode, 0, first.stderrText());
+
+  const lockPath = path.join(rootDir, "ai-profile.lock");
+  const firstLock = JSON.parse(await readFile(lockPath, "utf8")) as {
+    modelPolicy: {
+      resolutions: {
+        role: string;
+        client: string;
+        model: string;
+      }[];
+    };
+  };
+  const architectCodex = firstLock.modelPolicy.resolutions.find(
+    (r) => r.role === "architect" && r.client === "codex",
+  );
+  assert.ok(architectCodex);
+  assert.equal(architectCodex.model, "gpt-5.6-sol");
+
+  // Hand-edit the recorded lock to simulate what a stale/prior-catalog
+  // resolution would look like (a "superseded" model no live catalog entry
+  // names today), leaving everything else (profile, preset) unchanged.
+  const superseded = {
+    ...firstLock,
+    modelPolicy: {
+      ...firstLock.modelPolicy,
+      resolutions: firstLock.modelPolicy.resolutions.map((r) =>
+        r.role === "architect" && r.client === "codex"
+          ? { ...r, model: "gpt-5.6-sol-superseded" }
+          : r,
+      ),
+    },
+  };
+  await writeFile(lockPath, `${JSON.stringify(superseded, null, 2)}\n`, "utf8");
+
+  const second = compileOutput();
+  const secondCode = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: second.io },
+  );
+  assert.equal(secondCode, 0, second.stderrText());
+
+  const secondLock = JSON.parse(await readFile(lockPath, "utf8")) as {
+    modelPolicy: {
+      resolutions: {
+        role: string;
+        client: string;
+        model: string;
+      }[];
+    };
+  };
+  const reusedArchitectCodex = secondLock.modelPolicy.resolutions.find(
+    (r) => r.role === "architect" && r.client === "codex",
+  );
+  assert.ok(reusedArchitectCodex);
+
+  // An ordinary compile (no profile edit, no upgrade action) must reproduce
+  // the prior lock's row verbatim instead of silently re-resolving
+  // "gpt-5.6-sol" from the live catalog constants.
+  assert.equal(reusedArchitectCodex.model, "gpt-5.6-sol-superseded");
+});
