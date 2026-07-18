@@ -163,7 +163,8 @@
           "claude-opus-4-8"
         ],
         "source": "catalog",
-        "capabilityStatus": "unverified"
+        "capabilityStatus": "unverified",
+        "catalogVersion": 3
       },
       {
         "client": "claude",
@@ -173,7 +174,8 @@
         "effortStatus": "unverified",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "unverified"
+        "capabilityStatus": "unverified",
+        "catalogVersion": 3
       },
       {
         "client": "claude",
@@ -185,7 +187,8 @@
           "claude-opus-4-8"
         ],
         "source": "catalog",
-        "capabilityStatus": "unverified"
+        "capabilityStatus": "unverified",
+        "catalogVersion": 3
       },
       {
         "client": "claude",
@@ -195,7 +198,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "claude",
@@ -207,7 +211,8 @@
           "claude-opus-4-8"
         ],
         "source": "catalog",
-        "capabilityStatus": "unverified"
+        "capabilityStatus": "unverified",
+        "catalogVersion": 3
       },
       {
         "client": "claude",
@@ -217,7 +222,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "explicit-override",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "claude",
@@ -227,7 +233,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "claude",
@@ -239,7 +246,8 @@
           "claude-opus-4-8"
         ],
         "source": "catalog",
-        "capabilityStatus": "unverified"
+        "capabilityStatus": "unverified",
+        "catalogVersion": 3
       },
       {
         "client": "claude",
@@ -249,7 +257,8 @@
         "effortStatus": "unverified",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "unverified"
+        "capabilityStatus": "unverified",
+        "catalogVersion": 3
       },
       {
         "client": "claude",
@@ -261,7 +270,8 @@
           "claude-opus-4-8"
         ],
         "source": "catalog",
-        "capabilityStatus": "unverified"
+        "capabilityStatus": "unverified",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -271,7 +281,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -281,7 +292,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -291,7 +303,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -301,7 +314,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -311,7 +325,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -321,7 +336,8 @@
         "effortStatus": "unverified",
         "alternatives": [],
         "source": "explicit-override",
-        "capabilityStatus": "unverified"
+        "capabilityStatus": "unverified",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -331,7 +347,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -341,7 +358,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -351,7 +369,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       },
       {
         "client": "codex",
@@ -361,7 +380,8 @@
         "effortStatus": "advisory",
         "alternatives": [],
         "source": "catalog",
-        "capabilityStatus": "advisory"
+        "capabilityStatus": "advisory",
+        "catalogVersion": 3
       }
     ]
   },

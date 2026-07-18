@@ -150,6 +150,7 @@ function toLockModelPolicyResolution(
     alternatives: [...resolution.alternatives],
     source: resolution.source,
     capabilityStatus: resolution.capabilityStatus,
+    catalogVersion: resolution.catalogVersion,
   };
 }
 
@@ -289,7 +290,9 @@ export function validateLockfileValue(
 
   return {
     ok: true,
-    lockfile: backfillModelPolicyEffortStatus(value as AiProfileLockV2),
+    lockfile: backfillModelPolicyCatalogVersion(
+      backfillModelPolicyEffortStatus(value as AiProfileLockV2),
+    ),
     version: 2,
   };
 }
@@ -327,6 +330,50 @@ function backfillModelPolicyEffortStatus(
     return {
       ...resolution,
       effortStatus: resolution.capabilityStatus,
+    };
+  });
+
+  if (!changed) {
+    return lockfile;
+  }
+
+  return {
+    ...lockfile,
+    modelPolicy: { ...modelPolicy, resolutions },
+  };
+}
+
+/**
+ * Migrate a validated v2 lockfile value that is missing `catalogVersion` on
+ * one or more `modelPolicy.resolutions[]` rows (a pre-Phase-31.5-I6 v3
+ * lockfile: no producer stamped a per-row catalog version before this fix).
+ * `LockModelPolicyResolutionV2.catalogVersion` is a required, non-optional
+ * field in `types.ts`, so every downstream caller of a successful
+ * `validateLockfileValue` expects it to always be present and defined. A
+ * missing `catalogVersion` is backfilled from that lock's own top-level
+ * `modelPolicy.catalogVersion` -- the best available approximation for a
+ * pre-this-change lock, since it had no per-row granularity. Mirrors
+ * `backfillModelPolicyEffortStatus` above. Returns a new value; never
+ * mutates `lockfile`. A row that already has an explicit `catalogVersion` is
+ * left unchanged.
+ */
+function backfillModelPolicyCatalogVersion(
+  lockfile: AiProfileLockV2,
+): AiProfileLockV2 {
+  const { modelPolicy } = lockfile;
+  if (modelPolicy === undefined) {
+    return lockfile;
+  }
+
+  let changed = false;
+  const resolutions = modelPolicy.resolutions.map((resolution) => {
+    if (Object.prototype.hasOwnProperty.call(resolution, "catalogVersion")) {
+      return resolution;
+    }
+    changed = true;
+    return {
+      ...resolution,
+      catalogVersion: modelPolicy.catalogVersion,
     };
   });
 
@@ -516,8 +563,13 @@ function validateModelPolicyResolutions(
       // Tabnine row has no `effort` (see the comment below). See
       // `validateLockfileValue`'s migration/backfill for how a missing
       // `effortStatus` is derived from `capabilityStatus` before this
+      // function's caller returns. `catalogVersion` is likewise optional here
+      // (Phase 31.5 I6 Finding 3): a pre-I6 v3 lockfile row never had a
+      // per-row `catalogVersion` at all. `validateLockfileValue`'s
+      // `backfillModelPolicyCatalogVersion` derives a missing row-level value
+      // from the block-level `modelPolicy.catalogVersion` before this
       // function's caller returns.
-      ["effort", "effortStatus"],
+      ["effort", "effortStatus", "catalogVersion"],
     );
 
     if (
@@ -624,6 +676,26 @@ function validateModelPolicyResolutions(
           `${path}/capabilityStatus`,
           'one of ["configured","advisory","unsupported","unverified"]',
           describeValue(item.capabilityStatus),
+        ),
+      );
+    }
+
+    // `catalogVersion` is optional (Phase 31.5 I6 Finding 3 bugfix): absent
+    // on a pre-I6 v3 lockfile row. `validateLockfileValue` backfills a
+    // missing `catalogVersion` from the block-level
+    // `modelPolicy.catalogVersion` before returning. When present here it
+    // must still be a positive safe integer.
+    if (
+      Object.prototype.hasOwnProperty.call(item, "catalogVersion") &&
+      (typeof item.catalogVersion !== "number" ||
+        !Number.isSafeInteger(item.catalogVersion) ||
+        item.catalogVersion < 1)
+    ) {
+      issues.push(
+        schemaIssue(
+          `${path}/catalogVersion`,
+          "positive safe integer",
+          describeValue(item.catalogVersion),
         ),
       );
     }

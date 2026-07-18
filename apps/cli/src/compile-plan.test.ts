@@ -523,3 +523,90 @@ test("agent-profile compile --write reuses a prior lock's modelPolicy row across
   // "gpt-5.6-sol" from the live catalog constants.
   assert.equal(reusedArchitectCodex.model, "gpt-5.6-sol-superseded");
 });
+
+test("agent-profile compile --write keeps generated .codex/config.toml in agreement with a reused lockfile modelPolicy row (Phase 31.5 I6 fix)", async () => {
+  // Finding 1 (PR #122 review): the previous cycle only reconciled the
+  // *lockfile's* modelPolicy block against the prior lock; the generated
+  // `.codex/config.toml` primary-default write was rendered independently
+  // from the live catalog, so it could silently disagree with the lock that
+  // claims to describe it. This test proves the two now always agree, using
+  // the designated primary role ("implementer") whose Codex resolution is
+  // the one surface actually written into `.codex/config.toml`.
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    SUBAGENT_POLICY_PROFILE,
+    "utf8",
+  );
+
+  const first = compileOutput();
+  const firstCode = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: first.io },
+  );
+  assert.equal(firstCode, 0, first.stderrText());
+
+  const configPath = path.join(rootDir, ".codex", "config.toml");
+  const firstConfig = await readFile(configPath, "utf8");
+  // "implementer" is `MODEL_POLICY_PRIMARY_ROLE`; under the "role-aware"
+  // preset it resolves to `balanced` capability, which the Codex v3 catalog
+  // maps to "gpt-5.6-terra".
+  assert.match(firstConfig, /model = "gpt-5\.6-terra"/u);
+
+  const lockPath = path.join(rootDir, "ai-profile.lock");
+  const firstLock = JSON.parse(await readFile(lockPath, "utf8")) as {
+    modelPolicy: {
+      resolutions: {
+        role: string;
+        client: string;
+        model: string;
+        effort?: string;
+      }[];
+    };
+  };
+
+  // Simulate a future catalog bump: hand-edit the recorded lock's primary-
+  // role Codex row to a model no live catalog entry names today, leaving
+  // everything else (profile, preset) unchanged.
+  const superseded = {
+    ...firstLock,
+    modelPolicy: {
+      ...firstLock.modelPolicy,
+      resolutions: firstLock.modelPolicy.resolutions.map((r) =>
+        r.role === "implementer" && r.client === "codex"
+          ? { ...r, model: "gpt-5.6-terra-superseded" }
+          : r,
+      ),
+    },
+  };
+  await writeFile(lockPath, `${JSON.stringify(superseded, null, 2)}\n`, "utf8");
+
+  const second = compileOutput();
+  const secondCode = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: second.io },
+  );
+  assert.equal(secondCode, 0, second.stderrText());
+
+  const secondConfig = await readFile(configPath, "utf8");
+  const secondLock = JSON.parse(await readFile(lockPath, "utf8")) as {
+    modelPolicy: {
+      resolutions: {
+        role: string;
+        client: string;
+        model: string;
+      }[];
+    };
+  };
+  const reusedImplementerCodex = secondLock.modelPolicy.resolutions.find(
+    (r) => r.role === "implementer" && r.client === "codex",
+  );
+  assert.ok(reusedImplementerCodex);
+  assert.equal(reusedImplementerCodex.model, "gpt-5.6-terra-superseded");
+
+  // The generated file must name the exact same retained model as the lock
+  // that describes it -- never the live catalog's fresh "gpt-5.6-terra".
+  const secondModelLine = secondConfig.match(/^model = "([^"]+)"$/mu);
+  assert.ok(secondModelLine);
+  assert.equal(secondModelLine[1], "gpt-5.6-terra-superseded");
+});

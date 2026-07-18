@@ -71,6 +71,10 @@ test("ordinary compile reuses a prior lock's modelPolicy row instead of silently
         alternatives: [],
         source: "catalog",
         capabilityStatus: "advisory",
+        // Deliberately older than the current catalog version (3), so the
+        // reused-row assertion below can prove Finding 3: a retained row
+        // keeps its own recorded catalog version, never the current one.
+        catalogVersion: 2,
       },
     ],
   };
@@ -83,10 +87,27 @@ test("ordinary compile reuses a prior lock's modelPolicy row instead of silently
   assert.ok(reusedArchitectCodex);
 
   // Ordinary compile (no profile change, no upgrade action) must reproduce
-  // the prior lock's row verbatim instead of the live-catalog value.
+  // the prior lock's model/effort/alternatives/source verbatim instead of the
+  // live-catalog value.
   assert.equal(reusedArchitectCodex.model, "gpt-5.6-sol-superseded");
   assert.notEqual(reusedArchitectCodex.model, freshArchitectCodex.model);
-  assert.deepEqual(reusedArchitectCodex, previousModelPolicy.resolutions[0]);
+  assert.equal(reusedArchitectCodex.effort, previousModelPolicy.resolutions[0].effort);
+  assert.deepEqual(
+    reusedArchitectCodex.alternatives,
+    previousModelPolicy.resolutions[0].alternatives,
+  );
+  assert.equal(reusedArchitectCodex.source, previousModelPolicy.resolutions[0].source);
+  // Lifecycle/status are always recomputed against the *current* catalog
+  // (Phase 31.5 I6 correctness fix): a retained model that has since been
+  // removed from the live catalog honestly reports `unverified` instead of
+  // silently keeping a stale `advisory`/known-lifecycle claim it can no
+  // longer justify.
+  assert.equal(reusedArchitectCodex.capabilityStatus, "unverified");
+  assert.equal(reusedArchitectCodex.effortStatus, "unverified");
+  // Finding 3: a retained/reused row keeps its own recorded catalog version
+  // (2), never falsely claiming the current one (3).
+  assert.equal(reusedArchitectCodex.catalogVersion, 2);
+  assert.notEqual(reusedArchitectCodex.catalogVersion, fresh.catalogVersion);
 });
 
 test("a role with an explicit per-role override always resolves fresh, ignoring any stale previous lock row for that role", () => {
@@ -115,6 +136,7 @@ test("a role with an explicit per-role override always resolves fresh, ignoring 
         alternatives: [],
         source: "catalog",
         capabilityStatus: "advisory",
+        catalogVersion: 3,
       },
     ],
   };
@@ -144,6 +166,7 @@ test("a changed preset never reuses the previous lock's rows", () => {
         alternatives: [],
         source: "catalog",
         capabilityStatus: "advisory",
+        catalogVersion: 3,
       },
     ],
   };
@@ -155,6 +178,44 @@ test("a changed preset never reuses the previous lock's rows", () => {
   );
   assert.ok(architectCodex);
   assert.equal(architectCodex.model, "gpt-5.6-sol");
+});
+
+test("removing a previously-set explicit per-role override re-resolves fresh instead of reusing the stale override forever", () => {
+  // Same preset, but the current profile no longer declares any override for
+  // "architect" (Finding 2 correctness fix): the previous lock's row for that
+  // role was itself recorded with `source: "explicit-override"`, so it must
+  // not be carried forward once the profile edit that produced it is
+  // reverted -- otherwise the role could never return to the preset's own
+  // resolution through ordinary compile.
+  const profile = profileWithPreset({ enabled: true, preset: "role-aware" });
+
+  const previousModelPolicy: LockModelPolicyV2 = {
+    catalogVersion: 3,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "codex",
+        role: "architect",
+        model: "stale-explicit-override-model",
+        effort: "xhigh",
+        effortStatus: "unverified",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: 3,
+      },
+    ],
+  };
+
+  const result = resolveModelPolicyLockfile(profile, previousModelPolicy);
+  assert.ok(result);
+  const architectCodex = result.resolutions.find(
+    (r) => r.role === "architect" && r.client === "codex",
+  );
+  assert.ok(architectCodex);
+  assert.equal(architectCodex.model, "gpt-5.6-sol");
+  assert.notEqual(architectCodex.model, "stale-explicit-override-model");
+  assert.equal(architectCodex.source, "catalog");
 });
 
 test("no previous lock (first compile) keeps today's byte-identical fresh-catalog behavior", () => {

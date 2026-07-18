@@ -1129,12 +1129,21 @@ async function runCompile(
     return 1;
   }
 
+  // Read the prior lock's `modelPolicy` block EARLY, before compiling, so the
+  // rendered generated files (AGENTS.md/.codex/config.toml) and the lockfile
+  // this run eventually writes reconcile against the exact same previous
+  // value (Phase 31.5 I6 fix: generated files must match the lock that
+  // claims to describe them).
+  const previousLockForCompile = await readLockfileForRegions(rootDir);
+  const previousModelPolicy = previousLockForCompile?.modelPolicy;
+
   const compileResult = compileProfile({
     profile: profileResult.profile,
     targets:
       parsed.targets.length > 0
         ? (parsed.targets as CompilerTargetId[])
         : undefined,
+    ...(previousModelPolicy ? { previousModelPolicy } : {}),
   });
 
   if (!compileResult.ok) {
@@ -1265,9 +1274,10 @@ async function runCompile(
     files: compileResult.files,
     regionPlan,
     profile: profileResult.profile,
-    ...(regionPlan.previousModelPolicy
-      ? { previousModelPolicy: regionPlan.previousModelPolicy }
-      : {}),
+    // Reuse the exact same `previousModelPolicy` value already passed into
+    // `compileProfile` above, so the generated files and this lockfile write
+    // can never disagree about a retained role/client resolution.
+    ...(previousModelPolicy ? { previousModelPolicy } : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
@@ -3574,7 +3584,16 @@ async function writeCompiledClientFiles(input: {
    * exist. */
   tabnineModelOverride?: string;
 }): Promise<ClientFileWriteResult> {
-  const compileResult = compileProfile({ profile: input.profile });
+  // Read the prior lock's `modelPolicy` block EARLY, before compiling, so the
+  // rendered generated files and the lockfile this call eventually writes
+  // reconcile against the exact same previous value (Phase 31.5 I6 fix).
+  const previousLockForCompile = await readLockfileForRegions(input.rootDir);
+  const previousModelPolicy = previousLockForCompile?.modelPolicy;
+
+  const compileResult = compileProfile({
+    profile: input.profile,
+    ...(previousModelPolicy ? { previousModelPolicy } : {}),
+  });
 
   if (!compileResult.ok) {
     return {
@@ -3653,9 +3672,10 @@ async function writeCompiledClientFiles(input: {
     files: compileResult.files,
     regionPlan,
     profile: input.profile,
-    ...(regionPlan.previousModelPolicy
-      ? { previousModelPolicy: regionPlan.previousModelPolicy }
-      : {}),
+    // Reuse the exact same `previousModelPolicy` value already passed into
+    // `compileProfile` above, so the generated files and this lockfile write
+    // can never disagree about a retained role/client resolution.
+    ...(previousModelPolicy ? { previousModelPolicy } : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
@@ -4448,7 +4468,16 @@ async function planRegionAdoptions(
   rootDir: string,
   profile: AiProfile,
 ): Promise<RegionAdoptionResult> {
-  const compileResult = compileProfile({ profile });
+  // A re-adoption run (e.g. `init --import`) may already have a prior lock;
+  // reading it here keeps the AGENTS.md/CLAUDE.md bytes used for adoption
+  // comparison in agreement with every other generated-file surface (Phase
+  // 31.5 I6 fix).
+  const previousLockForCompile = await readLockfileForRegions(rootDir);
+  const previousModelPolicy = previousLockForCompile?.modelPolicy;
+  const compileResult = compileProfile({
+    profile,
+    ...(previousModelPolicy ? { previousModelPolicy } : {}),
+  });
   if (!compileResult.ok) return { adoptions: [], refusals: [] };
 
   // Build the path→compiled-bytes map and delegate to the shared adoption

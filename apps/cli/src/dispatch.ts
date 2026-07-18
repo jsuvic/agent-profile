@@ -110,7 +110,10 @@ export async function evaluateDispatchState(
     };
   agentControlRecommended ||= resolvePermissionPosture(profile.profile).legacy
     .isLegacyAutonomous;
-  const compiled = compileProfile({ profile: profile.profile });
+  const compiled = compileProfile({
+    profile: profile.profile,
+    ...(lock?.modelPolicy ? { previousModelPolicy: lock.modelPolicy } : {}),
+  });
   if (!compiled.ok)
     return {
       actions: withAgentControl(

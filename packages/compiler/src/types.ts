@@ -60,6 +60,16 @@ export type CompileRequest = {
   profile: AiProfile;
   targets?: CompilerTargetId[];
   templates?: TemplateDescriptor[];
+  /** The prior `ai-profile.lock`'s `modelPolicy` block, if any (Phase 31.5
+   * I6 fix: generated files must match the lock that claims to describe
+   * them). When supplied, every generated Codex/Claude model-policy surface
+   * (`.codex/config.toml`'s primary-default write, the `AGENTS.md`/
+   * `CLAUDE.md` guidance table) reconciles against it exactly like
+   * `resolveModelPolicyLockfile` does for the lockfile's own `modelPolicy`
+   * block, so a retained role/client resolution can never disagree between
+   * the generated files and the lock. Omitting this (the default) keeps
+   * today's always-fresh-from-the-live-catalog behavior. */
+  previousModelPolicy?: LockModelPolicyV2;
 };
 
 export type CompileIssueCode =
@@ -226,6 +236,18 @@ export type ModelPolicyTargetEffort = "low" | "medium" | "high" | "xhigh";
 // Codex/Claude producer must keep setting `effort` (still required for those
 // clients in practice) and a matching `effortStatus`, so existing lockfile
 // rows/goldens stay byte-identical.
+// Phase 31.5 (I6 Finding 3): `catalogVersion` records the catalog version
+// that actually produced/last-confirmed this specific row -- the current
+// version for a freshly-resolved row, or the prior lock's own recorded
+// version for a row retained/reused verbatim across an ordinary compile (see
+// `deriveLockedClientOverride` in model-policy-target-adapter.ts). This is
+// distinct from the block-level `LockModelPolicyV2.catalogVersion`, which
+// always describes the version that produced the block as a whole (the
+// *current* version at compile time); a reused row can therefore legitimately
+// carry an older `catalogVersion` than its own block. Required, non-optional
+// (matches the existing `effortStatus` precedent): `lockfile.ts`'s
+// `backfillModelPolicyCatalogVersion` migrates a pre-this-field lock by
+// copying the block-level `catalogVersion` onto every row that lacks its own.
 export type LockModelPolicyResolutionV2 = {
   client: ModelPolicyClientId;
   role: ModelPolicyRoleId;
@@ -235,6 +257,7 @@ export type LockModelPolicyResolutionV2 = {
   alternatives: string[];
   source: ModelPolicyResolutionSource;
   capabilityStatus: ModelPolicyCapabilityStatus;
+  catalogVersion: number;
 };
 
 export type LockModelPolicyV2 = {
