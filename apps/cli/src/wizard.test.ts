@@ -833,9 +833,18 @@ test("interactive regions flow produces same files as explicit --strategy region
 
   // The profile name is derived from the tmpdir basename and propagates into
   // AGENTS.md/CLAUDE.md generated regions. Normalize that line before
-  // comparing.
+  // comparing. Also strip the "Subagent Execution Policy" section: only the
+  // interactive wizard offers model-preset selection (Phase 31.5 I5), so it
+  // persists `subagentPolicy` and the explicit `--strategy regions --write`
+  // path (which never runs the wizard) intentionally does not. This is a
+  // real, documented divergence, not something the two paths should match.
   const normalize = (text: string): string =>
-    text.replace(/Name: agent-profile-wizard-[^\n]+/u, "Name: <NAME>");
+    text
+      .replace(/Name: agent-profile-wizard-[^\n]+/u, "Name: <NAME>")
+      .replace(
+        /## Subagent Execution Policy\n[\s\S]*?\n\n(?=## |<!-- agent-profile:generated:end -->)/u,
+        "",
+      );
   for (const relative of ["AGENTS.md", "CLAUDE.md"]) {
     const wizardText = (
       await readFile(path.join(wizardRoot, relative))
@@ -1717,6 +1726,32 @@ test("interactive wizard renders the write plan with exact per-client model/effo
   );
 });
 
+test("a confirmed non-default model preset is persisted into ai-profile.yaml and the lockfile's modelPolicy provenance", async () => {
+  const rootDir = await createTsRoot("model-preset-persisted");
+  const prompts = scriptedPrompts({
+    confirm: true,
+    clients: ["codex", "claude"],
+    modelPreset: "quality-first",
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+
+  const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
+  assert.match(profile, /subagentPolicy:\n {2}enabled: true\n {2}preset: quality-first/u);
+
+  const lockfile = await readWizardV2Lockfile(rootDir);
+  assert.equal(lockfile.modelPolicy?.preset, "quality-first");
+  assert.ok(
+    (lockfile.modelPolicy?.resolutions.length ?? 0) > 0,
+    "expected non-empty modelPolicy resolutions for the selected preset",
+  );
+});
+
 test("interactive wizard renders a Tabnine guided-manual-selection line when Tabnine is selected", async () => {
   const rootDir = await createTsRoot("model-preset-tabnine");
   const prompts = scriptedPrompts({
@@ -1987,6 +2022,13 @@ test("an existing unowned .tabnine/agent/settings.json is preserved byte-for-byt
 
   const afterBytes = await readFile(settingsPath, "utf8");
   assert.equal(afterBytes, originalBytes);
+
+  // The advisory outcome (file untouched, guidance to use /model and /about)
+  // must actually reach the user, not just be computed and discarded.
+  assert.match(
+    output.stdoutText(),
+    /\.tabnine\/agent\/settings\.json left untouched: .*\/model.*\/about/u,
+  );
 });
 
 test("cancelling at the advanced-override step writes nothing", async () => {

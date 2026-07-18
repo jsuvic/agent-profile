@@ -113,6 +113,30 @@ test("classifyTabnineSettingsOwnership: generated-owned when the lockfile record
   assert.equal(ownership, "generated-owned");
 });
 
+test("classifyTabnineSettingsOwnership: a lockfile-recorded generated-owned file that was hand-edited since degrades to unowned, not silently overwritten", async () => {
+  const rootDir = await makeTmpRoot();
+  await mkdir(path.join(rootDir, ".tabnine", "agent"), { recursive: true });
+  const originalBytes = '{\n  "model": {\n    "id": "gpt-5.4"\n  }\n}\n';
+  // The lockfile records the hash of what was originally generated...
+  await writeFile(
+    path.join(rootDir, "ai-profile.lock"),
+    generatedOwnedLockfile(
+      rootDir,
+      sha256Hex(Buffer.from(originalBytes, "utf8")),
+    ),
+    "utf8",
+  );
+  // ...but the on-disk file has since been hand-edited to a different model.
+  const editedBytes = '{\n  "model": {\n    "id": "user-picked-model"\n  }\n}\n';
+  await writeFile(
+    path.join(rootDir, ".tabnine", "agent", "settings.json"),
+    editedBytes,
+    "utf8",
+  );
+  const ownership = await classifyTabnineSettingsOwnership(rootDir);
+  assert.equal(ownership, "unowned");
+});
+
 test("classifyTabnineSettingsOwnership: a symlinked settings file is never treated as owned/writable", async () => {
   const rootDir = await makeTmpRoot();
   await mkdir(path.join(rootDir, ".tabnine", "agent"), { recursive: true });

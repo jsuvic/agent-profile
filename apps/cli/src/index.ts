@@ -38,6 +38,7 @@ import {
   type ImportStrategy,
   type LockOutputV2,
   type MixedOutputDescriptor,
+  type ModelPolicyTabnineSettingsPlan,
   type Phase14ImportReport,
   type PlannedWrite,
   type TemplateDescriptor,
@@ -47,6 +48,7 @@ import type {
   AiProfile,
   AiProfileSkillPackId,
   CapabilityCatalogEntry,
+  ModelPolicyPreset,
   SafetyMode,
 } from "@agent-profile/core";
 import {
@@ -1811,6 +1813,7 @@ async function runInit(
   let wizardSkillPacks: ReadonlyArray<AiProfileSkillPackId> | undefined;
   let wizardReviewerSubagents = false;
   let wizardAdvisoryHooks = false;
+  let wizardModelPreset: ModelPolicyPreset | undefined;
   let wizardTabnineModelOverride: string | undefined;
   if (isWizardEligibleArgs(args) && presetPayload === undefined) {
     const dispatch = await dispatchInitWizard({
@@ -1840,6 +1843,7 @@ async function runInit(
       wizardSkillPacks = dispatch.skillPacks;
       wizardReviewerSubagents = dispatch.reviewerSubagents;
       wizardAdvisoryHooks = dispatch.advisoryHooks;
+      wizardModelPreset = dispatch.modelPreset;
       wizardTabnineModelOverride = dispatch.tabnineModelOverride;
     }
   }
@@ -1978,6 +1982,9 @@ async function runInit(
             advisoryHooks: wizardAdvisoryHooks,
           },
         }),
+    ...(wizardModelPreset === undefined
+      ? {}
+      : { modelPreset: wizardModelPreset }),
   });
   const validation = parseProfileYaml(profileText, {
     sourcePath: safeProfilePath.path,
@@ -2042,6 +2049,7 @@ async function runInit(
 
   let plan: WritePlanResult | undefined;
   let clientWritePlan: WritePlanResult | undefined;
+  let clientTabninePlan: ModelPolicyTabnineSettingsPlan | undefined;
   let gitignoreUpdated = false;
 
   const profileRefusal = (
@@ -2111,6 +2119,7 @@ async function runInit(
       };
     }
     clientWritePlan = clientWrite.plan;
+    clientTabninePlan = clientWrite.tabnine;
     return undefined;
   };
 
@@ -2212,6 +2221,7 @@ async function runInit(
     wouldWrite: !parsed.write && plan.counts.create + plan.counts.change > 0,
     wrote: parsed.write && plan.counts.create + plan.counts.change > 0,
     clientWritePlan,
+    ...(clientTabninePlan ? { clientTabninePlan } : {}),
     gitignoreUpdated,
     clients,
     clientsEnabled: enabledClients(clients),
@@ -2250,12 +2260,21 @@ type DispatchInitWizardResult =
       skillPacks: ReadonlyArray<AiProfileSkillPackId>;
       reviewerSubagents: boolean;
       advisoryHooks: boolean;
+      modelPreset: ModelPolicyPreset;
       tabnineModelOverride?: string;
     }
   | { kind: "declined" };
 
 type ClientFileWriteResult =
-  | { ok: true; plan: WritePlanResult }
+  | {
+      ok: true;
+      plan: WritePlanResult;
+      /** The computed Tabnine write/advisory decision (Phase 31.5 I5R),
+       * present whenever Tabnine is an enabled client. Callers must surface
+       * an `advisory` plan to the user -- it means the settings file was
+       * intentionally left untouched, not that nothing happened. */
+      tabnine?: ModelPolicyTabnineSettingsPlan;
+    }
   | { ok: false; code: number; message: string };
 
 async function dispatchInitWizard(
@@ -2389,6 +2408,7 @@ async function dispatchInitWizard(
     skillPacks: outcome.skillPacks,
     reviewerSubagents: outcome.reviewerSubagents,
     advisoryHooks: outcome.advisoryHooks,
+    modelPreset: outcome.modelPreset,
     ...(outcome.tabnineModelOverride === undefined
       ? {}
       : { tabnineModelOverride: outcome.tabnineModelOverride }),
@@ -2971,6 +2991,12 @@ function renderInitialProfile(input: {
     reviewerSubagents: boolean;
     advisoryHooks: boolean;
   };
+  /** The wizard's resolved model-policy preset (Phase 31.5 I5), or
+   * `undefined` outside the interactive wizard. Persisted as
+   * `subagentPolicy.preset` so the compiler's real Codex/Claude target
+   * output and lock provenance reflect what the write-plan preview showed,
+   * instead of silently falling back to legacy mapping-v2 resolution. */
+  modelPreset?: ModelPolicyPreset;
 }): string {
   const safety = input.preferences?.safety ?? {
     mode: input.wizardCapabilities?.safetyMode ?? "guarded",
@@ -2987,6 +3013,10 @@ function renderInitialProfile(input: {
   const capabilities = input.wizardCapabilities
     ? renderInitialCapabilities(input.wizardCapabilities)
     : "";
+  const subagentPolicy =
+    input.modelPreset === undefined
+      ? ""
+      : `subagentPolicy:\n  enabled: true\n  preset: ${input.modelPreset}\n`;
 
   return `version: 1
 profile:
@@ -3012,7 +3042,7 @@ workflow:
   sdd: ${String(workflow.sdd)}
   tdd: ${String(workflow.tdd)}
   finalReview: ${String(workflow.finalReview)}
-${capabilities}permissions:
+${capabilities}${subagentPolicy}permissions:
   filesystem:
     read: ${permissions.filesystem.read}
     write: ${permissions.filesystem.write}
@@ -3066,6 +3096,7 @@ type InitReport = {
   wouldWrite: boolean;
   wrote: boolean;
   clientWritePlan?: WritePlanResult;
+  clientTabninePlan?: ModelPolicyTabnineSettingsPlan;
   gitignoreUpdated?: boolean;
   clients: ClientMatrix;
   clientsEnabled: ClientId[];
@@ -3159,6 +3190,10 @@ function toInitJson(report: InitReport): Record<string, unknown> {
 
   if (report.import) {
     summary.import = report.import;
+  }
+
+  if (report.clientTabninePlan) {
+    summary.tabnineModelSettings = report.clientTabninePlan;
   }
 
   return summary;
@@ -3604,7 +3639,7 @@ async function writeCompiledClientFiles(input: {
     input.tabnineModelOverride,
   );
 
-  const { writes } = buildCompileWrites({
+  const { writes, tabnine } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: compileResult.templates,
@@ -3618,6 +3653,7 @@ async function writeCompiledClientFiles(input: {
     return {
       ok: true,
       plan: await applyWritePlan({ rootDir: input.rootDir, writes }),
+      ...(tabnine ? { tabnine } : {}),
     };
   } catch {
     return {
@@ -4092,6 +4128,14 @@ function formatInitOutcomeSummary(input: InitReport): string[] {
     if (clientChanges.length > 0) {
       lines.push(`- generated ${String(clientChanges.length)} client files`);
     }
+  }
+
+  if (input.clientTabninePlan?.action === "write") {
+    lines.push("- wrote .tabnine/agent/settings.json");
+  } else if (input.clientTabninePlan?.action === "advisory") {
+    lines.push(
+      `- .tabnine/agent/settings.json left untouched: ${input.clientTabninePlan.guidance}`,
+    );
   }
 
   if (input.gitignoreUpdated) {

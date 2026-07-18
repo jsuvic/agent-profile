@@ -110,7 +110,16 @@ export async function classifyTabnineSettingsOwnership(
   const lockOutput = lockfile?.outputs.find(
     (output) => output.path === TABNINE_SETTINGS_PATH,
   );
-  return lockOutput?.ownership === "generated-owned"
+  if (lockOutput?.ownership !== "generated-owned") {
+    return "unowned";
+  }
+  // The lockfile alone does not prove the file is still what Agent Profile
+  // generated: a user may have hand-edited it since. Comparing the recorded
+  // hash catches that drift, so an edited "generated-owned" file degrades to
+  // `unowned` (preserved byte-for-byte, advisory guidance only) instead of
+  // being silently overwritten -- the same protection region-aware outputs
+  // get from `planRegionAwareWrites`'s hash-mismatch refusal.
+  return sha256Hex(existing.bytes) === lockOutput.sha256
     ? "generated-owned"
     : "unowned";
 }
