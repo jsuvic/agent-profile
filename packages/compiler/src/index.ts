@@ -90,27 +90,29 @@ export type {
   ModelPolicyTargetClientResolution,
   ModelPolicyTargetRow,
 } from "./model-policy-target-adapter.js";
-// Only the model-resolution-table surface (catalog, table builder, lockfile
-// row conversion) is part of the package's public API today, mirroring the
-// Codex/Claude adapter's exports. `planTabnineModelSettingsWrite` and its
-// supporting types/constants are deliberately NOT re-exported here: that
-// `.tabnine/agent/settings.json` ownership-aware write plan has no
-// production caller yet (it is not wired into any compile/write pipeline —
-// see docs/targets/subagent-policy.md's "Known scope narrowing (I3)"
-// section). They remain regular named exports of
-// ./model-policy-tabnine-adapter.js for direct/test use so the public
-// package entry point does not advertise an unwired write capability as a
-// stable, production-backed contract.
+// The model-resolution-table surface (catalog, table builder, lockfile row
+// conversion) mirrors the Codex/Claude adapter's exports.
+// `planTabnineModelSettingsWrite` and its supporting types/constants are now
+// re-exported too (Phase 31.5 I5R): `apps/cli/src/compile-plan.ts` wires this
+// into the real compile/init write pipeline (see
+// `classifyTabnineSettingsOwnership` / `buildCompileWrites`'s
+// `tabnineModelSettings` input), so the write-safe `.tabnine/agent/
+// settings.json` plan is a stable, production-backed contract.
 export {
   buildModelPolicyTabnineTargetTable,
   MODEL_POLICY_TABNINE_CATALOG_VERSION,
+  planTabnineModelSettingsWrite,
+  TABNINE_ADVISORY_GUIDANCE,
   TABNINE_MODEL_POLICY_CATALOG,
+  TABNINE_SETTINGS_WRITE_SAFE_PROPERTY,
   toLockModelPolicyTabnineResolutions,
 } from "./model-policy-tabnine-adapter.js";
 export type {
   ModelPolicyTabnineResolution,
   ModelPolicyTabnineRoleOverrides,
   ModelPolicyTabnineRow,
+  ModelPolicyTabnineSettingsPlan,
+  TabnineSettingsOwnership,
 } from "./model-policy-tabnine-adapter.js";
 export {
   ADVISORY_HOOK_TEMPLATES,

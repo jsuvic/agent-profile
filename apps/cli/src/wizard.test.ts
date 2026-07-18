@@ -58,7 +58,8 @@ type PromptCall =
     }
   | { kind: "confirmWritePlan"; default: boolean }
   | { kind: "selectModelPreset"; default: string }
-  | { kind: "confirmModelProbe"; default: boolean; calls: number };
+  | { kind: "confirmModelProbe"; default: boolean; calls: number }
+  | { kind: "selectAdvancedOverrides"; tabnineSelected: boolean };
 
 type ScriptedPrompts = CliPrompts & {
   calls: PromptCall[];
@@ -80,6 +81,13 @@ function scriptedPrompts(options: {
   advisoryHooks?: boolean;
   modelPreset?: "role-aware" | "quality-first" | "cost-conscious";
   probeConsent?: boolean;
+  /** Omitted entirely by default so the advanced-override step stays absent
+   * (progressive disclosure): scripted tests that do not opt in never see
+   * `selectAdvancedOverrides` in the prompt sequence, matching the additive/
+   * backward-compatible contract `selectModelPreset`/`confirmModelProbe`
+   * already established. */
+  advancedOverrides?: { tabnineModel?: string } | undefined;
+  includeAdvancedOverridesPrompt?: boolean;
 }): ScriptedPrompts {
   const calls: PromptCall[] = [];
   let manualLanguageIndex = 0;
@@ -146,6 +154,17 @@ function scriptedPrompts(options: {
       calls.push({ kind: "confirmModelProbe", default: def, calls: n });
       return options.probeConsent ?? def;
     },
+    ...(options.includeAdvancedOverridesPrompt
+      ? {
+          async selectAdvancedOverrides({ tabnineSelected }) {
+            calls.push({
+              kind: "selectAdvancedOverrides",
+              tabnineSelected,
+            });
+            return options.advancedOverrides;
+          },
+        }
+      : {}),
   };
 }
 
@@ -1809,4 +1828,186 @@ test("cancelling the interactive wizard before the write-plan confirm writes not
   });
   assert.equal(code, 0, output.stderrText());
   assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 31.5 (I5R): advanced per-role/exact-override entry, and Tabnine
+// write-plan wiring end to end through the real init pipeline.
+// ---------------------------------------------------------------------------
+
+test("the advanced-override step is off by default (progressive disclosure): omitted entirely when the prompt is not injected", async () => {
+  const rootDir = await createTsRoot("advanced-override-absent");
+  const prompts = scriptedPrompts({ confirm: false, clients: ["tabnine"] });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(
+    prompts.calls.some((call) => call.kind === "selectAdvancedOverrides"),
+    false,
+  );
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: guided manual selection \(documented enumeration only/u,
+  );
+});
+
+test("the advanced-override step is skipped entirely when Tabnine is not a selected client", async () => {
+  const rootDir = await createTsRoot("advanced-override-no-tabnine");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["codex"],
+    includeAdvancedOverridesPrompt: true,
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  const call = prompts.calls.find(
+    (item) => item.kind === "selectAdvancedOverrides",
+  );
+  assert.ok(call);
+  assert.equal((call as { tabnineSelected: boolean }).tabnineSelected, false);
+});
+
+test("declining the advanced-override step keeps the default guided-manual-selection path unchanged", async () => {
+  const rootDir = await createTsRoot("advanced-override-declined");
+  const prompts = scriptedPrompts({
+    confirm: false,
+    clients: ["tabnine"],
+    includeAdvancedOverridesPrompt: true,
+    advancedOverrides: undefined,
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: guided manual selection \(documented enumeration only/u,
+  );
+});
+
+test("a catalogued exact Tabnine override is written to .tabnine/agent/settings.json when the file is absent", async () => {
+  const rootDir = await createTsRoot("advanced-override-write");
+  const prompts = scriptedPrompts({
+    confirm: true,
+    clients: ["tabnine"],
+    includeAdvancedOverridesPrompt: true,
+    advancedOverrides: { tabnineModel: "gpt-5.4" },
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: exact override gpt-5\.4 \[catalogued\]/u,
+  );
+  const settingsPath = path.join(
+    rootDir,
+    ".tabnine",
+    "agent",
+    "settings.json",
+  );
+  const written = JSON.parse(await readFile(settingsPath, "utf8")) as {
+    model: { id: string };
+  };
+  assert.deepEqual(written, { model: { id: "gpt-5.4" } });
+});
+
+test("an uncatalogued exact Tabnine override is accepted, written, and labelled unverified/uncatalogued in the preview", async () => {
+  const rootDir = await createTsRoot("advanced-override-uncatalogued");
+  const prompts = scriptedPrompts({
+    confirm: true,
+    clients: ["tabnine"],
+    includeAdvancedOverridesPrompt: true,
+    advancedOverrides: { tabnineModel: "org-acme-private-finetune-7" },
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.match(
+    output.stdoutText(),
+    /Tabnine: exact override org-acme-private-finetune-7 \[unverified, uncatalogued\]/u,
+  );
+  const settingsPath = path.join(
+    rootDir,
+    ".tabnine",
+    "agent",
+    "settings.json",
+  );
+  const written = JSON.parse(await readFile(settingsPath, "utf8")) as {
+    model: { id: string };
+  };
+  assert.deepEqual(written, { model: { id: "org-acme-private-finetune-7" } });
+});
+
+test("an existing unowned .tabnine/agent/settings.json is preserved byte-for-byte even when an exact override is entered", async () => {
+  const rootDir = await createTsRoot("advanced-override-unowned-preserved");
+  await mkdir(path.join(rootDir, ".tabnine", "agent"), { recursive: true });
+  const originalBytes = '{"userWroteThis": true}\n';
+  const settingsPath = path.join(
+    rootDir,
+    ".tabnine",
+    "agent",
+    "settings.json",
+  );
+  await writeFile(settingsPath, originalBytes, "utf8");
+
+  const prompts = scriptedPrompts({
+    confirm: true,
+    clients: ["tabnine"],
+    includeAdvancedOverridesPrompt: true,
+    advancedOverrides: { tabnineModel: "gpt-5.4" },
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+
+  const afterBytes = await readFile(settingsPath, "utf8");
+  assert.equal(afterBytes, originalBytes);
+});
+
+test("cancelling at the advanced-override step writes nothing", async () => {
+  const rootDir = await createTsRoot("advanced-override-cancel");
+  const prompts: ScriptedPrompts = {
+    ...scriptedPrompts({
+      confirm: true,
+      clients: ["tabnine"],
+    }),
+  };
+  prompts.selectAdvancedOverrides = async () => {
+    const { WizardCancelled } = await import("./wizard.js");
+    throw new WizardCancelled();
+  };
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(await fileExists(path.join(rootDir, "ai-profile.yaml")), false);
+  assert.match(output.stdoutText(), /Cancelled - no files written\./u);
 });

@@ -6,7 +6,11 @@ import type { Readable, Writable } from "node:stream";
 
 import type { ModelPolicyTargetRow } from "@agent-profile/compiler";
 import { MODEL_POLICY_PRIMARY_ROLE } from "@agent-profile/compiler";
-import type { AiProfileSkillPackId, ModelPolicyPreset } from "@agent-profile/core";
+import {
+  validateModelPolicyOverride,
+  type AiProfileSkillPackId,
+  type ModelPolicyPreset,
+} from "@agent-profile/core";
 
 import {
   accent,
@@ -441,6 +445,41 @@ export async function createClackPrompts(
         initialValue: def,
       });
       return unwrap(value);
+    },
+
+    async selectAdvancedOverrides({ tabnineSelected }) {
+      // Progressive disclosure: skip entirely when Tabnine is not selected
+      // (nothing to customize), and off by default otherwise -- the confirm
+      // below defaults to false, so declining is the ordinary path.
+      if (!tabnineSelected) return undefined;
+
+      const wantsAdvanced = unwrap(
+        await confirm({
+          ...io,
+          message:
+            "Customize further? Enter an exact Tabnine model id (advanced, optional).",
+          initialValue: false,
+        }),
+      );
+      if (!wantsAdvanced) return undefined;
+
+      const raw = unwrap(
+        await text({
+          ...io,
+          message:
+            "Exact Tabnine model id (organization/private ids are accepted; leave blank to skip)",
+          validate: (value) => {
+            const trimmed = (value ?? "").trim();
+            if (trimmed === "") return undefined;
+            const validation = validateModelPolicyOverride(trimmed);
+            return validation.ok
+              ? undefined
+              : `Invalid model id (${validation.code}).`;
+          },
+        }),
+      );
+      const trimmed = raw.trim();
+      return trimmed === "" ? undefined : { tabnineModel: trimmed };
     },
   };
 }

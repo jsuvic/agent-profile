@@ -130,7 +130,7 @@ export async function evaluateDispatchState(
   ) {
     actions.push("compile-reconcile");
   } else if (lock) {
-    const writes = buildCompileWrites({
+    const { writes } = buildCompileWrites({
       profilePath: "ai-profile.yaml",
       profileBytes: Buffer.from(source),
       templates: compiled.templates,

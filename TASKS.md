@@ -140,7 +140,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I3 | Tabnine historical, organization, and private models | done | [003-tabnine-historical-private-models.md](docs/specs/phase-31.5/issues/003-tabnine-historical-private-models.md) |
 | I4 | Consented source-free model probes | done | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md) |
 | I5 | Exact role-aware model selection during init | done | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md) |
-| I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | ready | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
+| I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | done | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
 | I6 | Explicit model upgrade and locked resolution lifecycle | sequenced | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
 | I7 | Offline Doctor model policy and explicit recheck | sequenced | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
 | I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |

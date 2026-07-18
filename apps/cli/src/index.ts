@@ -14,8 +14,6 @@ import {
   applyWritePlan,
   buildPhase14ImportReport,
   compileProfile,
-  createLockfileFile,
-  resolveModelPolicyLockfile,
   getLocalRuntimeGitignoreFindings,
   parseMixedFile,
   planRootInstructionsAdoption,
@@ -84,6 +82,7 @@ import {
   findLockfileOwnedDrift,
   planCompileDryRun,
   planRegionAwareWrites,
+  resolveTabnineModelSettings,
 } from "./compile-plan.js";
 import type { DispatcherPrompts } from "./dispatch-clack.js";
 import {
@@ -1251,13 +1250,19 @@ async function runCompile(
     return 3;
   }
 
-  const writes = buildCompileWrites({
+  const tabnineModelSettings = await resolveTabnineModelSettings(
+    rootDir,
+    profileResult.profile,
+  );
+
+  const { writes } = buildCompileWrites({
     profilePath: safeProfilePath.path,
     profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
     regionPlan,
     profile: profileResult.profile,
+    ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
   if (parsed.write && !parsed.force) {
@@ -1632,7 +1637,12 @@ async function runDriftReconciliation(input: {
     }
   }
 
-  const writes = buildCompileWrites({
+  const tabnineModelSettings = await resolveTabnineModelSettings(
+    input.rootDir,
+    input.profile,
+  );
+
+  const { writes } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: input.compileResult.templates,
@@ -1647,6 +1657,7 @@ async function runDriftReconciliation(input: {
       refusals: [],
     },
     profile: input.profile,
+    ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
   prompts.showSummary(formatReconciliationSummary(actions));
@@ -1800,6 +1811,7 @@ async function runInit(
   let wizardSkillPacks: ReadonlyArray<AiProfileSkillPackId> | undefined;
   let wizardReviewerSubagents = false;
   let wizardAdvisoryHooks = false;
+  let wizardTabnineModelOverride: string | undefined;
   if (isWizardEligibleArgs(args) && presetPayload === undefined) {
     const dispatch = await dispatchInitWizard({
       args: parsed,
@@ -1828,6 +1840,7 @@ async function runInit(
       wizardSkillPacks = dispatch.skillPacks;
       wizardReviewerSubagents = dispatch.reviewerSubagents;
       wizardAdvisoryHooks = dispatch.advisoryHooks;
+      wizardTabnineModelOverride = dispatch.tabnineModelOverride;
     }
   }
 
@@ -2086,6 +2099,9 @@ async function runInit(
       profilePath: safeProfilePath.path,
       profile: validation.profile,
       profileBytes: Buffer.from(profileText, "utf8"),
+      ...(wizardTabnineModelOverride === undefined
+        ? {}
+        : { tabnineModelOverride: wizardTabnineModelOverride }),
     });
     if (!clientWrite.ok) {
       return {
@@ -2234,6 +2250,7 @@ type DispatchInitWizardResult =
       skillPacks: ReadonlyArray<AiProfileSkillPackId>;
       reviewerSubagents: boolean;
       advisoryHooks: boolean;
+      tabnineModelOverride?: string;
     }
   | { kind: "declined" };
 
@@ -2372,6 +2389,9 @@ async function dispatchInitWizard(
     skillPacks: outcome.skillPacks,
     reviewerSubagents: outcome.reviewerSubagents,
     advisoryHooks: outcome.advisoryHooks,
+    ...(outcome.tabnineModelOverride === undefined
+      ? {}
+      : { tabnineModelOverride: outcome.tabnineModelOverride }),
   };
 }
 
@@ -3504,6 +3524,13 @@ async function writeCompiledClientFiles(input: {
   profilePath: string;
   profile: AiProfile;
   profileBytes: Uint8Array;
+  /** Explicit exact Tabnine model override entered via the wizard's
+   * progressive-disclosure advanced entry step (Phase 31.5 I5R). `undefined`
+   * (the default) keeps Tabnine's guided-manual-selection default: no model
+   * is auto-selected, and any existing `.tabnine/agent/settings.json` is only
+   * ever written when Agent Profile already owns it or it does not yet
+   * exist. */
+  tabnineModelOverride?: string;
 }): Promise<ClientFileWriteResult> {
   const compileResult = compileProfile({ profile: input.profile });
 
@@ -3571,19 +3598,21 @@ async function writeCompiledClientFiles(input: {
     };
   }
 
-  const modelPolicy = resolveModelPolicyLockfile(input.profile);
-  const lockfile = createLockfileFile({
+  const tabnineModelSettings = await resolveTabnineModelSettings(
+    input.rootDir,
+    input.profile,
+    input.tabnineModelOverride,
+  );
+
+  const { writes } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
-    mixedOutputs: regionPlan.mixedOutputs,
-    ...(modelPolicy === undefined ? {} : { modelPolicy }),
+    regionPlan,
+    profile: input.profile,
+    ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
-  const writes = [
-    ...regionPlan.writes,
-    { path: lockfile.path, bytes: lockfile.bytes },
-  ];
 
   try {
     return {

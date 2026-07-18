@@ -7,12 +7,15 @@ import {
   buildModelPolicyTargetTable,
   MODEL_POLICY_PRIMARY_ROLE,
   MODEL_POLICY_TARGET_CATALOG_VERSION,
+  TABNINE_MODEL_POLICY_CATALOG,
   getCapabilityArtifactPaths,
   type ModelPolicyTargetRow,
 } from "@agent-profile/compiler";
 import {
   DEFAULT_MODEL_POLICY_PRESET,
+  findModelCatalogEntry,
   MODEL_POLICY_PRESETS,
+  validateModelPolicyOverride,
   type AiProfileSkillPackId,
   type ModelPolicyPreset,
   type SafetyMode,
@@ -163,6 +166,13 @@ export type WizardOutcome = {
    * when consent was withheld or no probe-eligible client/model existed;
    * declining always preserves this complete, honestly-unverified path. */
   modelProbeReport: ModelProbeReport;
+  /** Explicit exact Tabnine model override entered via the progressive-
+   * disclosure advanced-entry step (Phase 31.5 I5R). `undefined` (the
+   * default: the step is off unless the user opts in) keeps Tabnine's
+   * guided-manual-selection default -- no model is written. An uncatalogued
+   * value is accepted, never rejected, and labelled unverified in the
+   * preview (see `formatModelPolicySummary`). */
+  tabnineModelOverride?: string;
 };
 
 export type StrategyPrompt = (options: {
@@ -221,6 +231,22 @@ export type ModelProbeConsentPrompt = (options: {
 }) => Promise<boolean>;
 
 /**
+ * Progressive-disclosure advanced-entry step (Phase 31.5 I5R): off by
+ * default, reachable only via explicit user intent. Lets the user type an
+ * exact/unknown Tabnine model id, since Tabnine never auto-selects a model
+ * for a role (organization/admin-controlled availability -- see
+ * `model-policy-tabnine-adapter.ts`'s module comment). Returns `undefined`
+ * when the user declines to customize or leaves the entry blank; an
+ * uncatalogued value is still accepted (never rejected), consistent with
+ * `resolveModelPolicy`/`ModelPolicyCapabilityStatus`'s `"unverified"` status.
+ * `tabnineSelected` tells the implementation whether Tabnine is even a
+ * candidate client for this run, so it can skip the prompt entirely when not.
+ */
+export type ModelAdvancedOverridePrompt = (options: {
+  tabnineSelected: boolean;
+}) => Promise<{ tabnineModel?: string } | undefined>;
+
+/**
  * Optional presentation framing for the interactive wizard. Rendering-only: a
  * `CliPrompts` implementation that provides `framing` (the clack adapter) draws
  * the logo, intro/outro bars, and the detected/plan notes; an implementation
@@ -262,6 +288,14 @@ export type CliPrompts = {
    */
   selectModelPreset?: ModelPresetPrompt;
   confirmModelProbe?: ModelProbeConsentPrompt;
+  /**
+   * Optional (Phase 31.5 I5R): progressive-disclosure advanced-entry step for
+   * an exact/unknown Tabnine model override. Additive and backward
+   * compatible -- a `CliPrompts` implementation that omits this (existing
+   * scripted-test doubles) still works; `runInitWizard` never customizes
+   * anything when it is absent.
+   */
+  selectAdvancedOverrides?: ModelAdvancedOverridePrompt;
 };
 
 export type ManualLanguageParseResult =
@@ -902,6 +936,7 @@ export async function runInitWizard(input: {
     reason: "consent-declined",
     results: Object.freeze([]),
   });
+  let tabnineModelOverride: string | undefined;
   if (!context.hasExistingProfile) {
     setupProfile = await input.prompts.selectSetupProfile({
       default: "guarded-corporate",
@@ -952,6 +987,23 @@ export async function runInitWizard(input: {
         );
       }
     }
+
+    if (input.prompts.selectAdvancedOverrides) {
+      const advanced = await input.prompts.selectAdvancedOverrides({
+        tabnineSelected: normalizedClients.includes("tabnine"),
+      });
+      const rawTabnineModel = advanced?.tabnineModel;
+      if (rawTabnineModel !== undefined) {
+        const validation = validateModelPolicyOverride(rawTabnineModel);
+        if (validation.ok) {
+          tabnineModelOverride = rawTabnineModel;
+        } else {
+          input.io.stderr(
+            `Ignoring invalid Tabnine model override (${validation.code}); guided manual selection stays in effect.\n`,
+          );
+        }
+      }
+    }
   }
 
   const missingGitignore = missingGitignoreEntries(context);
@@ -978,6 +1030,7 @@ export async function runInitWizard(input: {
     modelPolicyTable,
     modelProbeConsent,
     modelProbeReport,
+    ...(tabnineModelOverride === undefined ? {} : { tabnineModelOverride }),
   };
 
   const plan = formatWizardPlan(context, outcomeDraft);
@@ -1121,10 +1174,24 @@ function formatModelPolicySummary(
     }
   }
   if (outcome.clients.includes("tabnine")) {
-    lines.push(
-      "  Tabnine: guided manual selection (documented enumeration only; " +
-        "select the exact model with /model and verify with /about)",
-    );
+    if (outcome.tabnineModelOverride !== undefined) {
+      const catalogued =
+        findModelCatalogEntry(
+          TABNINE_MODEL_POLICY_CATALOG,
+          outcome.tabnineModelOverride,
+        ) !== undefined;
+      lines.push(
+        `  Tabnine: exact override ${outcome.tabnineModelOverride} ` +
+          `[${catalogued ? "catalogued" : "unverified, uncatalogued"}] - ` +
+          "written to .tabnine/agent/settings.json when absent or already " +
+          "Agent-Profile-owned; preserved untouched otherwise",
+      );
+    } else {
+      lines.push(
+        "  Tabnine: guided manual selection (documented enumeration only; " +
+          "select the exact model with /model and verify with /about)",
+      );
+    }
   }
   lines.push(
     outcome.modelProbeConsent

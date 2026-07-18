@@ -143,6 +143,56 @@ test("selectModelPreset renders the expanded exact per-role model/effort/status 
   assert.match(rendered, new RegExp(`status=${qualityFirstRow.codex.primaryStatus}`, "u"));
 });
 
+test("selectAdvancedOverrides skips entirely (returns undefined without prompting) when Tabnine is not selected", async () => {
+  const { output, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = await prompts.selectAdvancedOverrides({
+    tabnineSelected: false,
+  });
+  assert.equal(result, undefined);
+  assert.equal(output.text(), "", "no prompt output when Tabnine is not selected");
+});
+
+test("selectAdvancedOverrides is off by default: declining the customize confirm returns undefined", async () => {
+  const { input, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = prompts.selectAdvancedOverrides({ tabnineSelected: true });
+  // The confirm defaults to false (progressive disclosure); pressing enter
+  // accepts the default and skips the text-entry step entirely.
+  await press(input, [ENTER]);
+  assert.equal(await result, undefined);
+});
+
+test("selectAdvancedOverrides accepts an exact Tabnine model id when the user opts in", async () => {
+  const { input, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = prompts.selectAdvancedOverrides({ tabnineSelected: true });
+  // Toggle the confirm to true, then type an exact id.
+  await press(input, [DOWN, ENTER]);
+  await press(input, ["gpt-5.4", ENTER]);
+  assert.deepEqual(await result, { tabnineModel: "gpt-5.4" });
+});
+
+test("selectAdvancedOverrides accepts an uncatalogued/private model id unchanged (never rejected)", async () => {
+  const { input, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = prompts.selectAdvancedOverrides({ tabnineSelected: true });
+  await press(input, [DOWN, ENTER]);
+  await press(input, ["org-acme-private-finetune-7", ENTER]);
+  assert.deepEqual(await result, {
+    tabnineModel: "org-acme-private-finetune-7",
+  });
+});
+
+test("selectAdvancedOverrides returns undefined when the user opts in but leaves the entry blank", async () => {
+  const { input, prompts } = await harness();
+  assert.ok(prompts.selectAdvancedOverrides);
+  const result = prompts.selectAdvancedOverrides({ tabnineSelected: true });
+  await press(input, [DOWN, ENTER]);
+  await press(input, [ENTER]);
+  assert.equal(await result, undefined);
+});
+
 test("confirmWritePlan keeps preview first and default (returns false on enter)", async () => {
   const { input, prompts } = await harness();
   const result = prompts.confirmWritePlan({ default: false });
@@ -564,6 +614,31 @@ test("cancel at confirmModelProbe exits 0, prints the cancel line, and writes no
   const prompts = fakePrompts({
     selectClients: async () => ["codex"],
     confirmModelProbe: () => {
+      throw new WizardCancelled();
+    },
+  });
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /Cancelled - no files written\./u);
+  assert.equal(
+    existsSync(path.join(rootDir, "ai-profile.yaml")),
+    false,
+    "cancelling must not write ai-profile.yaml",
+  );
+});
+
+test("cancel at selectAdvancedOverrides exits 0, prints the cancel line, and writes nothing", async () => {
+  // Reach the advanced-override step by selecting tabnine (the step is a
+  // no-op otherwise), then cancel there.
+  const rootDir = await createFreshRoot();
+  const output = createOutput();
+  const prompts = fakePrompts({
+    selectClients: async () => ["tabnine"],
+    selectAdvancedOverrides: () => {
       throw new WizardCancelled();
     },
   });

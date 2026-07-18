@@ -241,6 +241,124 @@ Recommendation rules:
 | legacy generated marker without lockfile exists | `Preserve existing files` plus warning  |
 | foreign skill or subagent path conflict exists  | `Preserve existing files` plus conflict |
 
+## Model Selection (Phase 31.5)
+
+For a new profile, the interactive wizard (step 6a, between capability packs
+and the `.gitignore` prompt) resolves an exact model/effort per role for the
+selected clients, using the mapping-v3 model-policy domain
+(`docs/specs/phase-31.5/001-model-selection-lifecycle.md`). This section
+documents what actually shipped: the preset step (I5), the probe-consent step
+(I5), the Tabnine manual/advisory path plus its exact-override entry point
+(I5R), and the offline/non-interactive contract. See
+`docs/targets/subagent-policy.md` for the underlying per-role capability/effort
+preset tables and the Tabnine adapter's catalog/lifecycle rules; this section
+does not duplicate those tables, only the CLI-facing flow around them.
+
+### Preset choice
+
+`agent-profile init` offers three presets, always shown with their **exact**
+per-role model/effort/lifecycle/status table for every preset before the
+choice commits — never only a `strongest`/`balanced` label:
+
+| Preset            | Shape                                                              |
+| ------------------ | ------------------------------------------------------------------ |
+| `role-aware`       | Recommended default. Strongest capability, highest effort for review-and-decision roles (grill, architect, critical/spec/quality reviewers); balanced capability for implementer roles; efficient capability for exploration and mechanical work. |
+| `quality-first`    | Strongest capability across nearly every role, including implementers; trades cost/latency for maximum capability everywhere reasonable. |
+| `cost-conscious`   | Balanced or efficient capability and lower effort across every role; trades some capability for cost/latency. |
+
+Each preset's table renders one row per role with the exact Codex and Claude
+model id, target effort, catalog lifecycle (`current` / `supported-legacy` /
+`deprecated` / `retired` / `unrated`), and capability status
+(`configured` / `advisory` / `unsupported` / `unverified`) — the same
+vocabulary Doctor and the lockfile use. The write-plan preview shown before
+the final confirm repeats this for the primary role and every selected
+client, plus the model catalog version, so the exact commitment is visible
+twice: once while choosing the preset, once in the final plan.
+
+### Probe consent
+
+Immediately after the preset commits (and only when at least one selected
+client's primary role resolved an exact Codex/Claude model), the wizard asks:
+
+> Run a live model probe now? At most N client call(s) will run, may contact
+> the provider, and may consume account quota. No repository content,
+> credentials, or account data is read or sent. Declining keeps every
+> selection unverified.
+
+The consent default is **declined**. Declining never starts a process — the
+probe function is still called, but gates on consent before touching any
+process/network seam, so the "zero processes started" guarantee holds
+regardless of which branch runs. Consenting runs at most the disclosed call
+count and folds the result into the write-plan preview
+(`Model probe: consented (N result(s))` vs.
+`Model probe: declined - exact models remain unverified against a live
+provider`). Tabnine is never probed (no documented source-free one-shot
+invocation for it).
+
+### Tabnine: guided manual selection, advisory guidance, and the exact-override entry point
+
+Tabnine's exact model availability is organization/admin-controlled and not
+something Agent Profile can rank or auto-select (see
+`docs/targets/subagent-policy.md`). By default, when Tabnine is a selected
+client, the write-plan preview shows:
+
+```text
+Tabnine: guided manual selection (documented enumeration only; select the
+exact model with /model and verify with /about)
+```
+
+No file is written or touched for this default path — `.tabnine/agent/
+settings.json` is left exactly as it is (or not created at all).
+
+An **advanced, exact-override entry point** (off by default — progressive
+disclosure, reachable only via explicit opt-in) lets you type an exact
+Tabnine model id, including an organization/private id Agent Profile does not
+recognize:
+
+- The step only appears when Tabnine is a selected client, and only asks
+  "Customize further?" — declining (the default) leaves the guided-manual
+  path above unchanged.
+- Opting in and typing a model id is validated only for shape (length,
+  control characters); an uncatalogued/unrecognized id is **never rejected**,
+  it is accepted and labelled `unverified, uncatalogued` in the preview, e.g.:
+
+  ```text
+  Tabnine: exact override org-acme-private-finetune-7 [unverified, uncatalogued]
+  - written to .tabnine/agent/settings.json when absent or already
+  Agent-Profile-owned; preserved untouched otherwise
+  ```
+
+- When you confirm the plan, this exact model is passed through to the real
+  write pipeline (`apps/cli/src/compile-plan.ts`'s `classifyTabnineSettingsOwnership`
+  + `buildCompileWrites`): the settings file is written deterministically
+  (`{"model": {"id": "<model>"}}`, the only reviewed write-safe shape) when it
+  is absent or already recorded as Agent-Profile-`generated-owned` in
+  `ai-profile.lock`; an existing file with any other provenance (`unowned`,
+  including a symlink) is always preserved byte-for-byte and only advisory
+  `/model`/`/about` guidance is shown instead — the same whole-file
+  ownership discipline every other generated file follows (ADR 0020), never a
+  structural JSON merge or a guess at existing content.
+- This override is **not** persisted into `ai-profile.yaml` (no
+  `subagentPolicy.roles[id].overrides.tabnine` schema field exists yet): it
+  only affects the write performed by this `init` run. A later
+  `agent-profile compile --write` run, without going back through the wizard,
+  has no exact model to offer and stays advisory-only for Tabnine.
+
+### Offline, non-interactive, and `--probe-models`
+
+In any non-interactive environment — `stdin`/`stdout` is not a TTY, `CI=true`,
+or `--non-interactive` is present — none of the model-selection prompts above
+run at all: `init` behaves as `init --import --strategy preserve --dry-run`
+and writes nothing (see "Init Wizard" above), so no preset, probe, or
+Tabnine-override choice is made on your behalf.
+
+`--probe-models` is not a supported flag: this phase intentionally offers
+*only* the consented, interactive prompt above, with no flag-based
+non-interactive opt-in. Passing `--probe-models` is rejected unconditionally,
+before `init` resolves `--root`, reads any file, or dispatches the wizard —
+so it never starts a client/provider/package process and never touches the
+filesystem, regardless of any other flags supplied alongside it.
+
 ## Init Clients
 
 `agent-profile init` preserves the phase 5 default profile bytes unless client
