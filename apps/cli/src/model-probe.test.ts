@@ -211,6 +211,18 @@ test("codex and claude pin documented non-persistent invocations; tabnine has no
   assert.ok(codexArgs.includes("--sandbox"));
   assert.ok(codexArgs.includes("read-only"));
   assert.ok(codexArgs.includes("--skip-git-repo-check"));
+  assert.ok(
+    codexArgs.includes("--ephemeral"),
+    "codex probe must skip persisting session rollout files to disk",
+  );
+  assert.ok(
+    codexArgs.includes("--ignore-user-config"),
+    "codex probe must not load $CODEX_HOME/config.toml",
+  );
+  assert.ok(
+    codexArgs.includes("--ignore-rules"),
+    "codex probe must not load user or project execpolicy .rules files",
+  );
   assert.ok(codexArgs.includes("--model"));
   assert.ok(codexArgs.includes("gpt-5.6-terra"));
   assert.ok(
@@ -222,6 +234,14 @@ test("codex and claude pin documented non-persistent invocations; tabnine has no
   const claudeArgs = claude.buildArgs("claude-haiku-4-5", "low");
   assert.equal(claude.command, "claude");
   assert.ok(claudeArgs.includes("-p"), "claude probe uses non-interactive print mode");
+  assert.ok(
+    claudeArgs.includes("--no-session-persistence"),
+    "claude probe must disable session persistence (print-mode-only flag)",
+  );
+  assert.ok(
+    claudeArgs.includes("--bare"),
+    "claude probe must skip hooks/skills/plugins/MCP/auto-memory/CLAUDE.md discovery",
+  );
   assert.ok(claudeArgs.includes("--model"));
   assert.ok(claudeArgs.includes("claude-haiku-4-5"));
   assert.ok(claudeArgs.includes(MODEL_PROBE_FIXED_PROMPT));
@@ -554,6 +574,48 @@ test("a model shared across calls is probed at most once", async () => {
       (invocation) => invocation.args[invocation.args.indexOf("--model") + 1],
     );
     assert.deepEqual(probedModels, ["claude-a", "claude-shared", "claude-b"]);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("a model probed as one call's alternative still uses its own highest intended effort as another call's primary", async () => {
+  const repoRoot = await makeFakeRepoRoot();
+  const { calls, runner } = recordingRunner((invocation) => {
+    const model = invocation.args[invocation.args.indexOf("--model") + 1] ?? "";
+    if (model === "codex-a") {
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "403 Forbidden: this account does not have access to the requested model.",
+        timedOut: false,
+      };
+    }
+    return okResult();
+  });
+  try {
+    await runModelProbe(
+      // "codex-shared" appears as call A's low-effort alternative, but is
+      // call B's own primary selection at high effort. Call A is iterated
+      // first (insertion order), so "codex-shared" is probed while still
+      // inside call A's alternative loop -- it must still carry its own
+      // (call B's) highest intended effort, not call A's lower effort.
+      plan([
+        { client: "codex", model: "codex-a", effort: "low", alternatives: ["codex-shared"] },
+        { client: "codex", model: "codex-shared", effort: "high", alternatives: [] },
+      ]),
+      CONSENT,
+      baseDeps(runner, repoRoot),
+    );
+    const sharedInvocation = calls.find(
+      (invocation) =>
+        invocation.args[invocation.args.indexOf("--model") + 1] === "codex-shared",
+    );
+    assert.ok(sharedInvocation, "codex-shared must have been probed");
+    assert.ok(
+      sharedInvocation?.args.includes("model_reasoning_effort=high"),
+      `codex-shared must be probed at its own highest intended effort (high), got: ${sharedInvocation?.args.join(" ")}`,
+    );
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

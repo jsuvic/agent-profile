@@ -5,7 +5,7 @@
 Status: implementation evidence for Phase 31.5 I4
 (`docs/specs/phase-31.5/issues/004-consented-source-free-probes.md`).
 
-Verified: 2026-07-18.
+Verified: 2026-07-18. Isolation-flag addendum verified: 2026-07-18.
 
 This note pins the per-client non-persistent invocation contracts used by
 `apps/cli/src/model-probe.ts`, the probe privacy notice, the call bound, and
@@ -60,8 +60,8 @@ and quota allowances are never recorded.
 
 | Client | Pinned invocation | Persistence | Evidence |
 | --- | --- | --- | --- |
-| Codex | `codex exec --sandbox read-only --skip-git-repo-check --model <exact> -c model_reasoning_effort=<effort> "<fixed prompt>"` | See note below | `client-verification-required` |
-| Claude | `claude -p "<fixed prompt>" --model <exact>` | See note below | `client-verification-required` |
+| Codex | `codex exec --sandbox read-only --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules --model <exact> -c model_reasoning_effort=<effort> "<fixed prompt>"` | See note below | `confirmed-official` (isolation flags) |
+| Claude | `claude -p "<fixed prompt>" --no-session-persistence --bare --model <exact>` | See note below | `confirmed-official` (isolation flags), `client-verification-required` (persistence guarantee, see version caveat) |
 | Tabnine | none — no contract row | n/a | `confirmed-official` gap: IDE-hosted, no documented source-free one-shot CLI; always `unsupported-client` |
 
 Notes:
@@ -72,23 +72,81 @@ Notes:
   (<https://developers.openai.com/codex/config-reference>). Canonical
   `extra-high` maps to the Codex `xhigh` value, mirroring the I2 target
   adapter.
+- **Codex isolation flags** (source:
+  <https://learn.chatgpt.com/docs/non-interactive-mode>, confirmed-official):
+  - `--ephemeral` — "skip persisting session rollout files to disk". Removes
+    the last gap in Codex non-persistence: without it, Codex would otherwise
+    write a local rollout/session record for the probe run.
+  - `--ignore-user-config` — "do not load `$CODEX_HOME/config.toml`". Keeps
+    the probe's behavior independent of whatever the operator has configured
+    on this machine (model aliases, sandbox defaults, etc.), so the probe
+    tests only the pinned invocation, not the local Codex configuration.
+  - `--ignore-rules` — "do not load user or project execpolicy `.rules` files
+    for this run". Matches the source-free contract: the probe already runs
+    from an empty directory outside any repository, so no project `.rules`
+    file should apply, but this flag also excludes any user-level rules file.
 - Claude Code documents a non-interactive print mode (`-p`) with `--model`.
   No non-interactive effort control is documented, so the Claude probe
   validates the exact model identity only; effort remains guidance.
+- **Claude isolation flags** (source:
+  <https://code.claude.com/docs/en/cli-reference> and
+  <https://code.claude.com/docs/en/headless>, confirmed-official for the
+  flags' existence and print-mode compatibility):
+  - `--no-session-persistence` — "Disable session persistence so sessions are
+    not saved to disk and cannot be resumed. Print mode only." Compatible
+    with `-p`.
+  - `--bare` — "reduce startup time by skipping auto-discovery of hooks,
+    skills, plugins, MCP servers, auto memory, and CLAUDE.md". This is also a
+    source-isolation control: it prevents the probe from ever loading
+    project-local `CLAUDE.md`/hooks/skills content, which the probe's fixed
+    prompt and empty external cwd do not otherwise guarantee against if a
+    user's home-directory-level configuration references such content.
+- **Bare-mode auth caveat:** per the headless docs, `--bare` mode "skips OAuth
+  and keychain reads"; authenticating in bare mode requires
+  `ANTHROPIC_API_KEY` in the environment or an `apiKeyHelper` supplied via
+  `--settings` JSON. Agent Profile does not set either of these (it never
+  reads or brokers credentials — see the Privacy notice above), so a Claude
+  probe run only succeeds if the operator's own environment already has one
+  of these configured. This is a caveat for what the *user* needs configured
+  for the probe to authenticate at all; it does not change any Agent Profile
+  code, since Agent Profile never handles auth either way.
+- **`--no-session-persistence` version regression caveat:** GitHub issue
+  [anthropics/claude-code#49565](https://github.com/anthropics/claude-code/issues/49565)
+  reports that `--no-session-persistence` was ignored in Claude Code v2.1.112
+  (a regression from v2.1.104, where it worked). The flag is still pinned
+  here — omitting it would be strictly worse on every affected and
+  unaffected version alike — but this is a per-installed-version caveat, not
+  a completed non-persistence guarantee: a release review MUST re-check the
+  installed Claude Code version against known regressions before treating
+  Claude's persistence row as anything stronger than
+  `client-verification-required`.
 - **Persistence caveat (both clients):** neither client documents a
   guaranteed way to disable local session/history recording for a one-shot
   invocation in every release. The probe therefore guarantees only what it
   controls — empty external cwd, fixed prompt, allowlisted environment,
   bounds, and no persistence *by Agent Profile*. Whether the client itself
   writes a session record under its own home directory is
-  `client-verification-required` per release; this is why both rows are not
-  `confirmed-official`. If a release review finds a client cannot satisfy
-  the source-free contract at all, its row must be removed (the probe then
-  honestly returns `unsupported-client`).
+  `client-verification-required` per release (see the two version/mode
+  caveats above); this is why both rows are not fully `confirmed-official`.
+  If a release review finds a client cannot satisfy the source-free contract
+  at all, its row must be removed (the probe then honestly returns
+  `unsupported-client`).
 - These exact flags were pinned from documentation, not from a live client
   run in this repository (probes are consent-gated and this change performed
   no external action). A release review MUST re-verify the flags against the
   installed client versions before shipping any UI that runs probes.
+
+## Effort-collapse fix (2026-07-18)
+
+The plan builder's `effortByModel` map now records, per exact model, the
+highest intended effort among every call for which that model was the
+*primary* selection — independent of which other call's *alternative* slot
+later happens to probe that same exact model. The orchestrator looks up this
+per-model effort (falling back to the encountering call's own effort only if
+the model is never anyone's primary selection) before invoking
+`buildArgs`. This closes a bug where a model that was one call's low-effort
+alternative and another call's high-effort primary selection could be probed
+at the lower effort if the low-effort call's candidates were iterated first.
 
 ## Failure meaning (closed set)
 

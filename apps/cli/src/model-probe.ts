@@ -187,6 +187,13 @@ export const MODEL_PROBE_INVOCATION_CONTRACTS: ModelProbeInvocationContractTable
           "--sandbox",
           "read-only",
           "--skip-git-repo-check",
+          // Non-persistence/isolation flags (official non-interactive-mode
+          // docs, see docs/research/013-model-probe-invocation-evidence.md):
+          // skip persisting session rollout files, skip $CODEX_HOME/config.toml,
+          // and skip user/project execpolicy .rules files for this run.
+          "--ephemeral",
+          "--ignore-user-config",
+          "--ignore-rules",
           "--model",
           model,
           "-c",
@@ -200,7 +207,18 @@ export const MODEL_PROBE_INVOCATION_CONTRACTS: ModelProbeInvocationContractTable
       // Claude Code documents no non-interactive effort control; the probe
       // validates the exact model identity only.
       buildArgs: (model: string) =>
-        Object.freeze(["-p", MODEL_PROBE_FIXED_PROMPT, "--model", model]),
+        Object.freeze([
+          "-p",
+          MODEL_PROBE_FIXED_PROMPT,
+          // Non-persistence/isolation flags (official CLI reference/headless
+          // docs, see docs/research/013-model-probe-invocation-evidence.md):
+          // disable session persistence (print-mode-only) and skip
+          // hooks/skills/plugins/MCP/auto-memory/CLAUDE.md discovery.
+          "--no-session-persistence",
+          "--bare",
+          "--model",
+          model,
+        ]),
     }),
   });
 
@@ -228,6 +246,12 @@ export type ModelProbePlan = Readonly<{
   calls: readonly ModelProbeCall[];
   maxCalls: number;
   quotaNote: string;
+  /** Every exact model's own highest intended effort, keyed by
+   * `candidateKey(client, model)`, independent of which call's alternative
+   * slot later encounters that same model. A model that is never anyone's
+   * primary selection (only ever an alternative) has no entry here; the
+   * orchestrator falls back to the encountering call's effort for those. */
+  effortByModel: ReadonlyMap<string, ModelPolicyEffort>;
 }>;
 
 const EFFORT_RANK: Readonly<Record<ModelPolicyEffort, number>> = Object.freeze({
@@ -293,6 +317,14 @@ export function buildModelProbePlan(
   }
   const maxCalls = Math.min(distinctCandidates.size, MODEL_PROBE_MAX_PROCESSES);
 
+  // Every model that is SOMEONE's primary selection carries its own highest
+  // intended effort here, independent of which call's alternative slot later
+  // probes that same exact model at a lower effort.
+  const effortByModel = new Map<string, ModelPolicyEffort>();
+  for (const call of calls.values()) {
+    effortByModel.set(candidateKey(call.client, call.model), call.effort);
+  }
+
   return Object.freeze({
     clients: Object.freeze(clients),
     calls: Object.freeze(
@@ -306,6 +338,7 @@ export function buildModelProbePlan(
       ),
     ),
     maxCalls,
+    effortByModel,
     quotaNote:
       `At most ${maxCalls} client call${maxCalls === 1 ? "" : "s"} will run. ` +
       "Each call may contact the client's provider and consume account quota. " +
@@ -651,9 +684,15 @@ export async function runModelProbe(
       try {
         await assertSafeProbeDirectory(cwd, deps.repoRootDir);
         processCount += 1;
+        // A model probed inside this call's alternative loop may itself be
+        // some OTHER call's primary selection at a higher intended effort;
+        // that per-model effort always wins over the encountering call's own
+        // effort (plan contract: "highest catalog-supported intended effort
+        // for that model").
+        const effort = plan.effortByModel.get(key) ?? call.effort;
         const raw = await deps.runner.run({
           command: contract.command,
-          args: contract.buildArgs(model, call.effort),
+          args: contract.buildArgs(model, effort),
           cwd,
           env,
           timeoutMs: bounds.timeoutMs,
