@@ -2372,3 +2372,125 @@ test("an unreadable .gitignore does not block a posture that needs no activation
     await rm(rootDir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// `configure` must not erase a v3 `modelPolicy` lockfile block (regression).
+// ---------------------------------------------------------------------------
+
+const SUBAGENT_POLICY_PROFILE = GUARDED_PROFILE.replace(
+  "workflow:\n  sdd: true\n  tdd: true\n  finalReview: true\n",
+  "workflow:\n  sdd: true\n  tdd: true\n  finalReview: true\nsubagentPolicy:\n  enabled: true\n  preset: role-aware\n",
+);
+
+test("configure preserves and reconciles the lockfile's modelPolicy block instead of erasing it", async () => {
+  // Regression: `applyDecision`'s `buildCompileWrites` call previously omitted
+  // `profile` (and `previousModelPolicy`), so `resolveModelPolicyLockfile` was
+  // never invoked for the lockfile `configure` actually writes -- every
+  // `ai-profile.lock` written by `configure` silently lost its `modelPolicy`
+  // block, even though the regenerated *files* (AGENTS.md, .codex/config.toml)
+  // reconciled correctly via a separate, correctly-wired `compileProfile` call.
+  const rootDir = await createRoot(SUBAGENT_POLICY_PROFILE);
+  try {
+    await materialize(rootDir);
+
+    const lockPath = path.join(rootDir, "ai-profile.lock");
+    type LockShape = {
+      modelPolicy?: {
+        resolutions: { role: string; client: string; model: string }[];
+      };
+    };
+    const firstLock = JSON.parse(
+      await readFile(lockPath, "utf8"),
+    ) as LockShape;
+    assert.ok(firstLock.modelPolicy, "initial compile must record modelPolicy");
+    const architectCodex = firstLock.modelPolicy.resolutions.find(
+      (r) => r.role === "architect" && r.client === "codex",
+    );
+    assert.ok(architectCodex);
+    assert.equal(architectCodex.model, "gpt-5.6-sol");
+
+    // Simulate a future catalog bump: hand-edit the recorded lock's
+    // "architect"/"codex" row to a model no live catalog entry names today,
+    // leaving everything else (profile, preset) unchanged. Phase 31.5 I6's
+    // reuse semantics require an ordinary run to reproduce this verbatim
+    // rather than silently re-deriving it from the live catalog.
+    const superseded: LockShape = {
+      ...firstLock,
+      modelPolicy: {
+        ...firstLock.modelPolicy,
+        resolutions: firstLock.modelPolicy.resolutions.map((r) =>
+          r.role === "architect" && r.client === "codex"
+            ? { ...r, model: "gpt-5.6-sol-superseded" }
+            : r,
+        ),
+      },
+    };
+    await writeFile(
+      lockPath,
+      `${JSON.stringify(superseded, null, 2)}\n`,
+      "utf8",
+    );
+
+    // Trigger a genuine `configure` write (a posture change) so
+    // `applyDecision` writes a fresh `ai-profile.lock`.
+    const { prompts } = scriptPrompts({ posture: "balanced", confirm: true });
+    const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+    assert.equal(report.outcome, "applied");
+
+    const secondLock = JSON.parse(
+      await readFile(lockPath, "utf8"),
+    ) as LockShape;
+    assert.ok(
+      secondLock.modelPolicy,
+      "configure must not erase the lockfile's modelPolicy block",
+    );
+    const reusedArchitectCodex = secondLock.modelPolicy.resolutions.find(
+      (r) => r.role === "architect" && r.client === "codex",
+    );
+    assert.ok(reusedArchitectCodex);
+    // Proves genuine reconciliation against the prior lock (Phase 31.5 I6),
+    // not just "some modelPolicy block exists": the superseded row must be
+    // reused verbatim, not silently re-derived from the live catalog.
+    assert.equal(reusedArchitectCodex.model, "gpt-5.6-sol-superseded");
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("configure keeps writing no modelPolicy block for a mapping-v2 profile (no subagentPolicy preset)", async () => {
+  // Companion to the reuse regression above: passing `profile` into
+  // `buildCompileWrites` must not start fabricating a `modelPolicy` block for
+  // a profile that never opted into a v3 preset -- `resolveModelPolicyLockfile`
+  // already guards on `subagentPolicy.preset`, this only proves the guard
+  // still holds through `configure`'s write path after the fix.
+  const rootDir = await createRoot();
+  try {
+    await materialize(rootDir);
+
+    const lockPath = path.join(rootDir, "ai-profile.lock");
+    type LockShape = { modelPolicy?: unknown };
+    const firstLock = JSON.parse(
+      await readFile(lockPath, "utf8"),
+    ) as LockShape;
+    assert.equal(
+      "modelPolicy" in firstLock,
+      false,
+      "a mapping-v2 profile's initial compile must not record modelPolicy",
+    );
+
+    const { prompts } = scriptPrompts({ posture: "balanced", confirm: true });
+    const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+    assert.equal(report.outcome, "applied");
+
+    const secondLock = JSON.parse(
+      await readFile(lockPath, "utf8"),
+    ) as LockShape;
+    assert.equal(
+      "modelPolicy" in secondLock,
+      false,
+      "configure must not fabricate a modelPolicy block for a mapping-v2 profile",
+    );
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});

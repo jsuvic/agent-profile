@@ -660,13 +660,10 @@ async function applyDecision(
   }
 
   // --- Regenerated shared artifacts, through the existing compile planner. --
-  // Read the prior lock's `modelPolicy` block so the generated files (e.g.
-  // AGENTS.md, .codex/config.toml) reconcile against it the same way every
-  // other compile call site does (Phase 31.5 I6 fix). Note: the
-  // `buildCompileWrites` call below still omits `profile`, so this run's
-  // lockfile write does not itself record a `modelPolicy` block (a disclosed,
-  // accepted gap from the prior cycle, unrelated to this fix) -- only the
-  // generated-file rendering is corrected here.
+  // Read the prior lock's `modelPolicy` block so both the generated files
+  // (e.g. AGENTS.md, .codex/config.toml) and the lockfile write below
+  // reconcile against it the same way every other compile call site does
+  // (Phase 31.5 I6 fix).
   const previousLockForCompile = await readLockfileForRegions(rootDir);
   const previousModelPolicy = previousLockForCompile?.modelPolicy;
   const compiled = compileProfile({
@@ -718,6 +715,8 @@ async function applyDecision(
       templates: compiled.templates,
       files: compiled.files,
       regionPlan,
+      profile: parsedNext.profile,
+      ...(previousModelPolicy ? { previousModelPolicy } : {}),
     }).writes,
   ];
   if (profileChanged) {
