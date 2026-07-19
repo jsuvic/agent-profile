@@ -141,7 +141,12 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I4 | Consented source-free model probes | done | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md) |
 | I5 | Exact role-aware model selection during init | done | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md) |
 | I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | done | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
-| I6 | Explicit model upgrade and locked resolution lifecycle | ready | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
+| I6 | Locked model-resolution reuse primitive (ordinary compile reuses the lock) | done | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
+| I6a | Upgrade command exact comparison and retain/adopt/customize planning | ready | [006a-upgrade-comparison-and-planning.md](docs/specs/phase-31.5/issues/006a-upgrade-comparison-and-planning.md) |
+| I6b | Metadata-only package/registry update check | sequenced | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
+| I6c | Upgrade-flow probe consent, separate from update-check consent | sequenced | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
+| I6d | Tabnine model-resolution reconciliation | sequenced | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
+| I6e | Upgrade write ownership refusal and rollback | sequenced | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
 | I7 | Offline Doctor model policy and explicit recheck | sequenced | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
 | I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
 | I9 | Published model-selection journey and final integration | sequenced | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
@@ -159,11 +164,20 @@ vertically by client (Codex end-to-end, then Claude end-to-end), not
 horizontally by layer.
 
 Dependency map: I1 -> (I1R, I3, I4); I1R -> I2; I2+I3+I4 -> I5; I5 -> I5R;
-I1+I2+I3+I4 -> I6; I4+I6 -> I7; I2+I3+I5+I6+I7 -> I8;
-I1-I8+I5R -> I9; I9 -> Phase 32 I1. I2, I3, and I4 are parallel-safe after
-I1 apart from shared exports and fixtures. I5 and I6 may proceed in parallel
-after their prerequisites with shared CLI-entrypoint merge coordination.
-I5R may proceed in parallel with I6 once I5's wizard/preview seam is stable.
+I1+I2+I3+I4 -> I6; I6+I2+I5 -> I6a; I6a -> (I6b, I6e); I6a+I6b+I4 -> I6c
+(I6c's own acceptance criteria require proving all four consent combinations
+against I6b's real update-check consent, so I6c cannot start before I6b
+lands); I1R+I3+I6 -> I6d (I6d now also depends on I1R as the precedent for
+adding its own new `tabnine` override schema field); I4+I6e -> I7 (I7
+depends on I6e, not base I6, since I7 needs the full upgrade write path
+settled); I2+I3+I5+I6a-I6e+I7 -> I8; I1-I8+I5R -> I9; I9 -> Phase 32 I1.
+I2, I3, and I4 are parallel-safe after I1 apart from shared exports and
+fixtures. I5 and I6 may proceed in parallel after their prerequisites with
+shared CLI-entrypoint merge coordination. I5R may proceed in parallel with
+I6 once I5's wizard/preview seam is stable. I6b and I6d are parallel-safe
+with each other once I6a's command shape stabilizes; I6c requires I6b to
+land first (shared cross-consent proof) and is not parallel-safe with it;
+I6e depends on I6a's write path existing and is independent of I6b/I6c/I6d.
 
 I3 amendment 2026-07-17: I3 shipped `planTabnineModelSettingsWrite` as a
 pure, unit-tested ownership-aware write plan for
@@ -197,15 +211,29 @@ precedent already set for I3's disclosed Tabnine-wiring scope reduction.
 I5R carries that remaining scope; I9's final-integration coverage list
 should account for I5R, not just I5, when it runs.
 
-I6 first RED-first cycle completed 2026-07-18 (spec + code-quality review
-passed): landed only the "ordinary compile reuses the lock" primitive for
-v3 Codex/Claude model resolutions (see the dated addendum in I6's own issue
-brief for exact scope, files, and the one disclosed/accepted gap at
-`configure.ts`). I6 remains `ready`, not `done` - the rest of its acceptance
-criteria (upgrade command retain/adopt/customize UX, metadata-only registry
-check, probe consent, Tabnine reconciliation, rollback) are still open and
-require further RED-first cycles, per the same "several focused cycles
-inside one task" pattern already used for I2.
+I6 completed 2026-07-18 (spec + code-quality review passed) for its own
+foundational scope only: the "ordinary compile reuses the lock" primitive
+for v3 Codex/Claude model resolutions, later hardened 2026-07-19 (generated
+files and lockfile now derive from one reconciled table; removing an
+override re-resolves fresh; reused rows carry their own `catalogVersion`)
+after PR review found the first cut left generated files inconsistent with
+the lock. See the dated addenda in I6's own issue brief for exact scope,
+files, and disclosed gaps.
+
+I6 split 2026-07-19 into I6a-I6e: the "one task, several focused cycles"
+pattern from I2 does not fit here, because I6's remaining acceptance
+criteria are independently-shaped CLI/UX/network/consent/adapter concerns
+(upgrade comparison+planning, metadata registry check, probe consent,
+Tabnine reconciliation, write rollback), not vertical slices of one seam.
+Each is its own issue brief and ledger row so `/implement-next` can advance
+them one bounded cycle at a time. I6a is `ready`; I6b-I6e are `sequenced`
+pending I6a's command shape stabilizing (see each brief's Parallelism notes
+for which pairs can then run in parallel).
+
+Also found and fixed 2026-07-19, as a separate PR unrelated to I6 itself:
+`apps/cli/src/configure.ts`'s `buildCompileWrites` call omitted `profile`,
+so every lockfile `configure` wrote silently erased its `modelPolicy` block.
+Pre-existing bug, surfaced while reviewing I6's disclosed gaps.
 
 ## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
 
