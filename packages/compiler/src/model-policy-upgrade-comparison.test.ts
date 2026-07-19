@@ -79,6 +79,45 @@ test("a role/client whose locked row is identical to today's fresh resolution is
   assert.equal(row.reason, undefined);
 });
 
+test("a role/client whose locked row differs only by catalogVersion is still reported as changed with a catalog version reason", () => {
+  // Same fixture pattern as the "unchanged" test above, but the locked row's
+  // catalogVersion is deliberately stale while every other field matches
+  // today's fresh resolution exactly -- a bundled-catalog revision bump with
+  // no observable model/effort/status/alternatives change for this role.
+  // Adopt would still rewrite this row's provenance, so it must not be
+  // silently filtered out as unchanged (PR review finding).
+  const freshRows = compareModelPolicyUpgrade(undefined, "role-aware");
+  const freshArchitectCodex = freshRows.find(
+    (r) => r.role === "architect" && r.client === "codex",
+  );
+  assert.ok(freshArchitectCodex);
+
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: freshArchitectCodex.fresh.catalogVersion,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "codex",
+        role: "architect",
+        model: freshArchitectCodex.fresh.model as string,
+        effort: freshArchitectCodex.fresh.effort,
+        effortStatus: freshArchitectCodex.fresh.capabilityStatus,
+        alternatives: [...freshArchitectCodex.fresh.alternatives],
+        source: "catalog",
+        capabilityStatus: freshArchitectCodex.fresh.capabilityStatus,
+        catalogVersion: freshArchitectCodex.fresh.catalogVersion - 1,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyUpgrade(previous, "role-aware");
+  const row = rows.find((r) => r.role === "architect" && r.client === "codex");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.match(row.reason, /catalog version/i);
+});
+
 test("a role/client with no prior locked row at all is reported as changed with a no-prior-lock reason", () => {
   const rows = compareModelPolicyUpgrade(undefined, "role-aware");
   const row = rows.find((r) => r.role === "architect" && r.client === "codex");

@@ -13,7 +13,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyWritePlan,
   buildPhase14ImportReport,
-  compareModelPolicyResolutions,
   compareModelPolicyUpgrade,
   compareModelPolicyUpgradeFromLegacy,
   compileProfile,
@@ -741,75 +740,26 @@ async function runUpgrade(
               parsed.modelPolicyStrategy,
               undefined,
               DEFAULT_MODEL_POLICY_PRESET,
+              deriveModelPolicyRoleOverrides(subagentPolicy.roles),
             )
           : undefined;
+  // No `--model-policy-strategy` strategy has a real write path yet, for any
+  // profile shape, including "adopt" on a v3-opted profile: writing only
+  // `ai-profile.lock`'s `modelPolicy` block (as an earlier revision of this
+  // command did) leaves any already-generated Codex/Claude target
+  // configuration and guidance encoding the OLD resolution while the lock
+  // claims the fresh one was adopted -- exactly the "lock and generated
+  // files silently disagree" defect class Phase 31.5 I6 was built to
+  // prevent for ordinary compiles. A real write must regenerate every
+  // affected target file atomically alongside the lock (and, for a bulk
+  // preset switch or a mapping-v2 profile, also edit `ai-profile.yaml`'s
+  // `subagentPolicy.preset`) -- none of that exists yet, so every strategy
+  // refuses `--write` until it does (PR review finding).
   if (parsed.modelPolicyStrategy !== undefined && parsed.write) {
-    if (isEnabledMappingV2Policy(subagentPolicy)) {
-      io.stderr(
-        "--write for a mapping-v2 profile is not yet supported: adopting v3 requires updating ai-profile.yaml's subagentPolicy.preset field too, which is not wired yet.\n",
-      );
-      return 1;
-    }
-    if (
-      parsed.modelPolicyStrategy === "quality-first" ||
-      parsed.modelPolicyStrategy === "cost-conscious"
-    ) {
-      io.stderr(
-        `--write with --model-policy-strategy ${parsed.modelPolicyStrategy} is not yet supported: switching the bulk preset requires updating ai-profile.yaml's subagentPolicy.preset too, which is not wired yet.\n`,
-      );
-      return 1;
-    }
-    if (parsed.modelPolicyStrategy === "adopt") {
-      if (lockfileView === undefined) {
-        io.stderr(
-          "--model-policy-strategy adopt --write requires an existing ai-profile.lock; run `agent-profile compile --write` first.\n",
-        );
-        return 1;
-      }
-      // `modelPolicyPlan` is guaranteed defined here: `hasV3ModelPreset(subagentPolicy)`
-      // holds (the earlier v3-opt-in refusal above would have already returned
-      // otherwise), and `planModelPolicyUpgrade("adopt", ...)` always resolves a
-      // block (it never returns `undefined` for "adopt"). `serializeLockfile`
-      // does not itself sort `modelPolicy.resolutions` (only `buildLockfile`
-      // does, at construction time), so the plan's rows -- which come back in
-      // preset/role table order, not lockfile order -- must be re-sorted by
-      // client then role here to satisfy the lockfile's deterministic-order
-      // validation on the next read.
-      const adoptedBlock = modelPolicyPlan?.block;
-      const updatedLockfile: AiProfileLockV2 = {
-        ...lockfileView,
-        modelPolicy: adoptedBlock && {
-          ...adoptedBlock,
-          resolutions: [...adoptedBlock.resolutions].sort(
-            compareModelPolicyResolutions,
-          ),
-        },
-      };
-      try {
-        await applyWritePlan({
-          rootDir,
-          writes: [
-            { path: "ai-profile.lock", bytes: serializeLockfile(updatedLockfile) },
-          ],
-        });
-      } catch {
-        io.stderr("Upgrade write plan could not be applied safely under --root.\n");
-        return 1;
-      }
-      if (parsed.json) {
-        io.stdout(
-          `${JSON.stringify({
-            command: "upgrade",
-            modelPolicyStrategy: "adopt",
-            modelPolicyWrote: true,
-          })}\n`,
-        );
-      } else {
-        io.stdout("Updated ai-profile.lock's model policy (adopt).\n");
-      }
-      return 0;
-    }
-    // "retain" falls through to the existing preview logic unchanged.
+    io.stderr(
+      "--write with --model-policy-strategy is not yet supported: adopting a plan must also regenerate the affected Codex/Claude target files and guidance so they never disagree with the lock, which is not wired yet. Preview with --model-policy-strategy (without --write), then run `agent-profile compile --write` once ai-profile.yaml reflects the change you want.\n",
+    );
+    return 1;
   }
   const scriptedWrite = parsed.write && parsed.adoptRecommended;
   const interactive =
@@ -1040,6 +990,8 @@ function emitUpgradeReport(
           : {
               modelPolicyPlan: {
                 strategy: modelPolicyPlan.strategy,
+                preset: modelPolicyPlan.block?.preset ?? null,
+                catalogVersion: modelPolicyPlan.block?.catalogVersion ?? null,
                 resolutions: modelPolicyPlan.block?.resolutions ?? [],
               },
             }),
@@ -1069,10 +1021,7 @@ function emitUpgradeReport(
   if (modelPolicyChanges !== undefined && modelPolicyChanges.length > 0) {
     lines.push(
       "model policy changes:",
-      ...modelPolicyChanges.map(
-        (row) =>
-          `- ${row.role} ${row.client}: ${row.old?.model ?? "(none)"} -> ${row.fresh.model} (${row.reason})`,
-      ),
+      ...modelPolicyChanges.map(formatModelPolicyChangeLine),
     );
   }
   if (modelPolicyPlan !== undefined) {
@@ -1096,13 +1045,56 @@ function emitUpgradeReport(
   ) {
     lines.push(
       "model policy changes (mapping v2 -> v3 preview):",
-      ...modelPolicyLegacyChanges.map(
-        (row) =>
-          `- ${row.role} ${row.client}: ${row.legacy?.model ?? "(none)"} -> ${row.fresh.model} (${row.reason})`,
-      ),
+      ...modelPolicyLegacyChanges.map(formatModelPolicyLegacyChangeLine),
     );
   }
   io.stdout(`${lines.join("\n")}\n`);
+}
+
+function formatAlternativesList(alternatives: readonly string[]): string {
+  return alternatives.length > 0 ? alternatives.join(", ") : "none";
+}
+
+/**
+ * One text-report line per changed row for a v3-opted comparison, covering
+ * every field the row carries (model, effort, capability status,
+ * alternatives, fresh lifecycle) so a non-JSON user can review the exact
+ * comparison before adopting, not just the model name (PR review finding).
+ */
+function formatModelPolicyChangeLine(
+  row: ModelPolicyUpgradeComparisonRow,
+): string {
+  return (
+    `- ${row.role} ${row.client}: ` +
+    `model ${row.old?.model ?? "(none)"} -> ${row.fresh.model}, ` +
+    `effort ${row.old?.effort ?? "(none)"} -> ${row.fresh.effort}, ` +
+    `status ${row.old?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
+    `alternatives [${formatAlternativesList(row.old?.alternatives ?? [])}] -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
+    `lifecycle ${row.fresh.lifecycle} ` +
+    `(${row.reason})`
+  );
+}
+
+/**
+ * Same completeness as `formatModelPolicyChangeLine`, for the mapping-v2
+ * comparison shape. `legacy` rows have no capability-status/alternatives
+ * concept (mapping-v2 predates both), so those columns only show the fresh
+ * v3 side's own values rather than a diff (PR review finding: this
+ * formatter previously omitted effort entirely, unlike its v3-opted
+ * sibling).
+ */
+function formatModelPolicyLegacyChangeLine(
+  row: ModelPolicyLegacyUpgradeComparisonRow,
+): string {
+  return (
+    `- ${row.role} ${row.client}: ` +
+    `model ${row.legacy?.model ?? "(none)"} -> ${row.fresh.model}, ` +
+    `effort ${row.legacy?.effort ?? "(none)"} -> ${row.fresh.effort}, ` +
+    `status -> ${row.fresh.capabilityStatus}, ` +
+    `alternatives -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
+    `lifecycle ${row.fresh.lifecycle} ` +
+    `(${row.reason})`
+  );
 }
 
 function formatUpgradeDiff(
@@ -4223,7 +4215,7 @@ Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
   agent-profile doctor [--root <path>] [--json] [--mcp-suggestions]
   agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
-  agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--non-interactive] [--json]
+  agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--non-interactive] [--json]
   agent-profile configure [--root <path>] [--non-interactive]
   agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 
@@ -4237,6 +4229,13 @@ Commands:
   init      Create a starting ai-profile.yaml (interactive wizard with no args).
   upgrade   Report or insert newly available capabilities (preview first).
             --write --adopt-recommended adopts all offered capabilities.
+            --model-policy-strategy <retain|adopt|quality-first|cost-conscious>
+            previews how a v3-opted or enabled mapping-v2 profile's model
+            policy would compare and resolve under that bulk strategy
+            (old/new model, effort, capability status, alternatives, and
+            lifecycle). Preview only; combining it with --write is refused
+            until the write path can also regenerate the affected Codex/
+            Claude target files, not just ai-profile.lock.
   configure Change or reconcile the agent control posture (interactive).
             Shows the current posture, what each client actually does, and a
             preview before anything is written. The profile, generated files,

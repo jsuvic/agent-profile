@@ -14,6 +14,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { compareModelPolicyResolutions } from "./lockfile.js";
 import type { LockModelPolicyV2 } from "./types.js";
 import {
   buildModelPolicyTargetTable,
@@ -65,11 +66,19 @@ test("adopt under the profile's own current preset is a genuine passthrough onto
   assert.ok(plan.block);
   assert.equal(plan.block.preset, "role-aware");
 
+  // The planner sorts `resolutions` (client, role) before returning, since
+  // the lockfile's deterministic-order validation requires it and a plan
+  // may be serialized directly without going through `buildLockfile`;
+  // `toLockModelPolicyFromTargetTable` itself does not sort, so the expected
+  // value must be sorted the same way before comparing.
   const expected = toLockModelPolicyFromTargetTable(
     "role-aware",
     buildModelPolicyTargetTable("role-aware", roleOverrides),
   );
-  assert.deepEqual(plan.block, expected);
+  assert.deepEqual(plan.block, {
+    ...expected,
+    resolutions: [...expected.resolutions].sort(compareModelPolicyResolutions),
+  });
 });
 
 test("quality-first bulk strategy resolves against the quality-first preset and differs observably from adopt/role-aware", () => {
@@ -87,7 +96,10 @@ test("quality-first bulk strategy resolves against the quality-first preset and 
     "quality-first",
     buildModelPolicyTargetTable("quality-first"),
   );
-  assert.deepEqual(qualityPlan.block, expected);
+  assert.deepEqual(qualityPlan.block, {
+    ...expected,
+    resolutions: [...expected.resolutions].sort(compareModelPolicyResolutions),
+  });
 
   // Compare on MODEL_POLICY_PRIMARY_ROLE/codex specifically: it's the one
   // role/client pair whose capability status also depends on which preset is
@@ -125,7 +137,10 @@ test("cost-conscious bulk strategy resolves against the cost-conscious preset an
     "cost-conscious",
     buildModelPolicyTargetTable("cost-conscious"),
   );
-  assert.deepEqual(costPlan.block, expected);
+  assert.deepEqual(costPlan.block, {
+    ...expected,
+    resolutions: [...expected.resolutions].sort(compareModelPolicyResolutions),
+  });
 
   // Same MODEL_POLICY_PRIMARY_ROLE/codex rationale as the quality-first test
   // above: this role/client pair's capability/effort genuinely differs across

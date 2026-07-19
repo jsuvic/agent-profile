@@ -12,6 +12,7 @@
 
 import type { ModelPolicyPreset } from "@agent-profile/core";
 
+import { compareModelPolicyResolutions } from "./lockfile.js";
 import {
   buildModelPolicyTargetTable,
   toLockModelPolicyFromTargetTable,
@@ -45,11 +46,23 @@ export function planModelPolicyUpgrade(
   const targetPreset: ModelPolicyPreset =
     strategy === "adopt" ? currentPreset : strategy;
 
+  const resolved = toLockModelPolicyFromTargetTable(
+    targetPreset,
+    buildModelPolicyTargetTable(targetPreset, roleOverrides),
+  );
+
+  // The lockfile's deterministic-order validation requires
+  // `modelPolicy.resolutions` sorted (client, role); `buildLockfile` applies
+  // this sort at construction time, but a plan returned directly from here
+  // (without going through `buildLockfile`) would not be pre-sorted on its
+  // own, so every non-retain strategy sorts here instead of leaving each
+  // caller to repeat the same fix-up before writing (Phase 31.5 I6a PR
+  // review finding).
   return Object.freeze({
     strategy,
-    block: toLockModelPolicyFromTargetTable(
-      targetPreset,
-      buildModelPolicyTargetTable(targetPreset, roleOverrides),
-    ),
+    block: Object.freeze({
+      ...resolved,
+      resolutions: [...resolved.resolutions].sort(compareModelPolicyResolutions),
+    }),
   });
 }

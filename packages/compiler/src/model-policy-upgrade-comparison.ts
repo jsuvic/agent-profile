@@ -151,6 +151,9 @@ export function compareModelPolicyUpgrade(
         if (alternativesDiffer(old.alternatives, fresh.alternatives)) {
           reasons.push("alternatives changed");
         }
+        if (old.catalogVersion !== fresh.catalogVersion) {
+          reasons.push("catalog version changed");
+        }
       }
 
       const changed = reasons.length > 0;
