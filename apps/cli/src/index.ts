@@ -15,6 +15,7 @@ import {
   buildPhase14ImportReport,
   compareModelPolicyResolutions,
   compareModelPolicyUpgrade,
+  compareModelPolicyUpgradeFromLegacy,
   compileProfile,
   deriveModelPolicyRoleOverrides,
   getLocalRuntimeGitignoreFindings,
@@ -43,6 +44,7 @@ import {
   type LockModelPolicyV2,
   type LockOutputV2,
   type MixedOutputDescriptor,
+  type ModelPolicyLegacyUpgradeComparisonRow,
   type ModelPolicyTabnineSettingsPlan,
   type ModelPolicyUpgradeBulkStrategy,
   type ModelPolicyUpgradeComparisonRow,
@@ -64,8 +66,10 @@ import {
   CAPABILITY_CATALOG,
   CAPABILITY_CATALOG_VERSION,
   computeOfferedCapabilities,
+  DEFAULT_MODEL_POLICY_PRESET,
   deriveEffectivePermissions,
   parseProfileYaml,
+  resolveEffectiveSubagentPolicy,
   verifyPresetToken,
   type PresetPreferences,
   type PresetTokenError,
@@ -599,6 +603,19 @@ function hasV3ModelPreset(
   return policy?.enabled === true && policy.preset !== undefined;
 }
 
+/**
+ * Companion type guard for the OTHER profile shape the upgrade report
+ * compares (Phase 31.5 I6a cycle 7): an "enabled mapping-v2" profile
+ * (`subagentPolicy.enabled === true`, no `preset` -- Phase 30's legacy
+ * role-based mapping). Mutually exclusive with `hasV3ModelPreset` by
+ * construction (a profile can never satisfy both).
+ */
+function isEnabledMappingV2Policy(
+  policy: AiProfileSubagentPolicy | undefined,
+): policy is AiProfileSubagentPolicy & { enabled: true; preset: undefined } {
+  return policy?.enabled === true && policy.preset === undefined;
+}
+
 async function runUpgrade(
   args: string[],
   cwd: string,
@@ -689,6 +706,16 @@ async function runUpgrade(
           deriveModelPolicyRoleOverrides(subagentPolicy.roles),
         ).filter((row) => row.changed)
       : undefined;
+  const legacyEffectivePolicy = isEnabledMappingV2Policy(subagentPolicy)
+    ? resolveEffectiveSubagentPolicy(subagentPolicy)
+    : undefined;
+  const modelPolicyLegacyChanges: readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined =
+    legacyEffectivePolicy
+      ? compareModelPolicyUpgradeFromLegacy(
+          legacyEffectivePolicy.roles,
+          DEFAULT_MODEL_POLICY_PRESET,
+        ).filter((row) => row.changed)
+      : undefined;
   if (parsed.modelPolicyStrategy !== undefined && !hasV3ModelPreset(subagentPolicy)) {
     io.stderr(
       "--model-policy-strategy requires a v3-opted profile (subagentPolicy.enabled with a preset).\n",
@@ -774,11 +801,27 @@ async function runUpgrade(
       (options.nonInteractive !== true && isInteractiveTty(io)));
 
   if ((!interactive || scriptedWrite) && !parsed.json) {
-    emitUpgradeReport(io, parsed.json, recordedVersion, offeredIds, modelPolicyChanges, modelPolicyPlan);
+    emitUpgradeReport(
+      io,
+      parsed.json,
+      recordedVersion,
+      offeredIds,
+      modelPolicyChanges,
+      modelPolicyPlan,
+      modelPolicyLegacyChanges,
+    );
   }
   if (offered.length === 0) {
     if (parsed.json) {
-      emitUpgradeReport(io, true, recordedVersion, offeredIds, modelPolicyChanges, modelPolicyPlan);
+      emitUpgradeReport(
+        io,
+        true,
+        recordedVersion,
+        offeredIds,
+        modelPolicyChanges,
+        modelPolicyPlan,
+        modelPolicyLegacyChanges,
+      );
     }
     if (interactive && !scriptedWrite) {
       const prompts = await getUpgradePrompts(options.prompts);
@@ -791,7 +834,15 @@ async function runUpgrade(
 
   if (!interactive && !scriptedWrite) {
     if (parsed.json) {
-      emitUpgradeReport(io, true, recordedVersion, offeredIds, modelPolicyChanges, modelPolicyPlan);
+      emitUpgradeReport(
+        io,
+        true,
+        recordedVersion,
+        offeredIds,
+        modelPolicyChanges,
+        modelPolicyPlan,
+        modelPolicyLegacyChanges,
+      );
     }
     return 0;
   }
@@ -946,6 +997,7 @@ function emitUpgradeReport(
   offeredIds: readonly string[],
   modelPolicyChanges?: readonly ModelPolicyUpgradeComparisonRow[],
   modelPolicyPlan?: ModelPolicyUpgradePlan,
+  modelPolicyLegacyChanges?: readonly ModelPolicyLegacyUpgradeComparisonRow[],
 ): void {
   if (json) {
     io.stdout(
@@ -972,6 +1024,17 @@ function emitUpgradeReport(
                 strategy: modelPolicyPlan.strategy,
                 resolutions: modelPolicyPlan.block?.resolutions ?? [],
               },
+            }),
+        ...(modelPolicyLegacyChanges === undefined
+          ? {}
+          : {
+              modelPolicyLegacyChanges: modelPolicyLegacyChanges.map((row) => ({
+                role: row.role,
+                client: row.client,
+                legacy: row.legacy ?? null,
+                fresh: row.fresh,
+                reason: row.reason,
+              })),
             }),
       })}\n`,
     );
@@ -1008,6 +1071,18 @@ function emitUpgradeReport(
         ),
       );
     }
+  }
+  if (
+    modelPolicyLegacyChanges !== undefined &&
+    modelPolicyLegacyChanges.length > 0
+  ) {
+    lines.push(
+      "model policy changes (mapping v2 -> v3 preview):",
+      ...modelPolicyLegacyChanges.map(
+        (row) =>
+          `- ${row.role} ${row.client}: ${row.legacy?.model ?? "(none)"} -> ${row.fresh.model} (${row.reason})`,
+      ),
+    );
   }
   io.stdout(`${lines.join("\n")}\n`);
 }

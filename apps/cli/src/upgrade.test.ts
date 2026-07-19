@@ -7,10 +7,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { CAPABILITY_CATALOG_VERSION, type AiProfile } from "@agent-profile/core";
+import {
+  CAPABILITY_CATALOG_VERSION,
+  resolveEffectiveSubagentPolicy,
+  type AiProfile,
+} from "@agent-profile/core";
 import {
   buildLockfile,
   compareModelPolicyResolutions,
+  compareModelPolicyUpgradeFromLegacy,
   deriveModelPolicyRoleOverrides,
   planModelPolicyUpgrade,
   resolveModelPolicyLockfile,
@@ -663,6 +668,63 @@ const V3_PROFILE_AI: AiProfile = {
   subagentPolicy: { enabled: true, preset: "role-aware" },
 };
 
+// Phase 31.5 (I6a, seventh cycle): an "enabled mapping-v2" profile fixture --
+// `subagentPolicy.enabled === true` with NO `preset` (Phase 30's legacy
+// role-based mapping) -- used to test `upgrade`'s mapping-v2 -> v3-preview
+// model-policy comparison report. Mirrors `PROFILE` above but adds a bare
+// `subagentPolicy: { enabled: true }` block (no preset, no per-role
+// overrides), so `subagentPolicy.enabled === true && subagentPolicy.preset
+// === undefined`.
+const MAPPING_V2_PROFILE = `version: 1
+profile:
+  name: upgrade-fixture
+  description: Upgrade fixture.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine: { enabled: true }
+  codex: { enabled: true }
+  claude: { enabled: true }
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+capabilities:
+  skills:
+    packs:
+      - base # preserve
+  delegation:
+    subagents:
+      enabled: true
+      packs:
+        - reviewer-subagents
+subagentPolicy:
+  enabled: true
+permissions:
+  filesystem: { read: allow, write: ask }
+  shell: { run: ask }
+  secrets: { access: deny }
+  dependencies: { install: ask }
+  network: { external: ask }
+  production: { access: deny }
+`;
+
+// The `AiProfile` value equivalent to `MAPPING_V2_PROFILE`'s `subagentPolicy`
+// block, used only to compute the independent "genuine passthrough" proof via
+// `resolveEffectiveSubagentPolicy` + `compareModelPolicyUpgradeFromLegacy` for
+// fixture construction (never passed to the CLI directly).
+const MAPPING_V2_SUBAGENT_POLICY: AiProfile["subagentPolicy"] = {
+  enabled: true,
+};
+
 function liveModelPolicy(): LockModelPolicyV2 {
   const resolved = resolveModelPolicyLockfile(V3_PROFILE_AI);
   if (!resolved) {
@@ -805,6 +867,7 @@ test("upgrade JSON omits modelPolicyChanges entirely for a profile that has not 
   assert.equal(code, 0);
   const report = JSON.parse(output.stdoutText()) as Record<string, unknown>;
   assert.equal("modelPolicyChanges" in report, false);
+  assert.equal("modelPolicyLegacyChanges" in report, false);
 });
 
 test("upgrade JSON omits modelPolicyPlan entirely when --model-policy-strategy is not passed, even for a v3-opted profile", async () => {
@@ -966,6 +1029,152 @@ test("upgrade --model-policy-strategy quality-first text (non-interactive) print
       ),
     );
   }
+});
+
+test("upgrade JSON reports model-policy changes for an enabled mapping-v2 profile compared against the default v3 preset", async () => {
+  const root = await createUpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    MAPPING_V2_PROFILE,
+  );
+  const output = createOutput();
+
+  const code = await runCli(["upgrade", "--root", root, "--json"], {
+    io: output,
+  });
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyLegacyChanges?: Array<{
+      role: string;
+      client: string;
+      legacy: { model: string; effort: string } | null;
+      fresh: { model: string | undefined };
+      reason?: string;
+    }>;
+  };
+  assert.ok(report.modelPolicyLegacyChanges);
+  assert.ok(report.modelPolicyLegacyChanges.length > 0);
+
+  const effective = resolveEffectiveSubagentPolicy(MAPPING_V2_SUBAGENT_POLICY);
+  assert.ok(effective);
+  const expected = compareModelPolicyUpgradeFromLegacy(
+    effective.roles,
+    "role-aware",
+  ).filter((row) => row.changed);
+  assert.deepEqual(
+    report.modelPolicyLegacyChanges,
+    expected.map((row) => ({
+      role: row.role,
+      client: row.client,
+      legacy: row.legacy ?? null,
+      fresh: row.fresh,
+      reason: row.reason,
+    })),
+  );
+});
+
+test("upgrade text (non-interactive) prints a mapping-v2-preview model policy changes section for an enabled mapping-v2 profile", async () => {
+  const root = await createUpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    MAPPING_V2_PROFILE,
+  );
+  const output = createOutput();
+
+  const code = await runCli(
+    ["upgrade", "--root", root, "--non-interactive"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(
+    output.stdoutText(),
+    /model policy changes \(mapping v2 -> v3 preview\):/u,
+  );
+
+  const effective = resolveEffectiveSubagentPolicy(MAPPING_V2_SUBAGENT_POLICY);
+  assert.ok(effective);
+  const expected = compareModelPolicyUpgradeFromLegacy(
+    effective.roles,
+    "role-aware",
+  ).filter((row) => row.changed);
+  assert.ok(expected.length > 0);
+  const row = expected[0]!;
+  assert.match(
+    output.stdoutText(),
+    new RegExp(
+      `- ${row.role} ${row.client}: ${row.legacy?.model ?? "\\(none\\)"} -> ${row.fresh.model} \\(${row.reason}\\)`,
+      "u",
+    ),
+  );
+});
+
+test("upgrade JSON keeps modelPolicyChanges and modelPolicyLegacyChanges mutually exclusive by profile shape", async () => {
+  const v3Root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const v3Output = createOutput();
+  assert.equal(
+    await runCli(["upgrade", "--root", v3Root, "--json"], { io: v3Output }),
+    0,
+  );
+  const v3Report = JSON.parse(v3Output.stdoutText()) as Record<
+    string,
+    unknown
+  >;
+  assert.equal("modelPolicyLegacyChanges" in v3Report, false);
+
+  const legacyRoot = await createUpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    MAPPING_V2_PROFILE,
+  );
+  const legacyOutput = createOutput();
+  assert.equal(
+    await runCli(["upgrade", "--root", legacyRoot, "--json"], {
+      io: legacyOutput,
+    }),
+    0,
+  );
+  const legacyReport = JSON.parse(legacyOutput.stdoutText()) as Record<
+    string,
+    unknown
+  >;
+  assert.equal("modelPolicyChanges" in legacyReport, false);
+});
+
+test("upgrade --model-policy-strategy still refuses cleanly for an enabled mapping-v2 profile, leaving files untouched", async () => {
+  const root = await createUpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    MAPPING_V2_PROFILE,
+  );
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(
+    output.stderrText(),
+    /--model-policy-strategy requires a v3-opted profile/u,
+  );
+  const profileAfter = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  assert.equal(profileAfter, profileBefore);
+  assert.equal(lockAfter, lockBefore);
 });
 
 test("upgrade --model-policy-strategy refuses cleanly for a profile that has not opted into v3 subagentPolicy, leaving files untouched", async () => {

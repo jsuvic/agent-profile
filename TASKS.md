@@ -253,6 +253,38 @@ rows cannot report a lifecycle comparison. State stays `ready` for the next
 `/implement-next` cycle rather than `done`, since the brief's acceptance
 criteria are not yet met.
 
+I6a seventh RED-first cycle completed 2026-07-19, also a disclosed partial
+slice: wired cycle 6's `compareModelPolicyUpgradeFromLegacy` into
+`agent-profile upgrade`'s existing JSON/text report surface
+(`apps/cli/src/index.ts`), the exact sibling of cycle 2's v3-opted
+wiring - for an enabled mapping-v2 profile only. New
+`isEnabledMappingV2Policy` type guard next to `hasV3ModelPreset`; a
+`modelPolicyLegacyChanges` field/section (compared against
+`DEFAULT_MODEL_POLICY_PRESET`, "role-aware") follows the same
+omit/empty/populated three-state convention as `modelPolicyChanges`/
+`modelPolicyPlan`, with a distinctly-worded text header ("model policy
+changes (mapping v2 -> v3 preview):") so users can tell the two
+comparison contexts apart. `modelPolicyChanges` and
+`modelPolicyLegacyChanges` are mutually exclusive by construction and a
+test proves it both directions. `--model-policy-strategy`'s existing
+refusal for a mapping-v2 profile is unchanged (regression-tested) - this
+cycle is comparison-report wiring only, no planning/write path for
+mapping-v2. Spec review passed COMPLIANT (one non-blocking test-rigor
+note: a refusal-message regex match instead of exact-string, matching an
+existing sibling test's established convention). Code-quality review
+passed ACCEPTABLE (one non-blocking note: `emitUpgradeReport` now takes 7
+positional args across 3 call sites - a good options-object refactor
+candidate for a future CLI-cleanup cycle, not this one). `npm test`/`npm
+run check` clean for both `apps/cli` (517 tests/513 pass/0 fail/4
+unrelated skips) and `packages/compiler` (303 tests/302 pass/0 fail/1
+unrelated skip, sanity-checked though untouched). Still left for later
+I6a cycles: the mapping-v2 planning/write path (needs to touch BOTH
+`ai-profile.yaml`'s `subagentPolicy` block and the lock), any
+`--model-policy-strategy` extension to mapping-v2, the "custom exact"
+strategy, quality-first/cost-conscious writes, the entire interactive
+clack UI, and the disclosed lifecycle-comparison gap from cycle 1. State
+stays `ready`, not `done`.
+
 I6a sixth RED-first cycle completed 2026-07-19, also a disclosed partial
 slice: added `compareModelPolicyUpgradeFromLegacy`
 (`packages/compiler/src/model-policy-legacy-upgrade-comparison.ts`), a
