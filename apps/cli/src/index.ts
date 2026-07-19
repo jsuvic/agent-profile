@@ -13,6 +13,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyWritePlan,
   buildPhase14ImportReport,
+  compareModelPolicyResolutions,
   compareModelPolicyUpgrade,
   compileProfile,
   deriveModelPolicyRoleOverrides,
@@ -703,6 +704,68 @@ async function runUpgrade(
           deriveModelPolicyRoleOverrides(subagentPolicy.roles),
         )
       : undefined;
+  if (parsed.modelPolicyStrategy !== undefined && parsed.write) {
+    if (
+      parsed.modelPolicyStrategy === "quality-first" ||
+      parsed.modelPolicyStrategy === "cost-conscious"
+    ) {
+      io.stderr(
+        `--write with --model-policy-strategy ${parsed.modelPolicyStrategy} is not yet supported: switching the bulk preset requires updating ai-profile.yaml's subagentPolicy.preset too, which is not wired yet.\n`,
+      );
+      return 1;
+    }
+    if (parsed.modelPolicyStrategy === "adopt") {
+      if (lockfileView === undefined) {
+        io.stderr(
+          "--model-policy-strategy adopt --write requires an existing ai-profile.lock; run `agent-profile compile --write` first.\n",
+        );
+        return 1;
+      }
+      // `modelPolicyPlan` is guaranteed defined here: `hasV3ModelPreset(subagentPolicy)`
+      // holds (the earlier v3-opt-in refusal above would have already returned
+      // otherwise), and `planModelPolicyUpgrade("adopt", ...)` always resolves a
+      // block (it never returns `undefined` for "adopt"). `serializeLockfile`
+      // does not itself sort `modelPolicy.resolutions` (only `buildLockfile`
+      // does, at construction time), so the plan's rows -- which come back in
+      // preset/role table order, not lockfile order -- must be re-sorted by
+      // client then role here to satisfy the lockfile's deterministic-order
+      // validation on the next read.
+      const adoptedBlock = modelPolicyPlan?.block;
+      const updatedLockfile: AiProfileLockV2 = {
+        ...lockfileView,
+        modelPolicy: adoptedBlock && {
+          ...adoptedBlock,
+          resolutions: [...adoptedBlock.resolutions].sort(
+            compareModelPolicyResolutions,
+          ),
+        },
+      };
+      try {
+        await applyWritePlan({
+          rootDir,
+          writes: [
+            { path: "ai-profile.lock", bytes: serializeLockfile(updatedLockfile) },
+          ],
+        });
+      } catch {
+        io.stderr("Upgrade write plan could not be applied safely under --root.\n");
+        return 1;
+      }
+      if (parsed.json) {
+        io.stdout(
+          `${JSON.stringify({
+            command: "upgrade",
+            modelPolicyStrategy: "adopt",
+            modelPolicyWrote: true,
+          })}\n`,
+        );
+      } else {
+        io.stdout("Updated ai-profile.lock's model policy (adopt).\n");
+      }
+      return 0;
+    }
+    // "retain" falls through to the existing preview logic unchanged.
+  }
   const scriptedWrite = parsed.write && parsed.adoptRecommended;
   const interactive =
     !parsed.json &&

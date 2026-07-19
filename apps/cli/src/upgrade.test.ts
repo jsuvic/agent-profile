@@ -10,10 +10,13 @@ import test from "node:test";
 import { CAPABILITY_CATALOG_VERSION, type AiProfile } from "@agent-profile/core";
 import {
   buildLockfile,
+  compareModelPolicyResolutions,
   deriveModelPolicyRoleOverrides,
   planModelPolicyUpgrade,
   resolveModelPolicyLockfile,
   serializeLockfile,
+  toLockfileV2View,
+  validateLockfileText,
   type LockModelPolicyV2,
 } from "@agent-profile/compiler";
 import { withNetworkSentinel } from "../../../packages/core/test/fixtures/preset/network-sentinel.js";
@@ -1014,6 +1017,258 @@ test("upgrade --model-policy-strategy rejects an unrecognized value", async () =
     output.stderrText(),
     /--model-policy-strategy requires one of: retain, adopt, quality-first, cost-conscious\./u,
   );
+});
+
+test("upgrade --model-policy-strategy adopt --write --json updates ai-profile.lock's model policy and leaves ai-profile.yaml untouched", async () => {
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, stale);
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    command: string;
+    modelPolicyStrategy: string;
+    modelPolicyWrote: boolean;
+  };
+  assert.equal(report.command, "upgrade");
+  assert.equal(report.modelPolicyStrategy, "adopt");
+  assert.equal(report.modelPolicyWrote, true);
+
+  const profileAfter = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  assert.equal(profileAfter, profileBefore);
+
+  const lockAfterText = await readFile(
+    path.join(root, "ai-profile.lock"),
+    "utf8",
+  );
+  const lockAfterResult = validateLockfileText(lockAfterText);
+  assert.ok(lockAfterResult.ok);
+  const lockAfter = toLockfileV2View(lockAfterResult.lockfile);
+  const expected = planModelPolicyUpgrade(
+    "adopt",
+    stale,
+    "role-aware",
+    deriveModelPolicyRoleOverrides(undefined),
+  );
+  // The written-then-reread lockfile stores `modelPolicy.resolutions` in the
+  // lockfile's own deterministic order (client then role, enforced by
+  // `validateLockfileText`), while the plan's rows come back in
+  // preset/role-table order; compare against the same sorted order rather
+  // than the plan's raw construction order.
+  const expectedSortedResolutions = expected.block
+    ? [...expected.block.resolutions].sort(compareModelPolicyResolutions)
+    : undefined;
+  assert.deepEqual(lockAfter.modelPolicy, {
+    ...expected.block,
+    resolutions: expectedSortedResolutions,
+  });
+});
+
+test("upgrade --model-policy-strategy adopt --write text (non-interactive) prints a confirmation and updates the lock", async () => {
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, stale);
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(
+    output.stdoutText(),
+    /Updated ai-profile\.lock's model policy \(adopt\)\./u,
+  );
+
+  const lockAfterText = await readFile(
+    path.join(root, "ai-profile.lock"),
+    "utf8",
+  );
+  const lockAfterResult = validateLockfileText(lockAfterText);
+  assert.ok(lockAfterResult.ok);
+  const lockAfter = toLockfileV2View(lockAfterResult.lockfile);
+  const expected = planModelPolicyUpgrade(
+    "adopt",
+    stale,
+    "role-aware",
+    deriveModelPolicyRoleOverrides(undefined),
+  );
+  const expectedSortedResolutions = expected.block
+    ? [...expected.block.resolutions].sort(compareModelPolicyResolutions)
+    : undefined;
+  assert.deepEqual(lockAfter.modelPolicy, {
+    ...expected.block,
+    resolutions: expectedSortedResolutions,
+  });
+});
+
+test("upgrade --model-policy-strategy adopt --write refuses cleanly when there is no existing lockfile", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  await rm(path.join(root, "ai-profile.lock"));
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(
+    output.stderrText(),
+    /--model-policy-strategy adopt --write requires an existing ai-profile\.lock/u,
+  );
+  const profileAfter = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  assert.equal(profileAfter, profileBefore);
+});
+
+for (const strategy of ["quality-first", "cost-conscious"] as const) {
+  test(`upgrade --model-policy-strategy ${strategy} --write is refused this cycle, leaving files untouched`, async () => {
+    const root = await createV3UpgradeRoot(
+      CAPABILITY_CATALOG_VERSION,
+      liveModelPolicy(),
+    );
+    const profileBefore = await readFile(
+      path.join(root, "ai-profile.yaml"),
+      "utf8",
+    );
+    const lockBefore = await readFile(
+      path.join(root, "ai-profile.lock"),
+      "utf8",
+    );
+    const output = createOutput();
+
+    const code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        strategy,
+        "--write",
+      ],
+      { io: output },
+    );
+
+    assert.equal(code, 1);
+    assert.match(output.stderrText(), /not yet supported/u);
+    const profileAfter = await readFile(
+      path.join(root, "ai-profile.yaml"),
+      "utf8",
+    );
+    const lockAfter = await readFile(
+      path.join(root, "ai-profile.lock"),
+      "utf8",
+    );
+    assert.equal(profileAfter, profileBefore);
+    assert.equal(lockAfter, lockBefore);
+  });
+}
+
+test("upgrade --model-policy-strategy retain --write behaves exactly like retain without --write (preview only, no write)", async () => {
+  const fresh = liveModelPolicy();
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, fresh);
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "retain",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyPlan?: { strategy: string };
+  };
+  assert.ok(report.modelPolicyPlan);
+  assert.equal(report.modelPolicyPlan?.strategy, "retain");
+
+  const profileAfter = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  assert.equal(profileAfter, profileBefore);
+  assert.equal(lockAfter, lockBefore);
 });
 
 async function createUpgradeRoot(

@@ -12,6 +12,7 @@ export {
 export {
   buildLockfile,
   buildLockfileV1,
+  compareModelPolicyResolutions,
   createLockfileFile,
   createLockfileV1File,
   migrateLockfileV1ToV2,

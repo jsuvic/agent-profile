@@ -253,6 +253,39 @@ rows cannot report a lifecycle comparison. State stays `ready` for the next
 `/implement-next` cycle rather than `done`, since the brief's acceptance
 criteria are not yet met.
 
+I6a fifth RED-first cycle completed 2026-07-19, also a disclosed partial
+slice: wired an actual write path for `--model-policy-strategy adopt
+--write` only. `"quality-first"`/`"cost-conscious"` with `--write` are
+explicitly refused (stderr + exit 1, no file touched): writing their plan's
+block into `ai-profile.lock` without also updating `ai-profile.yaml`'s
+`subagentPolicy.preset` would be silently inert on the next ordinary
+compile, since `deriveLockedClientOverride`
+(`packages/compiler/src/model-policy-target-adapter.ts`) only reuses a
+locked row when the lock's own `preset` matches the profile's current
+preset - verified, not assumed. `"adopt"` always resolves under the
+profile's own current preset, so its write is always consistent with
+`ai-profile.yaml` unchanged; `"adopt" --write` with no existing
+`ai-profile.lock` also refuses cleanly. The write reuses the existing
+`applyWritePlan` atomic-write helper (no new rollback/ownership logic - that
+stays I6e's job) and is fully self-contained: no capability-catalog
+interaction, no interactive-prompt entry, no YAML edit. Spec review passed
+COMPLIANT. Code-quality review found ISSUES_FOUND, non-blocking (three
+independent re-derivations of the lockfile's canonical `(client, role)` sort
+comparator - one in the new CLI write branch, two in its tests) - fixed
+before closing the cycle by exporting the compiler package's own
+`compareModelPolicyResolutions` (previously private in
+`packages/compiler/src/lockfile.ts`) via `packages/compiler/src/index.ts`
+and importing it at all three sites instead of re-deriving `localeCompare`
+chains. Re-ran `npm test`/`npm run check` for both `apps/cli` (513
+tests/509 pass/0 fail/4 unrelated skips) and `packages/compiler` (298
+tests/297 pass/0 fail/1 unrelated skip) after the fix: both clean. Still
+left for later I6a cycles: writing `quality-first`/`cost-conscious` (needs a
+paired `ai-profile.yaml` `subagentPolicy.preset` surgical edit), interactive
+clack rendering/selection/write-confirmation, the "custom exact" strategy,
+mapping-v2 comparison/planning/write, combining a model-policy write with
+the capability-catalog write in one invocation, and the disclosed
+lifecycle-comparison gap from cycle 1. State stays `ready`, not `done`.
+
 I6a fourth RED-first cycle completed 2026-07-19, also a disclosed partial
 slice: added `--model-policy-strategy <retain|adopt|quality-first|
 cost-conscious>` to `agent-profile upgrade` (`apps/cli/src/index.ts`), which
