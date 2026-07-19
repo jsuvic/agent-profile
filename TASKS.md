@@ -253,6 +253,27 @@ rows cannot report a lifecycle comparison. State stays `ready` for the next
 `/implement-next` cycle rather than `done`, since the brief's acceptance
 criteria are not yet met.
 
+I6a third RED-first cycle completed 2026-07-19, also a disclosed partial
+slice: added `planModelPolicyUpgrade`
+(`packages/compiler/src/model-policy-upgrade-planning.ts`), a thin pure
+helper that turns a chosen bulk strategy ("retain", "adopt", "quality-first",
+"cost-conscious") into the exact lockfile `modelPolicy` block that strategy
+would write if accepted, by directly chaining the existing
+`buildModelPolicyTargetTable`/`toLockModelPolicyFromTargetTable` adapter
+functions with no new resolution logic. "Retain" is a verbatim passthrough of
+the prior lock (or `undefined` if none exists); the other three always
+recompute fresh (never lock-reuse). Spec and code-quality review both passed;
+code-quality flagged one Important, non-blocking finding (an uncommented
+`"implementer"` role literal used to prove quality-first/cost-conscious
+observably differ from adopt/role-aware) which was fixed inline before
+closing the cycle (swapped to the exported `MODEL_POLICY_PRIMARY_ROLE`
+constant with an explanatory comment). Still left for later I6a cycles: the
+"custom exact" per-role/per-client strategy (needs real user-supplied
+selections, not purely derivable), CLI wiring of any planning path,
+interactive clack rendering, mapping-v2 legacy-resolver comparison/planning,
+the actual write path, and the disclosed lifecycle-comparison gap from cycle
+1. State stays `ready`, not `done`.
+
 I6a second RED-first cycle completed 2026-07-19, also a disclosed partial
 slice: wired `compareModelPolicyUpgrade` into `agent-profile upgrade`'s
 existing report-emission paths (`apps/cli/src/index.ts`'s `runUpgrade`/
