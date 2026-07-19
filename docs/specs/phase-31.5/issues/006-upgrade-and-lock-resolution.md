@@ -24,20 +24,27 @@ target, and lockfile changes. Ordinary compile reuses the lock.
 
 ## Acceptance criteria
 
-- Mapping-v2 profiles remain unchanged under ordinary compile and an upgrade
-  decline.
-- Upgrade tables show exact old/new models, effort, alternatives, lifecycle,
-  capability status, and reason for each changed role/client.
-- Retain, role-aware adopt, quality-first, cost-conscious, and custom exact
-  paths produce deterministic plans.
-- An optional metadata-only registry check reports a newer package/catalog and
-  manual update guidance; it never downloads or installs.
-- Probe consent is separate from update-check consent and writes no availability
-  result.
-- Lockfile provenance is stable, round-trippable, and authoritative for normal
-  compile until the next approved upgrade.
-- Existing unowned/drifted target files follow current refusal/reconciliation
-  contracts; partial failure rolls back.
+Split 2026-07-19 into this item's own foundational scope (both bullets below,
+now DONE) plus five carried-forward sub-briefs (I6a-I6e) that own the
+remaining bullets - see "Implementation context" for the full mapping.
+
+- DONE: Mapping-v2 profiles remain unchanged under ordinary compile and an
+  upgrade decline.
+- DONE: Lockfile provenance is stable, round-trippable, and authoritative for
+  normal compile until the next approved upgrade.
+- Moved to I6a: Upgrade tables show exact old/new models, effort,
+  alternatives, lifecycle, capability status, and reason for each changed
+  role/client; retain/adopt/quality-first/cost-conscious/custom-exact paths
+  produce deterministic plans.
+- Moved to I6b: An optional metadata-only registry check reports a newer
+  package/catalog and manual update guidance; it never downloads or installs.
+- Moved to I6c: Probe consent is separate from update-check consent and
+  writes no availability result.
+- Moved to I6d (not an original bullet, but required for I6a's comparison
+  table to be complete): Tabnine rows participate in the same lock-reuse
+  guarantee as Codex/Claude.
+- Moved to I6e: Existing unowned/drifted target files follow current
+  refusal/reconciliation contracts; partial failure rolls back.
 
 ## Expected RED proof
 
@@ -125,6 +132,20 @@ Still outstanding for future cycles: the CLI `upgrade` command's model-aware
 retain/adopt/customize UX, the metadata-only registry check, probe-consent
 separation, and Tabnine reconciliation (all of I6's remaining acceptance
 criteria).
+
+2026-07-19: also found and fixed (as a separate PR, not part of this item)
+that `apps/cli/src/configure.ts`'s own `buildCompileWrites` call omitted
+`profile`, so every lockfile `configure` wrote silently erased its
+`modelPolicy` block - a pre-existing bug independent of I6, surfaced by this
+work. See that PR for the fix.
+
+2026-07-19: this item's remaining acceptance criteria are split into five
+sub-briefs so each can run as its own bounded RED-first cycle rather than one
+oversized task - I6a (upgrade comparison/planning), I6b (metadata-only
+registry check), I6c (probe consent separation), I6d (Tabnine reconciliation,
+not an original bullet but required for I6a's table to be complete), I6e
+(write ownership/rollback). This item (I6) is now considered done for its
+own narrowed scope: the "ordinary compile reuses the lock" primitive.
 
 ## Review expectations
 
