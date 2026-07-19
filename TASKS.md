@@ -253,6 +253,31 @@ rows cannot report a lifecycle comparison. State stays `ready` for the next
 `/implement-next` cycle rather than `done`, since the brief's acceptance
 criteria are not yet met.
 
+I6a fourth RED-first cycle completed 2026-07-19, also a disclosed partial
+slice: added `--model-policy-strategy <retain|adopt|quality-first|
+cost-conscious>` to `agent-profile upgrade` (`apps/cli/src/index.ts`), which
+PREVIEWS `planModelPolicyUpgrade`'s plan for the chosen strategy in the
+JSON/text report output only - no disk write this cycle. Non-v3-opted
+profiles refuse fast (stderr + exit 1, no output/writes) before an
+unrecognized profile is ever reported on; a v3-opted profile gets a
+`modelPolicyPlan` field/section following the same three-state omit/empty/
+populated pattern established in cycle 2. Spec review passed COMPLIANT.
+Code-quality review found ISSUES_FOUND (both non-blocking, fixed inline
+before closing the cycle): (1) the v3-opt-in guard
+(`subagentPolicy?.enabled === true && subagentPolicy.preset !== undefined`)
+was duplicated verbatim at three call sites - extracted into a single named
+type-guard `hasV3ModelPreset` that still narrows `preset` correctly at every
+use; (2) the "flag omitted -> `modelPolicyPlan` absent" regression case was
+missing for a v3-opted profile specifically - added
+(`apps/cli/src/upgrade.test.ts`). Re-ran `npm test`/`npm run check` for
+`apps/cli` after both fixes: 507 tests, 503 pass, 0 fail, 4 pre-existing
+unrelated skips, clean typecheck. Still left for later I6a cycles: the
+actual write path (writing the chosen plan into `ai-profile.lock`, and
+updating `subagentPolicy.preset` in `ai-profile.yaml` for a bulk-preset
+switch), interactive clack rendering/selection, the "custom exact" strategy,
+mapping-v2 comparison/planning, and the disclosed lifecycle-comparison gap
+from cycle 1. State stays `ready`, not `done`.
+
 I6a third RED-first cycle completed 2026-07-19, also a disclosed partial
 slice: added `planModelPolicyUpgrade`
 (`packages/compiler/src/model-policy-upgrade-planning.ts`), a thin pure

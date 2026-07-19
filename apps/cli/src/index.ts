@@ -18,6 +18,7 @@ import {
   deriveModelPolicyRoleOverrides,
   getLocalRuntimeGitignoreFindings,
   parseMixedFile,
+  planModelPolicyUpgrade,
   planRootInstructionsAdoption,
   planWrites,
   readLockfileForRegions,
@@ -42,7 +43,9 @@ import {
   type LockOutputV2,
   type MixedOutputDescriptor,
   type ModelPolicyTabnineSettingsPlan,
+  type ModelPolicyUpgradeBulkStrategy,
   type ModelPolicyUpgradeComparisonRow,
+  type ModelPolicyUpgradePlan,
   type Phase14ImportReport,
   type PlannedWrite,
   type TemplateDescriptor,
@@ -51,6 +54,7 @@ import {
 import type {
   AiProfile,
   AiProfileSkillPackId,
+  AiProfileSubagentPolicy,
   CapabilityCatalogEntry,
   ModelPolicyPreset,
   SafetyMode,
@@ -245,6 +249,7 @@ type ParsedUpgradeArgs =
       nonInteractive: boolean;
       json: boolean;
       help: boolean;
+      modelPolicyStrategy: ModelPolicyUpgradeBulkStrategy | undefined;
     }
   | { ok: false; message: string };
 
@@ -580,6 +585,19 @@ type RunUpgradeOptions = {
   nonInteractive?: boolean;
 };
 
+/**
+ * Single-owner v3-opt-in check for the upgrade command's model-policy
+ * comparison/planning paths, expressed as a type guard so every call site
+ * narrows `preset` to defined without re-typing the same two-clause
+ * condition (Phase 31.5 I6a cycle 4 code-quality fix: this condition was
+ * previously duplicated verbatim at three call sites in `runUpgrade`).
+ */
+function hasV3ModelPreset(
+  policy: AiProfileSubagentPolicy | undefined,
+): policy is AiProfileSubagentPolicy & { enabled: true; preset: ModelPolicyPreset } {
+  return policy?.enabled === true && policy.preset !== undefined;
+}
+
 async function runUpgrade(
   args: string[],
   cwd: string,
@@ -663,12 +681,27 @@ async function runUpgrade(
   const offeredIds = offered.map((entry) => entry.id);
   const subagentPolicy = profileResult.profile.subagentPolicy;
   const modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined =
-    subagentPolicy?.enabled === true && subagentPolicy.preset !== undefined
+    hasV3ModelPreset(subagentPolicy)
       ? compareModelPolicyUpgrade(
           lockfileView?.modelPolicy,
           subagentPolicy.preset,
           deriveModelPolicyRoleOverrides(subagentPolicy.roles),
         ).filter((row) => row.changed)
+      : undefined;
+  if (parsed.modelPolicyStrategy !== undefined && !hasV3ModelPreset(subagentPolicy)) {
+    io.stderr(
+      "--model-policy-strategy requires a v3-opted profile (subagentPolicy.enabled with a preset).\n",
+    );
+    return 1;
+  }
+  const modelPolicyPlan: ModelPolicyUpgradePlan | undefined =
+    parsed.modelPolicyStrategy !== undefined && hasV3ModelPreset(subagentPolicy)
+      ? planModelPolicyUpgrade(
+          parsed.modelPolicyStrategy,
+          lockfileView?.modelPolicy,
+          subagentPolicy.preset,
+          deriveModelPolicyRoleOverrides(subagentPolicy.roles),
+        )
       : undefined;
   const scriptedWrite = parsed.write && parsed.adoptRecommended;
   const interactive =
@@ -678,11 +711,11 @@ async function runUpgrade(
       (options.nonInteractive !== true && isInteractiveTty(io)));
 
   if ((!interactive || scriptedWrite) && !parsed.json) {
-    emitUpgradeReport(io, parsed.json, recordedVersion, offeredIds, modelPolicyChanges);
+    emitUpgradeReport(io, parsed.json, recordedVersion, offeredIds, modelPolicyChanges, modelPolicyPlan);
   }
   if (offered.length === 0) {
     if (parsed.json) {
-      emitUpgradeReport(io, true, recordedVersion, offeredIds, modelPolicyChanges);
+      emitUpgradeReport(io, true, recordedVersion, offeredIds, modelPolicyChanges, modelPolicyPlan);
     }
     if (interactive && !scriptedWrite) {
       const prompts = await getUpgradePrompts(options.prompts);
@@ -695,7 +728,7 @@ async function runUpgrade(
 
   if (!interactive && !scriptedWrite) {
     if (parsed.json) {
-      emitUpgradeReport(io, true, recordedVersion, offeredIds, modelPolicyChanges);
+      emitUpgradeReport(io, true, recordedVersion, offeredIds, modelPolicyChanges, modelPolicyPlan);
     }
     return 0;
   }
@@ -849,6 +882,7 @@ function emitUpgradeReport(
   recordedVersion: number | undefined,
   offeredIds: readonly string[],
   modelPolicyChanges?: readonly ModelPolicyUpgradeComparisonRow[],
+  modelPolicyPlan?: ModelPolicyUpgradePlan,
 ): void {
   if (json) {
     io.stdout(
@@ -867,6 +901,14 @@ function emitUpgradeReport(
                 fresh: row.fresh,
                 reason: row.reason,
               })),
+            }),
+        ...(modelPolicyPlan === undefined
+          ? {}
+          : {
+              modelPolicyPlan: {
+                strategy: modelPolicyPlan.strategy,
+                resolutions: modelPolicyPlan.block?.resolutions ?? [],
+              },
             }),
       })}\n`,
     );
@@ -888,6 +930,21 @@ function emitUpgradeReport(
           `- ${row.role} ${row.client}: ${row.old?.model ?? "(none)"} -> ${row.fresh.model} (${row.reason})`,
       ),
     );
+  }
+  if (modelPolicyPlan !== undefined) {
+    if (modelPolicyPlan.block === undefined) {
+      lines.push(
+        `model policy plan (${modelPolicyPlan.strategy}): nothing to retain (no prior lock)`,
+      );
+    } else {
+      lines.push(
+        `model policy plan (${modelPolicyPlan.strategy}):`,
+        ...modelPolicyPlan.block.resolutions.map(
+          (row) =>
+            `- ${row.role} ${row.client}: ${row.model} (${row.effort ?? ""})`,
+        ),
+      );
+    }
   }
   io.stdout(`${lines.join("\n")}\n`);
 }
@@ -2489,6 +2546,9 @@ function toWizardImportReport(report: Phase14ImportReport): WizardImportReport {
   };
 }
 
+const MODEL_POLICY_UPGRADE_BULK_STRATEGIES: readonly ModelPolicyUpgradeBulkStrategy[] =
+  ["retain", "adopt", "quality-first", "cost-conscious"];
+
 function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
   let root = ".";
   let write = false;
@@ -2496,6 +2556,7 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
   let nonInteractive = false;
   let json = false;
   let help = false;
+  let modelPolicyStrategy: ModelPolicyUpgradeBulkStrategy | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     switch (arg) {
@@ -2520,6 +2581,24 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
       case "--json":
         json = true;
         break;
+      case "--model-policy-strategy": {
+        const value = args[index + 1];
+        if (
+          !value ||
+          !MODEL_POLICY_UPGRADE_BULK_STRATEGIES.includes(
+            value as ModelPolicyUpgradeBulkStrategy,
+          )
+        ) {
+          return {
+            ok: false,
+            message:
+              "--model-policy-strategy requires one of: retain, adopt, quality-first, cost-conscious.",
+          };
+        }
+        modelPolicyStrategy = value as ModelPolicyUpgradeBulkStrategy;
+        index += 1;
+        break;
+      }
       case "--help":
       case "-h":
         help = true;
@@ -2536,6 +2615,7 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
     nonInteractive,
     json,
     help,
+    modelPolicyStrategy,
   };
 }
 

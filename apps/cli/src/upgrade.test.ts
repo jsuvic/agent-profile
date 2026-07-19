@@ -10,6 +10,8 @@ import test from "node:test";
 import { CAPABILITY_CATALOG_VERSION, type AiProfile } from "@agent-profile/core";
 import {
   buildLockfile,
+  deriveModelPolicyRoleOverrides,
+  planModelPolicyUpgrade,
   resolveModelPolicyLockfile,
   serializeLockfile,
   type LockModelPolicyV2,
@@ -800,6 +802,218 @@ test("upgrade JSON omits modelPolicyChanges entirely for a profile that has not 
   assert.equal(code, 0);
   const report = JSON.parse(output.stdoutText()) as Record<string, unknown>;
   assert.equal("modelPolicyChanges" in report, false);
+});
+
+test("upgrade JSON omits modelPolicyPlan entirely when --model-policy-strategy is not passed, even for a v3-opted profile", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+
+  const code = await runCli(["upgrade", "--root", root, "--json"], {
+    io: output,
+  });
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as Record<string, unknown>;
+  assert.equal("modelPolicyPlan" in report, false);
+});
+
+test("upgrade --model-policy-strategy adopt --json previews the exact plan for a v3-opted profile", async () => {
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, stale);
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyPlan?: {
+      strategy: string;
+      resolutions: LockModelPolicyV2["resolutions"];
+    };
+  };
+  const expected = planModelPolicyUpgrade(
+    "adopt",
+    stale,
+    "role-aware",
+    deriveModelPolicyRoleOverrides(undefined),
+  );
+  assert.ok(report.modelPolicyPlan);
+  assert.equal(report.modelPolicyPlan?.strategy, "adopt");
+  assert.deepEqual(
+    report.modelPolicyPlan?.resolutions,
+    expected.block?.resolutions,
+  );
+});
+
+test("upgrade --model-policy-strategy retain --json previews the prior lock's resolutions verbatim", async () => {
+  const fresh = liveModelPolicy();
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, fresh);
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "retain",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyPlan?: {
+      strategy: string;
+      resolutions: LockModelPolicyV2["resolutions"];
+    };
+  };
+  assert.ok(report.modelPolicyPlan);
+  assert.equal(report.modelPolicyPlan?.strategy, "retain");
+  // The prior lock's resolutions are stored sorted (by client, then role) by
+  // `buildLockfile`/`serializeLockfile`; the CLI reads that already-sorted
+  // form back from disk, so compare against the same sort order rather than
+  // `fresh.resolutions`' raw construction order.
+  const sortedFreshResolutions = [...fresh.resolutions].sort(
+    (left, right) =>
+      left.client.localeCompare(right.client) ||
+      left.role.localeCompare(right.role),
+  );
+  assert.deepEqual(report.modelPolicyPlan?.resolutions, sortedFreshResolutions);
+});
+
+test("upgrade --model-policy-strategy retain text prints 'nothing to retain' when there is no prior lock", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, undefined);
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "retain",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(
+    output.stdoutText(),
+    /model policy plan \(retain\): nothing to retain \(no prior lock\)/u,
+  );
+});
+
+test("upgrade --model-policy-strategy quality-first text (non-interactive) prints the plan section", async () => {
+  const fresh = liveModelPolicy();
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, fresh);
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "quality-first",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const expected = planModelPolicyUpgrade(
+    "quality-first",
+    fresh,
+    "role-aware",
+    deriveModelPolicyRoleOverrides(undefined),
+  );
+  assert.ok(expected.block);
+  assert.match(output.stdoutText(), /model policy plan \(quality-first\):/u);
+  for (const row of expected.block?.resolutions ?? []) {
+    assert.match(
+      output.stdoutText(),
+      new RegExp(
+        `- ${row.role} ${row.client}: ${row.model} \\(${row.effort ?? ""}\\)`,
+        "u",
+      ),
+    );
+  }
+});
+
+test("upgrade --model-policy-strategy refuses cleanly for a profile that has not opted into v3 subagentPolicy, leaving files untouched", async () => {
+  const root = await createUpgradeRoot(CAPABILITY_CATALOG_VERSION);
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(
+    output.stderrText(),
+    /--model-policy-strategy requires a v3-opted profile/u,
+  );
+  const profileAfter = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  assert.equal(profileAfter, profileBefore);
+  assert.equal(lockAfter, lockBefore);
+});
+
+test("upgrade --model-policy-strategy rejects an unrecognized value", async () => {
+  const root = await createUpgradeRoot(CAPABILITY_CATALOG_VERSION);
+  const output = createOutput();
+
+  const code = await runCli(
+    ["upgrade", "--root", root, "--model-policy-strategy", "bogus"],
+    { io: output },
+  );
+
+  assert.equal(code, 2);
+  assert.match(
+    output.stderrText(),
+    /--model-policy-strategy requires one of: retain, adopt, quality-first, cost-conscious\./u,
+  );
 });
 
 async function createUpgradeRoot(
