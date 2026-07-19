@@ -716,22 +716,40 @@ async function runUpgrade(
           DEFAULT_MODEL_POLICY_PRESET,
         ).filter((row) => row.changed)
       : undefined;
-  if (parsed.modelPolicyStrategy !== undefined && !hasV3ModelPreset(subagentPolicy)) {
+  if (
+    parsed.modelPolicyStrategy !== undefined &&
+    !hasV3ModelPreset(subagentPolicy) &&
+    !isEnabledMappingV2Policy(subagentPolicy)
+  ) {
     io.stderr(
-      "--model-policy-strategy requires a v3-opted profile (subagentPolicy.enabled with a preset).\n",
+      "--model-policy-strategy requires a v3-opted profile or an enabled mapping-v2 profile (subagentPolicy.enabled).\n",
     );
     return 1;
   }
   const modelPolicyPlan: ModelPolicyUpgradePlan | undefined =
-    parsed.modelPolicyStrategy !== undefined && hasV3ModelPreset(subagentPolicy)
-      ? planModelPolicyUpgrade(
-          parsed.modelPolicyStrategy,
-          lockfileView?.modelPolicy,
-          subagentPolicy.preset,
-          deriveModelPolicyRoleOverrides(subagentPolicy.roles),
-        )
-      : undefined;
+    parsed.modelPolicyStrategy === undefined
+      ? undefined
+      : hasV3ModelPreset(subagentPolicy)
+        ? planModelPolicyUpgrade(
+            parsed.modelPolicyStrategy,
+            lockfileView?.modelPolicy,
+            subagentPolicy.preset,
+            deriveModelPolicyRoleOverrides(subagentPolicy.roles),
+          )
+        : isEnabledMappingV2Policy(subagentPolicy)
+          ? planModelPolicyUpgrade(
+              parsed.modelPolicyStrategy,
+              undefined,
+              DEFAULT_MODEL_POLICY_PRESET,
+            )
+          : undefined;
   if (parsed.modelPolicyStrategy !== undefined && parsed.write) {
+    if (isEnabledMappingV2Policy(subagentPolicy)) {
+      io.stderr(
+        "--write for a mapping-v2 profile is not yet supported: adopting v3 requires updating ai-profile.yaml's subagentPolicy.preset field too, which is not wired yet.\n",
+      );
+      return 1;
+    }
     if (
       parsed.modelPolicyStrategy === "quality-first" ||
       parsed.modelPolicyStrategy === "cost-conscious"

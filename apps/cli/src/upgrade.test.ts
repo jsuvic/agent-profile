@@ -17,6 +17,7 @@ import {
   compareModelPolicyResolutions,
   compareModelPolicyUpgradeFromLegacy,
   deriveModelPolicyRoleOverrides,
+  MODEL_POLICY_PRIMARY_ROLE,
   planModelPolicyUpgrade,
   resolveModelPolicyLockfile,
   serializeLockfile,
@@ -1139,7 +1140,13 @@ test("upgrade JSON keeps modelPolicyChanges and modelPolicyLegacyChanges mutuall
   assert.equal("modelPolicyChanges" in legacyReport, false);
 });
 
-test("upgrade --model-policy-strategy still refuses cleanly for an enabled mapping-v2 profile, leaving files untouched", async () => {
+// Phase 31.5 (I6a, eighth cycle): an enabled mapping-v2 profile no longer
+// refuses `--model-policy-strategy` previews -- "adopt" naturally means
+// "adopt the default v3 preset" for a profile that predates the preset
+// concept entirely (see `DEFAULT_MODEL_POLICY_PRESET`). This supersedes the
+// prior cycle's refusal test for the same fixture (that refusal was too
+// broad and is deliberately narrowed this cycle).
+test("upgrade --model-policy-strategy adopt --json previews the default v3 preset's exact plan for an enabled mapping-v2 profile", async () => {
   const root = await createUpgradeRoot(
     CAPABILITY_CATALOG_VERSION,
     MAPPING_V2_PROFILE,
@@ -1156,18 +1163,35 @@ test("upgrade --model-policy-strategy still refuses cleanly for an enabled mappi
       "upgrade",
       "--root",
       root,
-      "--non-interactive",
+      "--json",
       "--model-policy-strategy",
       "adopt",
     ],
     { io: output },
   );
 
-  assert.equal(code, 1);
-  assert.match(
-    output.stderrText(),
-    /--model-policy-strategy requires a v3-opted profile/u,
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyPlan?: {
+      strategy: string;
+      resolutions: LockModelPolicyV2["resolutions"];
+    };
+  };
+  const expected = planModelPolicyUpgrade(
+    "adopt",
+    undefined,
+    "role-aware",
   );
+  assert.ok(report.modelPolicyPlan);
+  assert.equal(report.modelPolicyPlan?.strategy, "adopt");
+  assert.deepEqual(
+    [...(report.modelPolicyPlan?.resolutions ?? [])].sort(
+      compareModelPolicyResolutions,
+    ),
+    [...(expected.block?.resolutions ?? [])].sort(compareModelPolicyResolutions),
+  );
+
+  // Preview-only: no files change.
   const profileAfter = await readFile(
     path.join(root, "ai-profile.yaml"),
     "utf8",
@@ -1177,7 +1201,163 @@ test("upgrade --model-policy-strategy still refuses cleanly for an enabled mappi
   assert.equal(lockAfter, lockBefore);
 });
 
-test("upgrade --model-policy-strategy refuses cleanly for a profile that has not opted into v3 subagentPolicy, leaving files untouched", async () => {
+test("upgrade --model-policy-strategy quality-first and cost-conscious --json preview correctly and differ observably from adopt for an enabled mapping-v2 profile", async () => {
+  const root = await createUpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    MAPPING_V2_PROFILE,
+  );
+
+  const adoptOutput = createOutput();
+  assert.equal(
+    await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--json",
+        "--model-policy-strategy",
+        "adopt",
+      ],
+      { io: adoptOutput },
+    ),
+    0,
+  );
+  const adoptReport = JSON.parse(adoptOutput.stdoutText()) as {
+    modelPolicyPlan?: { resolutions: LockModelPolicyV2["resolutions"] };
+  };
+  const adoptRow = adoptReport.modelPolicyPlan?.resolutions.find(
+    (row) => row.role === MODEL_POLICY_PRIMARY_ROLE && row.client === "codex",
+  );
+  assert.ok(adoptRow);
+
+  for (const strategy of ["quality-first", "cost-conscious"] as const) {
+    const output = createOutput();
+    const code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--json",
+        "--model-policy-strategy",
+        strategy,
+      ],
+      { io: output },
+    );
+    assert.equal(code, 0);
+    const report = JSON.parse(output.stdoutText()) as {
+      modelPolicyPlan?: {
+        strategy: string;
+        resolutions: LockModelPolicyV2["resolutions"];
+      };
+    };
+    const expected = planModelPolicyUpgrade(strategy, undefined, "role-aware");
+    assert.ok(report.modelPolicyPlan);
+    assert.equal(report.modelPolicyPlan?.strategy, strategy);
+    assert.deepEqual(
+      [...(report.modelPolicyPlan?.resolutions ?? [])].sort(
+        compareModelPolicyResolutions,
+      ),
+      [...(expected.block?.resolutions ?? [])].sort(
+        compareModelPolicyResolutions,
+      ),
+    );
+
+    const strategyRow = report.modelPolicyPlan?.resolutions.find(
+      (row) =>
+        row.role === MODEL_POLICY_PRIMARY_ROLE && row.client === "codex",
+    );
+    assert.ok(strategyRow);
+    assert.notDeepEqual(
+      [adoptRow.model, adoptRow.effort],
+      [strategyRow.model, strategyRow.effort],
+    );
+  }
+});
+
+test("upgrade --model-policy-strategy retain --json previews an empty resolutions set for an enabled mapping-v2 profile (no prior v3 lock)", async () => {
+  const root = await createUpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    MAPPING_V2_PROFILE,
+  );
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "retain",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyPlan?: {
+      strategy: string;
+      resolutions: LockModelPolicyV2["resolutions"];
+    };
+  };
+  assert.ok(report.modelPolicyPlan);
+  assert.equal(report.modelPolicyPlan?.strategy, "retain");
+  assert.deepEqual(report.modelPolicyPlan?.resolutions, []);
+});
+
+test("upgrade --model-policy-strategy --write refuses for an enabled mapping-v2 profile across strategies, leaving files untouched", async () => {
+  for (const strategy of [
+    "retain",
+    "adopt",
+    "quality-first",
+    "cost-conscious",
+  ] as const) {
+    const root = await createUpgradeRoot(
+      CAPABILITY_CATALOG_VERSION,
+      MAPPING_V2_PROFILE,
+    );
+    const profileBefore = await readFile(
+      path.join(root, "ai-profile.yaml"),
+      "utf8",
+    );
+    const lockBefore = await readFile(
+      path.join(root, "ai-profile.lock"),
+      "utf8",
+    );
+    const output = createOutput();
+
+    const code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        strategy,
+        "--write",
+      ],
+      { io: output },
+    );
+
+    assert.equal(code, 1);
+    assert.match(
+      output.stderrText(),
+      /--write for a mapping-v2 profile is not yet supported/u,
+    );
+    const profileAfter = await readFile(
+      path.join(root, "ai-profile.yaml"),
+      "utf8",
+    );
+    const lockAfter = await readFile(
+      path.join(root, "ai-profile.lock"),
+      "utf8",
+    );
+    assert.equal(profileAfter, profileBefore);
+    assert.equal(lockAfter, lockBefore);
+  }
+});
+
+test("upgrade --model-policy-strategy refuses cleanly for a profile that has not opted into v3 subagentPolicy or an enabled mapping-v2 policy, leaving files untouched", async () => {
   const root = await createUpgradeRoot(CAPABILITY_CATALOG_VERSION);
   const profileBefore = await readFile(
     path.join(root, "ai-profile.yaml"),
@@ -1201,7 +1381,7 @@ test("upgrade --model-policy-strategy refuses cleanly for a profile that has not
   assert.equal(code, 1);
   assert.match(
     output.stderrText(),
-    /--model-policy-strategy requires a v3-opted profile/u,
+    /--model-policy-strategy requires a v3-opted profile or an enabled mapping-v2 profile/u,
   );
   const profileAfter = await readFile(
     path.join(root, "ai-profile.yaml"),

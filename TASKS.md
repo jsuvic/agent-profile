@@ -253,6 +253,36 @@ rows cannot report a lifecycle comparison. State stays `ready` for the next
 `/implement-next` cycle rather than `done`, since the brief's acceptance
 criteria are not yet met.
 
+I6a eighth RED-first cycle completed 2026-07-19, also a disclosed partial
+slice: widened `--model-policy-strategy` preview (cycle 4's flag) to also
+accept an enabled mapping-v2 profile, with zero new compiler-package code
+- cycle 3's `planModelPolicyUpgrade` already produces the correct plan when
+called as `planModelPolicyUpgrade(strategy, undefined, "role-aware")`
+("adopt" targets the default v3 preset since mapping-v2 has no "current
+preset" of its own; "retain" naturally yields `block: undefined`/"nothing
+to retain", exactly right since mapping-v2 has no prior v3 lock). The
+refusal message widened to name both accepted shapes (deliberate wording
+change; the one stale test asserting the old exact string was updated, no
+other test needed changes per a grep check). Added an UNCONDITIONAL
+`--write` refusal for mapping-v2 across all four strategies, placed before
+the existing quality-first/cost-conscious/adopt write logic, so `adopt
+--write` on a mapping-v2 profile can never fall through to silently write
+only the lock block without also updating `ai-profile.yaml`'s
+`subagentPolicy.preset` (the exact "inert write" bug class cycle 5 already
+guarded against for v3-opted quality-first/cost-conscious). Spec review
+passed COMPLIANT and code-quality review passed ACCEPTABLE, both clean
+single-pass reviews (no fixes needed) - one forward-looking, non-blocking
+note: the `modelPolicyPlan` computation is now a three-level nested ternary
+and should become a small named helper if a future cycle adds a fifth plan
+shape. `npm test`/`npm run check` clean for `apps/cli` (520 tests/516
+pass/0 fail/4 unrelated skips). Still left for later I6a cycles: actually
+writing anything for a mapping-v2 profile (needs the deferred YAML
+`subagentPolicy.preset` surgical edit - the same gap blocking
+quality-first/cost-conscious writes for v3-opted profiles too), the
+"custom exact" strategy, the entire interactive clack UI, and the
+disclosed lifecycle-comparison gap from cycle 1. State stays `ready`, not
+`done`.
+
 I6a seventh RED-first cycle completed 2026-07-19, also a disclosed partial
 slice: wired cycle 6's `compareModelPolicyUpgradeFromLegacy` into
 `agent-profile upgrade`'s existing JSON/text report surface
