@@ -93,6 +93,8 @@ export type {
 } from "./model-policy-target-adapter.js";
 export { compareModelPolicyUpgrade } from "./model-policy-upgrade-comparison.js";
 export type { ModelPolicyUpgradeComparisonRow } from "./model-policy-upgrade-comparison.js";
+export { compareModelPolicyUpgradeFromLegacy } from "./model-policy-legacy-upgrade-comparison.js";
+export type { ModelPolicyLegacyUpgradeComparisonRow } from "./model-policy-legacy-upgrade-comparison.js";
 export { planModelPolicyUpgrade } from "./model-policy-upgrade-planning.js";
 export type {
   ModelPolicyUpgradeBulkStrategy,

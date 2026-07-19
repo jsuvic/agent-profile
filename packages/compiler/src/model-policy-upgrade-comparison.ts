@@ -60,8 +60,13 @@ export type ModelPolicyUpgradeComparisonRow = Readonly<{
  * `codex` client on `MODEL_POLICY_PRIMARY_ROLE` uses `primaryStatus` (the
  * single project-local configuration surface); every other row uses
  * `skillStatus` (guidance-only surfaces).
+ *
+ * Exported so other comparison helpers (e.g. the mapping-v2 legacy
+ * comparison, Phase 31.5 I6a cycle 6) share this one precedence rule
+ * instead of re-deriving it, so the two comparisons can never silently
+ * disagree about which status a given role/client's fresh row reports.
  */
-function freshCapabilityStatus(
+export function freshCapabilityStatus(
   role: ModelPolicyRoleId,
   client: ModelPolicyTargetClientId,
   resolution: ModelPolicyTargetClientResolution,

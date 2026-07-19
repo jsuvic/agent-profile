@@ -253,6 +253,40 @@ rows cannot report a lifecycle comparison. State stays `ready` for the next
 `/implement-next` cycle rather than `done`, since the brief's acceptance
 criteria are not yet met.
 
+I6a sixth RED-first cycle completed 2026-07-19, also a disclosed partial
+slice: added `compareModelPolicyUpgradeFromLegacy`
+(`packages/compiler/src/model-policy-legacy-upgrade-comparison.ts`), a
+compiler-layer-only comparison helper for the OTHER profile shape the brief
+requires: an enabled mapping-v2 profile (`subagentPolicy.enabled === true`,
+no `preset` - Phase 30's legacy role-based resolver). Compares each v2
+role's `resolveRoleMapping` output against what a target v3 preset's own
+fresh table would resolve instead, over the full v3 role vocabulary
+(`routine-implementer`, the one v3-only role with no v2 equivalent, reports
+`legacy: undefined` and a distinct "no v2 equivalent" reason). Sibling in
+structure to cycle 1's `compareModelPolicyUpgrade`. Spec review found one
+Medium finding (the fresh-row capability-status precedence logic had been
+copy-pasted rather than reused from cycle 1's file, exactly the drift risk
+the task text warned about) and one Low finding (a test asserted "v2/v3
+catalogs are disjoint" without actually verifying it) - both fixed before
+code-quality review: `freshCapabilityStatus` is now exported from
+`model-policy-upgrade-comparison.ts` and imported here instead of
+duplicated; a new test iterates the real v2/v3 catalog constants and proves
+disjointness rather than asserting it in a comment. Code-quality review
+passed ACCEPTABLE (one non-blocking Minor: a `Set` wrapping a 9-element
+array for a single-use membership check, unnecessary but not wrong).
+Re-ran `npm test`/`npm run check` for both `packages/compiler` (303
+tests/302 pass/0 fail/1 unrelated skip) and `apps/cli` (513 tests/509
+pass/0 fail/4 unrelated skips) after the fixes: both clean. Still left for
+later I6a cycles: any CLI wiring for the legacy comparison (mirrors cycle
+1->2's own gap before it was wired in), planning/write paths for a
+mapping-v2 profile adopting v3 (needs to touch BOTH `ai-profile.yaml`'s
+`subagentPolicy` block and the lock, not just the lock), the "custom exact"
+strategy, quality-first/cost-conscious writes (needs the deferred YAML
+preset surgical edit), the entire interactive clack UI (nothing in I6a so
+far is reachable outside the explicit `--model-policy-strategy` flag), and
+the disclosed lifecycle-comparison gap from cycle 1. State stays `ready`,
+not `done`.
+
 I6a fifth RED-first cycle completed 2026-07-19, also a disclosed partial
 slice: wired an actual write path for `--model-policy-strategy adopt
 --write` only. `"quality-first"`/`"cost-conscious"` with `--write` are
