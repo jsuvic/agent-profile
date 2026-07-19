@@ -17,8 +17,10 @@ multi-file write rolls back cleanly.
 
 Once a plan is approved (I6a), applying it writes the profile, any changed
 target files, and the lockfile using the existing atomic write-plan
-machinery (`apps/cli/src/compile-plan.ts`'s `applyWritePlanAtomic` and
-region-aware refusal logic already proven for `compile --write` and `init`).
+machinery: `packages/compiler/src/write-plan.ts`'s `applyWritePlanAtomic`
+(the actual all-or-nothing multi-file writer/rollback) combined with
+`apps/cli/src/compile-plan.ts`'s region-aware refusal/planning logic - both
+already proven for `compile --write` and `init`.
 A target file that is unowned or drifted from what the lock last recorded is
 refused exactly as `compile` refuses it today (no upgrade-specific carve-out).
 If any write in the batch fails partway through, every already-committed
@@ -50,17 +52,19 @@ before the upgrade was applied.
 There is no upgrade write path yet to test (I6a lands the plan; this item
 lands and verifies the write). Once I6a exists, without this item's
 verification the write path could plausibly reuse `applyWritePlanAtomic`
-incorrectly (e.g. omitting the lockfile from the same atomic batch as target
-files, breaking the rollback guarantee across all three artifact kinds).
+(`packages/compiler/src/write-plan.ts`) incorrectly (e.g. omitting the
+lockfile from the same atomic batch as target files, breaking the rollback
+guarantee across all three artifact kinds).
 
 ## Expected GREEN proof
 
 Focused tests proving: an unowned/drifted target file refuses the upgrade
 exactly as `compile` would; a forced mid-batch failure (matching the existing
-rollback test pattern in `apps/cli/src/compile-plan.test.ts`, e.g. "rolls
-back already-committed writes when a later rename fails") leaves the repo
-byte-identical to before; a successful upgrade's resulting lock passes full
-schema validation with no orphaned fields.
+rollback test pattern in `packages/compiler/src/write-plan.test.ts`, e.g.
+"applyWritePlanAtomic rolls back already-committed writes when a later
+rename fails") leaves the repo byte-identical to before; a successful
+upgrade's resulting lock passes full schema validation with no orphaned
+fields.
 
 ## Seam under test
 
@@ -74,14 +78,16 @@ rollback test patterns). Do not mock the write-plan or refusal logic itself.
 
 ## Test command guidance
 
-Run focused `apps/cli` upgrade write tests reusing the existing atomic
-write-plan/rollback test patterns from `compile-plan.test.ts`, then affected
-workspace suites and check.
+Run focused `apps/cli` upgrade write tests plus `packages/compiler`'s
+existing `write-plan.test.ts` rollback suite (reused, not duplicated), then
+affected workspace suites and check.
 
 ## Likely file ownership
 
 - CLI upgrade write-application wiring (`apps/cli/src/upgrade*.ts`, reusing
-  `apps/cli/src/compile-plan.ts`'s existing atomic machinery)
+  `packages/compiler/src/write-plan.ts`'s `applyWritePlanAtomic` and
+  `apps/cli/src/compile-plan.ts`'s region-aware refusal/planning logic - no
+  new write mechanism)
 - Upgrade write/rollback tests and fixtures
 
 ## Dependencies

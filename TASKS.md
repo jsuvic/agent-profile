@@ -164,15 +164,20 @@ vertically by client (Codex end-to-end, then Claude end-to-end), not
 horizontally by layer.
 
 Dependency map: I1 -> (I1R, I3, I4); I1R -> I2; I2+I3+I4 -> I5; I5 -> I5R;
-I1+I2+I3+I4 -> I6; I6+I2+I5 -> I6a; I6a -> (I6b, I6c, I6e); I3+I6 -> I6d;
-I4+I6a -> I6c; I4+I6e -> I7 (I7 now depends on I6e, not base I6, since I7
-needs the full upgrade write path settled); I2+I3+I5+I6a-I6e+I7 -> I8;
-I1-I8+I5R -> I9; I9 -> Phase 32 I1. I2, I3, and I4 are parallel-safe after
-I1 apart from shared exports and fixtures. I5 and I6 may proceed in parallel
-after their prerequisites with shared CLI-entrypoint merge coordination.
-I5R may proceed in parallel with I6 once I5's wizard/preview seam is stable.
-I6b, I6c, and I6d are parallel-safe with each other once I6a's command shape
-stabilizes; I6e depends on I6a's write path existing.
+I1+I2+I3+I4 -> I6; I6+I2+I5 -> I6a; I6a -> (I6b, I6e); I6a+I6b+I4 -> I6c
+(I6c's own acceptance criteria require proving all four consent combinations
+against I6b's real update-check consent, so I6c cannot start before I6b
+lands); I1R+I3+I6 -> I6d (I6d now also depends on I1R as the precedent for
+adding its own new `tabnine` override schema field); I4+I6e -> I7 (I7
+depends on I6e, not base I6, since I7 needs the full upgrade write path
+settled); I2+I3+I5+I6a-I6e+I7 -> I8; I1-I8+I5R -> I9; I9 -> Phase 32 I1.
+I2, I3, and I4 are parallel-safe after I1 apart from shared exports and
+fixtures. I5 and I6 may proceed in parallel after their prerequisites with
+shared CLI-entrypoint merge coordination. I5R may proceed in parallel with
+I6 once I5's wizard/preview seam is stable. I6b and I6d are parallel-safe
+with each other once I6a's command shape stabilizes; I6c requires I6b to
+land first (shared cross-consent proof) and is not parallel-safe with it;
+I6e depends on I6a's write path existing and is independent of I6b/I6c/I6d.
 
 I3 amendment 2026-07-17: I3 shipped `planTabnineModelSettingsWrite` as a
 pure, unit-tested ownership-aware write plan for

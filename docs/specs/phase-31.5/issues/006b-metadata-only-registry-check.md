@@ -81,8 +81,11 @@ I6a (attaches to that command's flow).
 
 ## Parallelism notes
 
-Can proceed in parallel with I6c and I6d once I6a's command shape is stable;
-serialize on I6a's shared CLI entrypoint/presentation edits.
+Can proceed in parallel with I6d once I6a's command shape is stable;
+serialize on I6a's shared CLI entrypoint/presentation edits. I6c depends on
+this item landing first (its own acceptance criteria require testing
+against this item's real consent, not a placeholder), so this item is a
+prerequisite for I6c, not a parallel sibling.
 
 ## Contract impact
 

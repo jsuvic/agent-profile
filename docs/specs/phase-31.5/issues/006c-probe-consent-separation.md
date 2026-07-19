@@ -85,9 +85,12 @@ two consents).
 
 ## Parallelism notes
 
-Can proceed in parallel with I6b and I6d once I6a's command shape is stable;
-serialize on I6a's shared CLI entrypoint/presentation edits, and on I6b only
-for the shared "two independent consents" regression tests.
+Requires I6b to land first: this item's own acceptance criteria (all four
+accept/decline combinations of the two consents) cannot be proven until
+I6b's real update-check consent exists to test independence against - a
+placeholder/stub consent would not be genuine evidence. Independent of I6d
+(no shared seam); serialize on I6a's shared CLI entrypoint/presentation
+edits.
 
 ## Contract impact
 
