@@ -13,7 +13,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyWritePlan,
   buildPhase14ImportReport,
+  compareModelPolicyUpgrade,
   compileProfile,
+  deriveModelPolicyRoleOverrides,
   getLocalRuntimeGitignoreFindings,
   parseMixedFile,
   planRootInstructionsAdoption,
@@ -40,6 +42,7 @@ import {
   type LockOutputV2,
   type MixedOutputDescriptor,
   type ModelPolicyTabnineSettingsPlan,
+  type ModelPolicyUpgradeComparisonRow,
   type Phase14ImportReport,
   type PlannedWrite,
   type TemplateDescriptor,
@@ -658,6 +661,15 @@ async function runUpgrade(
     recordedVersion,
   );
   const offeredIds = offered.map((entry) => entry.id);
+  const subagentPolicy = profileResult.profile.subagentPolicy;
+  const modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined =
+    subagentPolicy?.enabled === true && subagentPolicy.preset !== undefined
+      ? compareModelPolicyUpgrade(
+          lockfileView?.modelPolicy,
+          subagentPolicy.preset,
+          deriveModelPolicyRoleOverrides(subagentPolicy.roles),
+        ).filter((row) => row.changed)
+      : undefined;
   const scriptedWrite = parsed.write && parsed.adoptRecommended;
   const interactive =
     !parsed.json &&
@@ -666,11 +678,11 @@ async function runUpgrade(
       (options.nonInteractive !== true && isInteractiveTty(io)));
 
   if ((!interactive || scriptedWrite) && !parsed.json) {
-    emitUpgradeReport(io, parsed.json, recordedVersion, offeredIds);
+    emitUpgradeReport(io, parsed.json, recordedVersion, offeredIds, modelPolicyChanges);
   }
   if (offered.length === 0) {
     if (parsed.json) {
-      emitUpgradeReport(io, true, recordedVersion, offeredIds);
+      emitUpgradeReport(io, true, recordedVersion, offeredIds, modelPolicyChanges);
     }
     if (interactive && !scriptedWrite) {
       const prompts = await getUpgradePrompts(options.prompts);
@@ -683,7 +695,7 @@ async function runUpgrade(
 
   if (!interactive && !scriptedWrite) {
     if (parsed.json) {
-      emitUpgradeReport(io, true, recordedVersion, offeredIds);
+      emitUpgradeReport(io, true, recordedVersion, offeredIds, modelPolicyChanges);
     }
     return 0;
   }
@@ -836,6 +848,7 @@ function emitUpgradeReport(
   json: boolean,
   recordedVersion: number | undefined,
   offeredIds: readonly string[],
+  modelPolicyChanges?: readonly ModelPolicyUpgradeComparisonRow[],
 ): void {
   if (json) {
     io.stdout(
@@ -844,6 +857,17 @@ function emitUpgradeReport(
         catalogVersion: CAPABILITY_CATALOG_VERSION,
         recordedCatalogVersion: recordedVersion ?? null,
         offered: offeredIds,
+        ...(modelPolicyChanges === undefined
+          ? {}
+          : {
+              modelPolicyChanges: modelPolicyChanges.map((row) => ({
+                role: row.role,
+                client: row.client,
+                old: row.old ?? null,
+                fresh: row.fresh,
+                reason: row.reason,
+              })),
+            }),
       })}\n`,
     );
     return;
@@ -856,6 +880,15 @@ function emitUpgradeReport(
   if (offeredIds.length === 0) lines.push("nothing to offer");
   else
     lines.push("offered capabilities:", ...offeredIds.map((id) => `- ${id}`));
+  if (modelPolicyChanges !== undefined && modelPolicyChanges.length > 0) {
+    lines.push(
+      "model policy changes:",
+      ...modelPolicyChanges.map(
+        (row) =>
+          `- ${row.role} ${row.client}: ${row.old?.model ?? "(none)"} -> ${row.fresh.model} (${row.reason})`,
+      ),
+    );
+  }
   io.stdout(`${lines.join("\n")}\n`);
 }
 

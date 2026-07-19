@@ -7,7 +7,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { CAPABILITY_CATALOG_VERSION } from "@agent-profile/core";
+import { CAPABILITY_CATALOG_VERSION, type AiProfile } from "@agent-profile/core";
+import {
+  buildLockfile,
+  resolveModelPolicyLockfile,
+  serializeLockfile,
+  type LockModelPolicyV2,
+} from "@agent-profile/compiler";
 import { withNetworkSentinel } from "../../../packages/core/test/fixtures/preset/network-sentinel.js";
 
 import { runCli, type CliIo, type UpgradePrompts } from "./index.js";
@@ -582,6 +588,219 @@ capabilities:
       packs:
         - reviewer-subagents
 `;
+
+// Phase 31.5 (I6a, second cycle): a v3-opted profile fixture used to test
+// `upgrade`'s model-policy comparison report. Mirrors `PROFILE` above but
+// adds a `subagentPolicy` block (role-aware preset, no per-role overrides)
+// so `subagentPolicy.enabled === true && subagentPolicy.preset !== undefined`.
+const V3_PROFILE = `version: 1
+profile:
+  name: upgrade-fixture
+  description: Upgrade fixture.
+stack:
+  languages:
+    - typescript
+  frameworks: []
+  packageManagers:
+    - npm
+  testing: []
+clients:
+  tabnine: { enabled: true }
+  codex: { enabled: true }
+  claude: { enabled: true }
+safety:
+  mode: guarded
+  requiresSandbox: false
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: true
+capabilities:
+  skills:
+    packs:
+      - base # preserve
+  delegation:
+    subagents:
+      enabled: true
+      packs:
+        - reviewer-subagents
+subagentPolicy:
+  enabled: true
+  preset: role-aware
+permissions:
+  filesystem: { read: allow, write: ask }
+  shell: { run: ask }
+  secrets: { access: deny }
+  dependencies: { install: ask }
+  network: { external: ask }
+  production: { access: deny }
+`;
+
+// The `AiProfile` value equivalent to `V3_PROFILE`, used only to compute
+// today's live-catalog model-policy resolution via `resolveModelPolicyLockfile`
+// for fixture construction (never passed to the CLI directly).
+const V3_PROFILE_AI: AiProfile = {
+  version: 1,
+  profile: { name: "upgrade-fixture", description: "Upgrade fixture." },
+  stack: {
+    languages: ["typescript"],
+    frameworks: [],
+    packageManagers: ["npm"],
+    testing: [],
+  },
+  clients: {
+    tabnine: { enabled: true },
+    codex: { enabled: true },
+    claude: { enabled: true },
+  },
+  safety: { mode: "guarded", requiresSandbox: false },
+  workflow: { sdd: true, tdd: true, finalReview: true },
+  subagentPolicy: { enabled: true, preset: "role-aware" },
+};
+
+function liveModelPolicy(): LockModelPolicyV2 {
+  const resolved = resolveModelPolicyLockfile(V3_PROFILE_AI);
+  if (!resolved) {
+    throw new Error("expected resolveModelPolicyLockfile to resolve a v3 preset");
+  }
+  return resolved;
+}
+
+async function createV3UpgradeRoot(
+  catalogVersion: number | undefined,
+  modelPolicy: LockModelPolicyV2 | undefined,
+): Promise<string> {
+  const root = await mkdtemp(path.join(tmpdir(), "agent-profile-upgrade-v3-"));
+  await writeFile(path.join(root, "ai-profile.yaml"), V3_PROFILE, "utf8");
+  const lockfile = buildLockfile({
+    profileBytes: V3_PROFILE,
+    templates: [],
+    files: [],
+    ...(catalogVersion === undefined ? {} : { catalogVersion }),
+    ...(modelPolicy === undefined ? {} : { modelPolicy }),
+  });
+  await writeFile(
+    path.join(root, "ai-profile.lock"),
+    serializeLockfile(lockfile),
+    "utf8",
+  );
+  return root;
+}
+
+test("upgrade JSON reports a model-policy change for a v3-opted profile whose lock disagrees with today's live catalog", async () => {
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, stale);
+  const output = createOutput();
+
+  const code = await runCli(
+    ["upgrade", "--root", root, "--json"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyChanges?: Array<{
+      role: string;
+      client: string;
+      old: { model: string } | null;
+      fresh: { model: string };
+      reason?: string;
+    }>;
+  };
+  assert.ok(report.modelPolicyChanges);
+  const row = report.modelPolicyChanges?.find(
+    (candidate) => candidate.role === "architect" && candidate.client === "codex",
+  );
+  assert.ok(row);
+  assert.equal(row?.old?.model, `${architectCodex.model}-superseded`);
+  assert.equal(row?.fresh.model, architectCodex.model);
+  assert.match(row?.reason ?? "", /model/iu);
+});
+
+test("upgrade text (non-interactive) prints a model policy changes section for a v3-opted profile whose lock disagrees with today's live catalog", async () => {
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, stale);
+  const output = createOutput();
+
+  const code = await runCli(
+    ["upgrade", "--root", root, "--non-interactive"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /model policy changes:/u);
+  assert.match(output.stdoutText(), /architect codex/u);
+  assert.match(
+    output.stdoutText(),
+    new RegExp(
+      `${architectCodex.model}-superseded -> ${architectCodex.model}`,
+      "u",
+    ),
+  );
+});
+
+test("upgrade reports an empty model-policy change set for a v3-opted profile whose lock already matches today's live catalog", async () => {
+  const fresh = liveModelPolicy();
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, fresh);
+
+  const jsonOutput = createOutput();
+  const jsonCode = await runCli(
+    ["upgrade", "--root", root, "--json"],
+    { io: jsonOutput },
+  );
+  assert.equal(jsonCode, 0);
+  const report = JSON.parse(jsonOutput.stdoutText()) as {
+    modelPolicyChanges?: unknown[];
+  };
+  assert.deepEqual(report.modelPolicyChanges, []);
+
+  const textRoot = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, fresh);
+  const textOutput = createOutput();
+  const textCode = await runCli(
+    ["upgrade", "--root", textRoot, "--non-interactive"],
+    { io: textOutput },
+  );
+  assert.equal(textCode, 0);
+  assert.doesNotMatch(textOutput.stdoutText(), /model policy changes:/u);
+});
+
+test("upgrade JSON omits modelPolicyChanges entirely for a profile that has not opted into v3 subagentPolicy", async () => {
+  const root = await createUpgradeRoot(CAPABILITY_CATALOG_VERSION);
+  const output = createOutput();
+
+  const code = await runCli(
+    ["upgrade", "--root", root, "--json"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as Record<string, unknown>;
+  assert.equal("modelPolicyChanges" in report, false);
+});
 
 async function createUpgradeRoot(
   catalogVersion: number | undefined,

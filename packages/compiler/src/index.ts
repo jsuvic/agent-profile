@@ -90,6 +90,8 @@ export type {
   ModelPolicyTargetClientResolution,
   ModelPolicyTargetRow,
 } from "./model-policy-target-adapter.js";
+export { compareModelPolicyUpgrade } from "./model-policy-upgrade-comparison.js";
+export type { ModelPolicyUpgradeComparisonRow } from "./model-policy-upgrade-comparison.js";
 // The model-resolution-table surface (catalog, table builder, lockfile row
 // conversion) mirrors the Codex/Claude adapter's exports.
 // `planTabnineModelSettingsWrite` and its supporting types/constants are now

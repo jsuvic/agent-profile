@@ -235,6 +235,41 @@ Also found and fixed 2026-07-19, as a separate PR unrelated to I6 itself:
 so every lockfile `configure` wrote silently erased its `modelPolicy` block.
 Pre-existing bug, surfaced while reviewing I6's disclosed gaps.
 
+I6a first RED-first cycle completed 2026-07-19 as a disclosed partial slice
+(one bounded `/implement-next` cycle, not full closure): added the pure
+comparison helper `compareModelPolicyUpgrade`
+(`packages/compiler/src/model-policy-upgrade-comparison.ts`), which recomputes
+today's live-catalog resolution via the existing
+`buildModelPolicyTargetTable` (deliberately without lock-reuse) and diffs it
+row-by-row against a prior lock's `modelPolicy` rows (model/effort/capability
+status/alternatives), producing `changed`/`reason` per role+client, for a
+v3-opted profile only. Spec and code-quality review both passed with no
+blocking findings. Left for later I6a cycles: CLI wiring/table rendering
+(`apps/cli/src/upgrade*.ts`), the mapping-v2 (legacy `resolveRoleMapping`)
+comparison path, the five planning paths (retain/adopt/quality-first/
+cost-conscious/custom), the actual write path, and the disclosed
+lockfile-schema gap that locked rows carry no `lifecycle` field so `old`
+rows cannot report a lifecycle comparison. State stays `ready` for the next
+`/implement-next` cycle rather than `done`, since the brief's acceptance
+criteria are not yet met.
+
+I6a second RED-first cycle completed 2026-07-19, also a disclosed partial
+slice: wired `compareModelPolicyUpgrade` into `agent-profile upgrade`'s
+existing report-emission paths (`apps/cli/src/index.ts`'s `runUpgrade`/
+`emitUpgradeReport`) for a v3-opted profile only. JSON output gains a
+`modelPolicyChanges` array (omitted entirely for a non-v3 profile, present
+but empty when nothing drifted, populated with changed rows otherwise);
+non-interactive text output gains a matching `model policy changes:` section
+under the same three-state rule. Spec and code-quality review both passed
+with no blocking findings; 4 new `apps/cli/src/upgrade.test.ts` cases cover
+stale-lock JSON, stale-lock text, matching-lock empty-set, and the non-v3
+regression case (496 passing, 0 fail, 0 regressions). Still left for later
+I6a cycles: interactive clack rendering of the comparison table
+(`apps/cli/src/upgrade-clack.ts` untouched), the mapping-v2 legacy-resolver
+comparison path, the five planning paths, the actual write path, and the
+disclosed lifecycle-comparison gap from the first cycle. State stays
+`ready`, not `done`.
+
 ## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
 
 Approved 2026-07-14 from the repository-update field-test agreement. Phase 32
