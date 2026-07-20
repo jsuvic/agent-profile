@@ -824,6 +824,8 @@ async function runUpgrade(
         modelPolicyPlan: modelPolicyPlan!,
         existingUpgrade: lockfileView?.upgrade,
         targetPreset: bulkPreset,
+        modelPolicyChanges,
+        modelPolicyLegacyChanges,
       });
     }
     io.stderr(
@@ -1049,6 +1051,95 @@ const MODEL_POLICY_BEARING_PATHS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * `classifyTabnineSettingsOwnership` (inside `resolveTabnineModelSettings`)
+ * collapses a manual-owned lock entry, a drifted generated-owned one, and a
+ * now-absent file all into the same "unowned"/`undefined` results;
+ * `planTabnineModelSettingsWrite` then reports "advisory" (no write), and
+ * `buildCompileWrites` never carries a base Tabnine entry forward on its own
+ * (it isn't part of `compileResult.files`) -- so the entry silently vanishes
+ * from the rewritten lock even though the file on disk is left untouched.
+ * That means an unrelated model-policy write would demote a manual-owned
+ * entry to unknown ownership, silently accept generated-owned drift instead
+ * of flagging it, or drop the entry entirely if Tabnine was disabled after a
+ * prior write recorded it -- in every case dropping provenance the lockfile
+ * schema explicitly supports recording (PR review findings). Refuse rather
+ * than lose that provenance -- reconciling Tabnine drift/ownership is I6d's
+ * scope, not this write's. Returns `true` (and has already printed the
+ * refusal) when the write must stop; `false` when it's safe to proceed.
+ */
+async function refuseIfTabnineProvenanceWouldBeLost(input: {
+  rootDir: string;
+  io: CliIo;
+  strategyLabel: string;
+  tabnineModelSettings: Awaited<ReturnType<typeof resolveTabnineModelSettings>>;
+}): Promise<boolean> {
+  const { rootDir, io, strategyLabel, tabnineModelSettings } = input;
+  const priorLock = await readLockfileForRegions(rootDir);
+  const priorTabnineOutput = priorLock?.outputs.find(
+    (output) => output.path === TABNINE_SETTINGS_PATH,
+  );
+  if (
+    priorTabnineOutput === undefined ||
+    (tabnineModelSettings !== undefined &&
+      tabnineModelSettings.ownership === "generated-owned")
+  ) {
+    return false;
+  }
+  // Manual-owned needs no extra detail regardless of the fresh state (e.g.
+  // even if the file is also now missing from disk): the ownership label
+  // alone already explains why it can't be silently carried forward.
+  const detail =
+    tabnineModelSettings === undefined
+      ? ", but Tabnine is no longer an enabled client, so its resolution can't be reconciled here"
+      : priorTabnineOutput.ownership === "manual-owned"
+        ? ""
+        : tabnineModelSettings.ownership === "absent"
+          ? ", but the file is now missing from disk"
+          : ", but has drifted from its recorded hash";
+  io.stderr(
+    `Refusing to write (${strategyLabel}): ${TABNINE_SETTINGS_PATH} is recorded in ai-profile.lock as ${priorTabnineOutput.ownership}${detail}; reconcile it first (see \`agent-profile doctor\`), since this write must not silently drop its provenance.\n`,
+  );
+  return true;
+}
+
+/**
+ * Prints a `File changes (...)` preview of every non-"unchanged" write
+ * action before a bulk preset switch is actually applied, computed from the
+ * EXACT SAME `allWrites` array the real write uses right after this call --
+ * so the preview can never diverge from what's actually about to happen. A
+ * bulk preset switch mutates `ai-profile.yaml` itself, unlike "adopt" (which
+ * never touches it and keeps its existing model-policy-comparison-only
+ * preview); without this, that was the only write path in the repository
+ * that mutated a file's content with no exact diff shown first, breaking
+ * the mutation contract every other write path (capability-catalog
+ * inserts, `configure`, the interactive wizard) already follows (PR review
+ * finding). Returns `false` if the dry-run itself failed (already reported
+ * via `io.stderr`); `true` otherwise.
+ */
+async function previewBulkPresetSwitchWrites(
+  rootDir: string,
+  io: CliIo,
+  allWrites: PlannedWrite[],
+  targetPreset: ModelPolicyPreset,
+): Promise<boolean> {
+  const preview = await createOrApplyWritePlan(rootDir, allWrites, false, io);
+  if (!preview) {
+    return false;
+  }
+  const changedPreviewActions = preview.actions.filter(
+    (action) => action.action !== "unchanged",
+  );
+  if (changedPreviewActions.length > 0) {
+    io.stdout(
+      `File changes (${targetPreset}):\n${changedPreviewActions
+        .map((action) => `- ${action.path} (${action.action})`)
+        .join("\n")}\n`,
+    );
+  }
+  return true;
+}
+
+/**
  * Real write path for `--model-policy-strategy <strategy> --write` on a
  * v3-opted profile, covering both:
  * - "adopt" (`targetPreset: undefined`): keeps the profile's current preset
@@ -1080,6 +1171,16 @@ async function runModelPolicyWrite(input: {
   /** `undefined` for "adopt" (no `ai-profile.yaml` edit); a concrete preset
    * for a bulk preset switch ("quality-first"/"cost-conscious"). */
   targetPreset: ModelPolicyPreset | undefined;
+  /** The same comparison rows already computed (and, for a non-JSON caller,
+   * already printed via `printModelPolicyTextReport`) by `runUpgrade` --
+   * threaded through so the JSON write response can include them too,
+   * instead of reporting only mutation counts after the fact (PR review
+   * finding: automation consuming `--json --write` could not tell WHICH
+   * resolutions were actually adopted/switched). */
+  modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined;
+  modelPolicyLegacyChanges:
+    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
+    | undefined;
 }): Promise<number> {
   const {
     rootDir,
@@ -1091,6 +1192,8 @@ async function runModelPolicyWrite(input: {
     modelPolicyPlan,
     existingUpgrade,
     targetPreset,
+    modelPolicyChanges,
+    modelPolicyLegacyChanges,
   } = input;
   if (modelPolicyPlan.block === undefined) {
     // Invariant guaranteed by `planModelPolicyUpgrade`'s non-"retain"
@@ -1242,6 +1345,17 @@ async function runModelPolicyWrite(input: {
     existingTabnineModel,
   );
 
+  if (
+    await refuseIfTabnineProvenanceWouldBeLost({
+      rootDir,
+      io,
+      strategyLabel,
+      tabnineModelSettings,
+    })
+  ) {
+    return 1;
+  }
+
   const { writes } = buildCompileWrites({
     profilePath: "ai-profile.yaml",
     profileBytes: writeProfileBytes,
@@ -1254,12 +1368,17 @@ async function runModelPolicyWrite(input: {
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
-  const plan = await createOrApplyWritePlan(
-    rootDir,
-    profileYamlWrite ? [profileYamlWrite, ...writes] : writes,
-    true,
-    io,
-  );
+  const allWrites = profileYamlWrite ? [profileYamlWrite, ...writes] : writes;
+
+  if (
+    !json &&
+    targetPreset !== undefined &&
+    !(await previewBulkPresetSwitchWrites(rootDir, io, allWrites, targetPreset))
+  ) {
+    return 1;
+  }
+
+  const plan = await createOrApplyWritePlan(rootDir, allWrites, true, io);
   if (!plan) {
     return 1;
   }
@@ -1273,6 +1392,21 @@ async function runModelPolicyWrite(input: {
   // finding).
   const written = plan.counts.create + plan.counts.change;
   const wrote = written > 0;
+  // `written` (and the JSON `filesWritten` field, an existing contract) counts
+  // every action, including the metadata files `ai-profile.yaml`/
+  // `ai-profile.lock` themselves -- but the human-readable message calls that
+  // count "regenerated target files", which is wrong whenever the metadata
+  // files are also part of the total (PR review finding: e.g. changing the
+  // lock plus two real targets would claim "3 regenerated target files").
+  // Count only the actual generated-output actions for that specific wording.
+  const METADATA_WRITE_PATHS: ReadonlySet<string> = new Set([
+    "ai-profile.yaml",
+    "ai-profile.lock",
+  ]);
+  const targetFilesWritten = plan.actions.filter(
+    (action) =>
+      action.action !== "unchanged" && !METADATA_WRITE_PATHS.has(action.path),
+  ).length;
   if (json) {
     io.stdout(
       `${JSON.stringify({
@@ -1280,16 +1414,21 @@ async function runModelPolicyWrite(input: {
         modelPolicyStrategy: strategyLabel,
         modelPolicyWrote: wrote,
         filesWritten: written,
+        ...buildModelPolicyJsonFields(
+          modelPolicyChanges,
+          modelPolicyPlan,
+          modelPolicyLegacyChanges,
+        ),
       })}\n`,
     );
   } else if (wrote) {
     io.stdout(
       targetPreset === undefined
-        ? `Updated ai-profile.lock and regenerated ${written} target file${
-            written === 1 ? "" : "s"
+        ? `Updated ai-profile.lock and regenerated ${targetFilesWritten} target file${
+            targetFilesWritten === 1 ? "" : "s"
           } (adopt).\n`
-        : `Updated ai-profile.yaml and ai-profile.lock, and regenerated ${written} file${
-            written === 1 ? "" : "s"
+        : `Updated ai-profile.yaml and ai-profile.lock, and regenerated ${targetFilesWritten} target file${
+            targetFilesWritten === 1 ? "" : "s"
           } (${targetPreset}).\n`,
     );
   } else {
@@ -1465,11 +1604,25 @@ function buildModelPolicyReportLines(
         `model policy plan (${modelPolicyPlan.strategy}): nothing to retain (no prior lock)`,
       );
     } else {
+      // Render the complete row/block metadata, not just model/effort:
+      // Retain's block can legitimately hold retained values that differ
+      // from the fresh comparison above (effort status, alternatives,
+      // source, capability status, catalog version), so a text-mode reader
+      // could not otherwise infer the exact block that would actually be
+      // written -- especially for Retain, where nothing else in the report
+      // shows it (PR review finding).
       lines.push(
-        `model policy plan (${modelPolicyPlan.strategy}):`,
+        `model policy plan (${modelPolicyPlan.strategy}, preset: ${modelPolicyPlan.block.preset}, block catalog version: ${modelPolicyPlan.block.catalogVersion}):`,
         ...modelPolicyPlan.block.resolutions.map(
           (row) =>
-            `- ${row.role} ${row.client}: ${row.model} (${row.effort ?? ""})`,
+            `- ${row.role} ${row.client}: ` +
+            `model ${row.model}, ` +
+            `effort ${row.effort ?? "(none)"}, ` +
+            `effort status ${row.effortStatus}, ` +
+            `status ${row.capabilityStatus}, ` +
+            `alternatives [${formatAlternativesList(row.alternatives)}], ` +
+            `source ${row.source}, ` +
+            `catalog version ${row.catalogVersion}`,
         ),
       );
     }
@@ -1531,6 +1684,7 @@ function formatModelPolicyChangeLine(
     `- ${row.role} ${row.client}: ` +
     `model ${row.old?.model ?? "(none)"} -> ${row.fresh.model}, ` +
     `effort ${row.old?.effort ?? "(none)"} -> ${row.fresh.effort}, ` +
+    `effort status ${row.old?.effortStatus ?? "(none)"} -> ${row.fresh.effortStatus}, ` +
     `status ${row.old?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
     `alternatives [${formatAlternativesList(row.old?.alternatives ?? [])}] -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
     `lifecycle ${row.old?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle}, ` +

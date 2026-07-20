@@ -1133,6 +1133,63 @@ test("upgrade --model-policy-strategy retain text prints 'nothing to retain' whe
   );
 });
 
+test("upgrade --model-policy-strategy retain text (non-interactive) renders the complete retained row/block metadata, not just model/effort (PR review finding)", async () => {
+  // Retain's block can hold values that intentionally differ from the fresh
+  // comparison above it (that's the whole point of retaining) -- effort
+  // status, alternatives, source, capability status, and per-row/block
+  // catalog version cannot be inferred from the comparison section, so the
+  // text preview must render them explicitly.
+  const fresh = liveModelPolicy();
+  const retained: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, source: "explicit-override" as const }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, retained);
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "retain",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(
+    output.stdoutText(),
+    new RegExp(
+      `model policy plan \\(retain, preset: ${retained.preset}, block catalog version: ${retained.catalogVersion}\\):`,
+      "u",
+    ),
+  );
+  const architectRow = retained.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectRow);
+  const alternativesText =
+    architectRow.alternatives.length > 0
+      ? architectRow.alternatives.join(", ")
+      : "none";
+  assert.match(
+    output.stdoutText(),
+    new RegExp(
+      `- architect codex: model ${architectRow.model}, effort ${architectRow.effort}, ` +
+        `effort status ${architectRow.effortStatus}, status ${architectRow.capabilityStatus}, ` +
+        `alternatives \\[${alternativesText}\\], source explicit-override, catalog version ${architectRow.catalogVersion}`,
+      "u",
+    ),
+  );
+});
+
 test("upgrade --model-policy-strategy quality-first text (non-interactive) prints the plan section", async () => {
   const fresh = liveModelPolicy();
   const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, fresh);
@@ -1158,12 +1215,15 @@ test("upgrade --model-policy-strategy quality-first text (non-interactive) print
     deriveModelPolicyRoleOverrides(undefined),
   );
   assert.ok(expected.block);
-  assert.match(output.stdoutText(), /model policy plan \(quality-first\):/u);
+  assert.match(
+    output.stdoutText(),
+    /model policy plan \(quality-first, preset: quality-first, block catalog version: \d+\):/u,
+  );
   for (const row of expected.block?.resolutions ?? []) {
     assert.match(
       output.stdoutText(),
       new RegExp(
-        `- ${row.role} ${row.client}: ${row.model} \\(${row.effort ?? ""}\\)`,
+        `- ${row.role} ${row.client}: model ${row.model}, effort ${row.effort ?? "(none)"}`,
         "u",
       ),
     );
@@ -1756,6 +1816,101 @@ for (const targetPreset of ["quality-first", "cost-conscious"] as const) {
   });
 }
 
+test("upgrade --model-policy-strategy quality-first --write previews the exact ai-profile.yaml edit and generated-file changes before applying (PR review finding)", async () => {
+  // A bulk preset switch mutates ai-profile.yaml itself, unlike "adopt" --
+  // before this fix, only the model-policy comparison table was shown, with
+  // no view of the actual file-level diff the write was about to apply.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "quality-first",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /File changes \(quality-first\):/u);
+  assert.match(output.stdoutText(), /- ai-profile\.yaml \((create|change)\)/u);
+  assert.match(output.stdoutText(), /- \.codex\/config\.toml \((create|change)\)/u);
+
+  const previewIndex = output
+    .stdoutText()
+    .indexOf("File changes (quality-first):");
+  const confirmIndex = output
+    .stdoutText()
+    .indexOf("Updated ai-profile.yaml and ai-profile.lock");
+  assert.ok(previewIndex >= 0);
+  assert.ok(confirmIndex >= 0);
+  assert.ok(previewIndex < confirmIndex);
+});
+
+test("upgrade --model-policy-strategy quality-first --write reports the real generated-target-file count, excluding ai-profile.yaml/ai-profile.lock from that count (PR review finding)", async () => {
+  // Before this fix, the reported count included ai-profile.yaml and
+  // ai-profile.lock themselves alongside the actual generated target files,
+  // so the message's own wording ("regenerated N target files") overstated
+  // how many real target files changed.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "quality-first",
+      "--write",
+    ],
+    { io: output },
+  );
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as { filesWritten?: number };
+  assert.ok(report.filesWritten);
+
+  const textOutput = createOutput();
+  const textRoot = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const textCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      textRoot,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "quality-first",
+      "--write",
+    ],
+    { io: textOutput },
+  );
+  assert.equal(textCode, 0);
+  // filesWritten (JSON) counts every action, including ai-profile.yaml and
+  // ai-profile.lock; the text message's own count must be strictly less,
+  // since it excludes those two metadata files.
+  const match = textOutput
+    .stdoutText()
+    .match(/regenerated (\d+) target files? \(quality-first\)/u);
+  assert.ok(match);
+  const targetFilesWritten = Number(match[1]);
+  assert.ok(targetFilesWritten < (report.filesWritten as number));
+});
+
 test("upgrade --model-policy-strategy quality-first --write reports a no-op switch as unwritten when already on that preset, leaving every file byte-unchanged", async () => {
   // Mirrors the existing adopt no-op test's two-step technique: run the
   // switch for real first (establishing a baseline produced by THIS exact
@@ -1959,6 +2114,64 @@ test("upgrade --model-policy-strategy adopt --write --json regenerates ai-profil
   );
 });
 
+test("upgrade --model-policy-strategy adopt --write --json includes modelPolicyChanges in the write response, not just mutation counts (PR review finding)", async () => {
+  // Before this fix, the JSON adopt-write success record only reported
+  // `modelPolicyWrote`/`filesWritten` -- automation scripting this exact
+  // combination could not tell WHICH resolutions were actually adopted.
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    stale,
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyChanges?: Array<{
+      role: string;
+      client: string;
+      old: { model: string } | null;
+      fresh: { model: string };
+    }>;
+    modelPolicyPlan?: { preset: string | null; resolutions: unknown[] };
+  };
+  assert.ok(report.modelPolicyChanges);
+  const row = report.modelPolicyChanges?.find(
+    (candidate) => candidate.role === "architect" && candidate.client === "codex",
+  );
+  assert.ok(row);
+  assert.equal(row?.old?.model, `${architectCodex.model}-superseded`);
+  assert.equal(row?.fresh.model, architectCodex.model);
+  assert.ok(report.modelPolicyPlan);
+  assert.equal(report.modelPolicyPlan?.preset, "role-aware");
+  assert.ok((report.modelPolicyPlan?.resolutions.length ?? 0) > 0);
+});
+
 test("upgrade --model-policy-strategy adopt --write text mode prints a confirmation with a real file count", async () => {
   const fresh = liveModelPolicy();
   const architectCodex = fresh.resolutions.find(
@@ -2037,10 +2250,15 @@ test("upgrade --model-policy-strategy adopt --write shows the exact old/new mode
   );
 
   assert.equal(code, 0);
-  assert.match(output.stdoutText(), /model policy plan \(adopt\):/u);
+  assert.match(
+    output.stdoutText(),
+    /model policy plan \(adopt, preset: role-aware, block catalog version: \d+\):/u,
+  );
   assert.match(output.stdoutText(), /architect codex:/u);
   // The report must come BEFORE the write confirmation, not after or absent.
-  const reportIndex = output.stdoutText().indexOf("model policy plan (adopt):");
+  const reportIndex = output
+    .stdoutText()
+    .indexOf("model policy plan (adopt, preset:");
   const confirmIndex = output
     .stdoutText()
     .indexOf("Updated ai-profile.lock and regenerated");
@@ -2252,6 +2470,210 @@ test("upgrade --model-policy-strategy adopt --write proceeds when an UNRELATED (
 
   assert.equal(code, 0);
   assert.doesNotMatch(output.stderrText(), /manual-owned/u);
+});
+
+test("upgrade --model-policy-strategy adopt --write refuses when .tabnine/agent/settings.json is recorded manual-owned, since an unrelated model-policy write must not drop its provenance (PR review finding)", async () => {
+  // `classifyTabnineSettingsOwnership` collapses a manual-owned lock entry
+  // into the same "unowned" result a drifted generated-owned file gets;
+  // `planTabnineModelSettingsWrite` then reports "advisory" (no write), and
+  // `buildCompileWrites` never carries a base Tabnine entry forward on its
+  // own -- so without this refusal, an unrelated Codex/Claude adopt would
+  // silently drop the manual-owned ownership record while leaving the file
+  // itself untouched.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const tabnineSettingsPath = path.join(
+    root,
+    ".tabnine",
+    "agent",
+    "settings.json",
+  );
+  await mkdir(path.dirname(tabnineSettingsPath), { recursive: true });
+  const tabnineBytes = `${JSON.stringify(
+    { model: { id: "hand-picked-model" } },
+    null,
+    2,
+  )}\n`;
+  await writeFile(tabnineSettingsPath, tabnineBytes, "utf8");
+
+  const lockPath = path.join(root, "ai-profile.lock");
+  const lockJson = JSON.parse(await readFile(lockPath, "utf8")) as {
+    outputs: Array<{ path: string; [key: string]: unknown }>;
+  };
+  lockJson.outputs.push({
+    path: ".tabnine/agent/settings.json",
+    target: "manual",
+    templateId: "manual",
+    ownership: "manual-owned",
+  });
+  lockJson.outputs.sort((left, right) => left.path.localeCompare(right.path));
+  await writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`, "utf8");
+
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(lockPath, "utf8");
+  const tabnineBefore = await readFile(tabnineSettingsPath, "utf8");
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /\.tabnine\/agent\/settings\.json/u);
+  assert.match(output.stderrText(), /manual-owned/u);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(await readFile(lockPath, "utf8"), lockBefore);
+  assert.equal(await readFile(tabnineSettingsPath, "utf8"), tabnineBefore);
+});
+
+test("upgrade --model-policy-strategy adopt --write refuses when .tabnine/agent/settings.json has drifted from its recorded generated-owned hash (PR review finding)", async () => {
+  // A generated-owned Tabnine settings file whose on-disk bytes no longer
+  // match the recorded hash classifies as "unowned" (the same drift
+  // protection region-aware outputs get) -- without this refusal, the drift
+  // would be silently accepted (no write, but the ownership record still
+  // vanishes from the rewritten lock) instead of being flagged.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const tabnineSettingsPath = path.join(
+    root,
+    ".tabnine",
+    "agent",
+    "settings.json",
+  );
+  await mkdir(path.dirname(tabnineSettingsPath), { recursive: true });
+  const driftedBytes = `${JSON.stringify(
+    { model: { id: "hand-edited-model" } },
+    null,
+    2,
+  )}\n`;
+  await writeFile(tabnineSettingsPath, driftedBytes, "utf8");
+
+  const lockPath = path.join(root, "ai-profile.lock");
+  const lockJson = JSON.parse(await readFile(lockPath, "utf8")) as {
+    outputs: Array<{ path: string; [key: string]: unknown }>;
+  };
+  lockJson.outputs.push({
+    path: ".tabnine/agent/settings.json",
+    target: "tabnine",
+    templateId: "tabnine-model-settings@1",
+    ownership: "generated-owned",
+    // Deliberately wrong: does not match `driftedBytes`' real hash, so
+    // `classifyTabnineSettingsOwnership` must detect the drift.
+    sha256: "0".repeat(64),
+  });
+  lockJson.outputs.sort((left, right) => left.path.localeCompare(right.path));
+  await writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`, "utf8");
+
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(lockPath, "utf8");
+  const tabnineBefore = await readFile(tabnineSettingsPath, "utf8");
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /\.tabnine\/agent\/settings\.json/u);
+  assert.match(output.stderrText(), /drifted/u);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(await readFile(lockPath, "utf8"), lockBefore);
+  assert.equal(await readFile(tabnineSettingsPath, "utf8"), tabnineBefore);
+});
+
+test("upgrade --model-policy-strategy adopt --write refuses when a prior Tabnine lock entry exists but Tabnine is no longer an enabled client (code-quality review finding)", async () => {
+  // `resolveTabnineModelSettings` returns undefined entirely when Tabnine is
+  // disabled, which previously bypassed the drift/manual-owned refusal check
+  // (that check only looked at a *resolved* non-"generated-owned" ownership)
+  // -- disabling Tabnine after a prior write recorded an entry is another way
+  // to reach the same silent-drop defect, since the entry can never be
+  // reconciled by an unrelated model-policy write once Tabnine's disabled.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+
+  const profilePath = path.join(root, "ai-profile.yaml");
+  const profileWithTabnineDisabled = (await readFile(profilePath, "utf8")).replace(
+    "tabnine: { enabled: true }",
+    "tabnine: { enabled: false }",
+  );
+  assert.notEqual(
+    profileWithTabnineDisabled,
+    await readFile(profilePath, "utf8"),
+  );
+  await writeFile(profilePath, profileWithTabnineDisabled, "utf8");
+
+  const lockPath = path.join(root, "ai-profile.lock");
+  const lockJson = JSON.parse(await readFile(lockPath, "utf8")) as {
+    outputs: Array<{ path: string; [key: string]: unknown }>;
+  };
+  lockJson.outputs.push({
+    path: ".tabnine/agent/settings.json",
+    target: "tabnine",
+    templateId: "tabnine-model-settings@1",
+    ownership: "generated-owned",
+    sha256: "0".repeat(64),
+  });
+  lockJson.outputs.sort((left, right) => left.path.localeCompare(right.path));
+  await writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`, "utf8");
+
+  const profileBefore = await readFile(profilePath, "utf8");
+  const lockBefore = await readFile(lockPath, "utf8");
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /\.tabnine\/agent\/settings\.json/u);
+  assert.match(output.stderrText(), /no longer an enabled client/u);
+  assert.equal(await readFile(profilePath, "utf8"), profileBefore);
+  assert.equal(await readFile(lockPath, "utf8"), lockBefore);
 });
 
 test("upgrade --model-policy-strategy adopt --write refuses cleanly when a generated target file has drifted from the lock, leaving every file byte-unchanged", async () => {

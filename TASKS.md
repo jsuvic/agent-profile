@@ -380,6 +380,61 @@ treatment cycle 9 already built for "adopt", extended to also touch
 non-goal), and the disclosed lifecycle-comparison gap from cycle 1. State
 stays `ready`, not `done`.
 
+I6a PR review fix round 6 (2026-07-20, PR #125) addressed 8 new Codex bot
+findings (1 P1, 7 P2) surfaced after the eleventh cycle's quality-first/
+cost-conscious write wiring landed: (1) a drifted generated-owned
+`.tabnine/agent/settings.json` was silently accepted (no refusal, ownership
+record dropped from the rewritten lock) since `classifyTabnineSettingsOwnership`
+collapses drift into the same "unowned" result a manual-owned entry gets;
+(2) a manual-owned Tabnine settings entry lost its provenance the same way;
+(3) the JSON adopt-write success response omitted `modelPolicyChanges`/
+`modelPolicyPlan`, reporting only mutation counts; (4) the text formatter
+never rendered `effortStatus`, even though the comparator already reports
+an "effort status changed" reason; (5) the text-mode strategy-plan preview
+reduced every row to bare model/effort, discarding effort status/
+alternatives/source/per-row catalog version and never showing the block's
+own preset/catalogVersion - especially lossy for Retain, whose values can
+legitimately differ from the fresh comparison shown above it; (6, P1) a
+bulk preset switch (`quality-first`/`cost-conscious --write`) mutated
+`ai-profile.yaml` and generated files with no file-level preview at all
+(only the model-policy comparison table), breaking the mutation contract
+every other write path in this repository already follows; (7)
+`planModelPolicyUpgrade` silently dropped a prior lock's `client: "tabnine"`
+rows for every non-retain strategy, since it only ever resolves Codex/Claude
+rows from the target table - a real Adopt write would then delete Tabnine's
+provenance even though nothing about the strategy touches it; (8) the
+success message's file count included `ai-profile.yaml`/`ai-profile.lock`
+themselves, so "regenerated N target files" overstated the real target-file
+count. Fixed: (1)+(2) unified into one `refuseIfTabnineProvenanceWouldBeLost`
+refusal (extracted as a named helper per code-quality review) that reads the
+prior on-disk lock before writing and refuses whenever a recorded Tabnine
+entry can't be carried forward as `"generated-owned"` - also covers a third
+edge case the code-quality review surfaced (Tabnine disabled after a prior
+write recorded an entry), which the original fix from this same round
+missed; (3) `runModelPolicyWrite` now threads `modelPolicyChanges`/
+`modelPolicyLegacyChanges` through to `buildModelPolicyJsonFields(...)`;
+(4)+(5) both text renderers now show every field the row/block actually
+carries; (6) `previewBulkPresetSwitchWrites` (also extracted as a named
+helper) does a dry-run `createOrApplyWritePlan` first, from the exact same
+write array the real apply uses, and prints a `File changes (...):` section
+before applying, non-JSON only; (7) `planModelPolicyUpgrade` now preserves
+prior tabnine rows verbatim (documented as an intentional "out of scope,
+may go stale until I6d" tradeoff); (8) a separate `targetFilesWritten`
+count excludes the two metadata paths from the message's own count
+(`filesWritten`'s existing JSON semantics untouched). Spec review passed
+with only cosmetic notes (since fixed). Code-quality review found
+ISSUES_FOUND: `runModelPolicyWrite`'s continued growth flagged as Important
+- fixed by extracting the two largest new blocks into the two named helpers
+above; a ternary-message-construction ambiguity flagged as Important - fixed
+by adding both the disabled-Tabnine edge case and a clarifying comment.
+Tests: `packages/core` 213/212, `packages/compiler` 312/311, `apps/cli`
+545/541, all 0 failures; clean typecheck (including `tsconfig.test.json`)
+on all three; `verify:pack` and golden regeneration both clean. All 8
+findings resolved as GitHub review threads. State stays `ready`, not
+`done` - same open acceptance criteria as noted above (mapping-v2-
+adopting-v3 writes, "custom exact" strategy, interactive-UI triggering,
+Tabnine reconciliation deferred to I6d).
+
 I6a eleventh RED-first cycle completed 2026-07-20, also a disclosed partial
 slice: wired `planSubagentPolicyPresetEdit` (built but unwired in cycle 10)
 into the CLI, so `agent-profile upgrade --model-policy-strategy

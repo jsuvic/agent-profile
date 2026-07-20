@@ -160,6 +160,46 @@ test("cost-conscious bulk strategy resolves against the cost-conscious preset an
   );
 });
 
+test("adopt/quality-first/cost-conscious preserve a prior lock's tabnine rows verbatim, since Tabnine reconciliation is out of scope here (PR review finding)", () => {
+  const previousWithTabnine: LockModelPolicyV2 = {
+    ...PREVIOUS,
+    resolutions: [
+      ...PREVIOUS.resolutions,
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "organization/private-pinned-model",
+        effort: "high",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unsupported",
+        catalogVersion: 2,
+      },
+    ],
+  };
+
+  for (const strategy of ["adopt", "quality-first", "cost-conscious"] as const) {
+    const plan = planModelPolicyUpgrade(
+      strategy,
+      previousWithTabnine,
+      "role-aware",
+    );
+    assert.ok(plan.block);
+    const tabnineRow = plan.block.resolutions.find(
+      (row) => row.client === "tabnine",
+    );
+    assert.ok(
+      tabnineRow,
+      `expected strategy "${strategy}" to preserve the tabnine row`,
+    );
+    assert.deepEqual(
+      tabnineRow,
+      previousWithTabnine.resolutions.find((row) => row.client === "tabnine"),
+    );
+  }
+});
+
 test("planModelPolicyUpgrade is deterministic for identical inputs", () => {
   const first = planModelPolicyUpgrade("quality-first", PREVIOUS, "role-aware");
   const second = planModelPolicyUpgrade(

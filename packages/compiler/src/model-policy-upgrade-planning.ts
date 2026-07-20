@@ -51,6 +51,18 @@ export function planModelPolicyUpgrade(
     buildModelPolicyTargetTable(targetPreset, roleOverrides),
   );
 
+  // `toLockModelPolicyFromTargetTable` only ever resolves Codex/Claude rows
+  // (Tabnine model-resolution reconciliation is I6d's scope, not this
+  // slice's). A prior lock can legitimately carry `client: "tabnine"` rows
+  // (the lockfile schema and compiler tests explicitly support a mixed
+  // Codex/Claude/Tabnine block) -- rebuilding the block purely from the
+  // Codex/Claude target table would otherwise silently drop those rows'
+  // exact provenance from the plan, and an Adopt/bulk-preset-switch write
+  // would then delete them from the lock even though nothing about this
+  // strategy touches Tabnine at all (PR review finding).
+  const preservedTabnineRows =
+    previous?.resolutions.filter((row) => row.client === "tabnine") ?? [];
+
   // The lockfile's deterministic-order validation requires
   // `modelPolicy.resolutions` sorted (client, role); `buildLockfile` applies
   // this sort at construction time, but a plan returned directly from here
@@ -62,7 +74,9 @@ export function planModelPolicyUpgrade(
     strategy,
     block: Object.freeze({
       ...resolved,
-      resolutions: [...resolved.resolutions].sort(compareModelPolicyResolutions),
+      resolutions: [...resolved.resolutions, ...preservedTabnineRows].sort(
+        compareModelPolicyResolutions,
+      ),
     }),
   });
 }
