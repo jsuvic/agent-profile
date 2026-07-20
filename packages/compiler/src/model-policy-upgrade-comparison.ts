@@ -22,6 +22,7 @@ import {
   CLAUDE_MODEL_POLICY_CATALOG,
   CODEX_MODEL_POLICY_CATALOG,
   MODEL_POLICY_PRIMARY_ROLE,
+  MODEL_POLICY_TARGET_CATALOG_VERSION,
   type ModelPolicyRoleOverrides,
   type ModelPolicyTargetClientId,
   type ModelPolicyTargetClientResolution,
@@ -128,6 +129,23 @@ export function compareModelPolicyUpgrade(
 ): readonly ModelPolicyUpgradeComparisonRow[] {
   const freshTable = buildModelPolicyTargetTable(preset, roleOverrides);
 
+  // Block-level metadata (`LockModelPolicyV2.preset`/`.catalogVersion`) isn't
+  // carried by any individual resolution row, so a preset edit whose role
+  // overrides happen to leave every row's own resolved values unchanged
+  // would otherwise report no changes at all -- even though Adopt would
+  // still rewrite these two block-level fields. Fold that possibility into
+  // every row's own reason instead of adding a separate return shape, since
+  // there's no other row this fact could attach to (PR review finding).
+  const blockReasons: string[] = [];
+  if (previous !== undefined) {
+    if (previous.preset !== preset) {
+      blockReasons.push("preset changed");
+    }
+    if (previous.catalogVersion !== MODEL_POLICY_TARGET_CATALOG_VERSION) {
+      blockReasons.push("block catalog version changed");
+    }
+  }
+
   const rows: ModelPolicyUpgradeComparisonRow[] = [];
 
   for (const role of MODEL_POLICY_ROLE_IDS) {
@@ -186,6 +204,7 @@ export function compareModelPolicyUpgrade(
           reasons.push("resolution source changed");
         }
       }
+      reasons.push(...blockReasons);
 
       const changed = reasons.length > 0;
 

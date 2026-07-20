@@ -999,6 +999,25 @@ async function runUpgrade(
  * on disk refuses cleanly rather than silently overwriting or attempting
  * interactive reconciliation (out of scope for this cycle).
  */
+
+/**
+ * The only generated output paths whose CONTENT actually encodes a
+ * model-policy resolution -- `.codex/config.toml`'s primary-role model/
+ * effort write, `AGENTS.md`/`CLAUDE.md`'s subagent-execution-policy
+ * guidance table (model/effort per role), and Tabnine's own model/effort
+ * status section in its task-capsule guideline. Every other generated
+ * output (skill files, subagent templates, etc.) never varies with the
+ * adopted model policy at all, so a manual-owned classification on one of
+ * those is irrelevant to whether an adopt is safe (PR review finding: the
+ * manual-owned refusal was checking ALL manual outputs, not just these).
+ */
+const MODEL_POLICY_BEARING_PATHS: ReadonlySet<string> = new Set([
+  "AGENTS.md",
+  "CLAUDE.md",
+  ".codex/config.toml",
+  ".tabnine/guidelines/87-subagent-task-capsules.md",
+]);
+
 async function runModelPolicyAdoptWrite(input: {
   rootDir: string;
   io: CliIo;
@@ -1085,16 +1104,22 @@ async function runModelPolicyAdoptWrite(input: {
   // `regionPlan.manualOutputs` correctly leaves a manual-owned output's
   // BYTES untouched (planRegionAwareWrites classifies ownership before
   // region-specific branching, so this applies to .codex/config.toml just
-  // as much as AGENTS.md/CLAUDE.md). But leaving the file alone while still
+  // as much as AGENTS.md/CLAUDE.md). Leaving the file alone while still
   // writing the adopted resolution into the lock would make the lock claim
   // a status (e.g. the primary Codex role's "configured") that the actual
-  // on-disk file never received -- the exact "lock and generated files
-  // disagree" defect this whole write path exists to prevent, just for a
-  // file the region-aware plan correctly chose not to touch (PR review
-  // finding).
-  if (regionPlan.manualOutputs.length > 0) {
+  // on-disk file never received -- but that's only a real problem for a
+  // path whose CONTENT actually encodes model-policy resolution. An
+  // unrelated manual-owned output (e.g. a reconciled skill file) has
+  // nothing to do with the adopted plan, and buildCompileWrites already
+  // safely preserves its bytes and lock entry regardless, so refusing for
+  // it would block adoptions that are actually safe (PR review finding:
+  // the refusal was too broad).
+  const manualOwnedModelBearing = regionPlan.manualOutputs.filter((output) =>
+    MODEL_POLICY_BEARING_PATHS.has(output.path),
+  );
+  if (manualOwnedModelBearing.length > 0) {
     io.stderr(
-      `Refusing to adopt: the following generated target files are manual-owned, so adopting would leave them on the old resolution while the lock claimed the fresh one:\n${regionPlan.manualOutputs
+      `Refusing to adopt: the following generated target files are manual-owned, so adopting would leave them on the old resolution while the lock claimed the fresh one:\n${manualOwnedModelBearing
         .map((output) => `- ${output.path}`)
         .join("\n")}\nReconcile ownership first (see \`agent-profile doctor\`), or accept the model-policy change manually.\n`,
     );
@@ -1373,7 +1398,9 @@ function formatModelPolicyChangeLine(
     `effort ${row.old?.effort ?? "(none)"} -> ${row.fresh.effort}, ` +
     `status ${row.old?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
     `alternatives [${formatAlternativesList(row.old?.alternatives ?? [])}] -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
-    `lifecycle ${row.old?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle} ` +
+    `lifecycle ${row.old?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle}, ` +
+    `source ${row.old?.source ?? "(none)"} -> ${row.fresh.source}, ` +
+    `catalog version ${row.old?.catalogVersion ?? "(none)"} -> ${row.fresh.catalogVersion} ` +
     `(${row.reason})`
   );
 }

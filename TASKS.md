@@ -271,6 +271,34 @@ GitHub review threads. State stays `ready`, not `done` - the underlying
 brief acceptance criteria (custom-exact, mapping-v2/quality-first/
 cost-conscious writes, interactive UI) remain open for later cycles.
 
+I6a PR review fix round 4 (2026-07-20, PR #125) addressed 3 new Codex bot P2
+findings surfaced after fix round's own changes landed: (1) the manual-owned
+refusal in `runModelPolicyAdoptWrite` was too broad - it fired for ANY
+manual-owned generated output, even one with nothing to do with model-policy
+resolution (e.g. a reconciled skill file), needlessly blocking otherwise-safe
+adoptions; narrowed via a new `MODEL_POLICY_BEARING_PATHS` constant
+(`AGENTS.md`, `CLAUDE.md`, `.codex/config.toml`,
+`.tabnine/guidelines/87-subagent-task-capsules.md`) so the refusal only fires
+for a manual-owned path whose content actually encodes a model-policy
+resolution; (2) `formatModelPolicyChangeLine` (v3-opted text report) rendered
+`source`/`catalogVersion` only as part of the reason label, not as an
+old -> new provenance line like every other field - enriched to show both
+explicitly; (3) `compareModelPolicyUpgrade` compared only per-row fields,
+so a locked block whose block-level `preset` or `catalogVersion` differed
+from the fresh target (with every individual row's own resolved fields
+otherwise byte-identical) was silently reported as fully unchanged, even
+though Adopt would still rewrite those two block-level fields - fixed by
+folding a `blockReasons` check (`previous.preset !== preset`,
+`previous.catalogVersion !== MODEL_POLICY_TARGET_CATALOG_VERSION`) into
+every row's own reasons. Added regression tests for all three: an
+unrelated-manual-owned-file-does-not-block-adoption CLI test, a text-report
+source/catalogVersion-provenance CLI test, and two compiler tests (preset-
+changed-but-rows-identical, block-catalogVersion-changed-but-rows-identical).
+Tests: `packages/compiler` 309/308, `apps/cli` 532/528, both 0 failures;
+clean typecheck on both; `verify:pack` and golden regeneration both clean.
+All 3 findings resolved as GitHub review threads. State stays `ready`, not
+`done` - same open acceptance criteria as noted above.
+
 I6a tenth RED-first cycle completed 2026-07-20, also a disclosed partial
 slice: added `planSubagentPolicyPresetEdit`
 (`apps/cli/src/upgrade-model-policy-editor.ts`), a pure surgical YAML-edit

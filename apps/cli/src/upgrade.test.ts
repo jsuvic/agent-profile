@@ -15,6 +15,7 @@ import {
 import {
   buildLockfile,
   compareModelPolicyResolutions,
+  compareModelPolicyUpgrade,
   compareModelPolicyUpgradeFromLegacy,
   compileProfile,
   deriveModelPolicyRoleOverrides,
@@ -916,6 +917,57 @@ test("upgrade text (non-interactive) prints a model policy changes section for a
   );
 });
 
+test("upgrade text (non-interactive) renders resolution source and catalog version old/new provenance, not just the reason label (PR review finding)", async () => {
+  // Before this fix, the text formatter printed model/effort/status/
+  // alternatives/lifecycle but never the actual old/new source or
+  // catalogVersion VALUES -- a row whose reason said "resolution source
+  // changed" or "catalog version changed" gave the user no way to see what
+  // those values actually were.
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, source: "explicit-override" as const, catalogVersion: row.catalogVersion - 1 }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, stale);
+  const output = createOutput();
+
+  const code = await runCli(
+    ["upgrade", "--root", root, "--non-interactive"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const expected = compareModelPolicyUpgrade(stale, "role-aware").find(
+    (row) => row.role === "architect" && row.client === "codex",
+  );
+  assert.ok(expected);
+  assert.equal(expected.changed, true);
+  assert.match(expected.reason ?? "", /resolution source changed/iu);
+  assert.match(expected.reason ?? "", /catalog version changed/iu);
+  assert.match(
+    output.stdoutText(),
+    new RegExp(
+      `source ${expected.old?.source} -> ${expected.fresh.source}`,
+      "u",
+    ),
+  );
+  assert.match(
+    output.stdoutText(),
+    new RegExp(
+      `catalog version ${expected.old?.catalogVersion} -> ${expected.fresh.catalogVersion}`,
+      "u",
+    ),
+  );
+});
+
 test("upgrade reports an empty model-policy change set for a v3-opted profile whose lock already matches today's live catalog", async () => {
   const fresh = liveModelPolicy();
   const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, fresh);
@@ -1807,6 +1859,62 @@ test("upgrade --model-policy-strategy adopt --write refuses when an affected tar
   );
   assert.equal(await readFile(lockPath, "utf8"), lockBefore);
   assert.equal(await readFile(codexConfigPath, "utf8"), codexBefore);
+});
+
+test("upgrade --model-policy-strategy adopt --write proceeds when an UNRELATED (non-model-bearing) generated file is manual-owned (PR review finding)", async () => {
+  // planRegionAwareWrites classifies every manual-owned output into
+  // manualOutputs regardless of what it is, including a file that has
+  // nothing to do with model-policy resolution (e.g. a reconciled skill
+  // file). The refusal must only fire for a manual-owned path whose
+  // CONTENT actually encodes model-policy resolution -- refusing for an
+  // unrelated manual-owned file would block adoptions that are actually
+  // safe.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const lockPath = path.join(root, "ai-profile.lock");
+  const lockText = await readFile(lockPath, "utf8");
+  const lockJson = JSON.parse(lockText) as {
+    outputs: Array<{ path: string; ownership: string }>;
+  };
+  const modelBearingPaths = new Set([
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".codex/config.toml",
+    ".tabnine/guidelines/87-subagent-task-capsules.md",
+  ]);
+  const nonModelBearingIndex = lockJson.outputs.findIndex(
+    (output) =>
+      !modelBearingPaths.has(output.path) &&
+      output.ownership === "generated-owned",
+  );
+  assert.ok(nonModelBearingIndex >= 0);
+  const nonModelBearingPath = lockJson.outputs[nonModelBearingIndex]!.path;
+  lockJson.outputs[nonModelBearingIndex] = {
+    path: nonModelBearingPath,
+    target: "manual",
+    templateId: "manual",
+    ownership: "manual-owned",
+  };
+  await writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`, "utf8");
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.doesNotMatch(output.stderrText(), /manual-owned/u);
 });
 
 test("upgrade --model-policy-strategy adopt --write refuses cleanly when a generated target file has drifted from the lock, leaving every file byte-unchanged", async () => {

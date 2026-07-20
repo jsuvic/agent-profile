@@ -12,8 +12,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { MODEL_POLICY_ROLE_IDS } from "@agent-profile/core";
+
 import type { LockModelPolicyV2 } from "./types.js";
 import { compareModelPolicyUpgrade } from "./model-policy-upgrade-comparison.js";
+import {
+  buildModelPolicyTargetTable,
+  toLockModelPolicyFromTargetTable,
+  type ModelPolicyRoleOverrides,
+} from "./model-policy-target-adapter.js";
 
 test("a role/client whose locked model differs from today's live catalog resolution is reported as changed with a model reason", () => {
   const previous: LockModelPolicyV2 = {
@@ -207,6 +214,47 @@ test("old.lifecycle is derived from the current catalog: a still-catalogued lock
   ).find((r) => r.role === "architect" && r.client === "codex");
   assert.ok(uncataloguedRow);
   assert.equal(uncataloguedRow.old?.lifecycle, "unrated");
+});
+
+test("a locked block whose preset differs from the requested preset is reported as changed for every row, even one whose own resolved fields are byte-identical to fresh (PR review finding)", () => {
+  // Build a "previous" lock whose per-row resolutions are byte-identical to
+  // what comparing against "role-aware" would produce fresh, but whose
+  // block-level preset is "uniform" instead. Adopt would still rewrite the
+  // lock's preset field, so every row must report changed=true even though
+  // no individual row field differs.
+  const freshTable = buildModelPolicyTargetTable("role-aware");
+  const previous: LockModelPolicyV2 = {
+    ...toLockModelPolicyFromTargetTable("role-aware", freshTable),
+    preset: "uniform",
+  };
+
+  const rows = compareModelPolicyUpgrade(previous, "role-aware");
+  const row = rows.find((r) => r.role === "architect" && r.client === "codex");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.match(row.reason, /preset changed/i);
+});
+
+test("a locked block whose catalogVersion differs from today's target catalog version is reported as changed for every row, even one whose own resolved fields are byte-identical to fresh (PR review finding)", () => {
+  // Same pattern, but this time only the block-level catalogVersion is
+  // stale (every row's own model/effort/status/alternatives/source/
+  // per-row catalogVersion still match fresh exactly). Adopt would still
+  // rewrite the block's catalogVersion, so it must not be silently
+  // filtered out as unchanged.
+  const freshTable = buildModelPolicyTargetTable("role-aware");
+  const freshBlock = toLockModelPolicyFromTargetTable("role-aware", freshTable);
+  const previous: LockModelPolicyV2 = {
+    ...freshBlock,
+    catalogVersion: freshBlock.catalogVersion - 1,
+  };
+
+  const rows = compareModelPolicyUpgrade(previous, "role-aware");
+  const row = rows.find((r) => r.role === "architect" && r.client === "codex");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.match(row.reason, /block catalog version changed/i);
 });
 
 test("a role/client with no prior locked row at all is reported as changed with a no-prior-lock reason", () => {
