@@ -1876,7 +1876,7 @@ test("upgrade --model-policy-strategy adopt --write proceeds when an UNRELATED (
   const lockPath = path.join(root, "ai-profile.lock");
   const lockText = await readFile(lockPath, "utf8");
   const lockJson = JSON.parse(lockText) as {
-    outputs: Array<{ path: string; ownership: string }>;
+    outputs: Array<{ path: string; ownership: string; [key: string]: unknown }>;
   };
   const modelBearingPaths = new Set([
     "AGENTS.md",

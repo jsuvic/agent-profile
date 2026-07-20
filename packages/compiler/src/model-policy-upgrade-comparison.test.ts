@@ -219,13 +219,13 @@ test("old.lifecycle is derived from the current catalog: a still-catalogued lock
 test("a locked block whose preset differs from the requested preset is reported as changed for every row, even one whose own resolved fields are byte-identical to fresh (PR review finding)", () => {
   // Build a "previous" lock whose per-row resolutions are byte-identical to
   // what comparing against "role-aware" would produce fresh, but whose
-  // block-level preset is "uniform" instead. Adopt would still rewrite the
-  // lock's preset field, so every row must report changed=true even though
-  // no individual row field differs.
+  // block-level preset is "quality-first" instead. Adopt would still
+  // rewrite the lock's preset field, so every row must report changed=true
+  // even though no individual row field differs.
   const freshTable = buildModelPolicyTargetTable("role-aware");
   const previous: LockModelPolicyV2 = {
     ...toLockModelPolicyFromTargetTable("role-aware", freshTable),
-    preset: "uniform",
+    preset: "quality-first",
   };
 
   const rows = compareModelPolicyUpgrade(previous, "role-aware");
