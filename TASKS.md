@@ -380,6 +380,45 @@ treatment cycle 9 already built for "adopt", extended to also touch
 non-goal), and the disclosed lifecycle-comparison gap from cycle 1. State
 stays `ready`, not `done`.
 
+I6a eleventh RED-first cycle completed 2026-07-20, also a disclosed partial
+slice: wired `planSubagentPolicyPresetEdit` (built but unwired in cycle 10)
+into the CLI, so `agent-profile upgrade --model-policy-strategy
+quality-first --write` and `--model-policy-strategy cost-conscious --write`
+are now real writes for a v3-opted profile - the last of the three
+`--write` combinations cycle 10 flagged as still-missing. Generalized
+`runModelPolicyAdoptWrite` (cycle 9) into `runModelPolicyWrite`, adding a
+`targetPreset: ModelPolicyPreset | undefined` parameter (`undefined` keeps
+"adopt" semantics unchanged - no `ai-profile.yaml` edit; a concrete preset
+triggers `planSubagentPolicyPresetEdit`, re-validates the edited source via
+`parseProfileYaml`, and threads the EDITED profile/bytes through the same
+`compileProfile` -> `planRegionAwareWrites` -> `getProtectedGeneratedPaths`
+-> manual-owned-model-bearing refusal -> `resolveTabnineModelSettings` ->
+`buildCompileWrites` -> `createOrApplyWritePlan` pipeline cycle 9 built,
+prepending `{path: "ai-profile.yaml", bytes: edit.source}` to the writes
+array so the profile edit and the regenerated lock/target files land in
+ONE atomic plan - never yaml-written-but-lock-stale or vice versa). Still
+refuses: "retain" on a v3-opted profile (no guaranteed
+`modelPolicyPlan.block`, not a bulk preset switch) and every strategy on a
+mapping-v2 profile (adopting v3 there needs to ADD `subagentPolicy.preset`
+via a different YAML shape than `planSubagentPolicyPresetEdit` assumes
+exists - still a later cycle's scope). Spec review passed COMPLIANT.
+Code-quality review found ISSUES_FOUND, one Important item fixed: three
+refusal messages (drift, protected-paths, manual-owned) interpolated
+`strategyLabel` into a verb slot that only reads correctly for "adopt"
+(e.g. "Refusing to quality-first: ..."), a real user-facing regression from
+generalizing the hardcoded "adopt" wording - reworded to a preset-agnostic
+"Refusing to write (${strategyLabel}): ..." form, matching the pattern the
+success/no-op messages already used correctly. Two Minor items also fixed:
+a duplicated `"quality-first" || "cost-conscious"` predicate re-derived
+inline instead of reusing the already-named `isBulkPresetSwitch` variable;
+and a leftover single-element `for` loop in a narrowed test (dead ceremony
+from when it covered three strategies). Tests: `packages/core` 213/212,
+`apps/cli` 538/534, both 0 failures; clean typecheck on both; `verify:pack`
+and golden regeneration both clean. State stays `ready`, not `done` - still
+open: mapping-v2-adopting-v3 writes, the "custom exact" strategy
+(disclosed non-goal), interactive-UI triggering of any `--write` path, and
+the disclosed lifecycle-comparison gap from cycle 1.
+
 I6a ninth RED-first cycle completed 2026-07-20, also a disclosed partial
 slice, PLUS a fix pass responding to a Codex PR review (12 findings across
 two rounds; see PR #125's resolved review threads for full detail):

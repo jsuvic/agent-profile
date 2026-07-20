@@ -120,6 +120,7 @@ import {
   type RootChoice,
 } from "./reconcile.js";
 import { planProfileInsertions } from "./upgrade-editor.js";
+import { planSubagentPolicyPresetEdit } from "./upgrade-model-policy-editor.js";
 import type { ModelProbeProcessRunner } from "./model-probe.js";
 import {
   formatWizardDeclined,
@@ -765,15 +766,39 @@ async function runUpgrade(
   // regenerated Codex/Claude target files and `ai-profile.lock` can never
   // disagree about the adopted resolution -- unlike an earlier revision of
   // this command, which wrote only the lock's `modelPolicy` block and left
-  // already-generated target files stale (PR review finding). Every OTHER
-  // combination (any strategy on a mapping-v2 profile, since a bulk preset
-  // switch there would also need to edit `ai-profile.yaml`'s
-  // `subagentPolicy.preset`, which is not wired yet; or "retain"/
-  // "quality-first"/"cost-conscious" on a v3-opted profile) still has no
-  // real write path and keeps refusing with the original message.
+  // already-generated target files stale (PR review finding).
+  //
+  // "quality-first"/"cost-conscious" `--write` on a v3-opted profile now has
+  // a real write path too (Phase 31.5 I6a, this cycle): unlike "adopt" (which
+  // keeps the profile's current preset and just re-resolves it fresh, no
+  // `ai-profile.yaml` edit needed), these two strategies change
+  // `subagentPolicy.preset` itself, so `ai-profile.yaml` must be edited too --
+  // via `planSubagentPolicyPresetEdit` -- and the edited profile source, the
+  // regenerated `ai-profile.lock`, and every regenerated target file must all
+  // land in ONE atomic write plan.
+  //
+  // Every OTHER combination ("retain" on a v3-opted profile, since it has no
+  // guaranteed `modelPolicyPlan.block` and isn't a bulk preset switch; or any
+  // strategy on a mapping-v2 profile, since adopting v3 there would need to
+  // ADD `subagentPolicy.preset` via a different YAML shape than
+  // `planSubagentPolicyPresetEdit` assumes exists, which is not wired yet)
+  // still has no real write path and keeps refusing with the original
+  // message.
   if (parsed.modelPolicyStrategy !== undefined && parsed.write) {
-    if (parsed.modelPolicyStrategy === "adopt" && hasV3ModelPreset(subagentPolicy)) {
-      // Explicit `--model-policy-strategy adopt --write` is a two-flag
+    const isBulkPresetSwitch =
+      parsed.modelPolicyStrategy === "quality-first" ||
+      parsed.modelPolicyStrategy === "cost-conscious";
+    // Narrowed once here (rather than re-deriving the same "quality-first" ||
+    // "cost-conscious" check again below) so `isBulkPresetSwitch` stays the
+    // single source of truth for which strategies are a bulk preset switch.
+    const bulkPreset = isBulkPresetSwitch
+      ? (parsed.modelPolicyStrategy as "quality-first" | "cost-conscious")
+      : undefined;
+    if (
+      (parsed.modelPolicyStrategy === "adopt" || isBulkPresetSwitch) &&
+      hasV3ModelPreset(subagentPolicy)
+    ) {
+      // Explicit `--model-policy-strategy <strategy> --write` is a two-flag
       // scripted write (the same explicit-intent shape as the existing
       // capability-catalog `--write --adopt-recommended` combo, which also
       // prints its report/diff then writes immediately with no further
@@ -789,18 +814,20 @@ async function runUpgrade(
           modelPolicyLegacyChanges,
         );
       }
-      return runModelPolicyAdoptWrite({
+      return runModelPolicyWrite({
         rootDir,
         io,
         json: parsed.json,
         profileBytes,
+        profileSource,
         profile: profileResult.profile,
         modelPolicyPlan: modelPolicyPlan!,
         existingUpgrade: lockfileView?.upgrade,
+        targetPreset: bulkPreset,
       });
     }
     io.stderr(
-      "--write with --model-policy-strategy is not yet supported: adopting a plan must also regenerate the affected Codex/Claude target files and guidance so they never disagree with the lock, which is not wired yet. Preview with --model-policy-strategy (without --write), then run `agent-profile compile --write` once ai-profile.yaml reflects the change you want.\n",
+      '--write with --model-policy-strategy is not yet supported for this combination: "retain" on a v3-opted profile, and every strategy on a mapping-v2 profile (adopting v3 there would also need to add subagentPolicy.preset to ai-profile.yaml, which is not wired yet), still require preview-then-manual-edit. Preview with --model-policy-strategy (without --write), then run `agent-profile compile --write` once ai-profile.yaml reflects the change you want.\n',
     );
     return 1;
   }
@@ -1004,21 +1031,6 @@ async function runUpgrade(
 }
 
 /**
- * Real write path for `upgrade --model-policy-strategy adopt --write` on a
- * v3-opted profile (Phase 31.5 I6a cycle 9). Reuses the exact same pipeline
- * `agent-profile compile --write` uses (`compileProfile` ->
- * `planRegionAwareWrites` -> `buildCompileWrites` ->
- * `createOrApplyWritePlan`), seeded with the adopted plan's block as the
- * "previous" model policy, so the regenerated Codex/Claude target files and
- * `ai-profile.lock` can never disagree about the adopted resolution -- unlike
- * an earlier revision of this command, which wrote only the lock's
- * `modelPolicy` block and left already-generated target files stale (PR
- * review finding). Any drift between the current lock and the files actually
- * on disk refuses cleanly rather than silently overwriting or attempting
- * interactive reconciliation (out of scope for this cycle).
- */
-
-/**
  * The only generated output paths whose CONTENT actually encodes a
  * model-policy resolution -- `.codex/config.toml`'s primary-role model/
  * effort write, `AGENTS.md`/`CLAUDE.md`'s subagent-execution-policy
@@ -1036,27 +1048,94 @@ const MODEL_POLICY_BEARING_PATHS: ReadonlySet<string> = new Set([
   ".tabnine/guidelines/87-subagent-task-capsules.md",
 ]);
 
-async function runModelPolicyAdoptWrite(input: {
+/**
+ * Real write path for `--model-policy-strategy <strategy> --write` on a
+ * v3-opted profile, covering both:
+ * - "adopt" (`targetPreset: undefined`): keeps the profile's current preset
+ *   and just re-resolves it fresh against today's bundled catalog. No
+ *   `ai-profile.yaml` edit is needed.
+ * - "quality-first"/"cost-conscious" (`targetPreset` set, Phase 31.5 I6a this
+ *   cycle): a bulk preset switch. `ai-profile.yaml`'s `subagentPolicy.preset`
+ *   itself changes, so it must be edited via `planSubagentPolicyPresetEdit`
+ *   and included in the SAME atomic write plan as the regenerated
+ *   `ai-profile.lock` and target files, so all three can never disagree.
+ *
+ * Both cases seed an ordinary `compileProfile`/`buildCompileWrites` pipeline
+ * run (the exact machinery `agent-profile compile --write` uses) with the
+ * plan's block as the "previous" model policy, so the regenerated
+ * Codex/Claude target files and `ai-profile.lock` can never disagree about
+ * the adopted/switched resolution (PR review finding from an earlier
+ * revision, which wrote only the lock's `modelPolicy` block and left
+ * already-generated target files stale).
+ */
+async function runModelPolicyWrite(input: {
   rootDir: string;
   io: CliIo;
   json: boolean;
   profileBytes: Uint8Array;
+  profileSource: string;
   profile: AiProfile;
   modelPolicyPlan: ModelPolicyUpgradePlan;
   existingUpgrade: { catalogVersion: number } | undefined;
+  /** `undefined` for "adopt" (no `ai-profile.yaml` edit); a concrete preset
+   * for a bulk preset switch ("quality-first"/"cost-conscious"). */
+  targetPreset: ModelPolicyPreset | undefined;
 }): Promise<number> {
-  const { rootDir, io, json, profileBytes, profile, modelPolicyPlan, existingUpgrade } =
-    input;
+  const {
+    rootDir,
+    io,
+    json,
+    profileBytes,
+    profileSource,
+    profile,
+    modelPolicyPlan,
+    existingUpgrade,
+    targetPreset,
+  } = input;
   if (modelPolicyPlan.block === undefined) {
-    // Invariant guaranteed by `planModelPolicyUpgrade`'s "adopt" branch,
-    // which never returns an undefined block.
+    // Invariant guaranteed by `planModelPolicyUpgrade`'s non-"retain"
+    // branches, which never return an undefined block.
     throw new Error(
-      'planModelPolicyUpgrade("adopt", ...) unexpectedly returned no block',
+      `planModelPolicyUpgrade("${modelPolicyPlan.strategy}", ...) unexpectedly returned no block`,
     );
   }
   const previousModelPolicy = modelPolicyPlan.block;
+  const strategyLabel = modelPolicyPlan.strategy;
 
-  const compileResult = compileProfile({ profile, previousModelPolicy });
+  // For a bulk preset switch, `ai-profile.yaml` itself must be edited first
+  // (surgically, via `planSubagentPolicyPresetEdit`) -- everything downstream
+  // (compile, lock, target files) must be seeded from the EDITED profile, not
+  // the original on-disk one, so what's compiled is provably what would be
+  // re-read from disk after the write.
+  let writeProfile = profile;
+  let writeProfileBytes = profileBytes;
+  let profileYamlWrite: PlannedWrite | undefined;
+  if (targetPreset !== undefined) {
+    const edit = planSubagentPolicyPresetEdit(profileSource, targetPreset);
+    if (!edit.ok) {
+      io.stderr(
+        `Refusing to switch to the ${targetPreset} preset: ai-profile.yaml could not be safely edited (${edit.reason}). Edit ai-profile.yaml manually to set subagentPolicy.preset: ${targetPreset}, then run \`agent-profile compile --write\`.\n`,
+      );
+      return 1;
+    }
+    const editedResult = parseProfileYaml(edit.source, {
+      sourcePath: "ai-profile.yaml",
+    });
+    if (!editedResult.ok) {
+      io.stderr(
+        `Refusing to switch to the ${targetPreset} preset: the edited ai-profile.yaml failed validation.\n${formatValidationIssues(editedResult.issues)}`,
+      );
+      return 1;
+    }
+    writeProfile = editedResult.profile;
+    writeProfileBytes = Buffer.from(edit.source, "utf8");
+    profileYamlWrite = { path: "ai-profile.yaml", bytes: edit.source };
+  }
+
+  const compileResult = compileProfile({
+    profile: writeProfile,
+    previousModelPolicy,
+  });
   if (!compileResult.ok) {
     io.stderr(formatCompileIssues(compileResult.issues));
     return 1;
@@ -1081,7 +1160,7 @@ async function runModelPolicyAdoptWrite(input: {
 
   if (regionPlan.refusals.length > 0) {
     io.stderr(
-      "Refusing to adopt: generated target files have drifted from ai-profile.lock or need explicit ownership adoption; run `agent-profile compile` to reconcile first.\n",
+      `Refusing to write (${strategyLabel}): generated target files have drifted from ai-profile.lock or need explicit ownership adoption; run \`agent-profile compile\` to reconcile first.\n`,
     );
     return 1;
   }
@@ -1112,7 +1191,7 @@ async function runModelPolicyAdoptWrite(input: {
   }
   if (protectedPaths.length > 0) {
     io.stderr(
-      `Refusing to adopt: generated target files have drifted from ai-profile.lock:\n${protectedPaths
+      `Refusing to write (${strategyLabel}): generated target files have drifted from ai-profile.lock:\n${protectedPaths
         .map((item) => `- ${item.path} (${item.reason})`)
         .join("\n")}\nRun \`agent-profile compile\` to reconcile first.\n`,
     );
@@ -1137,7 +1216,7 @@ async function runModelPolicyAdoptWrite(input: {
   );
   if (manualOwnedModelBearing.length > 0) {
     io.stderr(
-      `Refusing to adopt: the following generated target files are manual-owned, so adopting would leave them on the old resolution while the lock claimed the fresh one:\n${manualOwnedModelBearing
+      `Refusing to write (${strategyLabel}): the following generated target files are manual-owned, so writing would leave them on the old resolution while the lock claimed the fresh one:\n${manualOwnedModelBearing
         .map((output) => `- ${output.path}`)
         .join("\n")}\nReconcile ownership first (see \`agent-profile doctor\`), or accept the model-policy change manually.\n`,
     );
@@ -1159,53 +1238,65 @@ async function runModelPolicyAdoptWrite(input: {
   const existingTabnineModel = await readExistingTabnineModelId(rootDir);
   const tabnineModelSettings = await resolveTabnineModelSettings(
     rootDir,
-    profile,
+    writeProfile,
     existingTabnineModel,
   );
 
   const { writes } = buildCompileWrites({
     profilePath: "ai-profile.yaml",
-    profileBytes,
+    profileBytes: writeProfileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
     regionPlan,
-    profile,
+    profile: writeProfile,
     previousModelPolicy,
     ...(existingUpgrade ? { existingUpgrade } : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
   });
 
-  const plan = await createOrApplyWritePlan(rootDir, writes, true, io);
+  const plan = await createOrApplyWritePlan(
+    rootDir,
+    profileYamlWrite ? [profileYamlWrite, ...writes] : writes,
+    true,
+    io,
+  );
   if (!plan) {
     return 1;
   }
 
   // `applyWritePlan` classifies every action "unchanged" when the current
-  // lock and generated files already match the adopted plan (e.g. re-running
-  // adopt after already adopting it, or the catalog hasn't actually moved) --
-  // `written === 0` in that case, so the report must say nothing was
-  // written, not unconditionally claim a mutation that never happened (PR
-  // review finding).
+  // ai-profile.yaml (if edited), ai-profile.lock, and generated files already
+  // match the plan (e.g. re-running the same strategy after already applying
+  // it, or the catalog/preset hasn't actually moved) -- `written === 0` in
+  // that case, so the report must say nothing was written, not
+  // unconditionally claim a mutation that never happened (PR review
+  // finding).
   const written = plan.counts.create + plan.counts.change;
   const wrote = written > 0;
   if (json) {
     io.stdout(
       `${JSON.stringify({
         command: "upgrade",
-        modelPolicyStrategy: "adopt",
+        modelPolicyStrategy: strategyLabel,
         modelPolicyWrote: wrote,
         filesWritten: written,
       })}\n`,
     );
   } else if (wrote) {
     io.stdout(
-      `Updated ai-profile.lock and regenerated ${written} target file${
-        written === 1 ? "" : "s"
-      } (adopt).\n`,
+      targetPreset === undefined
+        ? `Updated ai-profile.lock and regenerated ${written} target file${
+            written === 1 ? "" : "s"
+          } (adopt).\n`
+        : `Updated ai-profile.yaml and ai-profile.lock, and regenerated ${written} file${
+            written === 1 ? "" : "s"
+          } (${targetPreset}).\n`,
     );
   } else {
     io.stdout(
-      "Nothing to adopt: ai-profile.lock and generated target files already match the fresh catalog resolution.\n",
+      targetPreset === undefined
+        ? "Nothing to adopt: ai-profile.lock and generated target files already match the fresh catalog resolution.\n"
+        : `Nothing to switch: ai-profile.yaml, ai-profile.lock, and generated target files already match the ${targetPreset} preset.\n`,
     );
   }
   return 0;
@@ -4608,13 +4699,16 @@ Commands:
             previews how a v3-opted or enabled mapping-v2 profile's model
             policy would compare and resolve under that bulk strategy
             (old/new model, effort, capability status, alternatives, and
-            lifecycle). Combined with --write, "adopt" on a v3-opted profile
-            writes it for real -- regenerating ai-profile.lock and every
-            affected Codex/Claude target file together so they never
-            disagree. Every other combination (retain/quality-first/
-            cost-conscious on a v3-opted profile, or any strategy on a
-            mapping-v2 profile) still refuses --write until it can also edit
-            ai-profile.yaml's own subagentPolicy.preset.
+            lifecycle). Combined with --write, "adopt", "quality-first", and
+            "cost-conscious" on a v3-opted profile write it for real --
+            "adopt" regenerates ai-profile.lock and every affected
+            Codex/Claude target file together so they never disagree;
+            "quality-first"/"cost-conscious" additionally edit
+            ai-profile.yaml's own subagentPolicy.preset first, atomically with
+            the same lock/target-file regeneration. "retain" on a v3-opted
+            profile, and every strategy on a mapping-v2 profile (adopting v3
+            there would also need to ADD subagentPolicy.preset), still refuse
+            --write.
   configure Change or reconcile the agent control posture (interactive).
             Shows the current posture, what each client actually does, and a
             preview before anything is written. The profile, generated files,

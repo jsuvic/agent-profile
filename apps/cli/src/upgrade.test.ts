@@ -1601,23 +1601,105 @@ test("upgrade --model-policy-strategy --write is refused for every strategy on a
   }
 });
 
-test("upgrade --model-policy-strategy --write is refused for retain/quality-first/cost-conscious (not adopt) on a v3-opted profile, leaving files untouched", async () => {
-  for (const strategy of [
-    "retain",
-    "quality-first",
-    "cost-conscious",
-  ] as const) {
-    const root = await createV3UpgradeRoot(
-      CAPABILITY_CATALOG_VERSION,
-      liveModelPolicy(),
+// Phase 31.5 I6a (this cycle): "quality-first"/"cost-conscious" `--write` on a
+// v3-opted profile now have real write paths too (tested separately below,
+// mirroring "adopt"'s existing coverage). Only "retain" on a v3-opted profile
+// still has no real write path (no guaranteed `modelPolicyPlan.block`, and
+// it isn't a bulk preset switch).
+test("upgrade --model-policy-strategy --write is refused for retain (not adopt/quality-first/cost-conscious) on a v3-opted profile, leaving files untouched", async () => {
+  const root = await createV3UpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "retain",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /not yet supported/u);
+  const profileAfter = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  assert.equal(profileAfter, profileBefore);
+  assert.equal(lockAfter, lockBefore);
+});
+
+// Phase 31.5 I6a (this cycle): a bulk preset switch ("quality-first"/
+// "cost-conscious") edits `ai-profile.yaml`'s own `subagentPolicy.preset` via
+// `planSubagentPolicyPresetEdit`, then regenerates `ai-profile.lock` and
+// every affected target file from the EDITED profile, all in one atomic
+// write -- unlike "adopt", which never touches `ai-profile.yaml` at all.
+// `implementer` is `MODEL_POLICY_PRIMARY_ROLE` (the only role whose Codex
+// resolution is actually written into `.codex/config.toml`), and its
+// capability/effort differ across all three presets, so it is used to prove
+// the target file reflects the switched preset's resolution.
+function freshModelPolicyForPreset(
+  preset: "quality-first" | "cost-conscious",
+): LockModelPolicyV2 {
+  const profile: AiProfile = {
+    ...V3_PROFILE_AI,
+    subagentPolicy: { enabled: true, preset },
+  };
+  const resolved = resolveModelPolicyLockfile(profile);
+  if (!resolved) {
+    throw new Error(
+      `expected resolveModelPolicyLockfile to resolve the ${preset} preset`,
     );
-    const profileBefore = await readFile(
-      path.join(root, "ai-profile.yaml"),
+  }
+  return resolved;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+for (const targetPreset of ["quality-first", "cost-conscious"] as const) {
+  test(`upgrade --model-policy-strategy ${targetPreset} --write rewrites ai-profile.yaml's subagentPolicy.preset AND regenerates ai-profile.lock + target files together`, async () => {
+    const roleAware = liveModelPolicy();
+    const root = await createV3UpgradeRootWithGeneratedFiles(
+      CAPABILITY_CATALOG_VERSION,
+      roleAware,
+    );
+
+    const targetPolicy = freshModelPolicyForPreset(targetPreset);
+    const implementerBefore = roleAware.resolutions.find(
+      (row) => row.client === "codex" && row.role === "implementer",
+    );
+    const implementerAfter = targetPolicy.resolutions.find(
+      (row) => row.client === "codex" && row.role === "implementer",
+    );
+    assert.ok(implementerBefore);
+    assert.ok(implementerAfter);
+    assert.notEqual(implementerBefore.model, implementerAfter.model);
+
+    const codexConfigBefore = await readFile(
+      path.join(root, ".codex", "config.toml"),
       "utf8",
     );
-    const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
-    const output = createOutput();
+    assert.match(
+      codexConfigBefore,
+      new RegExp(escapeRegExp(implementerBefore.model), "u"),
+    );
 
+    const output = createOutput();
     const code = await runCli(
       [
         "upgrade",
@@ -1625,22 +1707,181 @@ test("upgrade --model-policy-strategy --write is refused for retain/quality-firs
         root,
         "--non-interactive",
         "--model-policy-strategy",
-        strategy,
+        targetPreset,
         "--write",
       ],
       { io: output },
     );
 
-    assert.equal(code, 1);
-    assert.match(output.stderrText(), /not yet supported/u);
+    assert.equal(code, 0);
+
     const profileAfter = await readFile(
       path.join(root, "ai-profile.yaml"),
       "utf8",
     );
-    const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
-    assert.equal(profileAfter, profileBefore);
-    assert.equal(lockAfter, lockBefore);
-  }
+    assert.match(
+      profileAfter,
+      new RegExp(
+        `subagentPolicy:\\s*\\n\\s*enabled: true\\s*\\n\\s*preset: ${targetPreset}`,
+        "u",
+      ),
+    );
+
+    const lockAfter = JSON.parse(
+      await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    ) as {
+      modelPolicy?: {
+        preset?: string;
+        resolutions: Array<{ role: string; client: string; model: string }>;
+      };
+    };
+    assert.equal(lockAfter.modelPolicy?.preset, targetPreset);
+    const lockRow = lockAfter.modelPolicy?.resolutions.find(
+      (row) => row.role === "implementer" && row.client === "codex",
+    );
+    assert.equal(lockRow?.model, implementerAfter.model);
+
+    const codexConfigAfter = await readFile(
+      path.join(root, ".codex", "config.toml"),
+      "utf8",
+    );
+    assert.match(
+      codexConfigAfter,
+      new RegExp(escapeRegExp(implementerAfter.model), "u"),
+    );
+    assert.doesNotMatch(
+      codexConfigAfter,
+      new RegExp(escapeRegExp(implementerBefore.model), "u"),
+    );
+  });
+}
+
+test("upgrade --model-policy-strategy quality-first --write reports a no-op switch as unwritten when already on that preset, leaving every file byte-unchanged", async () => {
+  // Mirrors the existing adopt no-op test's two-step technique: run the
+  // switch for real first (establishing a baseline produced by THIS exact
+  // pipeline), then run it again with nothing left to switch.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+
+  const firstOutput = createOutput();
+  const firstCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "quality-first",
+      "--write",
+    ],
+    { io: firstOutput },
+  );
+  assert.equal(firstCode, 0);
+  const firstReport = JSON.parse(firstOutput.stdoutText()) as {
+    modelPolicyWrote: boolean;
+    filesWritten: number;
+  };
+  assert.equal(firstReport.modelPolicyWrote, true);
+  assert.ok(firstReport.filesWritten > 0);
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "quality-first",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyWrote: boolean;
+    filesWritten: number;
+  };
+  assert.equal(report.filesWritten, 0);
+  assert.equal(report.modelPolicyWrote, false);
+
+  const textOutput = createOutput();
+  const textCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "quality-first",
+      "--write",
+    ],
+    { io: textOutput },
+  );
+  assert.equal(textCode, 0);
+  assert.doesNotMatch(textOutput.stdoutText(), /Updated ai-profile\.yaml/u);
+  assert.match(textOutput.stdoutText(), /Nothing to switch/u);
+});
+
+test("upgrade --model-policy-strategy quality-first --write refuses when an affected target file (.codex/config.toml) is manual-owned, leaving every file (including ai-profile.yaml) byte-unchanged", async () => {
+  // Reuses the exact same manual-owned-model-bearing refusal "adopt" already
+  // has (regionPlan.manualOutputs filtered by MODEL_POLICY_BEARING_PATHS);
+  // this proves it fires identically for the new bulk-preset-switch strategy,
+  // and that the ai-profile.yaml edit is refused right along with the write.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const lockPath = path.join(root, "ai-profile.lock");
+  const lockText = await readFile(lockPath, "utf8");
+  const lockJson = JSON.parse(lockText) as {
+    outputs: Array<{ path: string; [key: string]: unknown }>;
+  };
+  const codexConfigIndex = lockJson.outputs.findIndex(
+    (output) => output.path === ".codex/config.toml",
+  );
+  assert.ok(codexConfigIndex >= 0);
+  lockJson.outputs[codexConfigIndex] = {
+    path: ".codex/config.toml",
+    target: "manual",
+    templateId: "manual",
+    ownership: "manual-owned",
+  };
+  await writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`, "utf8");
+
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(lockPath, "utf8");
+  const codexConfigPath = path.join(root, ".codex", "config.toml");
+  const codexBefore = await readFile(codexConfigPath, "utf8");
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "quality-first",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /manual-owned/u);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(await readFile(lockPath, "utf8"), lockBefore);
+  assert.equal(await readFile(codexConfigPath, "utf8"), codexBefore);
 });
 
 test("upgrade --model-policy-strategy adopt --write --json regenerates ai-profile.lock AND real generated target files together, never lock-only (PR review finding)", async () => {
