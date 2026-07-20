@@ -744,19 +744,31 @@ async function runUpgrade(
               deriveModelPolicyRoleOverrides(subagentPolicy.roles),
             )
           : undefined;
-  // No `--model-policy-strategy` strategy has a real write path yet, for any
-  // profile shape, including "adopt" on a v3-opted profile: writing only
-  // `ai-profile.lock`'s `modelPolicy` block (as an earlier revision of this
-  // command did) leaves any already-generated Codex/Claude target
-  // configuration and guidance encoding the OLD resolution while the lock
-  // claims the fresh one was adopted -- exactly the "lock and generated
-  // files silently disagree" defect class Phase 31.5 I6 was built to
-  // prevent for ordinary compiles. A real write must regenerate every
-  // affected target file atomically alongside the lock (and, for a bulk
-  // preset switch or a mapping-v2 profile, also edit `ai-profile.yaml`'s
-  // `subagentPolicy.preset`) -- none of that exists yet, so every strategy
-  // refuses `--write` until it does (PR review finding).
+  // "adopt --write" on a v3-opted profile has a real write path (Phase 31.5
+  // I6a cycle 9): it seeds an ordinary `compileProfile`/`buildCompileWrites`
+  // pipeline run (the exact machinery `agent-profile compile --write` uses)
+  // with the adopted plan's block as the "previous" model policy, so the
+  // regenerated Codex/Claude target files and `ai-profile.lock` can never
+  // disagree about the adopted resolution -- unlike an earlier revision of
+  // this command, which wrote only the lock's `modelPolicy` block and left
+  // already-generated target files stale (PR review finding). Every OTHER
+  // combination (any strategy on a mapping-v2 profile, since a bulk preset
+  // switch there would also need to edit `ai-profile.yaml`'s
+  // `subagentPolicy.preset`, which is not wired yet; or "retain"/
+  // "quality-first"/"cost-conscious" on a v3-opted profile) still has no
+  // real write path and keeps refusing with the original message.
   if (parsed.modelPolicyStrategy !== undefined && parsed.write) {
+    if (parsed.modelPolicyStrategy === "adopt" && hasV3ModelPreset(subagentPolicy)) {
+      return runModelPolicyAdoptWrite({
+        rootDir,
+        io,
+        json: parsed.json,
+        profileBytes,
+        profile: profileResult.profile,
+        modelPolicyPlan: modelPolicyPlan!,
+        existingUpgrade: lockfileView?.upgrade,
+      });
+    }
     io.stderr(
       "--write with --model-policy-strategy is not yet supported: adopting a plan must also regenerate the affected Codex/Claude target files and guidance so they never disagree with the lock, which is not wired yet. Preview with --model-policy-strategy (without --write), then run `agent-profile compile --write` once ai-profile.yaml reflects the change you want.\n",
     );
@@ -951,6 +963,145 @@ async function runUpgrade(
   if (!lockfileView && !parsed.json) {
     io.stdout(
       "Catalog version not stamped without a lockfile; upgrade re-checks the profile, so adopted capabilities are not re-offered.\n",
+    );
+  }
+  return 0;
+}
+
+/**
+ * Real write path for `upgrade --model-policy-strategy adopt --write` on a
+ * v3-opted profile (Phase 31.5 I6a cycle 9). Reuses the exact same pipeline
+ * `agent-profile compile --write` uses (`compileProfile` ->
+ * `planRegionAwareWrites` -> `buildCompileWrites` ->
+ * `createOrApplyWritePlan`), seeded with the adopted plan's block as the
+ * "previous" model policy, so the regenerated Codex/Claude target files and
+ * `ai-profile.lock` can never disagree about the adopted resolution -- unlike
+ * an earlier revision of this command, which wrote only the lock's
+ * `modelPolicy` block and left already-generated target files stale (PR
+ * review finding). Any drift between the current lock and the files actually
+ * on disk refuses cleanly rather than silently overwriting or attempting
+ * interactive reconciliation (out of scope for this cycle).
+ */
+async function runModelPolicyAdoptWrite(input: {
+  rootDir: string;
+  io: CliIo;
+  json: boolean;
+  profileBytes: Uint8Array;
+  profile: AiProfile;
+  modelPolicyPlan: ModelPolicyUpgradePlan;
+  existingUpgrade: { catalogVersion: number } | undefined;
+}): Promise<number> {
+  const { rootDir, io, json, profileBytes, profile, modelPolicyPlan, existingUpgrade } =
+    input;
+  if (modelPolicyPlan.block === undefined) {
+    // Invariant guaranteed by `planModelPolicyUpgrade`'s "adopt" branch,
+    // which never returns an undefined block.
+    throw new Error(
+      'planModelPolicyUpgrade("adopt", ...) unexpectedly returned no block',
+    );
+  }
+  const previousModelPolicy = modelPolicyPlan.block;
+
+  const compileResult = compileProfile({ profile, previousModelPolicy });
+  if (!compileResult.ok) {
+    io.stderr(formatCompileIssues(compileResult.issues));
+    return 1;
+  }
+
+  let regionPlan: RegionAwareWritePlan;
+  try {
+    regionPlan = await planRegionAwareWrites(rootDir, compileResult.files, {
+      force: false,
+    });
+  } catch {
+    io.stderr(
+      formatSimpleError(
+        "generated outputs",
+        "safe repository-local readable paths",
+        "unsafe path",
+        "Existing generated output paths could not be safely read under --root.",
+      ),
+    );
+    return 1;
+  }
+
+  if (regionPlan.refusals.length > 0) {
+    io.stderr(
+      "Refusing to adopt: generated target files have drifted from ai-profile.lock or need explicit ownership adoption; run `agent-profile compile` to reconcile first.\n",
+    );
+    return 1;
+  }
+
+  // `planRegionAwareWrites`'s refusals only cover AGENTS.md/CLAUDE.md
+  // (`REGION_AWARE_PATHS`); every other generated output (notably
+  // `.codex/config.toml`, exactly the kind of file adopting a model policy
+  // regenerates) is only protected against on-disk drift by this second
+  // check, the same one `runCompile` performs before writing. Skipping it
+  // here would silently overwrite a hand-edited non-region file instead of
+  // refusing (PR review finding).
+  let protectedPaths: ProtectedGeneratedPath[];
+  try {
+    protectedPaths = await getProtectedGeneratedPaths(
+      rootDir,
+      compileResult.files,
+    );
+  } catch {
+    io.stderr(
+      formatSimpleError(
+        "generated outputs",
+        "safe repository-local readable paths",
+        "unsafe path",
+        "Existing generated output paths could not be safely read under --root.",
+      ),
+    );
+    return 1;
+  }
+  if (protectedPaths.length > 0) {
+    io.stderr(
+      `Refusing to adopt: generated target files have drifted from ai-profile.lock:\n${protectedPaths
+        .map((item) => `- ${item.path} (${item.reason})`)
+        .join("\n")}\nRun \`agent-profile compile\` to reconcile first.\n`,
+    );
+    return 1;
+  }
+
+  const tabnineModelSettings = await resolveTabnineModelSettings(
+    rootDir,
+    profile,
+  );
+
+  const { writes } = buildCompileWrites({
+    profilePath: "ai-profile.yaml",
+    profileBytes,
+    templates: compileResult.templates,
+    files: compileResult.files,
+    regionPlan,
+    profile,
+    previousModelPolicy,
+    ...(existingUpgrade ? { existingUpgrade } : {}),
+    ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
+  });
+
+  const plan = await createOrApplyWritePlan(rootDir, writes, true, io);
+  if (!plan) {
+    return 1;
+  }
+
+  const written = plan.counts.create + plan.counts.change;
+  if (json) {
+    io.stdout(
+      `${JSON.stringify({
+        command: "upgrade",
+        modelPolicyStrategy: "adopt",
+        modelPolicyWrote: true,
+        filesWritten: written,
+      })}\n`,
+    );
+  } else {
+    io.stdout(
+      `Updated ai-profile.lock and regenerated ${written} target file${
+        written === 1 ? "" : "s"
+      } (adopt).\n`,
     );
   }
   return 0;

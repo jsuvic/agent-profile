@@ -235,6 +235,38 @@ Also found and fixed 2026-07-19, as a separate PR unrelated to I6 itself:
 so every lockfile `configure` wrote silently erased its `modelPolicy` block.
 Pre-existing bug, surfaced while reviewing I6's disclosed gaps.
 
+I6a ninth RED-first cycle completed 2026-07-20, also a disclosed partial
+slice, PLUS a fix pass responding to a Codex PR review (12 findings across
+two rounds; see PR #125's resolved review threads for full detail):
+restored `--model-policy-strategy adopt --write` for v3-opted profiles
+ONLY, this time correctly - by reusing the exact same pipeline
+`agent-profile compile --write` already uses (`compileProfile` ->
+`planRegionAwareWrites` -> `getProtectedGeneratedPaths` ->
+`resolveTabnineModelSettings` -> `buildCompileWrites` ->
+`createOrApplyWritePlan`), seeded with the adopted plan's block as the
+"previous" model policy so Phase 31.5 I6's own lock-reuse primitive makes
+every regenerated Codex/Claude target file agree with the lock
+automatically - fixing the exact defect (lock written, generated files
+left stale) that got the write path removed entirely in the PR-review fix
+pass. Every other combination (any strategy on mapping-v2; retain/
+quality-first/cost-conscious on v3-opted) still refuses with the unchanged
+message. Code-quality review found one Critical, real gap: the new
+`runModelPolicyAdoptWrite` mirrored `planRegionAwareWrites`'s drift check
+(AGENTS.md/CLAUDE.md only) but omitted `getProtectedGeneratedPaths`, the
+SEPARATE check `runCompile` also performs for every other generated output
+- meaning a hand-edited `.codex/config.toml` would have been silently
+overwritten instead of refusing, contradicting the function's own doc
+comment. Fixed before closing the cycle (added the check + a regression
+test that corrupts `.codex/config.toml` in isolation and proves refusal).
+`npm test`/`npm run check` clean for `apps/cli` (520 tests/516 pass/0
+fail/4 unrelated skips) after the fix. Still left for later I6a cycles:
+mapping-v2 writes and quality-first/cost-conscious writes (both need the
+still-unbuilt `ai-profile.yaml` `subagentPolicy.preset` surgical edit),
+the "custom exact" strategy (disclosed, pre-existing non-goal - re-flagged
+by the same Codex review and deliberately left open, not a regression from
+this PR), and the disclosed lifecycle-comparison gap from cycle 1. State
+stays `ready`, not `done`.
+
 I6a first RED-first cycle completed 2026-07-19 as a disclosed partial slice
 (one bounded `/implement-next` cycle, not full closure): added the pure
 comparison helper `compareModelPolicyUpgrade`
