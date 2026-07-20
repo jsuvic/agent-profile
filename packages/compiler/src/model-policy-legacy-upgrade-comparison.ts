@@ -28,6 +28,7 @@ import {
 import { resolveRoleMapping } from "./subagent-mapping.js";
 import {
   buildModelPolicyTargetTable,
+  type ModelPolicyRoleOverrides,
   type ModelPolicyTargetClientId,
 } from "./model-policy-target-adapter.js";
 import { freshCapabilityStatus } from "./model-policy-upgrade-comparison.js";
@@ -85,8 +86,14 @@ function legacyClientResolution(
 export function compareModelPolicyUpgradeFromLegacy(
   roles: Readonly<Record<SubagentPolicyRoleId, EffectiveSubagentPolicyRole>>,
   targetPreset: ModelPolicyPreset,
+  roleOverrides?: ModelPolicyRoleOverrides,
 ): readonly ModelPolicyLegacyUpgradeComparisonRow[] {
-  const freshTable = buildModelPolicyTargetTable(targetPreset);
+  // Must match whatever `planModelPolicyUpgrade` would actually adopt: a
+  // profile's own `subagentPolicy.roles` overrides win over the target
+  // preset's defaults there too (Phase 31.5 I6a PR review finding -- the
+  // comparison and the plan disagreeing about the fresh target for the same
+  // adopt action is worse than showing neither).
+  const freshTable = buildModelPolicyTargetTable(targetPreset, roleOverrides);
 
   const rows: ModelPolicyLegacyUpgradeComparisonRow[] = [];
 

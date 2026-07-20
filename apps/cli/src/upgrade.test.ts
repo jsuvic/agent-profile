@@ -251,6 +251,47 @@ test("upgrade interactive adopt previews exact insertions and writes only after 
   assert.deepEqual(confirmDefaults, [false]);
 });
 
+test("upgrade interactive session still prints the model policy report, not just capability-catalog offers (PR review finding)", async () => {
+  // Before this fix, the model-policy comparison/plan was only rendered by
+  // emitUpgradeReport, which the interactive `prompts.*` flow never calls
+  // at all -- so a v3-opted profile's stale lock (or an explicit
+  // --model-policy-strategy) was invisible in a real interactive session.
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, stale);
+  const output = createOutput();
+  const prompts: UpgradePrompts = {
+    begin: () => {},
+    showOffered: () => {},
+    choose: async () => "keep",
+    customize: async () => [],
+    showDiff: () => {},
+    confirmWrite: async () => false,
+    end: () => {},
+  };
+
+  const code = await runCli(["upgrade", "--root", root], {
+    io: output,
+    nonInteractive: false,
+    upgradePrompts: prompts,
+  });
+
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /model policy changes:/u);
+  assert.match(output.stdoutText(), /architect codex:/u);
+});
+
 test("upgrade refusal prints the exact manual line and performs no partial write", async () => {
   const root = await createUpgradeRoot(
     21,

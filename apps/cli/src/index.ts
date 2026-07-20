@@ -713,6 +713,7 @@ async function runUpgrade(
       ? compareModelPolicyUpgradeFromLegacy(
           legacyEffectivePolicy.roles,
           DEFAULT_MODEL_POLICY_PRESET,
+          deriveModelPolicyRoleOverrides(subagentPolicy?.roles),
         ).filter((row) => row.changed)
       : undefined;
   if (
@@ -767,6 +768,19 @@ async function runUpgrade(
     !parsed.nonInteractive &&
     (options.nonInteractive === false ||
       (options.nonInteractive !== true && isInteractiveTty(io)));
+
+  // Printed exactly once, before any interactive/non-interactive branching,
+  // for every non-JSON path -- including the interactive prompt flow below,
+  // which otherwise never surfaces the model-policy report at all (PR
+  // review finding).
+  if (!parsed.json) {
+    printModelPolicyTextReport(
+      io,
+      modelPolicyChanges,
+      modelPolicyPlan,
+      modelPolicyLegacyChanges,
+    );
+  }
 
   if ((!interactive || scriptedWrite) && !parsed.json) {
     emitUpgradeReport(
@@ -1018,6 +1032,29 @@ function emitUpgradeReport(
   if (offeredIds.length === 0) lines.push("nothing to offer");
   else
     lines.push("offered capabilities:", ...offeredIds.map((id) => `- ${id}`));
+  // Model-policy lines are NOT appended here: `printModelPolicyTextReport`
+  // is the single owner of that text-mode rendering, called once
+  // unconditionally for every non-JSON path in `runUpgrade` (including the
+  // interactive prompt flow, which never calls this function at all) -
+  // duplicating that rendering here would either double-print for
+  // non-interactive callers or require yet another gate to avoid it.
+  io.stdout(`${lines.join("\n")}\n`);
+}
+
+/**
+ * Builds the text-mode model-policy report lines (comparison + plan +
+ * legacy comparison), independent of the rest of the upgrade report. Pure:
+ * no I/O, so it can be reused by both a text-mode caller and (in principle)
+ * a future interactive renderer without re-deriving the format.
+ */
+function buildModelPolicyReportLines(
+  modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined,
+  modelPolicyPlan: ModelPolicyUpgradePlan | undefined,
+  modelPolicyLegacyChanges:
+    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
+    | undefined,
+): string[] {
+  const lines: string[] = [];
   if (modelPolicyChanges !== undefined && modelPolicyChanges.length > 0) {
     lines.push(
       "model policy changes:",
@@ -1048,7 +1085,35 @@ function emitUpgradeReport(
       ...modelPolicyLegacyChanges.map(formatModelPolicyLegacyChangeLine),
     );
   }
-  io.stdout(`${lines.join("\n")}\n`);
+  return lines;
+}
+
+/**
+ * Prints the model-policy report (comparison/plan/legacy comparison) once,
+ * regardless of whether `runUpgrade` is about to take the interactive,
+ * non-interactive, or scripted-write path -- the interactive `prompts.*`
+ * flow only renders capability-catalog offers, so without this the entire
+ * model-policy report (including an explicit `--model-policy-strategy`
+ * preview) was silently invisible in a real interactive session (PR review
+ * finding). Never called in `--json` mode, where the same data already
+ * travels inside the single JSON report object.
+ */
+function printModelPolicyTextReport(
+  io: CliIo,
+  modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined,
+  modelPolicyPlan: ModelPolicyUpgradePlan | undefined,
+  modelPolicyLegacyChanges:
+    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
+    | undefined,
+): void {
+  const lines = buildModelPolicyReportLines(
+    modelPolicyChanges,
+    modelPolicyPlan,
+    modelPolicyLegacyChanges,
+  );
+  if (lines.length > 0) {
+    io.stdout(`${lines.join("\n")}\n`);
+  }
 }
 
 function formatAlternativesList(alternatives: readonly string[]): string {

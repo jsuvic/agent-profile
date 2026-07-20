@@ -112,6 +112,54 @@ test("a role/client whose legacy model differs from the fresh v3 catalog resolut
   assert.notEqual(row.legacy?.model, row.fresh.model);
 });
 
+test("an explicit roleOverrides argument changes the fresh side the same way it would change the actual adopt plan", () => {
+  // Phase 31.5 I6a PR review finding: the fresh side here must agree with
+  // what planModelPolicyUpgrade would actually adopt for the same profile,
+  // so a profile's own subagentPolicy.roles overrides must win here too,
+  // not just in the planning helper.
+  const roles = effectiveRoles();
+  const roleOverrides = {
+    architect: { capability: "efficient", effort: "low" },
+  } as const;
+
+  const withoutOverrides = compareModelPolicyUpgradeFromLegacy(
+    roles,
+    "role-aware",
+  );
+  const withOverrides = compareModelPolicyUpgradeFromLegacy(
+    roles,
+    "role-aware",
+    roleOverrides,
+  );
+
+  const rowWithout = withoutOverrides.find(
+    (r) => r.role === "architect" && r.client === "codex",
+  );
+  const rowWith = withOverrides.find(
+    (r) => r.role === "architect" && r.client === "codex",
+  );
+  assert.ok(rowWithout);
+  assert.ok(rowWith);
+  assert.notDeepEqual(rowWith.fresh, rowWithout.fresh);
+
+  const expectedFreshTable = buildModelPolicyTargetTable(
+    "role-aware",
+    roleOverrides,
+  );
+  const expectedFreshRow = expectedFreshTable.find(
+    (candidate) => candidate.role === "architect",
+  );
+  assert.ok(expectedFreshRow);
+  assert.deepEqual(rowWith.fresh, {
+    model: expectedFreshRow.codex.model,
+    effort: expectedFreshRow.codex.targetEffort,
+    lifecycle: expectedFreshRow.codex.lifecycle,
+    capabilityStatus: expectedFreshRow.codex.primaryStatus,
+    alternatives: expectedFreshRow.codex.alternatives,
+    catalogVersion: expectedFreshRow.codex.catalogVersion,
+  });
+});
+
 test("comparing the same inputs twice produces deterministic, deepEqual results", () => {
   const roles = effectiveRoles();
   const first = compareModelPolicyUpgradeFromLegacy(roles, "role-aware");
