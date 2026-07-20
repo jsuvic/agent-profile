@@ -42,6 +42,7 @@ export type ModelPolicyUpgradeComparisonRow = Readonly<{
     | Readonly<{
         model: string;
         effort: ModelPolicyTargetEffort | undefined;
+        effortStatus: ModelPolicyCapabilityStatus;
         alternatives: readonly string[];
         lifecycle: ModelCatalogLifecycleStatus | "unrated";
         capabilityStatus: ModelPolicyCapabilityStatus;
@@ -52,6 +53,7 @@ export type ModelPolicyUpgradeComparisonRow = Readonly<{
   fresh: Readonly<{
     model: string | undefined;
     effort: ModelPolicyTargetEffort;
+    effortStatus: ModelPolicyCapabilityStatus;
     alternatives: readonly string[];
     lifecycle: ModelCatalogLifecycleStatus | "unrated";
     capabilityStatus: ModelPolicyCapabilityStatus;
@@ -102,7 +104,14 @@ export function freshCapabilityStatus(
     : resolution.skillStatus;
 }
 
-function alternativesDiffer(
+/**
+ * Exported so the mapping-v2 legacy comparison (Phase 31.5 I6a) can compare
+ * its own `legacy.alternatives`/`fresh.alternatives` with the identical
+ * rule, instead of re-deriving array-equality independently (PR review
+ * finding: the two comparisons must never silently disagree about what
+ * counts as an alternatives change).
+ */
+export function alternativesDiffer(
   a: readonly string[],
   b: readonly string[],
 ): boolean {
@@ -160,6 +169,10 @@ export function compareModelPolicyUpgrade(
       const fresh: ModelPolicyUpgradeComparisonRow["fresh"] = Object.freeze({
         model: freshResolution.model,
         effort: freshResolution.targetEffort,
+        // Codex/Claude have no separately-statused effort control today, so
+        // `effortStatus` mirrors `capabilityStatus` here -- the same
+        // convention `toLockModelPolicyFromTargetTable` already uses.
+        effortStatus: freshCapability,
         alternatives: freshResolution.alternatives,
         lifecycle: freshResolution.lifecycle,
         capabilityStatus: freshCapability,
@@ -174,6 +187,7 @@ export function compareModelPolicyUpgrade(
           : Object.freeze({
               model: oldRow.model,
               effort: oldRow.effort,
+              effortStatus: oldRow.effortStatus,
               alternatives: oldRow.alternatives,
               lifecycle: lockedModelLifecycle(client, oldRow.model),
               capabilityStatus: oldRow.capabilityStatus,
@@ -190,6 +204,9 @@ export function compareModelPolicyUpgrade(
         }
         if (old.effort !== fresh.effort) {
           reasons.push("effort changed");
+        }
+        if (old.effortStatus !== fresh.effortStatus) {
+          reasons.push("effort status changed");
         }
         if (old.capabilityStatus !== fresh.capabilityStatus) {
           reasons.push("capability status changed");

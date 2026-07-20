@@ -698,11 +698,24 @@ async function runUpgrade(
   );
   const offeredIds = offered.map((entry) => entry.id);
   const subagentPolicy = profileResult.profile.subagentPolicy;
+  // A selected bulk-preset strategy ("quality-first"/"cost-conscious") is
+  // the same target `planModelPolicyUpgrade` below resolves for that
+  // strategy; the comparison must use that SAME target, not always the
+  // profile's current preset, or the report shows an old->current-preset
+  // table immediately followed by a materially different plan for the
+  // preset the user actually asked to review (PR review finding).
+  const modelPolicyComparisonPreset: ModelPolicyPreset =
+    parsed.modelPolicyStrategy === "quality-first" ||
+    parsed.modelPolicyStrategy === "cost-conscious"
+      ? parsed.modelPolicyStrategy
+      : hasV3ModelPreset(subagentPolicy)
+        ? subagentPolicy.preset
+        : DEFAULT_MODEL_POLICY_PRESET;
   const modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined =
     hasV3ModelPreset(subagentPolicy)
       ? compareModelPolicyUpgrade(
           lockfileView?.modelPolicy,
-          subagentPolicy.preset,
+          modelPolicyComparisonPreset,
           deriveModelPolicyRoleOverrides(subagentPolicy.roles),
         ).filter((row) => row.changed)
       : undefined;
@@ -713,7 +726,7 @@ async function runUpgrade(
     legacyEffectivePolicy
       ? compareModelPolicyUpgradeFromLegacy(
           legacyEffectivePolicy.roles,
-          DEFAULT_MODEL_POLICY_PRESET,
+          modelPolicyComparisonPreset,
           deriveModelPolicyRoleOverrides(subagentPolicy?.roles),
         ).filter((row) => row.changed)
       : undefined;
@@ -970,6 +983,11 @@ async function runUpgrade(
         offered: offeredIds,
         wrote: true,
         inserted: selected.map((entry) => entry.id),
+        ...buildModelPolicyJsonFields(
+          modelPolicyChanges,
+          modelPolicyPlan,
+          modelPolicyLegacyChanges,
+        ),
       })}\n`,
     );
   } else {
@@ -1235,6 +1253,59 @@ async function getConfigurePrompts(
   return createConfigureClackPrompts(CLI_VERSION);
 }
 
+/**
+ * The JSON model-policy fields shared by every JSON upgrade response:
+ * `emitUpgradeReport`'s own preview/no-op paths, and the scripted
+ * `--write --adopt-recommended` success record below, which used to build
+ * its own JSON object from scratch and omit these fields entirely -- so a
+ * scripted write on a v3-opted or mapping-v2 profile with model-policy
+ * changes silently dropped the one comparison a caller scripting this flag
+ * combination would need to see (PR review finding). Both call sites must
+ * render identically so a caller scripting either path sees the same shape.
+ */
+function buildModelPolicyJsonFields(
+  modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined,
+  modelPolicyPlan: ModelPolicyUpgradePlan | undefined,
+  modelPolicyLegacyChanges:
+    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
+    | undefined,
+): Record<string, unknown> {
+  return {
+    ...(modelPolicyChanges === undefined
+      ? {}
+      : {
+          modelPolicyChanges: modelPolicyChanges.map((row) => ({
+            role: row.role,
+            client: row.client,
+            old: row.old ?? null,
+            fresh: row.fresh,
+            reason: row.reason,
+          })),
+        }),
+    ...(modelPolicyPlan === undefined
+      ? {}
+      : {
+          modelPolicyPlan: {
+            strategy: modelPolicyPlan.strategy,
+            preset: modelPolicyPlan.block?.preset ?? null,
+            catalogVersion: modelPolicyPlan.block?.catalogVersion ?? null,
+            resolutions: modelPolicyPlan.block?.resolutions ?? [],
+          },
+        }),
+    ...(modelPolicyLegacyChanges === undefined
+      ? {}
+      : {
+          modelPolicyLegacyChanges: modelPolicyLegacyChanges.map((row) => ({
+            role: row.role,
+            client: row.client,
+            legacy: row.legacy ?? null,
+            fresh: row.fresh,
+            reason: row.reason,
+          })),
+        }),
+  };
+}
+
 function emitUpgradeReport(
   io: CliIo,
   json: boolean,
@@ -1251,38 +1322,11 @@ function emitUpgradeReport(
         catalogVersion: CAPABILITY_CATALOG_VERSION,
         recordedCatalogVersion: recordedVersion ?? null,
         offered: offeredIds,
-        ...(modelPolicyChanges === undefined
-          ? {}
-          : {
-              modelPolicyChanges: modelPolicyChanges.map((row) => ({
-                role: row.role,
-                client: row.client,
-                old: row.old ?? null,
-                fresh: row.fresh,
-                reason: row.reason,
-              })),
-            }),
-        ...(modelPolicyPlan === undefined
-          ? {}
-          : {
-              modelPolicyPlan: {
-                strategy: modelPolicyPlan.strategy,
-                preset: modelPolicyPlan.block?.preset ?? null,
-                catalogVersion: modelPolicyPlan.block?.catalogVersion ?? null,
-                resolutions: modelPolicyPlan.block?.resolutions ?? [],
-              },
-            }),
-        ...(modelPolicyLegacyChanges === undefined
-          ? {}
-          : {
-              modelPolicyLegacyChanges: modelPolicyLegacyChanges.map((row) => ({
-                role: row.role,
-                client: row.client,
-                legacy: row.legacy ?? null,
-                fresh: row.fresh,
-                reason: row.reason,
-              })),
-            }),
+        ...buildModelPolicyJsonFields(
+          modelPolicyChanges,
+          modelPolicyPlan,
+          modelPolicyLegacyChanges,
+        ),
       })}\n`,
     );
     return;

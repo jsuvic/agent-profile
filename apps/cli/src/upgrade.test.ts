@@ -14,6 +14,7 @@ import {
 } from "@agent-profile/core";
 import {
   buildLockfile,
+  buildModelPolicyTargetTable,
   compareModelPolicyResolutions,
   compareModelPolicyUpgrade,
   compareModelPolicyUpgradeFromLegacy,
@@ -1288,6 +1289,101 @@ test("upgrade JSON keeps modelPolicyChanges and modelPolicyLegacyChanges mutuall
     unknown
   >;
   assert.equal("modelPolicyChanges" in legacyReport, false);
+});
+
+test("upgrade --json --write --adopt-recommended includes modelPolicyChanges in the scripted-write success record (PR review finding)", async () => {
+  // The scripted-write success record (offered.length > 0, so the run
+  // actually inserts capabilities and writes ai-profile.yaml/lock) used to
+  // build its own JSON object from scratch, separate from
+  // `emitUpgradeReport`'s json branch, and never included the model-policy
+  // comparison fields at all -- so a caller scripting `--write
+  // --adopt-recommended` on a v3-opted profile with a stale model-policy
+  // lock got a successful write response with no model comparison, even
+  // though the command computed one.
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(23, stale);
+  const output = createOutput();
+
+  const code = await runCli(
+    ["upgrade", "--root", root, "--json", "--write", "--adopt-recommended"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    wrote?: boolean;
+    modelPolicyChanges?: Array<{
+      role: string;
+      client: string;
+      old: { model: string } | null;
+      fresh: { model: string };
+      reason?: string;
+    }>;
+  };
+  assert.equal(report.wrote, true);
+  assert.ok(report.modelPolicyChanges);
+  const row = report.modelPolicyChanges?.find(
+    (candidate) => candidate.role === "architect" && candidate.client === "codex",
+  );
+  assert.ok(row);
+  assert.equal(row?.old?.model, `${architectCodex.model}-superseded`);
+  assert.equal(row?.fresh.model, architectCodex.model);
+});
+
+test("upgrade --model-policy-strategy quality-first compares against the quality-first target, not the profile's current role-aware preset (PR review finding)", async () => {
+  // Before this fix, modelPolicyChanges was always computed against the
+  // profile's own current preset (role-aware for V3_PROFILE), even when the
+  // user explicitly asked to preview a different bulk strategy -- so the
+  // comparison table and the plan below it could show two different
+  // targets for the same requested strategy.
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "quality-first",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyChanges?: Array<{
+      role: string;
+      client: string;
+      fresh: { model: string | null };
+    }>;
+    modelPolicyPlan?: { preset: string | null };
+  };
+  assert.equal(report.modelPolicyPlan?.preset, "quality-first");
+
+  const expectedFreshTable = buildModelPolicyTargetTable("quality-first");
+  const expectedArchitect = expectedFreshTable.find(
+    (candidate) => candidate.role === "architect",
+  );
+  assert.ok(expectedArchitect);
+  const row = report.modelPolicyChanges?.find(
+    (candidate) => candidate.role === "architect" && candidate.client === "codex",
+  );
+  assert.ok(row);
+  assert.equal(row.fresh.model, expectedArchitect.codex.model);
 });
 
 // Phase 31.5 (I6a, eighth cycle): an enabled mapping-v2 profile no longer

@@ -299,6 +299,53 @@ clean typecheck on both; `verify:pack` and golden regeneration both clean.
 All 3 findings resolved as GitHub review threads. State stays `ready`, not
 `done` - same open acceptance criteria as noted above.
 
+Fix round 4's PR verify job initially failed CI's `npm run check` (2026-07-20,
+PR #125) with two type errors neither `npm run build` nor a plain `tsc -b`
+had caught: `apps/cli/src/upgrade.test.ts`'s new manual-owned lock-mutation
+test literal typed too narrow for the reassigned shape, and
+`packages/compiler/src/model-policy-upgrade-comparison.test.ts`'s new
+preset-changed test used `"uniform"`, not a valid `ModelPolicyPreset`. Fixed
+by loosening the test's parsed-lock type and correcting the preset literal
+to `"quality-first"`. Root cause: `npm run check` runs `tsc -p
+tsconfig.test.json --noEmit` in addition to the ordinary build, and CI runs
+`check`, not `build` - both must be run locally before pushing test-only
+changes, not just `build`.
+
+I6a PR review fix round 5 (2026-07-20, PR #125) addressed 4 new Codex bot P2
+findings surfaced after round 4 landed: (1) the mapping-v2 legacy comparison
+(`compareModelPolicyUpgradeFromLegacy`) only compared model/effort, so a
+role whose exact override already pinned the v3 target's own model (a
+legitimate mapping-v2 configuration) was reported unchanged even though
+Adopt would still rewrite the row's lifecycle/capabilityStatus from
+mapping-v2's fixed "unrated"/"advisory" constants to the v3 target's real
+values - fixed by comparing lifecycle/capabilityStatus/alternatives too,
+reusing `compareModelPolicyUpgrade`'s own `alternativesDiffer` (now
+exported) so the two comparisons can never disagree about that rule; (2)
+the scripted `--json --write --adopt-recommended` success record built its
+own JSON object from scratch, separately from `emitUpgradeReport`, and
+never included the model-policy comparison fields at all - fixed by
+extracting a shared `buildModelPolicyJsonFields` helper both call sites now
+use; (3) `compareModelPolicyUpgrade` never compared `effortStatus`, so a
+locked row differing only there (model/effort/capabilityStatus/
+alternatives/source/catalogVersion all matching) was reported unchanged
+even though Adopt would still serialize the fresh `effortStatus` - added a
+`effortStatus` field to both `old`/`fresh` and a comparison check; (4) the
+comparison for a selected `--model-policy-strategy quality-first`/
+`cost-conscious` still resolved against the profile's current preset
+instead of the actually-selected target, so the report's comparison table
+and the plan beneath it could show two different presets for the same
+requested strategy - fixed via a `modelPolicyComparisonPreset` derivation
+mirroring `planModelPolicyUpgrade`'s own targetPreset logic, shared by both
+the v3 and mapping-v2 comparison calls. Added regression tests for all
+four: a mapping-v2-model-matches-but-lifecycle-differs compiler test, a
+scripted-write-JSON-includes-model-fields CLI test, an
+effortStatus-only-change compiler test, and a
+compare-against-selected-strategy CLI test. Tests: `packages/compiler`
+311/310, `apps/cli` 534/530, both 0 failures; clean typecheck on both
+(including `tsconfig.test.json`); `verify:pack` and golden regeneration
+both clean. All 4 findings resolved as GitHub review threads. State stays
+`ready`, not `done` - same open acceptance criteria as noted above.
+
 I6a tenth RED-first cycle completed 2026-07-20, also a disclosed partial
 slice: added `planSubagentPolicyPresetEdit`
 (`apps/cli/src/upgrade-model-policy-editor.ts`), a pure surgical YAML-edit

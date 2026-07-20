@@ -12,7 +12,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MODEL_POLICY_ROLE_IDS } from "@agent-profile/core";
+import {
+  MODEL_POLICY_ROLE_IDS,
+  type ModelPolicyCapabilityStatus,
+} from "@agent-profile/core";
 
 import type { LockModelPolicyV2 } from "./types.js";
 import { compareModelPolicyUpgrade } from "./model-policy-upgrade-comparison.js";
@@ -163,6 +166,50 @@ test("a role/client whose locked row differs only by resolution source is still 
   assert.equal(row.changed, true);
   assert.ok(row.reason);
   assert.match(row.reason, /source/i);
+});
+
+test("a role/client whose locked row differs only by effortStatus is still reported as changed with an effort status reason (PR review finding)", () => {
+  // Same fixture pattern as the "unchanged" test above, but the locked
+  // row's effortStatus is deliberately stale while every other field
+  // (model, effort, capabilityStatus, alternatives, source, catalogVersion)
+  // matches today's fresh resolution exactly. Adopt would still serialize
+  // the fresh effortStatus, so it must not be silently filtered out as
+  // unchanged just because capabilityStatus happens to match.
+  const freshRows = compareModelPolicyUpgrade(undefined, "role-aware");
+  const freshArchitectCodex = freshRows.find(
+    (r) => r.role === "architect" && r.client === "codex",
+  );
+  assert.ok(freshArchitectCodex);
+
+  const staleEffortStatus: ModelPolicyCapabilityStatus =
+    freshArchitectCodex.fresh.effortStatus === "advisory"
+      ? "configured"
+      : "advisory";
+
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: freshArchitectCodex.fresh.catalogVersion,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "codex",
+        role: "architect",
+        model: freshArchitectCodex.fresh.model as string,
+        effort: freshArchitectCodex.fresh.effort,
+        effortStatus: staleEffortStatus,
+        alternatives: [...freshArchitectCodex.fresh.alternatives],
+        source: "catalog",
+        capabilityStatus: freshArchitectCodex.fresh.capabilityStatus,
+        catalogVersion: freshArchitectCodex.fresh.catalogVersion,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyUpgrade(previous, "role-aware");
+  const row = rows.find((r) => r.role === "architect" && r.client === "codex");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.match(row.reason, /effort status changed/i);
 });
 
 test("old.lifecycle is derived from the current catalog: a still-catalogued locked model reports its real lifecycle, an uncatalogued one reports unrated", () => {

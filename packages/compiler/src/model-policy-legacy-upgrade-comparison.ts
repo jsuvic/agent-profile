@@ -31,7 +31,10 @@ import {
   type ModelPolicyRoleOverrides,
   type ModelPolicyTargetClientId,
 } from "./model-policy-target-adapter.js";
-import { freshCapabilityStatus } from "./model-policy-upgrade-comparison.js";
+import {
+  alternativesDiffer,
+  freshCapabilityStatus,
+} from "./model-policy-upgrade-comparison.js";
 import type { ModelPolicyTargetEffort } from "./types.js";
 
 export type ModelPolicyLegacyUpgradeComparisonRow = Readonly<{
@@ -153,6 +156,22 @@ export function compareModelPolicyUpgradeFromLegacy(
         }
         if (legacy.effort !== fresh.effort) {
           reasons.push("effort changed");
+        }
+        // A mapping-v2 role whose exact-override model/effort already equal
+        // the v3 target still changes what Adopt would record: the
+        // displayed lifecycle/capability-status/alternatives move from
+        // mapping-v2's fixed "no such concept" constants to the v3 target's
+        // real values. Without this, an already-model/effort-matching row
+        // is silently reported unchanged even though adopting it changes
+        // the represented metadata (PR review finding).
+        if (legacy.lifecycle !== fresh.lifecycle) {
+          reasons.push("lifecycle changed");
+        }
+        if (legacy.capabilityStatus !== fresh.capabilityStatus) {
+          reasons.push("capability status changed");
+        }
+        if (alternativesDiffer(legacy.alternatives, fresh.alternatives)) {
+          reasons.push("alternatives changed");
         }
       }
 

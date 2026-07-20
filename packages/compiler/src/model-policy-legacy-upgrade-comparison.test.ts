@@ -166,6 +166,51 @@ test("an explicit roleOverrides argument changes the fresh side the same way it 
   });
 });
 
+test("a mapping-v2 role whose exact override already matches the v3 target's model is still reported as changed via lifecycle/capability-status (PR review finding)", () => {
+  // mapping-v2's `resolveRoleMapping` supports an exact per-client model
+  // override, which can legitimately be pointed at the SAME model id the
+  // v3 target would resolve. When that happens, the old "model changed"
+  // check alone could mask whether lifecycle/capabilityStatus/alternatives
+  // are compared at all -- this isolates that by matching the model while
+  // leaving lifecycle ("unrated" for mapping-v2 vs the real catalog value)
+  // and capabilityStatus ("advisory" for mapping-v2 vs the real primary
+  // status) free to differ, and asserts they are surfaced as their own
+  // reasons rather than silently dropped.
+  // "implementer" is `MODEL_POLICY_PRIMARY_ROLE`, so its Codex row uses
+  // `primaryStatus` ("configured" once resolved -- the one surface Agent
+  // Profile actually writes to `.codex/config.toml`), unlike every other
+  // role's guidance-only `skillStatus` ("advisory"); that contrast is what
+  // makes the capability-status assertion below meaningful.
+  const freshTable = buildModelPolicyTargetTable("role-aware");
+  const freshImplementerCodex = freshTable.find(
+    (candidate) => candidate.role === "implementer",
+  )?.codex;
+  assert.ok(freshImplementerCodex);
+  assert.ok(freshImplementerCodex.model);
+  assert.notEqual(freshImplementerCodex.lifecycle, "unrated");
+  assert.notEqual(freshImplementerCodex.primaryStatus, "advisory");
+
+  const roles = effectiveRoles();
+  const overriddenRoles = {
+    ...roles,
+    implementer: {
+      ...roles.implementer,
+      overrides: {
+        codex: { model: freshImplementerCodex.model },
+      },
+    },
+  };
+
+  const rows = compareModelPolicyUpgradeFromLegacy(overriddenRoles, "role-aware");
+  const row = rows.find((r) => r.role === "implementer" && r.client === "codex");
+  assert.ok(row);
+  assert.equal(row.legacy?.model, row.fresh.model);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.match(row.reason, /lifecycle changed/i);
+  assert.match(row.reason, /capability status changed/i);
+});
+
 test("comparing the same inputs twice produces deterministic, deepEqual results", () => {
   const roles = effectiveRoles();
   const first = compareModelPolicyUpgradeFromLegacy(roles, "role-aware");
