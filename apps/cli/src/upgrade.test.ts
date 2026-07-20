@@ -842,6 +842,47 @@ async function createV3UpgradeRootWithGeneratedFiles(
   return root;
 }
 
+// Phase 31.5 (I6a, this cycle): like `createV3UpgradeRootWithGeneratedFiles`,
+// but for an enabled mapping-v2 profile (no `subagentPolicy.preset`, no prior
+// `ai-profile.lock` `modelPolicy` block at all) -- used to prove
+// `--model-policy-strategy adopt|quality-first|cost-conscious --write` writes
+// `subagentPolicy.preset` into `ai-profile.yaml` for the first time AND
+// regenerates a fresh `ai-profile.lock` `modelPolicy` block AND the affected
+// target files together, all in one write.
+async function createMappingV2UpgradeRootWithGeneratedFiles(
+  catalogVersion: number | undefined,
+): Promise<string> {
+  const root = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-upgrade-mapping-v2-gen-"),
+  );
+  await writeFile(path.join(root, "ai-profile.yaml"), MAPPING_V2_PROFILE, "utf8");
+  const mappingV2ProfileAi: AiProfile = {
+    ...V3_PROFILE_AI,
+    subagentPolicy: { enabled: true },
+  };
+  const compileResult = compileProfile({ profile: mappingV2ProfileAi });
+  if (!compileResult.ok) {
+    throw new Error("mapping-v2 fixture profile failed to compile");
+  }
+  for (const file of compileResult.files) {
+    const dest = path.join(root, ...file.path.split("/"));
+    await mkdir(path.dirname(dest), { recursive: true });
+    await writeFile(dest, file.bytes);
+  }
+  const lockfile = buildLockfile({
+    profileBytes: MAPPING_V2_PROFILE,
+    templates: compileResult.templates,
+    files: compileResult.files,
+    ...(catalogVersion === undefined ? {} : { catalogVersion }),
+  });
+  await writeFile(
+    path.join(root, "ai-profile.lock"),
+    serializeLockfile(lockfile),
+    "utf8",
+  );
+  return root;
+}
+
 test("upgrade JSON reports a model-policy change for a v3-opted profile whose lock disagrees with today's live catalog", async () => {
   const fresh = liveModelPolicy();
   const architectCodex = fresh.resolutions.find(
@@ -1611,31 +1652,142 @@ test("upgrade --model-policy-strategy retain --json previews an empty resolution
   assert.deepEqual(report.modelPolicyPlan?.resolutions, []);
 });
 
-// Phase 31.5 (I6a, ninth cycle): narrowed from the prior cycle's blanket
-// "every strategy refuses --write" loop, which is no longer true --
-// "adopt --write" on a v3-opted profile now has a real write path (tested
-// separately below). Every OTHER combination still refuses with the exact
-// same unchanged message: "adopt" on a mapping-v2 profile (no real write
-// path for a bulk preset switch to `ai-profile.yaml` yet), and every other
-// strategy on either accepted profile shape.
-test("upgrade --model-policy-strategy --write is refused for every strategy on a mapping-v2 profile, leaving files untouched", async () => {
-  for (const strategy of [
-    "retain",
-    "adopt",
-    "quality-first",
-    "cost-conscious",
-  ] as const) {
-    const root = await createUpgradeRoot(
-      CAPABILITY_CATALOG_VERSION,
-      MAPPING_V2_PROFILE,
-    );
-    const profileBefore = await readFile(
-      path.join(root, "ai-profile.yaml"),
-      "utf8",
-    );
-    const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
-    const output = createOutput();
+// Phase 31.5 (I6a): narrowed twice now -- first from "every strategy refuses"
+// once "adopt --write" on a v3-opted profile got a real write path, and again
+// this cycle now "adopt"/"quality-first"/"cost-conscious" all have real write
+// paths for a mapping-v2 profile too (tested separately below). Only "retain"
+// still refuses on a mapping-v2 profile: it has no prior v3 lock resolution
+// to retain at all.
+test("upgrade --model-policy-strategy retain --write is refused on a mapping-v2 profile, leaving files untouched", async () => {
+  const root = await createUpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    MAPPING_V2_PROFILE,
+  );
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const output = createOutput();
 
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "retain",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /not yet supported/u);
+  const profileAfter = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  assert.equal(profileAfter, profileBefore);
+  assert.equal(lockAfter, lockBefore);
+});
+
+// Phase 31.5 I6a (this cycle): "adopt --write" on a mapping-v2 profile has no
+// current v3 preset to keep, so unlike v3-opted "adopt" (a no-yaml-edit
+// re-resolution), it resolves to `DEFAULT_MODEL_POLICY_PRESET` ("role-aware")
+// and writes `subagentPolicy.preset: role-aware` into `ai-profile.yaml` for
+// the first time, plus a fresh `ai-profile.lock` `modelPolicy` block (which
+// did not exist before), plus the regenerated target files, all atomically.
+test("upgrade --model-policy-strategy adopt --write on a mapping-v2 profile writes subagentPolicy.preset: role-aware AND a fresh ai-profile.lock modelPolicy block AND regenerates target files", async () => {
+  const root = await createMappingV2UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+  );
+
+  const lockBefore = JSON.parse(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+  ) as { modelPolicy?: unknown };
+  assert.equal(lockBefore.modelPolicy, undefined);
+
+  const roleAware = liveModelPolicy();
+  const implementerAfter = roleAware.resolutions.find(
+    (row) => row.client === "codex" && row.role === "implementer",
+  );
+  assert.ok(implementerAfter);
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  // A mapping-v2 write always involves a yaml edit, so the same file-level
+  // preview mechanism the bulk-preset-switch case uses must fire here too --
+  // labelled by the resolved target preset ("role-aware"), the same label the
+  // preview uses for an explicit bulk preset switch (it previews per-preset,
+  // not per-strategy).
+  assert.match(output.stdoutText(), /File changes \(role-aware\):/u);
+  assert.match(output.stdoutText(), /- ai-profile\.yaml \((create|change)\)/u);
+
+  const profileAfter = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  assert.match(
+    profileAfter,
+    /subagentPolicy:\s*\n\s*enabled: true\s*\n\s*preset: role-aware/u,
+  );
+
+  const lockAfter = JSON.parse(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+  ) as {
+    modelPolicy?: {
+      preset?: string;
+      resolutions: Array<{ role: string; client: string; model: string }>;
+    };
+  };
+  assert.equal(lockAfter.modelPolicy?.preset, "role-aware");
+  const lockRow = lockAfter.modelPolicy?.resolutions.find(
+    (row) => row.role === "implementer" && row.client === "codex",
+  );
+  assert.equal(lockRow?.model, implementerAfter.model);
+
+  const codexConfigAfter = await readFile(
+    path.join(root, ".codex", "config.toml"),
+    "utf8",
+  );
+  assert.match(
+    codexConfigAfter,
+    new RegExp(escapeRegExp(implementerAfter.model), "u"),
+  );
+});
+
+// Phase 31.5 I6a (this cycle): "quality-first"/"cost-conscious" `--write` on a
+// mapping-v2 profile resolve to the literal preset (same as the v3-opted bulk
+// case), also written into `ai-profile.yaml` for the first time.
+for (const targetPreset of ["quality-first", "cost-conscious"] as const) {
+  test(`upgrade --model-policy-strategy ${targetPreset} --write on a mapping-v2 profile writes subagentPolicy.preset: ${targetPreset} AND a fresh ai-profile.lock modelPolicy block`, async () => {
+    const root = await createMappingV2UpgradeRootWithGeneratedFiles(
+      CAPABILITY_CATALOG_VERSION,
+    );
+
+    const targetPolicy = freshModelPolicyForPreset(targetPreset);
+    const implementerAfter = targetPolicy.resolutions.find(
+      (row) => row.client === "codex" && row.role === "implementer",
+    );
+    assert.ok(implementerAfter);
+
+    const output = createOutput();
     const code = await runCli(
       [
         "upgrade",
@@ -1643,23 +1795,50 @@ test("upgrade --model-policy-strategy --write is refused for every strategy on a
         root,
         "--non-interactive",
         "--model-policy-strategy",
-        strategy,
+        targetPreset,
         "--write",
       ],
       { io: output },
     );
 
-    assert.equal(code, 1);
-    assert.match(output.stderrText(), /not yet supported/u);
+    assert.equal(code, 0);
+
     const profileAfter = await readFile(
       path.join(root, "ai-profile.yaml"),
       "utf8",
     );
-    const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
-    assert.equal(profileAfter, profileBefore);
-    assert.equal(lockAfter, lockBefore);
-  }
-});
+    assert.match(
+      profileAfter,
+      new RegExp(
+        `subagentPolicy:\\s*\\n\\s*enabled: true\\s*\\n\\s*preset: ${targetPreset}`,
+        "u",
+      ),
+    );
+
+    const lockAfter = JSON.parse(
+      await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    ) as {
+      modelPolicy?: {
+        preset?: string;
+        resolutions: Array<{ role: string; client: string; model: string }>;
+      };
+    };
+    assert.equal(lockAfter.modelPolicy?.preset, targetPreset);
+    const lockRow = lockAfter.modelPolicy?.resolutions.find(
+      (row) => row.role === "implementer" && row.client === "codex",
+    );
+    assert.equal(lockRow?.model, implementerAfter.model);
+
+    const codexConfigAfter = await readFile(
+      path.join(root, ".codex", "config.toml"),
+      "utf8",
+    );
+    assert.match(
+      codexConfigAfter,
+      new RegExp(escapeRegExp(implementerAfter.model), "u"),
+    );
+  });
+}
 
 // Phase 31.5 I6a (this cycle): "quality-first"/"cost-conscious" `--write` on a
 // v3-opted profile now have real write paths too (tested separately below,

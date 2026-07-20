@@ -617,6 +617,30 @@ function isEnabledMappingV2Policy(
   return policy?.enabled === true && policy.preset === undefined;
 }
 
+/**
+ * The preset `runModelPolicyWrite` should write into `ai-profile.yaml` for
+ * an "adopt"/"quality-first"/"cost-conscious" `--write`, or `undefined` when
+ * no edit is needed at all.
+ *
+ * - A v3-opted profile's "adopt" keeps its current preset and needs no edit
+ *   (`bulkPreset` is already `undefined` for "adopt"; only "quality-first"/
+ *   "cost-conscious" set it).
+ * - A mapping-v2 profile (Phase 31.5 I6a, this cycle) has no current v3
+ *   preset to keep at all -- even "adopt" resolves to a concrete preset
+ *   (`DEFAULT_MODEL_POLICY_PRESET`, "role-aware") that must be written into
+ *   `subagentPolicy.preset` for the first time, so mapping-v2 "adopt" needs
+ *   the same edit path a bulk preset switch does.
+ */
+function resolveModelPolicyWriteTargetPreset(
+  subagentPolicy: AiProfileSubagentPolicy | undefined,
+  bulkPreset: "quality-first" | "cost-conscious" | undefined,
+): ModelPolicyPreset | undefined {
+  if (!isEnabledMappingV2Policy(subagentPolicy)) {
+    return bulkPreset;
+  }
+  return bulkPreset ?? DEFAULT_MODEL_POLICY_PRESET;
+}
+
 async function runUpgrade(
   args: string[],
   cwd: string,
@@ -777,13 +801,9 @@ async function runUpgrade(
   // regenerated `ai-profile.lock`, and every regenerated target file must all
   // land in ONE atomic write plan.
   //
-  // Every OTHER combination ("retain" on a v3-opted profile, since it has no
-  // guaranteed `modelPolicyPlan.block` and isn't a bulk preset switch; or any
-  // strategy on a mapping-v2 profile, since adopting v3 there would need to
-  // ADD `subagentPolicy.preset` via a different YAML shape than
-  // `planSubagentPolicyPresetEdit` assumes exists, which is not wired yet)
-  // still has no real write path and keeps refusing with the original
-  // message.
+  // Every OTHER combination ("retain" on either profile shape, since it has
+  // no guaranteed `modelPolicyPlan.block` and isn't a preset switch) still
+  // has no real write path and keeps refusing with the original message.
   if (parsed.modelPolicyStrategy !== undefined && parsed.write) {
     const isBulkPresetSwitch =
       parsed.modelPolicyStrategy === "quality-first" ||
@@ -794,10 +814,16 @@ async function runUpgrade(
     const bulkPreset = isBulkPresetSwitch
       ? (parsed.modelPolicyStrategy as "quality-first" | "cost-conscious")
       : undefined;
+    const isAdopt = parsed.modelPolicyStrategy === "adopt";
     if (
-      (parsed.modelPolicyStrategy === "adopt" || isBulkPresetSwitch) &&
-      hasV3ModelPreset(subagentPolicy)
+      (isAdopt || isBulkPresetSwitch) &&
+      (hasV3ModelPreset(subagentPolicy) ||
+        isEnabledMappingV2Policy(subagentPolicy))
     ) {
+      const targetPreset = resolveModelPolicyWriteTargetPreset(
+        subagentPolicy,
+        bulkPreset,
+      );
       // Explicit `--model-policy-strategy <strategy> --write` is a two-flag
       // scripted write (the same explicit-intent shape as the existing
       // capability-catalog `--write --adopt-recommended` combo, which also
@@ -823,13 +849,13 @@ async function runUpgrade(
         profile: profileResult.profile,
         modelPolicyPlan: modelPolicyPlan!,
         existingUpgrade: lockfileView?.upgrade,
-        targetPreset: bulkPreset,
+        targetPreset,
         modelPolicyChanges,
         modelPolicyLegacyChanges,
       });
     }
     io.stderr(
-      '--write with --model-policy-strategy is not yet supported for this combination: "retain" on a v3-opted profile, and every strategy on a mapping-v2 profile (adopting v3 there would also need to add subagentPolicy.preset to ai-profile.yaml, which is not wired yet), still require preview-then-manual-edit. Preview with --model-policy-strategy (without --write), then run `agent-profile compile --write` once ai-profile.yaml reflects the change you want.\n',
+      '--write with --model-policy-strategy is not yet supported for "retain": it has no prior model-policy resolution to retain (a v3-opted profile has no guaranteed lock block to compare against on first adoption, and a mapping-v2 profile has no v3 lock at all). Preview with --model-policy-strategy (without --write), then run `agent-profile compile --write` once ai-profile.yaml reflects the change you want.\n',
     );
     return 1;
   }
@@ -4854,15 +4880,15 @@ Commands:
             policy would compare and resolve under that bulk strategy
             (old/new model, effort, capability status, alternatives, and
             lifecycle). Combined with --write, "adopt", "quality-first", and
-            "cost-conscious" on a v3-opted profile write it for real --
-            "adopt" regenerates ai-profile.lock and every affected
-            Codex/Claude target file together so they never disagree;
-            "quality-first"/"cost-conscious" additionally edit
-            ai-profile.yaml's own subagentPolicy.preset first, atomically with
-            the same lock/target-file regeneration. "retain" on a v3-opted
-            profile, and every strategy on a mapping-v2 profile (adopting v3
-            there would also need to ADD subagentPolicy.preset), still refuse
-            --write.
+            "cost-conscious" write it for real on BOTH profile shapes --
+            "adopt" on a v3-opted profile regenerates ai-profile.lock and
+            every affected Codex/Claude target file together so they never
+            disagree; "quality-first"/"cost-conscious" (and "adopt" on an
+            enabled mapping-v2 profile, which has no current preset to keep)
+            additionally edit ai-profile.yaml's own subagentPolicy.preset
+            first, atomically with the same lock/target-file regeneration.
+            "retain" still refuses --write on either profile shape (no prior
+            resolution to retain).
   configure Change or reconcile the agent control posture (interactive).
             Shows the current posture, what each client actually does, and a
             preview before anything is written. The profile, generated files,

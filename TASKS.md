@@ -435,6 +435,44 @@ findings resolved as GitHub review threads. State stays `ready`, not
 adopting-v3 writes, "custom exact" strategy, interactive-UI triggering,
 Tabnine reconciliation deferred to I6d).
 
+I6a twelfth RED-first cycle completed 2026-07-20, closing the last disclosed
+write-path gap from prior cycles: `agent-profile upgrade
+--model-policy-strategy adopt|quality-first|cost-conscious --write` now
+writes for real on an enabled mapping-v2 profile too (`subagentPolicy.enabled
+=== true && subagentPolicy.preset === undefined`), not just a v3-opted one.
+The refusal message from cycle 11 had claimed mapping-v2 needed a new YAML
+shape `planSubagentPolicyPresetEdit` didn't support - that claim was stale;
+the helper already documented and handled "present-enabled-no-preset
+(mapping-v2)" as one of its four starting shapes from cycle 10. The only
+real gap was CLI wiring plus one semantic wrinkle: a v3-opted profile's
+"adopt" keeps its current preset (no `ai-profile.yaml` edit needed), but a
+mapping-v2 profile has no current v3 preset to keep at all, so even
+"adopt" there resolves to a concrete preset (`DEFAULT_MODEL_POLICY_PRESET`,
+"role-aware") that must be written for the first time - the same edit path
+a bulk preset switch already used. A new `resolveModelPolicyWriteTargetPreset`
+helper (extracted per code-quality review, replacing an initial
+nested-ternary inline expression flagged as too dense to read without its
+own six-line comment) resolves this per profile shape; `runModelPolicyWrite`
+itself needed zero internal changes, confirmed by both implementation and
+spec review by tracing that `planModelPolicyUpgrade` never returns an
+undefined block for adopt/quality-first/cost-conscious (only "retain" can),
+so the function's existing invariant-check throw can never trip for a
+mapping-v2-sourced call. "Retain" still refuses on either profile shape (no
+prior resolution to retain - unchanged from every earlier cycle). Spec
+review passed COMPLIANT (traced the "zero internal changes" claim, the
+`bulkPreset ?? DEFAULT_MODEL_POLICY_PRESET` fallback boundary, and that the
+already-shipped v3-opted write paths are provably bit-for-bit unchanged).
+Code-quality review found ISSUES_FOUND, one Important item fixed (the dense
+nested-ternary `targetPreset` expression extracted into the named helper
+above, with its explanatory comment moved onto the helper's own doc
+comment). Tests: `packages/core` 213/212, `packages/compiler` 312/311,
+`apps/cli` 548/544, all 0 failures; clean typecheck (including
+`tsconfig.test.json`) on all three; `verify:pack` and golden regeneration
+both clean. State stays `ready`, not `done` - only the "custom exact"
+strategy (disclosed, pre-existing non-goal), interactive-UI triggering of
+any `--write` path, and Tabnine reconciliation (deferred to I6d) remain
+open against the brief's acceptance criteria.
+
 I6a eleventh RED-first cycle completed 2026-07-20, also a disclosed partial
 slice: wired `planSubagentPolicyPresetEdit` (built but unwired in cycle 10)
 into the CLI, so `agent-profile upgrade --model-policy-strategy
