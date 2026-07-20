@@ -235,6 +235,40 @@ Also found and fixed 2026-07-19, as a separate PR unrelated to I6 itself:
 so every lockfile `configure` wrote silently erased its `modelPolicy` block.
 Pre-existing bug, surfaced while reviewing I6's disclosed gaps.
 
+I6a tenth RED-first cycle completed 2026-07-20, also a disclosed partial
+slice: added `planSubagentPolicyPresetEdit`
+(`apps/cli/src/upgrade-model-policy-editor.ts`), a pure surgical YAML-edit
+helper that sets `subagentPolicy.enabled: true` and `subagentPolicy.preset:
+<preset>` in a profile's source without re-rendering the whole document -
+the still-missing piece blocking both quality-first/cost-conscious writes
+(v3-opted) and mapping-v2-adopting-v3 writes, since both need to edit
+`ai-profile.yaml` itself, not just the lock. Reuses `configure.ts`'s
+existing "surgical profile editing" byte-splice engine
+(`editScalarUnder`, newly exported, purely additive, no behavior change)
+twice in sequence (enabled, then preset) with a re-parse in between, since
+`editScalarUnder` reads byte offsets from whatever source string it's
+handed. Handles all four starting shapes: `subagentPolicy` absent,
+present-disabled, present-enabled-no-preset (mapping-v2), and
+present-enabled-different-preset (bulk switch) - idempotent-safe when
+`enabled` is already `true`. No CLI wiring yet - a later cycle wires this
+into the actual write paths. Spec review passed COMPLIANT. Code-quality
+review found ISSUES_FOUND, two non-blocking-but-fixed items: (1) the
+re-parse-between-edits step had no comment explaining why reusing the
+original document/source pair for the second edit would silently corrupt
+output at stale byte offsets - added; (2) a test asserting "only the
+preset scalar's bytes changed" used a `\s+`-tolerant regex that wouldn't
+actually catch a reflow/reindent bug - replaced with an exact
+byte-equality assertion against the original fixture with only the preset
+substring swapped. Re-ran `npm test`/`npm run check` for `apps/cli` (527
+tests/523 pass/0 fail/4 unrelated skips) after both fixes: clean. Still
+left for later I6a cycles: wiring `planSubagentPolicyPresetEdit` into the
+actual `--write` paths for quality-first/cost-conscious (v3-opted) and
+mapping-v2-adopt (both also still need the atomic multi-file write
+treatment cycle 9 already built for "adopt", extended to also touch
+`ai-profile.yaml`), the "custom exact" strategy (disclosed, pre-existing
+non-goal), and the disclosed lifecycle-comparison gap from cycle 1. State
+stays `ready`, not `done`.
+
 I6a ninth RED-first cycle completed 2026-07-20, also a disclosed partial
 slice, PLUS a fix pass responding to a Codex PR review (12 findings across
 two rounds; see PR #125's resolved review threads for full detail):

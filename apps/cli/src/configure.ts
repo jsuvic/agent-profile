@@ -1372,6 +1372,8 @@ function editTarget(edit: ProfileEdit): {
   }
 }
 
+export { editScalarUnder };
+
 export function editProfile(
   source: string,
   edit: ProfileEdit,
