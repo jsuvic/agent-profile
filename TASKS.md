@@ -235,6 +235,42 @@ Also found and fixed 2026-07-19, as a separate PR unrelated to I6 itself:
 so every lockfile `configure` wrote silently erased its `modelPolicy` block.
 Pre-existing bug, surfaced while reviewing I6's disclosed gaps.
 
+I6a PR review fix round (2026-07-20, PR #125) addressed 8 new Codex bot
+findings (2 P1, 6 P2) on the accumulated cycles 1-9 work, on top of the two
+earlier fix rounds already noted above: (1) `adopt --write` now prints the
+old/new plan before applying it (the write branch previously bypassed
+`printModelPolicyTextReport` entirely); (2) `adopt --write` now refuses when
+an affected generated file is manual-owned, since `planRegionAwareWrites`
+correctly leaves its bytes untouched but the lock would otherwise still
+claim the fresh resolution was adopted; (3) a new
+`readExistingTabnineModelId` helper preserves an existing, correct,
+generated-owned Tabnine settings entry during an unrelated model-policy
+adopt, instead of silently dropping it from the rewritten lock; (4) adopt-
+write's success report now derives `wrote`/`modelPolicyWrote` from the
+actual write-plan counts instead of unconditionally claiming a mutation
+occurred; (5) `compareModelPolicyUpgrade`'s `changed` predicate now also
+fires on a `source` difference (e.g. catalog -> explicit-override with an
+otherwise-identical row); (6) `old.lifecycle` is now derived by looking up
+the locked model against the same live catalog constants `fresh.lifecycle`
+uses (not a lockfile schema change - the disclosed gap from cycle 1 is
+resolved this way rather than by adding a stored field); (7) the mapping-v2
+comparison's `legacy` side gained `alternatives`/`lifecycle`/
+`capabilityStatus` as honest fixed constants (`[]`/`"unrated"`/`"advisory"`)
+reflecting that mapping-v2 structurally has none of these concepts, rather
+than omitting them; (8) `--help` text now documents the `adopt --write`
+exception instead of claiming every model-policy write is refused. Both
+text formatters were enriched to render the new fields as real old->new
+comparisons. Spec review passed COMPLIANT and code-quality review passed
+ACCEPTABLE (one non-blocking Important note - an overly verbose type-guard
+chain in `readExistingTabnineModelId` - simplified before closing). Tests:
+`packages/core` 213/212, `packages/compiler` 307/306, `apps/cli` 530/526,
+all 0 failures; clean typecheck on all three; `verify:pack` and golden
+regeneration both clean. All 11 findings from the first two review rounds
+plus these 8 (except the disclosed "custom exact" non-goal) resolved as
+GitHub review threads. State stays `ready`, not `done` - the underlying
+brief acceptance criteria (custom-exact, mapping-v2/quality-first/
+cost-conscious writes, interactive UI) remain open for later cycles.
+
 I6a tenth RED-first cycle completed 2026-07-20, also a disclosed partial
 slice: added `planSubagentPolicyPresetEdit`
 (`apps/cli/src/upgrade-model-policy-editor.ts`), a pure surgical YAML-edit

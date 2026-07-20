@@ -118,6 +118,97 @@ test("a role/client whose locked row differs only by catalogVersion is still rep
   assert.match(row.reason, /catalog version/i);
 });
 
+test("a role/client whose locked row differs only by resolution source is still reported as changed with a source reason", () => {
+  // A profile adding an explicit exact override that happens to equal the
+  // catalog-selected model/effort still changes the row's provenance
+  // (source: "catalog" -> "explicit-override"); Adopt would rewrite the
+  // lock to record that, so it must not be silently filtered out as
+  // unchanged just because model/effort/status/alternatives/catalogVersion
+  // all still match (PR review finding).
+  const freshRows = compareModelPolicyUpgrade(undefined, "role-aware");
+  const freshArchitectCodex = freshRows.find(
+    (r) => r.role === "architect" && r.client === "codex",
+  );
+  assert.ok(freshArchitectCodex);
+  assert.equal(freshArchitectCodex.fresh.source, "catalog");
+
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: freshArchitectCodex.fresh.catalogVersion,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "codex",
+        role: "architect",
+        model: freshArchitectCodex.fresh.model as string,
+        effort: freshArchitectCodex.fresh.effort,
+        effortStatus: freshArchitectCodex.fresh.capabilityStatus,
+        alternatives: [...freshArchitectCodex.fresh.alternatives],
+        source: "explicit-override",
+        capabilityStatus: freshArchitectCodex.fresh.capabilityStatus,
+        catalogVersion: freshArchitectCodex.fresh.catalogVersion,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyUpgrade(previous, "role-aware");
+  const row = rows.find((r) => r.role === "architect" && r.client === "codex");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.match(row.reason, /source/i);
+});
+
+test("old.lifecycle is derived from the current catalog: a still-catalogued locked model reports its real lifecycle, an uncatalogued one reports unrated", () => {
+  const freshRows = compareModelPolicyUpgrade(undefined, "role-aware");
+  const freshArchitectCodex = freshRows.find(
+    (r) => r.role === "architect" && r.client === "codex",
+  );
+  assert.ok(freshArchitectCodex);
+
+  // Still-catalogued case: the locked model IS the current fresh model, so
+  // its derived lifecycle must equal fresh's own lifecycle.
+  const stillCatalogued: LockModelPolicyV2 = {
+    catalogVersion: freshArchitectCodex.fresh.catalogVersion,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "codex",
+        role: "architect",
+        model: freshArchitectCodex.fresh.model as string,
+        effort: "high",
+        effortStatus: "advisory",
+        alternatives: [],
+        source: "catalog",
+        capabilityStatus: "advisory",
+        catalogVersion: freshArchitectCodex.fresh.catalogVersion,
+      },
+    ],
+  };
+  const stillCataloguedRow = compareModelPolicyUpgrade(
+    stillCatalogued,
+    "role-aware",
+  ).find((r) => r.role === "architect" && r.client === "codex");
+  assert.ok(stillCataloguedRow);
+  assert.equal(stillCataloguedRow.old?.lifecycle, freshArchitectCodex.fresh.lifecycle);
+
+  // Uncatalogued case: a model id that has never existed in the catalog.
+  const uncatalogued: LockModelPolicyV2 = {
+    ...stillCatalogued,
+    resolutions: [
+      {
+        ...stillCatalogued.resolutions[0]!,
+        model: "gpt-5.6-sol-retired-and-removed",
+      },
+    ],
+  };
+  const uncataloguedRow = compareModelPolicyUpgrade(
+    uncatalogued,
+    "role-aware",
+  ).find((r) => r.role === "architect" && r.client === "codex");
+  assert.ok(uncataloguedRow);
+  assert.equal(uncataloguedRow.old?.lifecycle, "unrated");
+});
+
 test("a role/client with no prior locked row at all is reported as changed with a no-prior-lock reason", () => {
   const rows = compareModelPolicyUpgrade(undefined, "role-aware");
   const row = rows.find((r) => r.role === "architect" && r.client === "codex");

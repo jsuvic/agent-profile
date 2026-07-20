@@ -54,6 +54,12 @@ test("a role with a v2 equivalent is a genuine passthrough of independently-comp
   assert.deepEqual(row.legacy, {
     model: expectedLegacy.codex.model,
     effort: expectedLegacy.codex.reasoningEffort,
+    // mapping-v2 has no alternatives/lifecycle concept and never performs a
+    // literal per-role config write, so these are fixed, honest constants,
+    // not derived per-row (see the type's own doc comments).
+    alternatives: [],
+    lifecycle: "unrated",
+    capabilityStatus: "advisory",
   });
   assert.deepEqual(row.fresh, {
     model: expectedFreshRow.codex.model,

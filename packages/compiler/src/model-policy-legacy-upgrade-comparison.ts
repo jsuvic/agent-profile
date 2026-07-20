@@ -39,7 +39,23 @@ export type ModelPolicyLegacyUpgradeComparisonRow = Readonly<{
   client: ModelPolicyTargetClientId;
   changed: boolean;
   legacy:
-    | Readonly<{ model: string; effort: ModelPolicyTargetEffort }>
+    | Readonly<{
+        model: string;
+        effort: ModelPolicyTargetEffort;
+        /** Always empty: mapping-v2's `resolveRoleMapping` has no
+         *  alternatives concept at all (one pinned model per capability
+         *  tier, no ordered fallback list). */
+        alternatives: readonly string[];
+        /** Always `"unrated"`: mapping-v2 never tracked catalog lifecycle
+         *  status for its pinned models. */
+        lifecycle: "unrated";
+        /** Always `"advisory"`: mapping-v2 never writes a role-specific
+         *  exact model into any target config file the way v3's primary-role
+         *  Codex write does -- every legacy row is guidance-table-only
+         *  (AGENTS.md/CLAUDE.md), the same semantics v3's own `skillStatus`
+         *  guidance surfaces already use. */
+        capabilityStatus: ModelPolicyCapabilityStatus;
+      }>
     | undefined;
   fresh: Readonly<{
     model: string | undefined;
@@ -51,6 +67,9 @@ export type ModelPolicyLegacyUpgradeComparisonRow = Readonly<{
   }>;
   reason: string | undefined;
 }>;
+
+const LEGACY_LIFECYCLE = "unrated" as const;
+const LEGACY_CAPABILITY_STATUS: ModelPolicyCapabilityStatus = "advisory";
 
 const SUBAGENT_POLICY_ROLE_ID_SET: ReadonlySet<string> = new Set(
   SUBAGENT_POLICY_ROLE_IDS,
@@ -66,21 +85,22 @@ function legacyClientResolution(
   role: SubagentPolicyRoleId,
   effective: EffectiveSubagentPolicyRole,
   client: ModelPolicyTargetClientId,
-): Readonly<{ model: string; effort: ModelPolicyTargetEffort }> {
+): NonNullable<ModelPolicyLegacyUpgradeComparisonRow["legacy"]> {
   const resolved = resolveRoleMapping(
     effective.capability,
     effective.effort,
     effective.overrides,
   );
-  return client === "codex"
-    ? Object.freeze({
-        model: resolved.codex.model,
-        effort: resolved.codex.reasoningEffort,
-      })
-    : Object.freeze({
-        model: resolved.claude.model,
-        effort: resolved.claude.effort,
-      });
+  const clientResolution =
+    client === "codex"
+      ? { model: resolved.codex.model, effort: resolved.codex.reasoningEffort }
+      : { model: resolved.claude.model, effort: resolved.claude.effort };
+  return Object.freeze({
+    ...clientResolution,
+    alternatives: Object.freeze([]),
+    lifecycle: LEGACY_LIFECYCLE,
+    capabilityStatus: LEGACY_CAPABILITY_STATUS,
+  });
 }
 
 export function compareModelPolicyUpgradeFromLegacy(

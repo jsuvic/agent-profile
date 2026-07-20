@@ -97,6 +97,7 @@ import {
   planCompileDryRun,
   planRegionAwareWrites,
   resolveTabnineModelSettings,
+  TABNINE_SETTINGS_PATH,
 } from "./compile-plan.js";
 import type { DispatcherPrompts } from "./dispatch-clack.js";
 import {
@@ -759,6 +760,22 @@ async function runUpgrade(
   // real write path and keeps refusing with the original message.
   if (parsed.modelPolicyStrategy !== undefined && parsed.write) {
     if (parsed.modelPolicyStrategy === "adopt" && hasV3ModelPreset(subagentPolicy)) {
+      // Explicit `--model-policy-strategy adopt --write` is a two-flag
+      // scripted write (the same explicit-intent shape as the existing
+      // capability-catalog `--write --adopt-recommended` combo, which also
+      // prints its report/diff then writes immediately with no further
+      // interactive confirmation). Print the exact old/new plan before
+      // applying it, in every non-JSON invocation, so the command never
+      // mutates the lock and generated files without having shown what it's
+      // about to do first (PR review finding).
+      if (!parsed.json) {
+        printModelPolicyTextReport(
+          io,
+          modelPolicyChanges,
+          modelPolicyPlan,
+          modelPolicyLegacyChanges,
+        );
+      }
       return runModelPolicyAdoptWrite({
         rootDir,
         io,
@@ -1065,9 +1082,42 @@ async function runModelPolicyAdoptWrite(input: {
     return 1;
   }
 
+  // `regionPlan.manualOutputs` correctly leaves a manual-owned output's
+  // BYTES untouched (planRegionAwareWrites classifies ownership before
+  // region-specific branching, so this applies to .codex/config.toml just
+  // as much as AGENTS.md/CLAUDE.md). But leaving the file alone while still
+  // writing the adopted resolution into the lock would make the lock claim
+  // a status (e.g. the primary Codex role's "configured") that the actual
+  // on-disk file never received -- the exact "lock and generated files
+  // disagree" defect this whole write path exists to prevent, just for a
+  // file the region-aware plan correctly chose not to touch (PR review
+  // finding).
+  if (regionPlan.manualOutputs.length > 0) {
+    io.stderr(
+      `Refusing to adopt: the following generated target files are manual-owned, so adopting would leave them on the old resolution while the lock claimed the fresh one:\n${regionPlan.manualOutputs
+        .map((output) => `- ${output.path}`)
+        .join("\n")}\nReconcile ownership first (see \`agent-profile doctor\`), or accept the model-policy change manually.\n`,
+    );
+    return 1;
+  }
+
+  // `resolveTabnineModelSettings` reports `model: undefined` unless a
+  // caller threads through a freshly-chosen exact override (only `init`'s
+  // wizard flow currently does); `planTabnineModelSettingsWrite` treats a
+  // missing model as "advisory" REGARDLESS of ownership, and
+  // `buildCompileWrites` never carries a base Tabnine lock entry forward on
+  // its own (`.tabnine/agent/settings.json` isn't part of `compileResult`'s
+  // templated files). Left alone, an "adopt" that has nothing to do with
+  // Tabnine would silently drop an existing, unrelated, already-correct
+  // generated-owned Tabnine settings entry out of the rewritten lock while
+  // leaving the actual file on disk untouched (PR review finding) -- so
+  // read back the currently-recorded model and re-affirm it, rather than
+  // letting an unrelated model-policy write demote it.
+  const existingTabnineModel = await readExistingTabnineModelId(rootDir);
   const tabnineModelSettings = await resolveTabnineModelSettings(
     rootDir,
     profile,
+    existingTabnineModel,
   );
 
   const { writes } = buildCompileWrites({
@@ -1087,24 +1137,61 @@ async function runModelPolicyAdoptWrite(input: {
     return 1;
   }
 
+  // `applyWritePlan` classifies every action "unchanged" when the current
+  // lock and generated files already match the adopted plan (e.g. re-running
+  // adopt after already adopting it, or the catalog hasn't actually moved) --
+  // `written === 0` in that case, so the report must say nothing was
+  // written, not unconditionally claim a mutation that never happened (PR
+  // review finding).
   const written = plan.counts.create + plan.counts.change;
+  const wrote = written > 0;
   if (json) {
     io.stdout(
       `${JSON.stringify({
         command: "upgrade",
         modelPolicyStrategy: "adopt",
-        modelPolicyWrote: true,
+        modelPolicyWrote: wrote,
         filesWritten: written,
       })}\n`,
     );
-  } else {
+  } else if (wrote) {
     io.stdout(
       `Updated ai-profile.lock and regenerated ${written} target file${
         written === 1 ? "" : "s"
       } (adopt).\n`,
     );
+  } else {
+    io.stdout(
+      "Nothing to adopt: ai-profile.lock and generated target files already match the fresh catalog resolution.\n",
+    );
   }
   return 0;
+}
+
+/**
+ * Best-effort read of the currently-recorded Tabnine exact model id from
+ * `.tabnine/agent/settings.json`'s own `{model:{id:...}}` shape (the same
+ * shape `renderTabnineSettingsBaseline` in the compiler package writes).
+ * Returns `undefined` on anything unexpected (file absent, unreadable,
+ * malformed JSON, wrong shape) rather than throwing -- callers already treat
+ * `undefined` as "no explicit override known this run", the existing safe
+ * default, so a read failure here degrades to that same behavior instead of
+ * failing the whole write.
+ */
+async function readExistingTabnineModelId(
+  rootDir: string,
+): Promise<string | undefined> {
+  try {
+    const bytes = await readOptionalBytes(rootDir, TABNINE_SETTINGS_PATH);
+    if (!bytes) return undefined;
+    const parsed = JSON.parse(Buffer.from(bytes).toString("utf8")) as {
+      model?: { id?: unknown };
+    };
+    const id = parsed.model?.id;
+    return typeof id === "string" ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function getUpgradePrompts(
@@ -1286,18 +1373,19 @@ function formatModelPolicyChangeLine(
     `effort ${row.old?.effort ?? "(none)"} -> ${row.fresh.effort}, ` +
     `status ${row.old?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
     `alternatives [${formatAlternativesList(row.old?.alternatives ?? [])}] -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
-    `lifecycle ${row.fresh.lifecycle} ` +
+    `lifecycle ${row.old?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle} ` +
     `(${row.reason})`
   );
 }
 
 /**
  * Same completeness as `formatModelPolicyChangeLine`, for the mapping-v2
- * comparison shape. `legacy` rows have no capability-status/alternatives
- * concept (mapping-v2 predates both), so those columns only show the fresh
- * v3 side's own values rather than a diff (PR review finding: this
- * formatter previously omitted effort entirely, unlike its v3-opted
- * sibling).
+ * comparison shape. `legacy` rows now carry explicit alternatives/lifecycle/
+ * capabilityStatus values (always empty/"unrated"/"advisory" respectively --
+ * honest constants reflecting that mapping-v2 has none of these concepts,
+ * not derived per-row) instead of omitting them entirely, so old/new is a
+ * real comparison on every column, not just model/effort (PR review
+ * finding).
  */
 function formatModelPolicyLegacyChangeLine(
   row: ModelPolicyLegacyUpgradeComparisonRow,
@@ -1306,9 +1394,9 @@ function formatModelPolicyLegacyChangeLine(
     `- ${row.role} ${row.client}: ` +
     `model ${row.legacy?.model ?? "(none)"} -> ${row.fresh.model}, ` +
     `effort ${row.legacy?.effort ?? "(none)"} -> ${row.fresh.effort}, ` +
-    `status -> ${row.fresh.capabilityStatus}, ` +
-    `alternatives -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
-    `lifecycle ${row.fresh.lifecycle} ` +
+    `status ${row.legacy?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
+    `alternatives [${formatAlternativesList(row.legacy?.alternatives ?? [])}] -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
+    `lifecycle ${row.legacy?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle} ` +
     `(${row.reason})`
   );
 }
@@ -4449,9 +4537,13 @@ Commands:
             previews how a v3-opted or enabled mapping-v2 profile's model
             policy would compare and resolve under that bulk strategy
             (old/new model, effort, capability status, alternatives, and
-            lifecycle). Preview only; combining it with --write is refused
-            until the write path can also regenerate the affected Codex/
-            Claude target files, not just ai-profile.lock.
+            lifecycle). Combined with --write, "adopt" on a v3-opted profile
+            writes it for real -- regenerating ai-profile.lock and every
+            affected Codex/Claude target file together so they never
+            disagree. Every other combination (retain/quality-first/
+            cost-conscious on a v3-opted profile, or any strategy on a
+            mapping-v2 profile) still refuses --write until it can also edit
+            ai-profile.yaml's own subagentPolicy.preset.
   configure Change or reconcile the agent control posture (interactive).
             Shows the current posture, what each client actually does, and a
             preview before anything is written. The profile, generated files,

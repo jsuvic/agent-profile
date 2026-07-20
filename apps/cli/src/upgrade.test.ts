@@ -1185,20 +1185,21 @@ test("upgrade text (non-interactive) prints a mapping-v2-preview model policy ch
   ).filter((row) => row.changed);
   assert.ok(expected.length > 0);
   const row = expected[0]!;
-  // Text-mode rows show every field the row carries (model, effort, fresh
-  // capability status/alternatives/lifecycle), not just model + reason (PR
-  // review finding) -- build the exact expected line the same way the CLI
-  // does rather than a partial regex, so a future formatting regression is
-  // actually caught.
+  // Text-mode rows show every field the row carries -- both `legacy` (now
+  // real alternatives/lifecycle/capabilityStatus constants, not omitted)
+  // and `fresh` -- as an old/new comparison on every column, not just
+  // model/effort (PR review finding) -- build the exact expected line the
+  // same way the CLI does rather than a partial regex, so a future
+  // formatting regression is actually caught.
   const alternativesText = (alternatives: readonly string[]) =>
     alternatives.length > 0 ? alternatives.join(", ") : "none";
   const expectedLine =
     `- ${row.role} ${row.client}: ` +
     `model ${row.legacy?.model ?? "(none)"} -> ${row.fresh.model}, ` +
     `effort ${row.legacy?.effort ?? "(none)"} -> ${row.fresh.effort}, ` +
-    `status -> ${row.fresh.capabilityStatus}, ` +
-    `alternatives -> [${alternativesText(row.fresh.alternatives)}], ` +
-    `lifecycle ${row.fresh.lifecycle} ` +
+    `status ${row.legacy?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
+    `alternatives [${alternativesText(row.legacy?.alternatives ?? [])}] -> [${alternativesText(row.fresh.alternatives)}], ` +
+    `lifecycle ${row.legacy?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle} ` +
     `(${row.reason})`;
   assert.ok(
     output.stdoutText().includes(expectedLine),
@@ -1607,6 +1608,205 @@ test("upgrade --model-policy-strategy adopt --write text mode prints a confirmat
     output.stdoutText(),
     /Updated ai-profile\.lock and regenerated [1-9]\d* target files? \(adopt\)\.\n/u,
   );
+});
+
+test("upgrade --model-policy-strategy adopt --write shows the exact old/new model-policy report before applying it (PR review finding)", async () => {
+  // Before this fix, the write branch returned early without ever calling
+  // printModelPolicyTextReport, so a real interactive/non-interactive
+  // invocation could rewrite the lock and generated files without ever
+  // showing the user what changed first.
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    stale,
+  );
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /model policy plan \(adopt\):/u);
+  assert.match(output.stdoutText(), /architect codex:/u);
+  // The report must come BEFORE the write confirmation, not after or absent.
+  const reportIndex = output.stdoutText().indexOf("model policy plan (adopt):");
+  const confirmIndex = output
+    .stdoutText()
+    .indexOf("Updated ai-profile.lock and regenerated");
+  assert.ok(reportIndex >= 0);
+  assert.ok(confirmIndex >= 0);
+  assert.ok(reportIndex < confirmIndex);
+});
+
+test("upgrade --model-policy-strategy adopt --write reports a no-op adoption as unwritten, not a false mutation (PR review finding)", async () => {
+  // Run adopt --write for real first (establishing a lock+files baseline
+  // produced by THIS exact pipeline, so the second run's "unchanged"
+  // classification isn't sensitive to incidental byte differences between
+  // the fixture's own lock-construction helper and buildCompileWrites's),
+  // then run it again with nothing left to adopt: applyWritePlan must
+  // classify every action "unchanged" the second time, and the report must
+  // say so, not unconditionally claim modelPolicyWrote: true / print the
+  // "Updated..." confirmation.
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    stale,
+  );
+
+  const firstOutput = createOutput();
+  const firstCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: firstOutput },
+  );
+  assert.equal(firstCode, 0);
+  const firstReport = JSON.parse(firstOutput.stdoutText()) as {
+    modelPolicyWrote: boolean;
+    filesWritten: number;
+  };
+  assert.equal(firstReport.modelPolicyWrote, true);
+  assert.ok(firstReport.filesWritten > 0);
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyWrote: boolean;
+    filesWritten: number;
+  };
+  assert.equal(report.filesWritten, 0);
+  assert.equal(report.modelPolicyWrote, false);
+
+  const textOutput = createOutput();
+  const textCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: textOutput },
+  );
+  assert.equal(textCode, 0);
+  assert.doesNotMatch(textOutput.stdoutText(), /Updated ai-profile\.lock/u);
+  assert.match(textOutput.stdoutText(), /Nothing to adopt/u);
+});
+
+test("upgrade --model-policy-strategy adopt --write refuses when an affected target file (.codex/config.toml) is manual-owned, leaving every file byte-unchanged (PR review finding)", async () => {
+  // planRegionAwareWrites correctly leaves a manual-owned file's BYTES
+  // untouched, but without this refusal the LOCK would still be rewritten
+  // claiming the fresh resolution was adopted -- even though the actual
+  // manual-owned file on disk never received it.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const lockPath = path.join(root, "ai-profile.lock");
+  const lockText = await readFile(lockPath, "utf8");
+  const lockJson = JSON.parse(lockText) as {
+    outputs: Array<{ path: string; [key: string]: unknown }>;
+  };
+  const codexConfigIndex = lockJson.outputs.findIndex(
+    (output) => output.path === ".codex/config.toml",
+  );
+  assert.ok(codexConfigIndex >= 0);
+  // A manual-owned LockOutputV2 is a distinct shape (no sha256; target and
+  // templateId are both the literal "manual"), not a generated-owned entry
+  // with its ownership field flipped.
+  lockJson.outputs[codexConfigIndex] = {
+    path: ".codex/config.toml",
+    target: "manual",
+    templateId: "manual",
+    ownership: "manual-owned",
+  };
+  await writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`, "utf8");
+
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(lockPath, "utf8");
+  const codexConfigPath = path.join(root, ".codex", "config.toml");
+  const codexBefore = await readFile(codexConfigPath, "utf8");
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /manual-owned/u);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(await readFile(lockPath, "utf8"), lockBefore);
+  assert.equal(await readFile(codexConfigPath, "utf8"), codexBefore);
 });
 
 test("upgrade --model-policy-strategy adopt --write refuses cleanly when a generated target file has drifted from the lock, leaving every file byte-unchanged", async () => {

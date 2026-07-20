@@ -14,10 +14,13 @@ import {
   type ModelCatalogLifecycleStatus,
   type ModelPolicyCapabilityStatus,
   type ModelPolicyPreset,
+  type ModelPolicyResolutionSource,
 } from "@agent-profile/core";
 
 import {
   buildModelPolicyTargetTable,
+  CLAUDE_MODEL_POLICY_CATALOG,
+  CODEX_MODEL_POLICY_CATALOG,
   MODEL_POLICY_PRIMARY_ROLE,
   type ModelPolicyRoleOverrides,
   type ModelPolicyTargetClientId,
@@ -39,7 +42,9 @@ export type ModelPolicyUpgradeComparisonRow = Readonly<{
         model: string;
         effort: ModelPolicyTargetEffort | undefined;
         alternatives: readonly string[];
+        lifecycle: ModelCatalogLifecycleStatus | "unrated";
         capabilityStatus: ModelPolicyCapabilityStatus;
+        source: ModelPolicyResolutionSource;
         catalogVersion: number;
       }>
     | undefined;
@@ -49,10 +54,30 @@ export type ModelPolicyUpgradeComparisonRow = Readonly<{
     alternatives: readonly string[];
     lifecycle: ModelCatalogLifecycleStatus | "unrated";
     capabilityStatus: ModelPolicyCapabilityStatus;
+    source: ModelPolicyResolutionSource;
     catalogVersion: number;
   }>;
   reason: string | undefined;
 }>;
+
+/**
+ * The locked row's own record has no `lifecycle` field (the lockfile schema
+ * never persisted it), so `old.lifecycle` is derived by looking up the
+ * locked model's id against the SAME live catalog constants `fresh` was
+ * computed from: if the model still exists there, its current lifecycle
+ * status applies; if it's since been removed from the catalog entirely (or
+ * the row's provenance was an uncatalogued explicit override), `"unrated"`
+ * -- the identical convention `fresh.lifecycle` already uses for an
+ * uncatalogued model (PR review finding).
+ */
+function lockedModelLifecycle(
+  client: ModelPolicyTargetClientId,
+  model: string,
+): ModelCatalogLifecycleStatus | "unrated" {
+  const catalog =
+    client === "codex" ? CODEX_MODEL_POLICY_CATALOG : CLAUDE_MODEL_POLICY_CATALOG;
+  return catalog.find((entry) => entry.id === model)?.status ?? "unrated";
+}
 
 /**
  * Authoritative capability status for a fresh row's client resolution,
@@ -120,6 +145,7 @@ export function compareModelPolicyUpgrade(
         alternatives: freshResolution.alternatives,
         lifecycle: freshResolution.lifecycle,
         capabilityStatus: freshCapability,
+        source: freshResolution.source,
         catalogVersion: freshResolution.catalogVersion,
       });
 
@@ -131,7 +157,9 @@ export function compareModelPolicyUpgrade(
               model: oldRow.model,
               effort: oldRow.effort,
               alternatives: oldRow.alternatives,
+              lifecycle: lockedModelLifecycle(client, oldRow.model),
               capabilityStatus: oldRow.capabilityStatus,
+              source: oldRow.source,
               catalogVersion: oldRow.catalogVersion,
             });
 
@@ -153,6 +181,9 @@ export function compareModelPolicyUpgrade(
         }
         if (old.catalogVersion !== fresh.catalogVersion) {
           reasons.push("catalog version changed");
+        }
+        if (old.source !== fresh.source) {
+          reasons.push("resolution source changed");
         }
       }
 
