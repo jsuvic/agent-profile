@@ -164,6 +164,12 @@ export type CliOptions = {
    * the interactive init model-probe step so tests never spawn a real client
    * process. Production callers omit this and get the real Node runner. */
   probeRunner?: ModelProbeProcessRunner;
+  /** Test-only seam (Phase 31.5 I6b): overrides the `--check-for-updates`
+   * registry request's abort timeout so tests can prove the timeout
+   * mechanism itself terminates a hung request without waiting out the real
+   * default duration. Production callers omit this and get
+   * `checkForPackageUpdate`'s own default. */
+  updateCheckTimeoutMs?: number;
 };
 
 export type UpgradeStrategy = "keep" | "adopt-recommended" | "customize";
@@ -478,6 +484,9 @@ export async function runCli(
         ...(options.nonInteractive !== undefined
           ? { nonInteractive: options.nonInteractive }
           : {}),
+        ...(options.updateCheckTimeoutMs !== undefined
+          ? { updateCheckTimeoutMs: options.updateCheckTimeoutMs }
+          : {}),
       });
     case "configure":
       return runConfigure(rest, cwd, io, {
@@ -602,6 +611,10 @@ async function runConfigure(
 type RunUpgradeOptions = {
   prompts?: UpgradePrompts;
   nonInteractive?: boolean;
+  /** Test-only seam (Phase 31.5 I6b): overrides the `--check-for-updates`
+   * registry request's abort timeout. Production callers omit this and get
+   * `checkForPackageUpdate`'s own default. */
+  updateCheckTimeoutMs?: number;
 };
 
 /**
@@ -674,13 +687,19 @@ async function runUpgrade(
   // check. Declining (the default) performs zero network access -- this
   // block is only entered when `--check-for-updates` was passed. The check
   // never installs or downloads anything; it only reports and renders
-  // manual update guidance. JSON-mode integration is deferred (see TASKS.md)
-  // so this text-only report never breaks `upgrade --json`'s one-clean-line
+  // manual update guidance. `parseUpgradeArgs` already rejects
+  // `--check-for-updates` combined with `--json` outright (rather than
+  // silently no-oping it), so by the time we get here `parsed.json` is
+  // guaranteed false whenever `parsed.checkForUpdates` is true -- this
+  // text-only report can never collide with `upgrade --json`'s one-clean-line
   // output contract.
-  if (parsed.checkForUpdates && !parsed.json) {
+  if (parsed.checkForUpdates) {
     const updateResult = await checkForPackageUpdate({
       packageName: UPDATE_CHECK_PACKAGE_NAME,
       currentVersion: CLI_VERSION,
+      ...(options.updateCheckTimeoutMs !== undefined
+        ? { timeoutMs: options.updateCheckTimeoutMs }
+        : {}),
     });
     io.stdout(formatUpdateCheckMessage(updateResult));
   }
@@ -3869,6 +3888,13 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
         return { ok: false, message: `Unknown option: ${arg ?? ""}` };
     }
   }
+  if (checkForUpdates && json) {
+    return {
+      ok: false,
+      message:
+        "--check-for-updates cannot be combined with --json; the update check's text-only report would break --json's single clean JSON line contract. Run them as two separate invocations instead.",
+    };
+  }
   return {
     ok: true,
     root,
@@ -5398,7 +5424,9 @@ Commands:
             whether a newer @agent-profile/cli is available, with manual
             update guidance (it never installs, downloads, or writes
             anything). Off by default: declining performs zero network
-            access. Ignored in --json mode in this phase.
+            access. Cannot be combined with --json (rejected outright, since
+            its text-only report would break --json's single clean line
+            contract); run them as separate invocations.
   configure Change or reconcile the agent control posture (interactive).
             Shows the current posture, what each client actually does, and a
             preview before anything is written. The profile, generated files,

@@ -273,6 +273,126 @@ test("upgrade --check-for-updates reports current version when registry matches 
   assert.match(output.stdoutText(), /is up to date/u);
 });
 
+test("upgrade --check-for-updates degrades to 'could not check' when the registry response is malformed", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("not json", { status: 200 })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+});
+
+test("upgrade --check-for-updates degrades to 'could not check' when the fetch itself throws", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("network is down");
+  }) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+  assert.match(output.stdoutText(), /network is down/u);
+});
+
+test("upgrade --check-for-updates aborts a hung registry request once the timeout fires, rather than hanging forever", async () => {
+  // Unlike the "fetch itself throws" test above (which only proves the
+  // generic catch-block degrades ANY rejected fetch promise to "unknown"),
+  // this proves the AbortController/timeout mechanism itself is what
+  // terminates a genuinely hung request: the stub never resolves or rejects
+  // on its own -- it only rejects when the signal it was given aborts,
+  // mirroring real `fetch` abort semantics.
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  let observedSignal: AbortSignal | undefined;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    observedSignal = init?.signal ?? undefined;
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    });
+  }) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output, updateCheckTimeoutMs: 10 },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.ok(observedSignal, "expected fetch to receive an AbortSignal");
+  assert.equal(observedSignal?.aborted, true);
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+});
+
+test("upgrade --check-for-updates reports the installed version is newer than the registry's (older status)", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ version: "0.0.1" }), {
+      status: 200,
+    })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(
+    output.stdoutText(),
+    /current version \(.+\) is newer than the registry's latest \(0\.0\.1\)/u,
+  );
+});
+
+test("upgrade rejects --check-for-updates combined with --json instead of silently ignoring it", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(
+      ["upgrade", "--root", root, "--check-for-updates", "--json"],
+      { io: output },
+    ),
+  );
+
+  assert.equal(code, 2);
+  assert.match(
+    output.stderrText(),
+    /--check-for-updates cannot be combined with --json/u,
+  );
+});
+
 test("upgrade JSON remains one clean machine-readable record in report and write modes", async () => {
   for (const args of [
     ["--json"],
