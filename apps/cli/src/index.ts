@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   applyWritePlan,
+  applyWritePlanAtomic,
   buildPhase14ImportReport,
   compareModelPolicyUpgrade,
   compareModelPolicyUpgradeFromLegacy,
@@ -1135,6 +1136,101 @@ const MODEL_POLICY_BEARING_PATHS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * `regionPlan.manualOutputs` correctly leaves a manual-owned output's BYTES
+ * untouched (`planRegionAwareWrites` classifies ownership before
+ * region-specific branching, so this applies to `.codex/config.toml` just
+ * as much as `AGENTS.md`/`CLAUDE.md`). Leaving the file alone while still
+ * writing the adopted resolution into the lock would make the lock claim a
+ * status (e.g. the primary Codex role's "configured") that the actual
+ * on-disk file never received -- but that's only a real problem for a path
+ * whose CONTENT actually encodes model-policy resolution. An unrelated
+ * manual-owned output (e.g. a reconciled skill file) has nothing to do with
+ * the adopted plan, and `buildCompileWrites` already safely preserves its
+ * bytes and lock entry regardless, so refusing for it would block
+ * adoptions that are actually safe (PR review finding: the refusal was too
+ * broad).
+ *
+ * A manual-owned path in `MODEL_POLICY_BEARING_PATHS` is only a REAL
+ * problem when this specific STRATEGY would actually change its content --
+ * e.g. Tabnine's task-capsule guideline depends only on the profile's
+ * preset/role overrides, which "adopt" never changes, so adopting a fresh
+ * Codex/Claude resolution can never alter it. Comparing the fresh compiled
+ * bytes against the ON-DISK bytes was still wrong: a manually customized
+ * file legitimately differs from ANY compiled rendering regardless of
+ * whether the strategy touches it, so that comparison refused for ordinary
+ * manual customization too (PR review finding). The correct comparison is
+ * PRE-strategy render vs. POST-strategy render -- both freshly compiled,
+ * on-disk bytes never enter into it -- so a path is only refused when the
+ * STRATEGY itself would have changed what gets generated there.
+ */
+function findManualOwnedModelBearingChanges(input: {
+  manualOutputs: readonly LockOutputV2[];
+  preStrategyFiles: readonly GeneratedFile[];
+  postStrategyFiles: readonly GeneratedFile[];
+}): LockOutputV2[] {
+  const { manualOutputs, preStrategyFiles, postStrategyFiles } = input;
+  const candidates = manualOutputs.filter((output) =>
+    MODEL_POLICY_BEARING_PATHS.has(output.path),
+  );
+  return candidates.filter((output) => {
+    const postFile = postStrategyFiles.find(
+      (file) => file.path === output.path,
+    );
+    const preFile = preStrategyFiles.find((file) => file.path === output.path);
+    if (postFile === undefined || preFile === undefined) {
+      // Either render is missing this path entirely -- can't prove the
+      // strategy leaves it alone, so treat it as affected.
+      return true;
+    }
+    return sha256Hex(preFile.bytes) !== sha256Hex(postFile.bytes);
+  });
+}
+
+/**
+ * Structural equality for a `LockModelPolicyV2` block, used to answer "did
+ * the model-policy resolution itself actually change" independent of
+ * whether `ai-profile.lock` AS A WHOLE changed -- the lock's own
+ * create/change/unchanged action covers every field in the file (generated
+ * output hashes, template metadata, `upgrade.catalogVersion`, ...), so a
+ * lock-wide `change` action does not mean the `modelPolicy` block moved at
+ * all (e.g. adopting an already-current policy after a compiler upgrade
+ * that only touched unrelated template hashes) (PR review finding). Avoids
+ * a bare `JSON.stringify` comparison, which would be sensitive to object key
+ * insertion order rather than actual content.
+ */
+function modelPolicyBlocksEqual(
+  a: LockModelPolicyV2 | undefined,
+  b: LockModelPolicyV2 | undefined,
+): boolean {
+  if (a === undefined || b === undefined) {
+    return a === b;
+  }
+  if (
+    a.catalogVersion !== b.catalogVersion ||
+    a.preset !== b.preset ||
+    a.resolutions.length !== b.resolutions.length
+  ) {
+    return false;
+  }
+  return a.resolutions.every((row, index) => {
+    const other = b.resolutions[index];
+    return (
+      other !== undefined &&
+      row.client === other.client &&
+      row.role === other.role &&
+      row.model === other.model &&
+      row.effort === other.effort &&
+      row.effortStatus === other.effortStatus &&
+      row.source === other.source &&
+      row.capabilityStatus === other.capabilityStatus &&
+      row.catalogVersion === other.catalogVersion &&
+      row.alternatives.length === other.alternatives.length &&
+      row.alternatives.every((alt, altIndex) => alt === other.alternatives[altIndex])
+    );
+  });
+}
+
+/**
  * `classifyTabnineSettingsOwnership` (inside `resolveTabnineModelSettings`)
  * collapses a manual-owned lock entry, a drifted generated-owned one, and a
  * now-absent file all into the same "unowned"/`undefined` results;
@@ -1152,13 +1248,15 @@ const MODEL_POLICY_BEARING_PATHS: ReadonlySet<string> = new Set([
  * refusal) when the write must stop; `false` when it's safe to proceed.
  */
 async function refuseIfTabnineProvenanceWouldBeLost(input: {
-  rootDir: string;
   io: CliIo;
   strategyLabel: string;
   tabnineModelSettings: Awaited<ReturnType<typeof resolveTabnineModelSettings>>;
+  /** Read once, before any write, by the caller -- shared with the caller's
+   * own `modelPolicy` block comparison so both read the identical prior
+   * on-disk state rather than each re-reading independently. */
+  priorLock: Awaited<ReturnType<typeof readLockfileForRegions>>;
 }): Promise<boolean> {
-  const { rootDir, io, strategyLabel, tabnineModelSettings } = input;
-  const priorLock = await readLockfileForRegions(rootDir);
+  const { io, strategyLabel, tabnineModelSettings, priorLock } = input;
   const priorTabnineOutput = priorLock?.outputs.find(
     (output) => output.path === TABNINE_SETTINGS_PATH,
   );
@@ -1187,6 +1285,41 @@ async function refuseIfTabnineProvenanceWouldBeLost(input: {
 }
 
 /**
+ * A minimal line-level diff for a CLI preview, not a general-purpose diffing
+ * tool: trims the common prefix and common suffix of lines, then renders
+ * every line in between as removed (`-`) or added (`+`). This is exact for
+ * the single-region edits this command actually produces (one scalar value
+ * changed, or one new key inserted) -- it is not a full LCS/Myers diff, and
+ * would over-report for a genuinely scattered multi-region change, but no
+ * write path in this command ever produces one.
+ */
+function formatTextDiff(oldText: string, newText: string): string {
+  const oldLines = oldText.split("\n");
+  const newLines = newText.split("\n");
+  let prefixLen = 0;
+  while (
+    prefixLen < oldLines.length &&
+    prefixLen < newLines.length &&
+    oldLines[prefixLen] === newLines[prefixLen]
+  ) {
+    prefixLen++;
+  }
+  let oldEnd = oldLines.length;
+  let newEnd = newLines.length;
+  while (
+    oldEnd > prefixLen &&
+    newEnd > prefixLen &&
+    oldLines[oldEnd - 1] === newLines[newEnd - 1]
+  ) {
+    oldEnd--;
+    newEnd--;
+  }
+  const removed = oldLines.slice(prefixLen, oldEnd).map((line) => `  -${line}`);
+  const added = newLines.slice(prefixLen, newEnd).map((line) => `  +${line}`);
+  return [...removed, ...added].join("\n");
+}
+
+/**
  * Prints a `File changes (...)` preview of every non-"unchanged" write
  * action before a bulk preset switch is actually applied, computed from the
  * EXACT SAME `allWrites` array the real write uses right after this call --
@@ -1196,15 +1329,31 @@ async function refuseIfTabnineProvenanceWouldBeLost(input: {
  * preview); without this, that was the only write path in the repository
  * that mutated a file's content with no exact diff shown first, breaking
  * the mutation contract every other write path (capability-catalog
- * inserts, `configure`, the interactive wizard) already follows (PR review
- * finding). Returns `false` if the dry-run itself failed (already reported
- * via `io.stderr`); `true` otherwise.
+ * inserts, `configure`, the interactive wizard) already follows.
+ *
+ * The action label alone (`path (change)`) was still not enough -- a PR
+ * review finding after this preview first shipped pointed out it discarded
+ * the planned bytes entirely, so a user still could not review the actual
+ * `ai-profile.yaml` splice or generated-file content being accepted. Each
+ * changed path (other than `ai-profile.lock`, whose JSON diff is too large
+ * to usefully render inline) now also shows a real content diff: a semantic
+ * `subagentPolicy.enabled`/`.preset` old->new line for `ai-profile.yaml`
+ * (since the profile object, not raw text, is the clearest description of
+ * that one-field edit), and a line-level text diff (via `formatTextDiff`,
+ * pre-strategy render vs. the bytes about to be written) for every other
+ * changed file.
+ *
+ * Returns `false` if the dry-run itself failed (already reported via
+ * `io.stderr`); `true` otherwise.
  */
 async function previewBulkPresetSwitchWrites(
   rootDir: string,
   io: CliIo,
   allWrites: PlannedWrite[],
   targetPreset: ModelPolicyPreset,
+  profile: AiProfile,
+  writeProfile: AiProfile,
+  preStrategyFiles: readonly GeneratedFile[],
 ): Promise<boolean> {
   const preview = await createOrApplyWritePlan(rootDir, allWrites, false, io);
   if (!preview) {
@@ -1213,13 +1362,38 @@ async function previewBulkPresetSwitchWrites(
   const changedPreviewActions = preview.actions.filter(
     (action) => action.action !== "unchanged",
   );
-  if (changedPreviewActions.length > 0) {
-    io.stdout(
-      `File changes (${targetPreset}):\n${changedPreviewActions
-        .map((action) => `- ${action.path} (${action.action})`)
-        .join("\n")}\n`,
-    );
+  if (changedPreviewActions.length === 0) {
+    return true;
   }
+  const lines: string[] = [`File changes (${targetPreset}):`];
+  for (const action of changedPreviewActions) {
+    lines.push(`- ${action.path} (${action.action})`);
+    if (action.path === "ai-profile.yaml") {
+      lines.push(
+        `  subagentPolicy.enabled: ${profile.subagentPolicy?.enabled ?? false} -> ${writeProfile.subagentPolicy?.enabled ?? false}`,
+        `  subagentPolicy.preset: ${profile.subagentPolicy?.preset ?? "(none)"} -> ${writeProfile.subagentPolicy?.preset ?? "(none)"}`,
+      );
+      continue;
+    }
+    if (action.path === "ai-profile.lock") {
+      continue;
+    }
+    const write = allWrites.find((candidate) => candidate.path === action.path);
+    if (write === undefined) continue;
+    const newBytes =
+      typeof write.bytes === "string"
+        ? Buffer.from(write.bytes, "utf8")
+        : write.bytes;
+    const preFile = preStrategyFiles.find(
+      (file) => file.path === action.path,
+    );
+    const oldText = preFile ? Buffer.from(preFile.bytes).toString("utf8") : "";
+    const diff = formatTextDiff(oldText, Buffer.from(newBytes).toString("utf8"));
+    if (diff.length > 0) {
+      lines.push(diff);
+    }
+  }
+  io.stdout(`${lines.join("\n")}\n`);
   return true;
 }
 
@@ -1288,6 +1462,11 @@ async function runModelPolicyWrite(input: {
   }
   const previousModelPolicy = modelPolicyPlan.block;
   const strategyLabel = modelPolicyPlan.strategy;
+  // Read once, before any write, so every prior-state comparison in this
+  // function (Tabnine provenance, the manual-owned pre/post-strategy diff,
+  // and the final `modelPolicyWrote` check) observes the identical on-disk
+  // state.
+  const priorLock = await readLockfileForRegions(rootDir);
 
   // For a bulk preset switch, `ai-profile.yaml` itself must be edited first
   // (surgically, via `planSubagentPolicyPresetEdit`) -- everything downstream
@@ -1327,6 +1506,30 @@ async function runModelPolicyWrite(input: {
     io.stderr(formatCompileIssues(compileResult.issues));
     return 1;
   }
+  // What every generated file would look like WITHOUT this strategy applied
+  // -- the original profile, reconciled against the original prior lock (so
+  // an unrelated role keeps its exact current resolution via the same
+  // lock-reuse primitive `compileResult` itself used). Shared by the
+  // manual-owned-bearing-path check (only refuse when the strategy itself
+  // would change a file's content, not because it happens to differ from
+  // on-disk manual customization) and the pre-apply preview (show the real
+  // content diff the strategy produces, not just a path+action label) (PR
+  // review findings).
+  const preStrategyCompile = compileProfile({
+    profile,
+    previousModelPolicy: priorLock?.modelPolicy,
+  });
+  if (!preStrategyCompile.ok) {
+    // The ORIGINAL profile (before this write) fails to compile -- a real,
+    // user-relevant problem in its own right. Silently degrading to "no
+    // pre-strategy files" would make the manual-owned-bearing check treat
+    // every candidate as affected (safe) but would make the later preview
+    // render every changed file as if it were purely new content, hiding
+    // the actual problem instead of surfacing it.
+    io.stderr(formatCompileIssues(preStrategyCompile.issues));
+    return 1;
+  }
+  const preStrategyFiles = preStrategyCompile.files;
 
   let regionPlan: RegionAwareWritePlan;
   try {
@@ -1385,48 +1588,11 @@ async function runModelPolicyWrite(input: {
     return 1;
   }
 
-  // `regionPlan.manualOutputs` correctly leaves a manual-owned output's
-  // BYTES untouched (planRegionAwareWrites classifies ownership before
-  // region-specific branching, so this applies to .codex/config.toml just
-  // as much as AGENTS.md/CLAUDE.md). Leaving the file alone while still
-  // writing the adopted resolution into the lock would make the lock claim
-  // a status (e.g. the primary Codex role's "configured") that the actual
-  // on-disk file never received -- but that's only a real problem for a
-  // path whose CONTENT actually encodes model-policy resolution. An
-  // unrelated manual-owned output (e.g. a reconciled skill file) has
-  // nothing to do with the adopted plan, and buildCompileWrites already
-  // safely preserves its bytes and lock entry regardless, so refusing for
-  // it would block adoptions that are actually safe (PR review finding:
-  // the refusal was too broad).
-  // A manual-owned path in `MODEL_POLICY_BEARING_PATHS` is only a REAL
-  // problem when this specific write would actually have changed its
-  // bytes -- e.g. Tabnine's task-capsule guideline depends only on the
-  // profile's preset/role overrides, which "adopt" never changes, so
-  // adopting a fresh Codex/Claude resolution can never alter it. Refusing
-  // for a bearing path whose fresh compiled bytes are identical to what's
-  // already on disk would block an adoption that was never actually going
-  // to touch that file (PR review finding: the allowlist alone was still
-  // over-broad, since it never checked whether bytes would differ).
-  const manualOwnedModelBearingCandidates = regionPlan.manualOutputs.filter(
-    (output) => MODEL_POLICY_BEARING_PATHS.has(output.path),
-  );
-  const manualOwnedModelBearing: LockOutputV2[] = [];
-  for (const output of manualOwnedModelBearingCandidates) {
-    const freshFile = compileResult.files.find(
-      (file) => file.path === output.path,
-    );
-    if (freshFile === undefined) {
-      manualOwnedModelBearing.push(output);
-      continue;
-    }
-    const onDiskBytes = await readOptionalBytes(rootDir, output.path);
-    if (
-      onDiskBytes === undefined ||
-      sha256Hex(onDiskBytes) !== sha256Hex(freshFile.bytes)
-    ) {
-      manualOwnedModelBearing.push(output);
-    }
-  }
+  const manualOwnedModelBearing = findManualOwnedModelBearingChanges({
+    manualOutputs: regionPlan.manualOutputs,
+    preStrategyFiles,
+    postStrategyFiles: compileResult.files,
+  });
   if (manualOwnedModelBearing.length > 0) {
     io.stderr(
       `Refusing to write (${strategyLabel}): the following generated target files are manual-owned and would actually change under this write, so writing would leave them on the old resolution while the lock claimed the fresh one:\n${manualOwnedModelBearing
@@ -1457,10 +1623,10 @@ async function runModelPolicyWrite(input: {
 
   if (
     await refuseIfTabnineProvenanceWouldBeLost({
-      rootDir,
       io,
       strategyLabel,
       tabnineModelSettings,
+      priorLock,
     })
   ) {
     return 1;
@@ -1483,12 +1649,22 @@ async function runModelPolicyWrite(input: {
   if (
     !json &&
     targetPreset !== undefined &&
-    !(await previewBulkPresetSwitchWrites(rootDir, io, allWrites, targetPreset))
+    !(await previewBulkPresetSwitchWrites(
+      rootDir,
+      io,
+      allWrites,
+      targetPreset,
+      profile,
+      writeProfile,
+      preStrategyFiles,
+    ))
   ) {
     return 1;
   }
 
-  const plan = await createOrApplyWritePlan(rootDir, allWrites, true, io);
+  const plan = await createOrApplyWritePlan(rootDir, allWrites, true, io, {
+    atomic: true,
+  });
   if (!plan) {
     return 1;
   }
@@ -1522,15 +1698,22 @@ async function runModelPolicyWrite(input: {
   // recreated -- e.g. `ai-profile.lock` already matches the adopted plan,
   // but a target file was deleted out-of-band and this write repaired it.
   // `modelPolicyWrote` must answer a narrower question ("did the adopted
-  // model-policy resolution itself actually change?"), so it's derived
-  // from `ai-profile.lock`'s own action specifically, not the aggregate
-  // (PR review finding: the aggregate falsely reported a mutation for a
-  // target-only repair).
-  const lockAction = plan.actions.find(
-    (action) => action.path === "ai-profile.lock",
+  // model-policy resolution itself actually change?"). A prior fix derived
+  // it from `ai-profile.lock`'s own file-level action, but that action
+  // covers the ENTIRE lock -- generated-output hashes, template metadata,
+  // `upgrade.catalogVersion` -- not just `modelPolicy`, so a lock-wide
+  // `change` (e.g. after a compiler upgrade that only touched unrelated
+  // template hashes) still falsely reported a policy mutation even when
+  // adopting an already-current policy (PR review finding). Compare the
+  // actual `modelPolicy` blocks -- the prior on-disk lock's (`priorLock`,
+  // read before this write) against the one this write resolves to
+  // (`previousModelPolicy`, which `resolveModelPolicyLockfile`'s lock-reuse
+  // primitive reproduces verbatim once every row already matches it) --
+  // instead of trusting the lock's own file-level action at all.
+  const modelPolicyWrote = !modelPolicyBlocksEqual(
+    priorLock?.modelPolicy,
+    previousModelPolicy,
   );
-  const modelPolicyWrote =
-    lockAction !== undefined && lockAction.action !== "unchanged";
   if (json) {
     io.stdout(
       `${JSON.stringify({
@@ -4566,11 +4749,23 @@ async function createOrApplyWritePlan(
   writes: PlannedWrite[],
   write: boolean,
   io: CliIo,
+  // `atomic: true` uses `applyWritePlanAtomic` (all-or-nothing: prepares
+  // every write as a staged temp file, then commits, rolling back cleanly on
+  // any failure) instead of the plain `applyWritePlan`, which writes files
+  // one at a time -- required whenever `writes` spans multiple
+  // independently-meaningful files (e.g. `ai-profile.yaml` + `ai-profile.lock`
+  // + generated targets) where a mid-write failure leaving some files updated
+  // and others stale would be worse than refusing the whole write (PR review
+  // finding, matching the same precedent `configure.ts` already established
+  // for its own multi-file mutation). Defaults to `false` (unchanged
+  // behavior) for every existing single-concern caller.
+  options: { atomic?: boolean } = {},
 ): Promise<WritePlanResult | undefined> {
   try {
-    return write
-      ? await applyWritePlan({ rootDir, writes })
-      : await planCompileDryRun(rootDir, writes);
+    if (!write) return await planCompileDryRun(rootDir, writes);
+    return options.atomic
+      ? await applyWritePlanAtomic({ rootDir, writes })
+      : await applyWritePlan({ rootDir, writes });
   } catch {
     io.stderr(
       formatSimpleError(

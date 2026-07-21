@@ -435,6 +435,62 @@ findings resolved as GitHub review threads. State stays `ready`, not
 adopting-v3 writes, "custom exact" strategy, interactive-UI triggering,
 Tabnine reconciliation deferred to I6d).
 
+I6a PR review fix round 8 (2026-07-21, PR #125), after I6a was already
+marked `done`: addressed 4 new Codex bot findings (2 P1, 2 P2) on the same
+already-shipped `upgrade` write paths: (1, P1) model-policy writes were not
+atomic - `createOrApplyWritePlan`'s real-apply path delegated to the plain
+`applyWritePlan` (writes files one at a time), not `applyWritePlanAtomic`
+(all-or-nothing), so a mid-write failure could leave `ai-profile.yaml`
+updated while `ai-profile.lock` stayed stale, especially damaging since
+`ai-profile.yaml` is first in the write array for a bulk preset switch -
+fixed by giving `createOrApplyWritePlan` an `{atomic: true}` option, used
+only at the model-policy write's real-apply call site (matching the same
+precedent `configure.ts` already established for its own multi-file
+mutation); (2, P2) the manual-owned "model-policy-bearing path" refusal
+(from round 6) compared fresh compiled bytes against ON-DISK bytes, so a
+manually-customized bearing file (e.g. a hand-edited Tabnine guideline)
+always refused regardless of whether the selected strategy would have
+touched it at all - fixed by comparing a PRE-strategy render (the
+ORIGINAL profile reconciled against the prior lock) against the
+POST-strategy render instead, so a path is only refused when the strategy
+itself would change its content; (3, P2) `modelPolicyWrote` (from round 6)
+was derived from `ai-profile.lock`'s own file-level write-plan action, but
+that action covers the ENTIRE lock (generated-output hashes, template
+metadata, the profile's own recorded sha256), not just the `modelPolicy`
+block, so a lock-wide change unrelated to model resolution (e.g. an edited
+profile description) still falsely reported a policy mutation - fixed with
+a new `modelPolicyBlocksEqual` field-by-field structural comparison
+against the prior on-disk lock's actual `modelPolicy` block; (4, P1) the
+pre-apply preview (from round 7) showed only `path (action)` labels,
+discarding the planned bytes entirely, so a user still could not review
+the actual `ai-profile.yaml` splice or generated-file content being
+accepted - fixed by rendering a semantic `subagentPolicy.enabled`/`.preset`
+old->new line for the profile and a real line-level content diff (a new
+`formatTextDiff` common-prefix/suffix-trim helper, documented as exact
+only for the single-region edits this command actually produces) for
+every other changed file. One pre-existing test had a genuine bug fixed
+during this round: the ".codex/config.toml manual-owned" refusal test used
+the "architect" role to build its stale fixture, but that file's
+primary-default write only ever encodes `MODEL_POLICY_PRIMARY_ROLE`
+("implementer") - the new pre/post-strategy comparison correctly exposed
+that architect changes can never affect that file, so the test was fixed
+to perturb "implementer" instead. Spec review passed (COMPLIANT-equivalent,
+one disclosed non-blocking note: no CLI-level regression test directly
+proves the atomic-write wiring itself, acceptable since `applyWritePlanAtomic`'s
+rollback semantics are already independently unit-tested at the primitive
+level and re-verifying that contract here is explicitly I6e's scope, not
+I6a's). Code-quality review found ISSUES_FOUND, both items fixed: a
+pre-strategy compile failure was silently degrading to an empty file list
+instead of surfacing the problem - now refuses with the compile issues
+printed, matching the existing post-strategy compile-failure precedent;
+the manual-owned-bearing comparison loop was extracted into a named
+`findManualOwnedModelBearingChanges` helper, matching the decomposition
+pattern already established for `refuseIfTabnineProvenanceWouldBeLost` and
+`previewBulkPresetSwitchWrites` in earlier rounds. Tests: `packages/compiler`
+313/312 (unaffected), `apps/cli` 555/551, all 0 failures; clean typecheck
+(including `tsconfig.test.json`) on both; `verify:pack` and golden
+regeneration both clean.
+
 I6a PR review fix round 7 (2026-07-21, PR #125), after I6a was already
 marked `done`: addressed 6 new Codex bot P2 findings (a 7th was deliberately
 deferred with documentation instead of fixed as code - see below) on the

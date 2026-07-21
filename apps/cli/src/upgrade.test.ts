@@ -2097,6 +2097,57 @@ test("upgrade --model-policy-strategy quality-first --write previews the exact a
   assert.ok(previewIndex < confirmIndex);
 });
 
+test("upgrade --model-policy-strategy quality-first --write's preview shows the actual ai-profile.yaml splice and generated-file content diff, not just a path+action label (PR review finding)", async () => {
+  // A prior fix added the `File changes (...):` section, but it only ever
+  // rendered `- path (action)` for each changed file -- the planned bytes
+  // themselves were discarded, so a user still could not review the exact
+  // profile edit or generated-file content being accepted before it
+  // applied. The preview must now also show a semantic
+  // subagentPolicy.enabled/preset diff for ai-profile.yaml, and a real
+  // line-level content diff for every other changed file.
+  const fresh = liveModelPolicy();
+  const implementerCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "implementer",
+  );
+  assert.ok(implementerCodex);
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    fresh,
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "quality-first",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.match(
+    output.stdoutText(),
+    /subagentPolicy\.enabled: true -> true/u,
+  );
+  assert.match(
+    output.stdoutText(),
+    /subagentPolicy\.preset: role-aware -> quality-first/u,
+  );
+  // A real content diff for .codex/config.toml must show both the removed
+  // (old, role-aware) implementer model line and the added (new,
+  // quality-first) one -- not just the file's path+action label.
+  assert.match(
+    output.stdoutText(),
+    new RegExp(`^\\s*-.*${escapeRegExp(implementerCodex.model)}`, "mu"),
+  );
+  assert.match(output.stdoutText(), /^\s*\+.*model = /mu);
+});
+
 test("upgrade --model-policy-strategy quality-first --write reports the real generated-target-file count, excluding ai-profile.yaml/ai-profile.lock from that count (PR review finding)", async () => {
   // Before this fix, the reported count included ai-profile.yaml and
   // ai-profile.lock themselves alongside the actual generated target files,
@@ -2627,6 +2678,76 @@ test("upgrade --model-policy-strategy adopt --write proceeds when Tabnine's guid
   assert.doesNotMatch(output.stderrText(), /manual-owned/u);
 });
 
+test("upgrade --model-policy-strategy adopt --write reports modelPolicyWrote: false when ai-profile.lock changes for a reason unrelated to modelPolicy (PR review finding)", async () => {
+  // A lock-wide `change` action covers every field in the file (generated
+  // output hashes, template metadata, the profile's own recorded sha256,
+  // `upgrade.catalogVersion`), not just `modelPolicy` -- deriving
+  // modelPolicyWrote from that file-level action alone (an earlier fix)
+  // would still falsely report a policy mutation whenever the lock changes
+  // for any other reason while the modelPolicy block itself stays
+  // identical. Establish a real baseline via the actual write pipeline
+  // first, then edit ai-profile.yaml's description (unrelated to
+  // subagentPolicy/model resolution) so the lock's recorded profile hash
+  // -- and therefore the whole lock file's action -- changes on the next
+  // adopt, even though nothing about the adopted model policy moved.
+  const fresh = liveModelPolicy();
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    fresh,
+  );
+  const baselineCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: createOutput() },
+  );
+  assert.equal(baselineCode, 0);
+
+  const profilePath = path.join(root, "ai-profile.yaml");
+  const profileWithEditedDescription = (
+    await readFile(profilePath, "utf8")
+  ).replace(
+    "description: Upgrade fixture.",
+    "description: Upgrade fixture (edited, unrelated to model policy).",
+  );
+  assert.notEqual(
+    profileWithEditedDescription,
+    await readFile(profilePath, "utf8"),
+  );
+  await writeFile(profilePath, profileWithEditedDescription, "utf8");
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyWrote?: boolean;
+    filesWritten?: number;
+  };
+  // The lock DOES change (the profile's recorded sha256 moves), so some
+  // write happens, but the adopted model-policy resolution itself does
+  // not, so modelPolicyWrote must be false.
+  assert.ok((report.filesWritten ?? 0) > 0);
+  assert.equal(report.modelPolicyWrote, false);
+});
+
 test("upgrade --model-policy-strategy adopt --write reports modelPolicyWrote: false when only a missing generated target is repaired and ai-profile.lock itself is unchanged (PR review finding)", async () => {
   // Two-step technique (mirroring the existing no-op test below): run
   // adopt --write for real first, establishing a lock+files baseline
@@ -2812,10 +2933,32 @@ test("upgrade --model-policy-strategy adopt --write refuses when an affected tar
   // planRegionAwareWrites correctly leaves a manual-owned file's BYTES
   // untouched, but without this refusal the LOCK would still be rewritten
   // claiming the fresh resolution was adopted -- even though the actual
-  // manual-owned file on disk never received it.
+  // manual-owned file on disk never received it. Uses a STALE prior policy
+  // for the PRIMARY role (`.codex/config.toml`'s primary-default write only
+  // encodes `MODEL_POLICY_PRIMARY_ROLE`, "implementer" -- an architect-only
+  // change would never affect this file's content at all) so adopting
+  // genuinely changes `.codex/config.toml` -- the refusal now compares the
+  // pre-strategy render against the post-strategy render (PR review
+  // finding: comparing against on-disk bytes would also refuse for
+  // ordinary manual customization, not just a real strategy-induced
+  // change), so a fixture where adopt is a no-op for this path would never
+  // trigger it.
+  const fresh = liveModelPolicy();
+  const implementerCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "implementer",
+  );
+  assert.ok(implementerCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "implementer"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
   const root = await createV3UpgradeRootWithGeneratedFiles(
     CAPABILITY_CATALOG_VERSION,
-    liveModelPolicy(),
+    stale,
   );
   const lockPath = path.join(root, "ai-profile.lock");
   const lockText = await readFile(lockPath, "utf8");
