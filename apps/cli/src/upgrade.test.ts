@@ -36,7 +36,7 @@ import {
 } from "@agent-profile/compiler";
 import { withNetworkSentinel } from "../../../packages/core/test/fixtures/preset/network-sentinel.js";
 
-import { runCli, type CliIo, type UpgradePrompts } from "./index.js";
+import { CLI_VERSION, runCli, type CliIo, type UpgradePrompts } from "./index.js";
 import type { CliPrompts } from "./wizard.js";
 import { WizardCancelled } from "./wizard.js";
 
@@ -197,6 +197,80 @@ test("upgrade scripted mutation inserts recommended capabilities and stamps the 
     await readFile(path.join(root, "ai-profile.lock"), "utf8"),
   ) as { upgrade?: { catalogVersion?: number } };
   assert.equal(lock.upgrade?.catalogVersion, CAPABILITY_CATALOG_VERSION);
+});
+
+test("upgrade declines the optional update check by default: zero network calls", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(["upgrade", "--root", root], { io: output }),
+  );
+
+  assert.equal(code, 0);
+});
+
+test("upgrade --check-for-updates reports a newer registry version with manual guidance and never installs", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  let requestedUrl: string | undefined;
+  let requestInit: RequestInit | undefined;
+  globalThis.fetch = (async (
+    url: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    requestedUrl = String(url);
+    requestInit = init;
+    return new Response(JSON.stringify({ version: "999.0.0" }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(requestedUrl ?? "", /registry\.npmjs\.org/u);
+  assert.match(requestedUrl ?? "", /agent-profile/u);
+  // No auth headers/credentials sent as part of the request.
+  assert.equal(requestInit?.headers, undefined);
+  assert.match(
+    output.stdoutText(),
+    /A newer @agent-profile\/cli version is available: 999\.0\.0/u,
+  );
+  assert.match(
+    output.stdoutText(),
+    /npm install -g @agent-profile\/cli@latest/u,
+  );
+});
+
+test("upgrade --check-for-updates reports current version when registry matches installed version", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ version: CLI_VERSION }), {
+      status: 200,
+    })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /is up to date/u);
 });
 
 test("upgrade JSON remains one clean machine-readable record in report and write modes", async () => {

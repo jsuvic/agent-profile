@@ -123,6 +123,11 @@ import {
 } from "./reconcile.js";
 import { planProfileInsertions } from "./upgrade-editor.js";
 import { planSubagentPolicyPresetEdit } from "./upgrade-model-policy-editor.js";
+import {
+  checkForPackageUpdate,
+  formatUpdateCheckMessage,
+  UPDATE_CHECK_PACKAGE_NAME,
+} from "./update-check.js";
 import type { ModelProbeProcessRunner } from "./model-probe.js";
 import {
   formatWizardDeclined,
@@ -258,6 +263,12 @@ type ParsedUpgradeArgs =
       json: boolean;
       help: boolean;
       modelPolicyStrategy: ModelPolicyUpgradeBulkStrategy | undefined;
+      /** Phase 31.5 (I6b): explicit, off-by-default opt-in for the
+       * metadata-only registry update check. A distinct consent mechanism
+       * from the interactive-only model-probe consent (`--probe-models` is
+       * rejected as a flag; this one isn't, since `upgrade` is already a
+       * scriptable, non-interactive-friendly command). */
+      checkForUpdates: boolean;
     }
   | { ok: false; message: string };
 
@@ -657,6 +668,21 @@ async function runUpgrade(
   if (parsed.help) {
     io.stdout(formatHelp());
     return 0;
+  }
+
+  // Phase 31.5 (I6b): explicitly-consented, metadata-only registry update
+  // check. Declining (the default) performs zero network access -- this
+  // block is only entered when `--check-for-updates` was passed. The check
+  // never installs or downloads anything; it only reports and renders
+  // manual update guidance. JSON-mode integration is deferred (see TASKS.md)
+  // so this text-only report never breaks `upgrade --json`'s one-clean-line
+  // output contract.
+  if (parsed.checkForUpdates && !parsed.json) {
+    const updateResult = await checkForPackageUpdate({
+      packageName: UPDATE_CHECK_PACKAGE_NAME,
+      currentVersion: CLI_VERSION,
+    });
+    io.stdout(formatUpdateCheckMessage(updateResult));
   }
 
   const rootDir = path.resolve(cwd, parsed.root);
@@ -3789,6 +3815,7 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
   let json = false;
   let help = false;
   let modelPolicyStrategy: ModelPolicyUpgradeBulkStrategy | undefined;
+  let checkForUpdates = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     switch (arg) {
@@ -3812,6 +3839,9 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
         break;
       case "--json":
         json = true;
+        break;
+      case "--check-for-updates":
+        checkForUpdates = true;
         break;
       case "--model-policy-strategy": {
         const value = args[index + 1];
@@ -3848,6 +3878,7 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
     json,
     help,
     modelPolicyStrategy,
+    checkForUpdates,
   };
 }
 
@@ -5332,7 +5363,7 @@ Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
   agent-profile doctor [--root <path>] [--json] [--mcp-suggestions]
   agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
-  agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--non-interactive] [--json]
+  agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--check-for-updates] [--non-interactive] [--json]
   agent-profile configure [--root <path>] [--non-interactive]
   agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 
@@ -5362,6 +5393,12 @@ Commands:
             keeps everything as-is) and never combines with
             --adopt-recommended (each selects an independent write path;
             run them as separate invocations).
+            --check-for-updates opts into one read-only, unauthenticated
+            metadata lookup against the public npm registry to report
+            whether a newer @agent-profile/cli is available, with manual
+            update guidance (it never installs, downloads, or writes
+            anything). Off by default: declining performs zero network
+            access. Ignored in --json mode in this phase.
   configure Change or reconcile the agent control posture (interactive).
             Shows the current posture, what each client actually does, and a
             preview before anything is written. The profile, generated files,

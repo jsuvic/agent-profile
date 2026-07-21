@@ -143,7 +143,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | done | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
 | I6 | Locked model-resolution reuse primitive (ordinary compile reuses the lock) | done | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
 | I6a | Upgrade command exact comparison and retain/adopt/customize planning | done | [006a-upgrade-comparison-and-planning.md](docs/specs/phase-31.5/issues/006a-upgrade-comparison-and-planning.md) |
-| I6b | Metadata-only package/registry update check | sequenced | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
+| I6b | Metadata-only package/registry update check | ready | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
 | I6c | Upgrade-flow probe consent, separate from update-check consent | sequenced | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
 | I6d | Tabnine model-resolution reconciliation | sequenced | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
 | I6e | Upgrade write ownership refusal and rollback | sequenced | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
@@ -210,6 +210,47 @@ tracking them as follow-up rather than blocking I5's closure, the same
 precedent already set for I3's disclosed Tabnine-wiring scope reduction.
 I5R carries that remaining scope; I9's final-integration coverage list
 should account for I5R, not just I5, when it runs.
+
+I6b first RED-first cycle completed 2026-07-21, a disclosed partial slice:
+added `apps/cli/src/update-check.ts` (`checkForPackageUpdate`,
+`formatUpdateCheckMessage`, `manualUpdateGuidance`) and a new `upgrade
+--check-for-updates` flag (off by default, separate from I6c's still-not-built
+probe consent) that performs one read-only `fetch` against the npm registry's
+package-metadata endpoint, reports newer/current/older/unknown plus manual
+`npm install -g @agent-profile/cli@latest` guidance, and never
+installs/downloads/writes anything. Declining (the default) performs zero
+network access, proven via the existing `withNetworkSentinel` fixture reused
+from `apps/cli/src/upgrade.test.ts`'s established pattern. `--json` mode
+currently no-ops the check entirely (documented in code comments and
+`--help` text) rather than integrating it into the JSON envelope - an
+explicit, disclosed scope choice, not an oversight. Implementer initially
+wrote the implementation before the tests (a process deviation from this
+repo's required RED-first TDD workflow) but disclosed this rather than
+hiding it; asked to correct it, the implementer then verified a real RED by
+stashing the implementation, confirming the two behavior-driving tests failed
+with "Unknown option: --check-for-updates" against the pre-change code, and
+restoring to reconfirm green - so the ledger's RED->GREEN proof is genuine,
+just not achieved in the originally-intended writing order. Spec review
+passed COMPLIANT: verified in the code (not just claimed) that fetch
+failures, non-OK responses, malformed JSON, and a missing/wrong-typed
+`version` field are all caught and degrade to an `"unknown"` status rather
+than throwing (a 5s `AbortController` timeout also guards against a hang), and
+that no auth headers/credentials/telemetry are sent. Code-quality review
+passed ACCEPTABLE with two non-blocking Minor notes (a slightly dense
+`"version" in body ? ... : undefined` extraction, and an unreachable
+exhaustiveness-guard `default` case that could use a clarifying comment) -
+left as-is, not blocking. Tests: `apps/cli` 563/559 (0 fail, 4 pre-existing
+skips); clean typecheck (`tsc -b` + `tsconfig.test.json --noEmit`). Deferred,
+per spec review's own recommendation, as near-term follow-up rather than
+blocking this cycle: dedicated tests for the `unknown` (timeout/malformed-
+response) and `older` status branches (the code paths themselves were
+verified sound by direct reading, satisfying AGENTS.md's own "static-only
+evidence is weaker than a regression test" standard as a disclosed gap, not
+an unmet criterion); and a real decision on `--json` mode integration versus
+formally rejecting the flag combination. State stays `ready`, not `done` -
+the brief's acceptance criteria are not yet fully covered by regression
+tests, matching this ledger's established precedent (see I6a's own history
+below) for how a disclosed partial slice is tracked.
 
 I6 completed 2026-07-18 (spec + code-quality review passed) for its own
 foundational scope only: the "ordinary compile reuses the lock" primitive
