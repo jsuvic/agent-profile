@@ -142,7 +142,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I5 | Exact role-aware model selection during init | done | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md) |
 | I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | done | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
 | I6 | Locked model-resolution reuse primitive (ordinary compile reuses the lock) | done | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
-| I6a | Upgrade command exact comparison and retain/adopt/customize planning | ready | [006a-upgrade-comparison-and-planning.md](docs/specs/phase-31.5/issues/006a-upgrade-comparison-and-planning.md) |
+| I6a | Upgrade command exact comparison and retain/adopt/customize planning | done | [006a-upgrade-comparison-and-planning.md](docs/specs/phase-31.5/issues/006a-upgrade-comparison-and-planning.md) |
 | I6b | Metadata-only package/registry update check | sequenced | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
 | I6c | Upgrade-flow probe consent, separate from update-check consent | sequenced | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
 | I6d | Tabnine model-resolution reconciliation | sequenced | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
@@ -434,6 +434,15 @@ findings resolved as GitHub review threads. State stays `ready`, not
 `done` - same open acceptance criteria as noted above (mapping-v2-
 adopting-v3 writes, "custom exact" strategy, interactive-UI triggering,
 Tabnine reconciliation deferred to I6d).
+
+I6a marked `done` 2026-07-21. The brief's own acceptance criteria are now
+fully met: cycle 12 (below) shipped the last write-path gap
+(mapping-v2-adopting-v3), and "custom exact" - the one remaining item from
+the brief's original five-strategy list - was formally descoped via a
+dated amendment to `006a-upgrade-comparison-and-planning.md`'s own
+Non-goals/Acceptance-criteria sections, not silently dropped. It is tracked
+separately as `phase-31.9` (see that section above), pending a future grill
+session; nothing in this item's approved acceptance bar remains open.
 
 I6a twelfth RED-first cycle completed 2026-07-20, closing the last disclosed
 write-path gap from prior cycles: `agent-profile upgrade
@@ -753,6 +762,26 @@ I6a cycles: interactive clack rendering of the comparison table
 comparison path, the five planning paths, the actual write path, and the
 disclosed lifecycle-comparison gap from the first cycle. State stays
 `ready`, not `done`.
+
+## phase-31.9: Upgrade "custom exact" model-policy strategy (`docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`)
+
+Descoped from Phase 31.5 I6a on 2026-07-21 (see I6a's own brief amendment):
+the "custom exact" per-role/per-client planning path was the only one of
+five originally-listed I6a strategies never implemented, repeatedly flagged
+by automated PR review and consciously deferred each round since it needed
+a materially larger, undecided design (a nested per-role/per-client
+`ai-profile.yaml` edit surface, a scripted-write input shape, and several
+open product-shape questions) rather than a bounded implementation cycle.
+The linked document is a findings/problem record only, not an approved spec
+- it captures what already exists (the shared `SubagentPolicyRoleOverrides`
+schema, both comparison helpers' existing `roleOverrides` support) and the
+open design questions a future grill session needs to resolve (input shape,
+whether it composes with a bulk strategy, persistence target, mapping-v2
+interaction, validation strictness, interactive UX scope).
+
+| Id | Task                                                       | State       | Brief                                                                                                     |
+| -- | ----------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------- |
+| 1  | Grill session: upgrade "custom exact" strategy design       | human-gate  | [001-upgrade-custom-exact-strategy.md](docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md)         |
 
 ## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
 
