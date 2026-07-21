@@ -5,6 +5,19 @@
 Approved and implemented. Belongs to Phase 13. Depends on
 `001-subagent-template-reference-schema.md`.
 
+Amended 2026-07-19 (Phase 31.5 I6a): `maxTurns` raised for all three
+templates (`implementer` 18 -> 30, `spec-reviewer` 10 -> 18,
+`code-quality-reviewer` 10 -> 18). During I6a's bounded `/implement-next`
+cycles, `implementer`/`spec-reviewer`/`code-quality-reviewer` dispatches
+repeatedly hit the old caps mid-task - typically right before running the
+final test/typecheck command or emitting the required final status report
+- forcing manual resumes. The prior caps were too tight for a real bounded
+implementation/review cycle (write RED tests, implement, run the full
+workspace test suite, typecheck, self-review, report); the new caps still
+bound the work, just with enough headroom to finish one cycle without
+truncation. No other part of this spec (prompt text, tool scope, status
+contract, non-goals) changes.
+
 ## Problem
 
 The implementation-review workflow needs three roles that behave differently:
@@ -68,7 +81,7 @@ description: Use for a bounded implementation task after the parent agent has pr
 purpose: Implement one scoped task with tests, self-review, and honest escalation when requirements or architecture are unclear.
 toolScope: workspace-write
 modelPreference: balanced
-maxTurns: 18
+maxTurns: 30
 timeoutMinutes: 20
 mcpServers: []
 prompt: |
@@ -113,7 +126,7 @@ description: Use after an implementation worker reports DONE or DONE_WITH_CONCER
 purpose: Catch missing requirements, extra scope, and misunderstandings before code-quality review.
 toolScope: read-only
 modelPreference: capable
-maxTurns: 10
+maxTurns: 18
 timeoutMinutes: 8
 mcpServers: []
 prompt: |
@@ -150,7 +163,7 @@ description: Use only after spec review passes to assess maintainability, decomp
 purpose: Catch maintainability and test-quality risks after the implementation is known to match the spec.
 toolScope: read-only
 modelPreference: capable
-maxTurns: 10
+maxTurns: 18
 timeoutMinutes: 8
 mcpServers: []
 prompt: |

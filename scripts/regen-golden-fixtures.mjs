@@ -8,9 +8,11 @@ const here = path.dirname(url.fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const fixturesDir = path.join(repoRoot, "fixtures");
 
-const { compileProfile, createLockfileFile } = await import(
-  url.pathToFileURL(path.join(repoRoot, "packages/compiler/dist/index.js")).href
-);
+const { compileProfile, createLockfileFile, resolveModelPolicyLockfile } =
+  await import(
+    url.pathToFileURL(path.join(repoRoot, "packages/compiler/dist/index.js"))
+      .href
+  );
 const { readProfileFile } = await import(
   url.pathToFileURL(path.join(repoRoot, "packages/core/dist/index.js")).href
 );
@@ -51,10 +53,12 @@ for (const entry of entries) {
     await writeFile(target, file.bytes);
   }
 
+  const modelPolicy = resolveModelPolicyLockfile(profileResult.profile);
   const lockfile = createLockfileFile({
     profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
+    ...(modelPolicy === undefined ? {} : { modelPolicy }),
   });
   await writeFile(path.join(expectedDir, "ai-profile.lock"), lockfile.bytes);
   console.log(`regenerated ${entry.name}`);

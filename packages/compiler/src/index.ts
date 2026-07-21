@@ -12,6 +12,7 @@ export {
 export {
   buildLockfile,
   buildLockfileV1,
+  compareModelPolicyResolutions,
   createLockfileFile,
   createLockfileV1File,
   migrateLockfileV1ToV2,
@@ -90,6 +91,15 @@ export type {
   ModelPolicyTargetClientResolution,
   ModelPolicyTargetRow,
 } from "./model-policy-target-adapter.js";
+export { compareModelPolicyUpgrade } from "./model-policy-upgrade-comparison.js";
+export type { ModelPolicyUpgradeComparisonRow } from "./model-policy-upgrade-comparison.js";
+export { compareModelPolicyUpgradeFromLegacy } from "./model-policy-legacy-upgrade-comparison.js";
+export type { ModelPolicyLegacyUpgradeComparisonRow } from "./model-policy-legacy-upgrade-comparison.js";
+export { planModelPolicyUpgrade } from "./model-policy-upgrade-planning.js";
+export type {
+  ModelPolicyUpgradeBulkStrategy,
+  ModelPolicyUpgradePlan,
+} from "./model-policy-upgrade-planning.js";
 // The model-resolution-table surface (catalog, table builder, lockfile row
 // conversion) mirrors the Codex/Claude adapter's exports.
 // `planTabnineModelSettingsWrite` and its supporting types/constants are now
