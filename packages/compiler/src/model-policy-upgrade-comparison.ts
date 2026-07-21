@@ -72,6 +72,23 @@ export type ModelPolicyUpgradeComparisonRow = Readonly<{
  * the row's provenance was an uncatalogued explicit override), `"unrated"`
  * -- the identical convention `fresh.lifecycle` already uses for an
  * uncatalogued model (PR review finding).
+ *
+ * This relies on a maintenance discipline documented in
+ * `docs/specs/phase-31.5/001-model-selection-lifecycle.md`'s "Catalog
+ * lifecycle" section: "once published, an exact identifier remains in
+ * compatibility history" -- i.e. `CODEX_MODEL_POLICY_CATALOG`/
+ * `CLAUDE_MODEL_POLICY_CATALOG` must never delete an entry, only add
+ * `status: "retired"` (mirroring `findModelCatalogEntry`'s own precedent in
+ * `packages/core/src/model-policy.ts`). As long as that discipline holds,
+ * a "not found" locked model id is genuinely uncatalogued (never
+ * published), not one whose real historical lifecycle got lost -- there is
+ * no separate historical registry to consult; the catalog array IS the
+ * compatibility history. If a future catalog change ever needs to actually
+ * prune an old entry, this function's "unrated" fallback would then hide
+ * that entry's real retired/deprecated status; see
+ * `docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`'s sibling
+ * finding for that open design question (PR review finding, deferred
+ * pending a maintainer decision on whether pruning should ever be allowed).
  */
 function lockedModelLifecycle(
   client: ModelPolicyTargetClientId,

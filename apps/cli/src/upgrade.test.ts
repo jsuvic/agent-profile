@@ -1655,10 +1655,11 @@ test("upgrade --model-policy-strategy retain --json previews an empty resolution
 // Phase 31.5 (I6a): narrowed twice now -- first from "every strategy refuses"
 // once "adopt --write" on a v3-opted profile got a real write path, and again
 // this cycle now "adopt"/"quality-first"/"cost-conscious" all have real write
-// paths for a mapping-v2 profile too (tested separately below). Only "retain"
-// still refuses on a mapping-v2 profile: it has no prior v3 lock resolution
-// to retain at all.
-test("upgrade --model-policy-strategy retain --write is refused on a mapping-v2 profile, leaving files untouched", async () => {
+// paths for a mapping-v2 profile too (tested separately below). "Retain"
+// always succeeds as a no-op (PR review finding) on either profile shape --
+// it has no prior v3 lock resolution to retain on a mapping-v2 profile
+// either, but that's simply "nothing to write", not a refusal.
+test("upgrade --model-policy-strategy retain --write succeeds as a no-op on a mapping-v2 profile, leaving files untouched", async () => {
   const root = await createUpgradeRoot(
     CAPABILITY_CATALOG_VERSION,
     MAPPING_V2_PROFILE,
@@ -1683,8 +1684,8 @@ test("upgrade --model-policy-strategy retain --write is refused on a mapping-v2 
     { io: output },
   );
 
-  assert.equal(code, 1);
-  assert.match(output.stderrText(), /not yet supported/u);
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /Nothing to write \(retain\)/u);
   const profileAfter = await readFile(
     path.join(root, "ai-profile.yaml"),
     "utf8",
@@ -1845,7 +1846,11 @@ for (const targetPreset of ["quality-first", "cost-conscious"] as const) {
 // mirroring "adopt"'s existing coverage). Only "retain" on a v3-opted profile
 // still has no real write path (no guaranteed `modelPolicyPlan.block`, and
 // it isn't a bulk preset switch).
-test("upgrade --model-policy-strategy --write is refused for retain (not adopt/quality-first/cost-conscious) on a v3-opted profile, leaving files untouched", async () => {
+test("upgrade --model-policy-strategy retain --write succeeds as a no-op on a v3-opted profile, leaving files untouched (PR review finding)", async () => {
+  // "Retain" keeps everything exactly as it is now, so --write on it has
+  // nothing to write; treating it as a refusal (exit 1) would make
+  // automation that uniformly appends --write to whatever strategy it
+  // selected incorrectly treat a deliberate no-op as a failure.
   const root = await createV3UpgradeRoot(
     CAPABILITY_CATALOG_VERSION,
     liveModelPolicy(),
@@ -1870,8 +1875,8 @@ test("upgrade --model-policy-strategy --write is refused for retain (not adopt/q
     { io: output },
   );
 
-  assert.equal(code, 1);
-  assert.match(output.stderrText(), /not yet supported/u);
+  assert.equal(code, 0);
+  assert.match(output.stdoutText(), /Nothing to write \(retain\)/u);
   const profileAfter = await readFile(
     path.join(root, "ai-profile.yaml"),
     "utf8",
@@ -1879,6 +1884,64 @@ test("upgrade --model-policy-strategy --write is refused for retain (not adopt/q
   const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
   assert.equal(profileAfter, profileBefore);
   assert.equal(lockAfter, lockBefore);
+});
+
+test("upgrade --model-policy-strategy retain --write --json succeeds as a no-op and includes the model comparison fields (PR review finding)", async () => {
+  const root = await createV3UpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "retain",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyStrategy?: string;
+    modelPolicyWrote?: boolean;
+    filesWritten?: number;
+    modelPolicyPlan?: { strategy: string };
+  };
+  assert.equal(report.modelPolicyStrategy, "retain");
+  assert.equal(report.modelPolicyWrote, false);
+  assert.equal(report.filesWritten, 0);
+  assert.equal(report.modelPolicyPlan?.strategy, "retain");
+});
+
+test("upgrade --adopt-recommended --write combined with --model-policy-strategy --write is rejected explicitly, not silently applying only one (PR review finding)", async () => {
+  const root = await createV3UpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const output = createOutput();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--write",
+      "--adopt-recommended",
+      "--model-policy-strategy",
+      "adopt",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /cannot be combined/u);
 });
 
 // Phase 31.5 I6a (this cycle): a bulk preset switch ("quality-first"/
@@ -2351,6 +2414,64 @@ test("upgrade --model-policy-strategy adopt --write --json includes modelPolicyC
   assert.ok((report.modelPolicyPlan?.resolutions.length ?? 0) > 0);
 });
 
+test("upgrade --write --adopt-recommended --json includes model comparison fields in a capability-insertion refusal, not just the refusals list (PR review finding)", async () => {
+  // Before this fix, the JSON refusal branch built its own object from
+  // scratch and never included the independently-computed model
+  // comparison/plan fields, even though text mode already prints them
+  // before the same refusal.
+  const flowStyleProfile = V3_PROFILE.replace(
+    "    packs:\n      - base # preserve\n",
+    "    packs: [base] # owned flow\n",
+  );
+  assert.notEqual(flowStyleProfile, V3_PROFILE);
+
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+
+  const root = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-upgrade-flow-refusal-"),
+  );
+  await writeFile(path.join(root, "ai-profile.yaml"), flowStyleProfile, "utf8");
+  const lockfile = buildLockfile({
+    profileBytes: flowStyleProfile,
+    templates: [],
+    files: [],
+    modelPolicy: stale,
+  });
+  await writeFile(
+    path.join(root, "ai-profile.lock"),
+    serializeLockfile(lockfile),
+    "utf8",
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    ["upgrade", "--root", root, "--json", "--write", "--adopt-recommended"],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    wrote?: boolean;
+    refusals?: unknown[];
+    modelPolicyChanges?: Array<{ role: string; client: string }>;
+  };
+  assert.equal(report.wrote, false);
+  assert.ok(report.refusals && report.refusals.length > 0);
+  assert.ok(report.modelPolicyChanges && report.modelPolicyChanges.length > 0);
+});
+
 test("upgrade --model-policy-strategy adopt --write text mode prints a confirmation with a real file count", async () => {
   const fresh = liveModelPolicy();
   const architectCodex = fresh.resolutions.find(
@@ -2444,6 +2565,159 @@ test("upgrade --model-policy-strategy adopt --write shows the exact old/new mode
   assert.ok(reportIndex >= 0);
   assert.ok(confirmIndex >= 0);
   assert.ok(reportIndex < confirmIndex);
+});
+
+test("upgrade --model-policy-strategy adopt --write proceeds when Tabnine's guideline path is manual-owned but adopting Codex/Claude changes cannot alter its bytes (PR review finding)", async () => {
+  // Tabnine's task-capsule guideline depends only on the profile's
+  // preset/role overrides, which "adopt" never changes -- adopting a fresh
+  // Codex/Claude resolution can never alter its bytes. Refusing because
+  // this path happens to be manual-owned (even though this specific write
+  // was never going to touch it) would block an adoption that was
+  // genuinely safe.
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    stale,
+  );
+
+  const lockPath = path.join(root, "ai-profile.lock");
+  const lockJson = JSON.parse(await readFile(lockPath, "utf8")) as {
+    outputs: Array<{ path: string; [key: string]: unknown }>;
+  };
+  const tabnineGuidelineIndex = lockJson.outputs.findIndex(
+    (output) =>
+      output.path === ".tabnine/guidelines/87-subagent-task-capsules.md",
+  );
+  assert.ok(tabnineGuidelineIndex >= 0);
+  lockJson.outputs[tabnineGuidelineIndex] = {
+    path: ".tabnine/guidelines/87-subagent-task-capsules.md",
+    target: "manual",
+    templateId: "manual",
+    ownership: "manual-owned",
+  };
+  await writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`, "utf8");
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  assert.doesNotMatch(output.stderrText(), /manual-owned/u);
+});
+
+test("upgrade --model-policy-strategy adopt --write reports modelPolicyWrote: false when only a missing generated target is repaired and ai-profile.lock itself is unchanged (PR review finding)", async () => {
+  // Two-step technique (mirroring the existing no-op test below): run
+  // adopt --write for real first, establishing a lock+files baseline
+  // produced by THIS exact pipeline (a fixture built directly via
+  // `buildLockfile` is not byte-identical to what `buildCompileWrites`
+  // itself would construct, so a single-step "already matches" premise
+  // would be unreliable). Only THEN delete a generated target file
+  // out-of-band, so the second run must repair it while ai-profile.lock
+  // itself still classifies as "unchanged".
+  const fresh = liveModelPolicy();
+
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    fresh,
+  );
+  const baselineOutput = createOutput();
+  const baselineCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: baselineOutput },
+  );
+  assert.equal(baselineCode, 0);
+
+  await rm(path.join(root, ".codex", "config.toml"));
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyWrote?: boolean;
+    filesWritten?: number;
+  };
+  assert.equal(report.modelPolicyWrote, false);
+  assert.ok((report.filesWritten ?? 0) > 0);
+
+  const textRoot = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    fresh,
+  );
+  const textBaselineCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      textRoot,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: createOutput() },
+  );
+  assert.equal(textBaselineCode, 0);
+  await rm(path.join(textRoot, ".codex", "config.toml"));
+  const textOutput = createOutput();
+  const textCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      textRoot,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: textOutput },
+  );
+  assert.equal(textCode, 0);
+  assert.match(
+    textOutput.stdoutText(),
+    /already matches the adopted resolution; repaired/u,
+  );
+  assert.doesNotMatch(textOutput.stdoutText(), /^Updated ai-profile\.lock/mu);
 });
 
 test("upgrade --model-policy-strategy adopt --write reports a no-op adoption as unwritten, not a false mutation (PR review finding)", async () => {

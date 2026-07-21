@@ -435,6 +435,62 @@ findings resolved as GitHub review threads. State stays `ready`, not
 adopting-v3 writes, "custom exact" strategy, interactive-UI triggering,
 Tabnine reconciliation deferred to I6d).
 
+I6a PR review fix round 7 (2026-07-21, PR #125), after I6a was already
+marked `done`: addressed 6 new Codex bot P2 findings (a 7th was deliberately
+deferred with documentation instead of fixed as code - see below) on the
+already-shipped, already-reviewed `upgrade` write paths: (1)
+`--adopt-recommended` combined with `--model-policy-strategy ... --write`
+silently ran only the model-policy write and dropped the capability
+adoption - now explicitly rejected as an unsupported combination rather
+than silently applying one and ignoring the other; (2) `ai-profile.lock`
+lost a preserved prior lock's `client: "tabnine"` rows during the ACTUAL
+write compilation even though an earlier round's planner-level fix
+preserved them in the PREVIEW - `resolveModelPolicyLockfile`
+(`packages/compiler/src/model-policy-target-adapter.ts`) unconditionally
+recomputed tabnine rows fresh (currently always empty) and discarded
+`previousModelPolicy`'s tabnine rows; now falls back to them only when the
+fresh computation is empty; (3) the JSON capability-insertion refusal
+branch omitted the shared model-policy comparison fields even though text
+mode already prints them first; (4) "retain" `--write` returned exit code
+1 (refusal) instead of succeeding as a no-op, which would make automation
+uniformly appending `--write` treat a deliberate no-op as a failure - now
+returns 0 with a "Nothing to write" message/JSON shape; the now-provably-
+unreachable trailing refusal was replaced with a defensive invariant throw;
+(5) the manual-owned "model-policy-bearing path" refusal was still
+over-broad - it refused for ANY manual-owned path in the allowlist
+regardless of whether THIS specific write would actually change its bytes
+(e.g. Tabnine's guideline depends only on preset/roles, which "adopt"
+never changes) - now compares fresh compiled bytes against actual on-disk
+bytes and only refuses on a genuine difference; (6) `modelPolicyWrote` (and
+the success text) was derived from the aggregate written-file count, so a
+write that only repaired a missing/drifted generated target file (with
+`ai-profile.lock` itself unchanged) falsely reported the model policy as
+mutated - now derived specifically from the lock's own action, with a
+third text branch distinguishing "repaired a target file" from "actually
+adopted/switched" and "nothing to do". Spec review passed COMPLIANT
+(verified all 6 fixes against the actual diff, including exhaustiveness of
+the new dispatch branches and that the byte-comparison fix reads the same
+fresh bytes that would actually be written). Code-quality review found
+ISSUES_FOUND, one Important item fixed: `resolveModelPolicyLockfile`'s own
+JSDoc still described Tabnine rows as "unaffected" by `previousModelPolicy`
+after the fix made that no longer true - updated the JSDoc itself (not
+just an inline comment) to document the fallback and its "resurrected
+until a real override source exists" tradeoff; one Minor item also fixed
+(aligned the new unreachable-invariant throw's wording with this file's
+existing precedent). The 7th finding (`lockedModelLifecycle` reporting
+"unrated" for a locked model no longer present in the live catalog arrays,
+losing whether it was actually retired) was deliberately NOT fixed as
+code: it cannot occur in this project's real history today (both catalogs
+contain only "current" entries so far), and the two candidate closures (a
+regression test pinning today's catalog contents, vs. a new historical
+registry) are a genuine narrow maintainer decision, not a bounded
+implementation cycle - documented as `phase-31.9` item 2 (see that section)
+plus a clarifying JSDoc addition, left unresolved on the PR rather than
+silently closed. Tests: `packages/core` 213/212, `packages/compiler`
+313/312, `apps/cli` 553/549, all 0 failures; clean typecheck (including
+`tsconfig.test.json`) on all three; `verify:pack` and golden regeneration
+both clean.
+
 I6a marked `done` 2026-07-21. The brief's own acceptance criteria are now
 fully met: cycle 12 (below) shipped the last write-path gap
 (mapping-v2-adopting-v3), and "custom exact" - the one remaining item from
@@ -782,6 +838,21 @@ interaction, validation strictness, interactive UX scope).
 | Id | Task                                                       | State       | Brief                                                                                                     |
 | -- | ----------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------- |
 | 1  | Grill session: upgrade "custom exact" strategy design       | human-gate  | [001-upgrade-custom-exact-strategy.md](docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md)         |
+| 2  | Maintainer decision: catalog lifecycle history retention     | human-gate  | [002-catalog-lifecycle-history-retention.md](docs/specs/phase-31.9/002-catalog-lifecycle-history-retention.md) |
+
+Item 2 (added 2026-07-21): raised by Codex bot PR review on PR #125 -
+`lockedModelLifecycle` (`packages/compiler/src/model-policy-upgrade-comparison.ts`)
+reports "unrated" for a locked model id no longer present in the live
+catalog arrays, which would be wrong if that model was actually retired
+rather than never-published. This cannot occur in this project's real
+history today (both catalogs contain only `"current"` entries so far), and
+the existing spec already documents the required discipline ("once
+published, remains in compatibility history" - never delete, only mark
+retired). Not fixed as code, since the two candidate closures (a
+regression test pinning today's catalog contents, vs. a new historical
+registry) are a narrow but genuine maintainer decision, not a bounded
+implementation cycle. Left unresolved on the PR (not silently closed);
+documented as a clarifying code comment plus this findings record.
 
 ## phase-32: Guided Repository Update (`docs/specs/phase-32/001-guided-repository-update.md`)
 

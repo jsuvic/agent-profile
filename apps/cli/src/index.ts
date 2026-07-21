@@ -805,6 +805,54 @@ async function runUpgrade(
   // no guaranteed `modelPolicyPlan.block` and isn't a preset switch) still
   // has no real write path and keeps refusing with the original message.
   if (parsed.modelPolicyStrategy !== undefined && parsed.write) {
+    // `--adopt-recommended` selects the capability-catalog write path
+    // further below (`scriptedWrite`); combined with an explicit
+    // `--model-policy-strategy ... --write`, only ONE of the two writes
+    // ever ran (whichever branch returned first), silently dropping the
+    // other explicit request instead of applying both or refusing the
+    // combination (PR review finding). Reject rather than guess which one
+    // the caller actually wanted.
+    if (parsed.adoptRecommended) {
+      io.stderr(
+        "--adopt-recommended and --model-policy-strategy --write cannot be combined: each selects an independent write path, and running only one would silently drop the other's explicit request. Run them as two separate `agent-profile upgrade --write` invocations instead.\n",
+      );
+      return 1;
+    }
+    // "Retain" always succeeds as a no-op: --write on a strategy that keeps
+    // everything exactly as it is now has nothing to write, so treating it
+    // as a refusal (exit 1) makes automation that uniformly appends --write
+    // to whatever strategy it selected incorrectly treat a deliberate no-op
+    // as a failure (PR review finding).
+    if (parsed.modelPolicyStrategy === "retain") {
+      if (!parsed.json) {
+        printModelPolicyTextReport(
+          io,
+          modelPolicyChanges,
+          modelPolicyPlan,
+          modelPolicyLegacyChanges,
+        );
+      }
+      if (parsed.json) {
+        io.stdout(
+          `${JSON.stringify({
+            command: "upgrade",
+            modelPolicyStrategy: "retain",
+            modelPolicyWrote: false,
+            filesWritten: 0,
+            ...buildModelPolicyJsonFields(
+              modelPolicyChanges,
+              modelPolicyPlan,
+              modelPolicyLegacyChanges,
+            ),
+          })}\n`,
+        );
+      } else {
+        io.stdout(
+          "Nothing to write (retain): ai-profile.yaml and ai-profile.lock stay unchanged.\n",
+        );
+      }
+      return 0;
+    }
     const isBulkPresetSwitch =
       parsed.modelPolicyStrategy === "quality-first" ||
       parsed.modelPolicyStrategy === "cost-conscious";
@@ -854,10 +902,15 @@ async function runUpgrade(
         modelPolicyLegacyChanges,
       });
     }
-    io.stderr(
-      '--write with --model-policy-strategy is not yet supported for "retain": it has no prior model-policy resolution to retain (a v3-opted profile has no guaranteed lock block to compare against on first adoption, and a mapping-v2 profile has no v3 lock at all). Preview with --model-policy-strategy (without --write), then run `agent-profile compile --write` once ai-profile.yaml reflects the change you want.\n',
+    // Unreachable: "retain" already returned above, and every remaining
+    // `parsed.modelPolicyStrategy` value ("adopt"/"quality-first"/
+    // "cost-conscious") is covered by `isAdopt || isBulkPresetSwitch`; the
+    // profile-shape check a few lines above this whole block already
+    // refused any profile that is neither v3-opted nor an enabled
+    // mapping-v2 profile before `--write` is ever considered.
+    throw new Error(
+      `--model-policy-strategy "${parsed.modelPolicyStrategy}" --write unexpectedly matched no known write path`,
     );
-    return 1;
   }
   const scriptedWrite = parsed.write && parsed.adoptRecommended;
   const interactive =
@@ -967,6 +1020,11 @@ async function runUpgrade(
           offered: offeredIds,
           wrote: false,
           refusals: edit.refusals,
+          ...buildModelPolicyJsonFields(
+            modelPolicyChanges,
+            modelPolicyPlan,
+            modelPolicyLegacyChanges,
+          ),
         })}\n`,
       );
     } else if (prompts) prompts.showDiff(refusalText.trimEnd());
@@ -1340,12 +1398,38 @@ async function runModelPolicyWrite(input: {
   // safely preserves its bytes and lock entry regardless, so refusing for
   // it would block adoptions that are actually safe (PR review finding:
   // the refusal was too broad).
-  const manualOwnedModelBearing = regionPlan.manualOutputs.filter((output) =>
-    MODEL_POLICY_BEARING_PATHS.has(output.path),
+  // A manual-owned path in `MODEL_POLICY_BEARING_PATHS` is only a REAL
+  // problem when this specific write would actually have changed its
+  // bytes -- e.g. Tabnine's task-capsule guideline depends only on the
+  // profile's preset/role overrides, which "adopt" never changes, so
+  // adopting a fresh Codex/Claude resolution can never alter it. Refusing
+  // for a bearing path whose fresh compiled bytes are identical to what's
+  // already on disk would block an adoption that was never actually going
+  // to touch that file (PR review finding: the allowlist alone was still
+  // over-broad, since it never checked whether bytes would differ).
+  const manualOwnedModelBearingCandidates = regionPlan.manualOutputs.filter(
+    (output) => MODEL_POLICY_BEARING_PATHS.has(output.path),
   );
+  const manualOwnedModelBearing: LockOutputV2[] = [];
+  for (const output of manualOwnedModelBearingCandidates) {
+    const freshFile = compileResult.files.find(
+      (file) => file.path === output.path,
+    );
+    if (freshFile === undefined) {
+      manualOwnedModelBearing.push(output);
+      continue;
+    }
+    const onDiskBytes = await readOptionalBytes(rootDir, output.path);
+    if (
+      onDiskBytes === undefined ||
+      sha256Hex(onDiskBytes) !== sha256Hex(freshFile.bytes)
+    ) {
+      manualOwnedModelBearing.push(output);
+    }
+  }
   if (manualOwnedModelBearing.length > 0) {
     io.stderr(
-      `Refusing to write (${strategyLabel}): the following generated target files are manual-owned, so writing would leave them on the old resolution while the lock claimed the fresh one:\n${manualOwnedModelBearing
+      `Refusing to write (${strategyLabel}): the following generated target files are manual-owned and would actually change under this write, so writing would leave them on the old resolution while the lock claimed the fresh one:\n${manualOwnedModelBearing
         .map((output) => `- ${output.path}`)
         .join("\n")}\nReconcile ownership first (see \`agent-profile doctor\`), or accept the model-policy change manually.\n`,
     );
@@ -1433,12 +1517,26 @@ async function runModelPolicyWrite(input: {
     (action) =>
       action.action !== "unchanged" && !METADATA_WRITE_PATHS.has(action.path),
   ).length;
+  // `wrote` (aggregate across every action) is true even when the ONLY
+  // thing that changed was a missing/drifted generated target file being
+  // recreated -- e.g. `ai-profile.lock` already matches the adopted plan,
+  // but a target file was deleted out-of-band and this write repaired it.
+  // `modelPolicyWrote` must answer a narrower question ("did the adopted
+  // model-policy resolution itself actually change?"), so it's derived
+  // from `ai-profile.lock`'s own action specifically, not the aggregate
+  // (PR review finding: the aggregate falsely reported a mutation for a
+  // target-only repair).
+  const lockAction = plan.actions.find(
+    (action) => action.path === "ai-profile.lock",
+  );
+  const modelPolicyWrote =
+    lockAction !== undefined && lockAction.action !== "unchanged";
   if (json) {
     io.stdout(
       `${JSON.stringify({
         command: "upgrade",
         modelPolicyStrategy: strategyLabel,
-        modelPolicyWrote: wrote,
+        modelPolicyWrote,
         filesWritten: written,
         ...buildModelPolicyJsonFields(
           modelPolicyChanges,
@@ -1447,7 +1545,7 @@ async function runModelPolicyWrite(input: {
         ),
       })}\n`,
     );
-  } else if (wrote) {
+  } else if (modelPolicyWrote) {
     io.stdout(
       targetPreset === undefined
         ? `Updated ai-profile.lock and regenerated ${targetFilesWritten} target file${
@@ -1456,6 +1554,14 @@ async function runModelPolicyWrite(input: {
         : `Updated ai-profile.yaml and ai-profile.lock, and regenerated ${targetFilesWritten} target file${
             targetFilesWritten === 1 ? "" : "s"
           } (${targetPreset}).\n`,
+    );
+  } else if (wrote) {
+    io.stdout(
+      `ai-profile.lock already matches the ${
+        targetPreset === undefined ? "adopted" : targetPreset
+      } resolution; repaired ${targetFilesWritten} target file${
+        targetFilesWritten === 1 ? "" : "s"
+      } that had drifted from it.\n`,
     );
   } else {
     io.stdout(
@@ -4887,8 +4993,10 @@ Commands:
             enabled mapping-v2 profile, which has no current preset to keep)
             additionally edit ai-profile.yaml's own subagentPolicy.preset
             first, atomically with the same lock/target-file regeneration.
-            "retain" still refuses --write on either profile shape (no prior
-            resolution to retain).
+            "retain" --write is always a no-op (nothing to write, since it
+            keeps everything as-is) and never combines with
+            --adopt-recommended (each selects an independent write path;
+            run them as separate invocations).
   configure Change or reconcile the agent control posture (interactive).
             Shows the current posture, what each client actually does, and a
             preview before anything is written. The profile, generated files,
