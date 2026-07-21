@@ -779,7 +779,16 @@ async function runUpgrade(
         : isEnabledMappingV2Policy(subagentPolicy)
           ? planModelPolicyUpgrade(
               parsed.modelPolicyStrategy,
-              undefined,
+              // A profile can legitimately be mapping-v2-shaped (no
+              // `subagentPolicy.preset`) while `ai-profile.lock` still
+              // carries a real v3 `modelPolicy` block -- e.g. a user
+              // removed `subagentPolicy.preset` without regenerating the
+              // lock. Hardcoding `undefined` here made "retain" preview
+              // (and write) "nothing to retain" even though the lock's own
+              // rows are still real, on-disk, byte-identical resolutions
+              // (PR review finding); pass the lock's own block through so
+              // "retain" reflects what's actually on disk.
+              lockfileView?.modelPolicy,
               DEFAULT_MODEL_POLICY_PRESET,
               deriveModelPolicyRoleOverrides(subagentPolicy.roles),
             )
@@ -837,6 +846,7 @@ async function runUpgrade(
         io.stdout(
           `${JSON.stringify({
             command: "upgrade",
+            ...buildUpgradeCapabilityJsonFields(recordedVersion, offeredIds),
             modelPolicyStrategy: "retain",
             modelPolicyWrote: false,
             filesWritten: 0,
@@ -848,6 +858,7 @@ async function runUpgrade(
           })}\n`,
         );
       } else {
+        printOfferedCapabilitiesUnrelatedToModelPolicyWrite(io, offeredIds);
         io.stdout(
           "Nothing to write (retain): ai-profile.yaml and ai-profile.lock stay unchanged.\n",
         );
@@ -901,6 +912,8 @@ async function runUpgrade(
         targetPreset,
         modelPolicyChanges,
         modelPolicyLegacyChanges,
+        recordedVersion,
+        offeredIds,
       });
     }
     // Unreachable: "retain" already returned above, and every remaining
@@ -1135,6 +1148,15 @@ const MODEL_POLICY_BEARING_PATHS: ReadonlySet<string> = new Set([
   ".tabnine/guidelines/87-subagent-task-capsules.md",
 ]);
 
+/** The two files a model-policy write's own write plan always includes as
+ * metadata, never as a "generated target" in the human-readable sense --
+ * excluded from the target-file counts/wording in `runModelPolicyWrite`'s
+ * final report. */
+const METADATA_WRITE_PATHS: ReadonlySet<string> = new Set([
+  "ai-profile.yaml",
+  "ai-profile.lock",
+]);
+
 /**
  * `regionPlan.manualOutputs` correctly leaves a manual-owned output's BYTES
  * untouched (`planRegionAwareWrites` classifies ownership before
@@ -1339,9 +1361,16 @@ function formatTextDiff(oldText: string, newText: string): string {
  * to usefully render inline) now also shows a real content diff: a semantic
  * `subagentPolicy.enabled`/`.preset` old->new line for `ai-profile.yaml`
  * (since the profile object, not raw text, is the clearest description of
- * that one-field edit), and a line-level text diff (via `formatTextDiff`,
- * pre-strategy render vs. the bytes about to be written) for every other
- * changed file.
+ * that one-field edit), and a line-level text diff for every other changed
+ * file.
+ *
+ * That text diff's "old" side must be the file's ACTUAL current on-disk
+ * bytes, not a synthetic pre-strategy compile -- a further PR review
+ * finding after that first content-diff fix pointed out a canonical render
+ * misrepresents a mixed-owned file's preserved manual content, and hides
+ * most of a to-be-created file's content behind an empty-vs-canonical diff
+ * instead of the real empty-vs-planned one. A path with no on-disk file at
+ * all (a genuine `create`) reads as an empty `oldText`.
  *
  * Returns `false` if the dry-run itself failed (already reported via
  * `io.stderr`); `true` otherwise.
@@ -1353,7 +1382,6 @@ async function previewBulkPresetSwitchWrites(
   targetPreset: ModelPolicyPreset,
   profile: AiProfile,
   writeProfile: AiProfile,
-  preStrategyFiles: readonly GeneratedFile[],
 ): Promise<boolean> {
   const preview = await createOrApplyWritePlan(rootDir, allWrites, false, io);
   if (!preview) {
@@ -1384,10 +1412,10 @@ async function previewBulkPresetSwitchWrites(
       typeof write.bytes === "string"
         ? Buffer.from(write.bytes, "utf8")
         : write.bytes;
-    const preFile = preStrategyFiles.find(
-      (file) => file.path === action.path,
-    );
-    const oldText = preFile ? Buffer.from(preFile.bytes).toString("utf8") : "";
+    const onDiskBytes = await readOptionalBytes(rootDir, action.path);
+    const oldText = onDiskBytes
+      ? Buffer.from(onDiskBytes).toString("utf8")
+      : "";
     const diff = formatTextDiff(oldText, Buffer.from(newBytes).toString("utf8"));
     if (diff.length > 0) {
       lines.push(diff);
@@ -1439,6 +1467,15 @@ async function runModelPolicyWrite(input: {
   modelPolicyLegacyChanges:
     | readonly ModelPolicyLegacyUpgradeComparisonRow[]
     | undefined;
+  /** The SAME capability-catalog discovery `runUpgrade` already computed
+   * (unconditionally, before this model-policy dispatch) -- this write path
+   * only concerns model policy, but it's still the same `upgrade` command
+   * invocation, and the two upgrade concerns are documented as separate:
+   * dropping the capability report here just because a model-policy write
+   * happened to run first would silently hide currently-offered
+   * capabilities from both text and JSON output (PR review finding). */
+  recordedVersion: number | undefined;
+  offeredIds: readonly string[];
 }): Promise<number> {
   const {
     rootDir,
@@ -1452,6 +1489,8 @@ async function runModelPolicyWrite(input: {
     targetPreset,
     modelPolicyChanges,
     modelPolicyLegacyChanges,
+    recordedVersion,
+    offeredIds,
   } = input;
   if (modelPolicyPlan.block === undefined) {
     // Invariant guaranteed by `planModelPolicyUpgrade`'s non-"retain"
@@ -1509,12 +1548,15 @@ async function runModelPolicyWrite(input: {
   // What every generated file would look like WITHOUT this strategy applied
   // -- the original profile, reconciled against the original prior lock (so
   // an unrelated role keeps its exact current resolution via the same
-  // lock-reuse primitive `compileResult` itself used). Shared by the
-  // manual-owned-bearing-path check (only refuse when the strategy itself
-  // would change a file's content, not because it happens to differ from
-  // on-disk manual customization) and the pre-apply preview (show the real
-  // content diff the strategy produces, not just a path+action label) (PR
-  // review findings).
+  // lock-reuse primitive `compileResult` itself used). Used ONLY by the
+  // manual-owned-bearing-path check below (only refuse when the strategy
+  // itself would change a file's content, not because it happens to differ
+  // from on-disk manual customization) -- NOT by the pre-apply preview,
+  // which deliberately diffs against the file's actual ON-DISK bytes
+  // instead (a synthetic canonical render would misrepresent a mixed-owned
+  // file's preserved manual content, and hide most of a to-be-created
+  // file's content behind an empty-vs-canonical diff instead of the real
+  // empty-vs-planned one) (PR review findings).
   const preStrategyCompile = compileProfile({
     profile,
     previousModelPolicy: priorLock?.modelPolicy,
@@ -1523,9 +1565,9 @@ async function runModelPolicyWrite(input: {
     // The ORIGINAL profile (before this write) fails to compile -- a real,
     // user-relevant problem in its own right. Silently degrading to "no
     // pre-strategy files" would make the manual-owned-bearing check treat
-    // every candidate as affected (safe) but would make the later preview
-    // render every changed file as if it were purely new content, hiding
-    // the actual problem instead of surfacing it.
+    // every candidate as affected, which is at least fail-safe there, but
+    // would still hide a genuine problem in the original profile instead of
+    // surfacing it.
     io.stderr(formatCompileIssues(preStrategyCompile.issues));
     return 1;
   }
@@ -1656,7 +1698,6 @@ async function runModelPolicyWrite(input: {
       targetPreset,
       profile,
       writeProfile,
-      preStrategyFiles,
     ))
   ) {
     return 1;
@@ -1685,10 +1726,6 @@ async function runModelPolicyWrite(input: {
   // files are also part of the total (PR review finding: e.g. changing the
   // lock plus two real targets would claim "3 regenerated target files").
   // Count only the actual generated-output actions for that specific wording.
-  const METADATA_WRITE_PATHS: ReadonlySet<string> = new Set([
-    "ai-profile.yaml",
-    "ai-profile.lock",
-  ]);
   const targetFilesWritten = plan.actions.filter(
     (action) =>
       action.action !== "unchanged" && !METADATA_WRITE_PATHS.has(action.path),
@@ -1718,6 +1755,7 @@ async function runModelPolicyWrite(input: {
     io.stdout(
       `${JSON.stringify({
         command: "upgrade",
+        ...buildUpgradeCapabilityJsonFields(recordedVersion, offeredIds),
         modelPolicyStrategy: strategyLabel,
         modelPolicyWrote,
         filesWritten: written,
@@ -1728,29 +1766,16 @@ async function runModelPolicyWrite(input: {
         ),
       })}\n`,
     );
-  } else if (modelPolicyWrote) {
-    io.stdout(
-      targetPreset === undefined
-        ? `Updated ai-profile.lock and regenerated ${targetFilesWritten} target file${
-            targetFilesWritten === 1 ? "" : "s"
-          } (adopt).\n`
-        : `Updated ai-profile.yaml and ai-profile.lock, and regenerated ${targetFilesWritten} target file${
-            targetFilesWritten === 1 ? "" : "s"
-          } (${targetPreset}).\n`,
-    );
-  } else if (wrote) {
-    io.stdout(
-      `ai-profile.lock already matches the ${
-        targetPreset === undefined ? "adopted" : targetPreset
-      } resolution; repaired ${targetFilesWritten} target file${
-        targetFilesWritten === 1 ? "" : "s"
-      } that had drifted from it.\n`,
-    );
   } else {
+    printOfferedCapabilitiesUnrelatedToModelPolicyWrite(io, offeredIds);
     io.stdout(
-      targetPreset === undefined
-        ? "Nothing to adopt: ai-profile.lock and generated target files already match the fresh catalog resolution.\n"
-        : `Nothing to switch: ai-profile.yaml, ai-profile.lock, and generated target files already match the ${targetPreset} preset.\n`,
+      formatModelPolicyWriteResultText({
+        modelPolicyWrote,
+        wrote,
+        plan,
+        targetPreset,
+        targetFilesWritten,
+      }),
     );
   }
   return 0;
@@ -1849,6 +1874,112 @@ function buildModelPolicyJsonFields(
           })),
         }),
   };
+}
+
+/**
+ * The capability-catalog JSON fields (`catalogVersion`/`recordedCatalogVersion`/
+ * `offered`) shared by EVERY JSON `upgrade` response, including the two
+ * model-policy-only write paths ("retain" no-op, and `runModelPolicyWrite`'s
+ * real write) -- those two write paths concern only model policy, but they
+ * are still the same `upgrade` command invocation, and the capability
+ * report is documented as a separate, independent concern that must not be
+ * silently dropped just because a model-policy write happened to run first
+ * (PR review finding). Mirrors `buildModelPolicyJsonFields`'s own
+ * "shared JSON fields, one owner" precedent.
+ */
+function buildUpgradeCapabilityJsonFields(
+  recordedVersion: number | undefined,
+  offeredIds: readonly string[],
+): Record<string, unknown> {
+  return {
+    catalogVersion: CAPABILITY_CATALOG_VERSION,
+    recordedCatalogVersion: recordedVersion ?? null,
+    offered: offeredIds,
+  };
+}
+
+/**
+ * Text-mode counterpart to `buildUpgradeCapabilityJsonFields`: prints
+ * currently-offered capabilities before a model-policy-only write's own
+ * message, so a user running `--model-policy-strategy ... --write` without
+ * `--adopt-recommended` still learns about unrelated offered capabilities
+ * (PR review finding -- same rationale as the JSON fields above). A no-op
+ * when nothing is offered.
+ */
+function printOfferedCapabilitiesUnrelatedToModelPolicyWrite(
+  io: CliIo,
+  offeredIds: readonly string[],
+): void {
+  if (offeredIds.length > 0) {
+    io.stdout(
+      `offered capabilities (unrelated to this model-policy write):\n${offeredIds.map((id) => `- ${id}`).join("\n")}\n`,
+    );
+  }
+}
+
+/**
+ * The final text-mode message for a model-policy write's outcome:
+ * - `modelPolicyWrote`: the adopted/switched resolution genuinely changed.
+ * - `wrote` but not `modelPolicyWrote`: SOMETHING else in the write plan
+ *   changed (a missing target recreated, an unrelated regeneration, or a
+ *   metadata-only lock change) while the model policy itself did not.
+ *   Earlier wording called every one of these "drift", even though the
+ *   drift-refusal preflight already refuses genuine hash drift before this
+ *   message is ever reached -- so nothing here was actually drifted; this
+ *   distinguishes created/regenerated/metadata-only instead (PR review
+ *   finding).
+ * - neither: a genuine no-op.
+ */
+function formatModelPolicyWriteResultText(input: {
+  modelPolicyWrote: boolean;
+  wrote: boolean;
+  plan: WritePlanResult;
+  targetPreset: ModelPolicyPreset | undefined;
+  targetFilesWritten: number;
+}): string {
+  const { modelPolicyWrote, wrote, plan, targetPreset, targetFilesWritten } =
+    input;
+  if (modelPolicyWrote) {
+    return targetPreset === undefined
+      ? `Updated ai-profile.lock and regenerated ${targetFilesWritten} target file${
+          targetFilesWritten === 1 ? "" : "s"
+        } (adopt).\n`
+      : `Updated ai-profile.yaml and ai-profile.lock, and regenerated ${targetFilesWritten} target file${
+          targetFilesWritten === 1 ? "" : "s"
+        } (${targetPreset}).\n`;
+  }
+  if (wrote) {
+    const targetActions = plan.actions.filter(
+      (action) =>
+        action.action !== "unchanged" &&
+        !METADATA_WRITE_PATHS.has(action.path),
+    );
+    const created = targetActions.filter(
+      (action) => action.action === "create",
+    ).length;
+    const regenerated = targetActions.filter(
+      (action) => action.action === "change",
+    ).length;
+    const resolutionLabel = targetPreset === undefined ? "adopted" : targetPreset;
+    if (targetActions.length === 0) {
+      return `Updated ai-profile.lock for an unrelated metadata change; the ${resolutionLabel} model policy itself is unchanged.\n`;
+    }
+    const parts: string[] = [];
+    if (created > 0) {
+      parts.push(
+        `created ${created} missing target file${created === 1 ? "" : "s"}`,
+      );
+    }
+    if (regenerated > 0) {
+      parts.push(
+        `regenerated ${regenerated} target file${regenerated === 1 ? "" : "s"}`,
+      );
+    }
+    return `ai-profile.lock already matches the ${resolutionLabel} resolution; ${parts.join(" and ")} to keep them consistent with it.\n`;
+  }
+  return targetPreset === undefined
+    ? "Nothing to adopt: ai-profile.lock and generated target files already match the fresh catalog resolution.\n"
+    : `Nothing to switch: ai-profile.yaml, ai-profile.lock, and generated target files already match the ${targetPreset} preset.\n`;
 }
 
 function emitUpgradeReport(

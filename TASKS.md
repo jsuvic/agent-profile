@@ -435,6 +435,62 @@ findings resolved as GitHub review threads. State stays `ready`, not
 adopting-v3 writes, "custom exact" strategy, interactive-UI triggering,
 Tabnine reconciliation deferred to I6d).
 
+I6a PR review fix round 9 (2026-07-21, PR #125), after I6a was already
+marked `done`: addressed 4 new Codex bot findings (1 P1, 3 P2) on the same
+`upgrade` write paths, all fresh evidence surfaced against round 8's own
+fixes: (1, P1) the bulk-preset-switch preview (round 7) diffed against a
+synthetic pre-strategy compile, not the file's actual on-disk bytes - for a
+mixed-owned file this misrepresented preserved manual content as newly
+added, and for a genuine `create` action it hid most of the file behind a
+diff against the wrong baseline instead of the real empty-vs-planned one -
+fixed by reading actual on-disk bytes (missing file treated as empty) for
+the diff's "old" side, removing the `preStrategyFiles` parameter from the
+preview function entirely (the manual-owned-bearing-path check, a
+genuinely different question, still correctly uses the synthetic pre/post
+comparison); (2, P2) the "repaired" success message (round 8) always said
+a target file "had drifted", even for a missing-file repair, an unrelated
+template regeneration, or a metadata-only lock change, and could read
+"repaired 0 target files that had drifted" - fixed with neutral wording
+that inspects the write-plan actions to distinguish created/regenerated/
+metadata-only, never using the word "drift"; (3, P2)
+`--model-policy-strategy ... --write` without `--adopt-recommended`
+silently dropped the capability-catalog report (currently-offered
+capabilities vanished from both text and JSON, even though the two upgrade
+concerns are documented as independent) - fixed by threading the same
+`recordedVersion`/`offeredIds` `runUpgrade` already computes into both the
+"retain" no-op branch and `runModelPolicyWrite`'s real-write branch; (4,
+P2) mapping-v2 "retain" always previewed "nothing to retain" even when a
+real v3 `ai-profile.lock` `modelPolicy` block still exists (e.g. a user
+removed `subagentPolicy.preset` without regenerating the lock - an
+accepted repository state, not missing information) - fixed by passing
+`lockfileView?.modelPolicy` instead of a hardcoded `undefined` for every
+mapping-v2 strategy (safe for adopt/quality-first/cost-conscious too,
+which only use "previous" for Tabnine-row preservation). One test-
+construction bug found and fixed while testing finding 4: a hand-crafted
+lock JSON with unsorted `modelPolicy.resolutions` failed schema validation
+("not in deterministic order") - fixed by sorting via the already-exported
+`compareModelPolicyResolutions` before writing the fixture, since (unlike
+most fixtures in this file) it writes lock JSON directly rather than via
+`buildLockfile`. Spec review passed COMPLIANT. Code-quality review found
+ISSUES_FOUND, all four items fixed: a stale comment claimed the pre-
+strategy compile was still "shared" with the preview (no longer true after
+fix 1) - corrected to state the preview now deliberately uses on-disk
+bytes instead; real duplication between the "retain" no-op branch and
+`runModelPolicyWrite`'s final report (identical JSON shape and text line,
+copy-pasted rather than extracted) - fixed via two new shared helpers,
+`buildUpgradeCapabilityJsonFields` and
+`printOfferedCapabilitiesUnrelatedToModelPolicyWrite`, mirroring the
+existing `buildModelPolicyJsonFields` precedent for exactly this "shared
+report fields, one owner" problem shape; broken indentation in the
+three-way message block (hand-edited without reformatting) - fixed by
+extracting it into a new named `formatModelPolicyWriteResultText` helper,
+matching this function's own established decomposition pattern
+(`findManualOwnedModelBearingChanges`, `refuseIfTabnineProvenanceWouldBeLost`)
+instead of growing further inline; a test comment gap on the sort-fixture
+fix - added. Tests: `apps/cli` 558/554, all 0 failures; clean typecheck
+(including `tsconfig.test.json`); `verify:pack` and golden regeneration
+both clean.
+
 I6a PR review fix round 8 (2026-07-21, PR #125), after I6a was already
 marked `done`: addressed 4 new Codex bot findings (2 P1, 2 P2) on the same
 already-shipped `upgrade` write paths: (1, P1) model-policy writes were not

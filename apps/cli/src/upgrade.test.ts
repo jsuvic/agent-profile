@@ -1652,6 +1652,64 @@ test("upgrade --model-policy-strategy retain --json previews an empty resolution
   assert.deepEqual(report.modelPolicyPlan?.resolutions, []);
 });
 
+test("upgrade --model-policy-strategy retain --json preserves a mapping-v2 profile's REAL prior lock rows, when one exists (PR review finding)", async () => {
+  // A profile can legitimately be mapping-v2-shaped (no
+  // subagentPolicy.preset) while ai-profile.lock still carries a real v3
+  // modelPolicy block -- e.g. a user removed subagentPolicy.preset without
+  // regenerating the lock. Hardcoding `undefined` as the "previous" block
+  // for every mapping-v2 strategy made "retain" preview "nothing to
+  // retain" even though the lock's own rows are still real, on-disk,
+  // byte-identical resolutions -- unlike the "no prior v3 lock" case
+  // above, this profile/lock combination is NOT missing information, it's
+  // just describing an accepted repository state that retain should
+  // reflect exactly.
+  const fresh = liveModelPolicy();
+  const root = await createUpgradeRoot(
+    CAPABILITY_CATALOG_VERSION,
+    MAPPING_V2_PROFILE,
+  );
+  const lockPath = path.join(root, "ai-profile.lock");
+  const lockJson = JSON.parse(await readFile(lockPath, "utf8")) as {
+    modelPolicy?: unknown;
+    [key: string]: unknown;
+  };
+  // Sort required here specifically because this fixture writes the lock's
+  // JSON directly (unlike most other tests in this file, which build it via
+  // `buildLockfile` and get deterministic ordering for free) -- an unsorted
+  // `resolutions` array fails lockfile schema validation.
+  lockJson.modelPolicy = {
+    ...fresh,
+    resolutions: [...fresh.resolutions].sort(compareModelPolicyResolutions),
+  };
+  await writeFile(lockPath, `${JSON.stringify(lockJson, null, 2)}\n`, "utf8");
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "retain",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyPlan?: {
+      strategy: string;
+      resolutions: LockModelPolicyV2["resolutions"];
+    };
+  };
+  assert.equal(report.modelPolicyPlan?.strategy, "retain");
+  assert.deepEqual(
+    report.modelPolicyPlan?.resolutions,
+    [...fresh.resolutions].sort(compareModelPolicyResolutions),
+  );
+});
+
 // Phase 31.5 (I6a): narrowed twice now -- first from "every strategy refuses"
 // once "adopt --write" on a v3-opted profile got a real write path, and again
 // this cycle now "adopt"/"quality-first"/"cost-conscious" all have real write
@@ -2148,6 +2206,50 @@ test("upgrade --model-policy-strategy quality-first --write's preview shows the 
   assert.match(output.stdoutText(), /^\s*\+.*model = /mu);
 });
 
+test("upgrade --model-policy-strategy quality-first --write's preview diffs a to-be-created file against an empty baseline, not a synthetic pre-strategy render (PR review finding)", async () => {
+  // A prior fix diffed against a synthetic pre-strategy compile
+  // (`preStrategyFiles`), not the file's actual on-disk bytes -- for a
+  // genuine `create` action (the file is currently absent), that synthetic
+  // "old" side is a canonical render that never existed on disk, hiding
+  // most of the file being created behind a diff against the wrong
+  // baseline instead of the real empty-vs-planned one. Delete a target
+  // file out-of-band so the write plan must create it, then assert the
+  // diff shows ONLY additions (no removed lines at all).
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  await rm(path.join(root, ".codex", "config.toml"));
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "quality-first",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const stdout = output.stdoutText();
+  assert.match(stdout, /- \.codex\/config\.toml \(create\)/u);
+
+  const sectionStart = stdout.indexOf(".codex/config.toml (create)");
+  assert.ok(sectionStart >= 0);
+  const nextSectionStart = stdout.indexOf("\n- ", sectionStart + 1);
+  const section = stdout.slice(
+    sectionStart,
+    nextSectionStart === -1 ? undefined : nextSectionStart,
+  );
+  assert.doesNotMatch(section, /^ {2}-/mu);
+  assert.match(section, /^ {2}\+/mu);
+});
+
 test("upgrade --model-policy-strategy quality-first --write reports the real generated-target-file count, excluding ai-profile.yaml/ai-profile.lock from that count (PR review finding)", async () => {
   // Before this fix, the reported count included ai-profile.yaml and
   // ai-profile.lock themselves alongside the actual generated target files,
@@ -2465,6 +2567,80 @@ test("upgrade --model-policy-strategy adopt --write --json includes modelPolicyC
   assert.ok((report.modelPolicyPlan?.resolutions.length ?? 0) > 0);
 });
 
+test("upgrade --model-policy-strategy adopt --write preserves the capability-catalog report even though it never runs the capability-adoption path (PR review finding)", async () => {
+  // The model-policy write path returns early, before the normal
+  // capability-catalog computation's report -- unrelated to any model
+  // write, currently-offered capabilities must still be reported (both
+  // upgrade concerns are documented as separate; the two flag combos apply
+  // to independent write paths, per the --adopt-recommended rejection
+  // fixed in an earlier round).
+  const fresh = liveModelPolicy();
+  const architectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(architectCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  // Omitting catalogVersion (no `upgrade.catalogVersion` stamp at all)
+  // makes every catalog capability "offered", independent of the
+  // model-policy write below.
+  const root = await createV3UpgradeRootWithGeneratedFiles(undefined, stale);
+
+  const jsonOutput = createOutput();
+  const jsonCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: jsonOutput },
+  );
+  assert.equal(jsonCode, 0);
+  const report = JSON.parse(jsonOutput.stdoutText()) as {
+    catalogVersion?: number;
+    recordedCatalogVersion?: number | null;
+    offered?: string[];
+    modelPolicyStrategy?: string;
+  };
+  assert.equal(report.catalogVersion, CAPABILITY_CATALOG_VERSION);
+  assert.equal(report.recordedCatalogVersion, null);
+  assert.ok((report.offered?.length ?? 0) > 0);
+  assert.equal(report.modelPolicyStrategy, "adopt");
+
+  const textRoot = await createV3UpgradeRootWithGeneratedFiles(
+    undefined,
+    stale,
+  );
+  const textOutput = createOutput();
+  const textCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      textRoot,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: textOutput },
+  );
+  assert.equal(textCode, 0);
+  assert.match(
+    textOutput.stdoutText(),
+    /offered capabilities \(unrelated to this model-policy write\):/u,
+  );
+});
+
 test("upgrade --write --adopt-recommended --json includes model comparison fields in a capability-insertion refusal, not just the refusals list (PR review finding)", async () => {
   // Before this fix, the JSON refusal branch built its own object from
   // scratch and never included the independently-computed model
@@ -2746,6 +2922,64 @@ test("upgrade --model-policy-strategy adopt --write reports modelPolicyWrote: fa
   // not, so modelPolicyWrote must be false.
   assert.ok((report.filesWritten ?? 0) > 0);
   assert.equal(report.modelPolicyWrote, false);
+
+  // Text mode must describe this as a metadata-only update, not claim any
+  // target file "drifted" -- nothing here was drift (the drift-refusal
+  // preflight already refuses genuine hash drift outright), and no target
+  // file changed at all in this scenario.
+  const textRoot = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    fresh,
+  );
+  const textBaselineCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      textRoot,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: createOutput() },
+  );
+  assert.equal(textBaselineCode, 0);
+  const textProfilePath = path.join(textRoot, "ai-profile.yaml");
+  await writeFile(
+    textProfilePath,
+    (await readFile(textProfilePath, "utf8")).replace(
+      "description: Upgrade fixture.",
+      "description: Upgrade fixture (edited, unrelated to model policy).",
+    ),
+    "utf8",
+  );
+  const textOutput = createOutput();
+  const textCode = await runCli(
+    [
+      "upgrade",
+      "--root",
+      textRoot,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: textOutput },
+  );
+  assert.equal(textCode, 0);
+  // The edited description is embedded in AGENTS.md/CLAUDE.md's own header,
+  // so this scenario actually regenerates those target files too (not a
+  // pure metadata-only lock change) -- the key assertion is that the
+  // wording never claims drift (the drift-refusal preflight already
+  // refuses genuine hash drift outright, so nothing here was ever
+  // "drifted") and describes this as a regeneration, not the "Updated..."
+  // adopted-resolution message.
+  assert.match(
+    textOutput.stdoutText(),
+    /already matches the adopted resolution; regenerated \d+ target files? to keep them consistent with it/u,
+  );
+  assert.doesNotMatch(textOutput.stdoutText(), /drift/iu);
+  assert.doesNotMatch(textOutput.stdoutText(), /^Updated ai-profile\.lock and regenerated/mu);
 });
 
 test("upgrade --model-policy-strategy adopt --write reports modelPolicyWrote: false when only a missing generated target is repaired and ai-profile.lock itself is unchanged (PR review finding)", async () => {
@@ -2836,9 +3070,10 @@ test("upgrade --model-policy-strategy adopt --write reports modelPolicyWrote: fa
   assert.equal(textCode, 0);
   assert.match(
     textOutput.stdoutText(),
-    /already matches the adopted resolution; repaired/u,
+    /already matches the adopted resolution; created 1 missing target file/u,
   );
   assert.doesNotMatch(textOutput.stdoutText(), /^Updated ai-profile\.lock/mu);
+  assert.doesNotMatch(textOutput.stdoutText(), /drift/iu);
 });
 
 test("upgrade --model-policy-strategy adopt --write reports a no-op adoption as unwritten, not a false mutation (PR review finding)", async () => {
