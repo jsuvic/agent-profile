@@ -68,6 +68,42 @@ test("resolveModelPolicyLockfile stays valid and unaffected by the Tabnine capab
   assert.ok(modelPolicy.resolutions.some((r) => r.client === "claude"));
 });
 
+test("resolveModelPolicyLockfile preserves a prior lock's tabnine rows verbatim since the fresh tabnine table currently emits none (PR review finding)", () => {
+  // A caller's `planModelPolicyUpgrade` plan can carry preserved prior
+  // `client: "tabnine"` rows forward (the lockfile schema explicitly
+  // supports a mixed Codex/Claude/Tabnine block). Before this fix,
+  // `resolveModelPolicyLockfile` unconditionally recomputed tabnine rows
+  // fresh (currently always empty) and discarded whatever the caller
+  // passed in as `previousModelPolicy`, so the actually-written lock would
+  // disagree with a plan that had just been previewed to the user.
+  const previousTabnineRow: LockModelPolicyResolutionV2 = {
+    client: "tabnine",
+    role: "architect",
+    model: "organization/private-pinned-model",
+    effort: "high",
+    effortStatus: "unsupported",
+    alternatives: [],
+    source: "explicit-override",
+    capabilityStatus: "unsupported",
+    catalogVersion: 2,
+  };
+  const previousModelPolicy = {
+    catalogVersion: 2,
+    preset: "role-aware" as const,
+    resolutions: [previousTabnineRow],
+  };
+
+  const modelPolicy = resolveModelPolicyLockfile(
+    profileWithPreset(),
+    previousModelPolicy,
+  );
+  assert.ok(modelPolicy);
+  const tabnineRow = modelPolicy.resolutions.find(
+    (row) => row.client === "tabnine",
+  );
+  assert.deepEqual(tabnineRow, previousTabnineRow);
+});
+
 test("a hand-assembled mixed Codex/Claude/Tabnine lockfile modelPolicy block validates and keeps each client's rows independent", () => {
   const preset = "role-aware" as const;
   const codexClaudeResolutions = toLockModelPolicyFromTargetTable(
