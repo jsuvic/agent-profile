@@ -143,7 +143,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | done | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
 | I6 | Locked model-resolution reuse primitive (ordinary compile reuses the lock) | done | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
 | I6a | Upgrade command exact comparison and retain/adopt/customize planning | done | [006a-upgrade-comparison-and-planning.md](docs/specs/phase-31.5/issues/006a-upgrade-comparison-and-planning.md) |
-| I6b | Metadata-only package/registry update check | sequenced | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
+| I6b | Metadata-only package/registry update check | done | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
 | I6c | Upgrade-flow probe consent, separate from update-check consent | sequenced | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
 | I6d | Tabnine model-resolution reconciliation | sequenced | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
 | I6e | Upgrade write ownership refusal and rollback | sequenced | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
@@ -210,6 +210,84 @@ tracking them as follow-up rather than blocking I5's closure, the same
 precedent already set for I3's disclosed Tabnine-wiring scope reduction.
 I5R carries that remaining scope; I9's final-integration coverage list
 should account for I5R, not just I5, when it runs.
+
+I6b first RED-first cycle completed 2026-07-21, a disclosed partial slice:
+added `apps/cli/src/update-check.ts` (`checkForPackageUpdate`,
+`formatUpdateCheckMessage`, `manualUpdateGuidance`) and a new `upgrade
+--check-for-updates` flag (off by default, separate from I6c's still-not-built
+probe consent) that performs one read-only `fetch` against the npm registry's
+package-metadata endpoint, reports newer/current/older/unknown plus manual
+`npm install -g @agent-profile/cli@latest` guidance, and never
+installs/downloads/writes anything. Declining (the default) performs zero
+network access, proven via the existing `withNetworkSentinel` fixture reused
+from `apps/cli/src/upgrade.test.ts`'s established pattern. `--json` mode
+currently no-ops the check entirely (documented in code comments and
+`--help` text) rather than integrating it into the JSON envelope - an
+explicit, disclosed scope choice, not an oversight. Implementer initially
+wrote the implementation before the tests (a process deviation from this
+repo's required RED-first TDD workflow) but disclosed this rather than
+hiding it; asked to correct it, the implementer then verified a real RED by
+stashing the implementation, confirming the two behavior-driving tests failed
+with "Unknown option: --check-for-updates" against the pre-change code, and
+restoring to reconfirm green - so the ledger's RED->GREEN proof is genuine,
+just not achieved in the originally-intended writing order. Spec review
+passed COMPLIANT: verified in the code (not just claimed) that fetch
+failures, non-OK responses, malformed JSON, and a missing/wrong-typed
+`version` field are all caught and degrade to an `"unknown"` status rather
+than throwing (a 5s `AbortController` timeout also guards against a hang), and
+that no auth headers/credentials/telemetry are sent. Code-quality review
+passed ACCEPTABLE with two non-blocking Minor notes (a slightly dense
+`"version" in body ? ... : undefined` extraction, and an unreachable
+exhaustiveness-guard `default` case that could use a clarifying comment) -
+left as-is, not blocking. Tests: `apps/cli` 563/559 (0 fail, 4 pre-existing
+skips); clean typecheck (`tsc -b` + `tsconfig.test.json --noEmit`). Deferred,
+per spec review's own recommendation, as near-term follow-up rather than
+blocking this cycle: dedicated tests for the `unknown` (timeout/malformed-
+response) and `older` status branches (the code paths themselves were
+verified sound by direct reading, satisfying AGENTS.md's own "static-only
+evidence is weaker than a regression test" standard as a disclosed gap, not
+an unmet criterion); and a real decision on `--json` mode integration versus
+formally rejecting the flag combination. State stayed `ready`, not `done`
+pending that follow-up.
+
+I6b second RED-first cycle completed 2026-07-21, closing all three items
+deferred above: (1) added a malformed (non-JSON) registry-response test and a
+thrown-fetch-error test, both proving the `"unknown"` status degrades to a
+"Could not check for updates" message with exit code 0, never a hard
+failure; (2) added an older-version test (registry reports `0.0.1` against
+the real running `0.5.0`), confirming `compareVersions` correctly yields
+`"older"`; (3) made the `--check-for-updates`/`--json` interaction an
+explicit product decision - rejects the combination outright (exit code 2),
+matching this command's existing flag-conflict-rejection precedent, rather
+than the silent no-op cycle 1 shipped - with help text/comments updated to
+match. RED verified honestly this time: before implementing the `--json`
+rejection, the two unknown/older tests already passed against cycle 1's
+code (proving those branches were already sound, just untested) while the
+new `--json`-rejection test failed with `0 !== 2` as expected. Spec review
+found one remaining gap: no test isolated the `AbortController` timeout
+mechanism itself from a generic thrown-fetch-error (both hit the same catch
+block, but the acceptance criteria names "timeout" specifically). A third
+small cycle closed it: added a test-only `updateCheckTimeoutMs` seam
+(`CliOptions`/`RunUpgradeOptions` in `apps/cli/src/index.ts`, following the
+same precedent as the existing `probeRunner` test seam, production default
+of 5000ms in `update-check.ts` untouched for real callers) and one new test
+whose `fetch` stub only rejects via a real `AbortSignal` "abort" event,
+never resolving/rejecting on its own, proving the timeout wiring itself
+fires the abort rather than merely re-exercising the generic catch block.
+Spec review passed COMPLIANT across all three cycles combined, with every
+acceptance-criteria bullet in the brief now traced to a specific regression
+test (not static-only evidence). Code-quality review passed ACCEPTABLE both
+times (cycle 2 had no findings beyond the flagged gap already handled by
+cycle 3; cycle 3 had only two non-blocking Minor notes - a small doc-comment
+duplication versus the `probeRunner` precedent, and a mildly redundant
+double-assertion in the new test - left as-is). Tests: `apps/cli` 568/564,
+0 failures, 4 pre-existing skips; clean typecheck (`tsc -b` +
+`tsconfig.test.json --noEmit`). State moves to `done` - the brief's full
+acceptance-criteria list is now backed by regression tests. Not carried
+forward as open scope: `README.md`'s "Upgrading existing profiles" section
+still doesn't mention `--check-for-updates` (same disclosed, pre-existing
+gap pattern as I6a's own `--model-policy-strategy` omission - a
+documentation-polish item, not a behavior gap).
 
 I6 completed 2026-07-18 (spec + code-quality review passed) for its own
 foundational scope only: the "ordinary compile reuses the lock" primitive
