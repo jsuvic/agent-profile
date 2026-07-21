@@ -19,10 +19,12 @@ Upgrade reads the profile's portable preset intent plus its current locked
 resolution, computes what today's bundled catalog would resolve fresh for
 each role/client, and where the two differ, presents an upgrade table (old
 vs. new, with a stated reason) and offers: Retain (keep every locked row, no
-changes), role-aware Adopt (accept every role's fresh recommendation),
-quality-first and cost-conscious bulk strategies, and Custom exact
-(per-role/per-client picks). Each path must produce a deterministic plan
-before any write occurs.
+changes), role-aware Adopt (accept every role's fresh recommendation), and
+quality-first and cost-conscious bulk strategies. Each path must produce a
+deterministic plan before any write occurs. (A "Custom exact"
+per-role/per-client strategy was originally in scope here too; see the
+Non-goals amendment below - it is tracked separately as a future item
+pending a grill session, not part of this item's acceptance bar.)
 
 Per the parent spec's "Existing repository upgrade" flow (step 1: `agent-profile
 upgrade` compares "the legacy/locked catalog resolution with mapping v3"),
@@ -48,6 +50,21 @@ and lockfile are unaffected until an upgrade is explicitly accepted.
   contracts here.
 - Automatic package installation, remote catalog mutation, or forced
   migration (already a non-goal of parent I6).
+- **Amendment (2026-07-21):** the "custom exact" (per-role/per-client picks)
+  strategy, originally listed as an acceptance criterion below, is
+  descoped from this item. It needed a materially larger, still-undecided
+  design (a nested per-role/per-client `ai-profile.yaml` edit surface, an
+  input shape for scripted `--write`, and several open product-shape
+  questions - e.g. whether it composes with a bulk strategy or replaces
+  it, and how it interacts with a mapping-v2 profile) that is not a bounded
+  implementation cycle. Every other planning path (retain, adopt,
+  quality-first, cost-conscious) shipped, was tested, and passed review
+  across twelve `/implement-next` cycles; this was the only one left
+  unimplemented, repeatedly flagged by automated PR review and
+  consciously deferred each time (see PR #125's review history), with the
+  repository owner explicitly agreeing it was out of scope for this pass.
+  See `docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md` for the
+  full findings record pending a future grill session.
 
 ## Acceptance criteria
 
@@ -56,9 +73,11 @@ and lockfile are unaffected until an upgrade is explicitly accepted.
   v3-opted profile and an enabled mapping-v2 profile (comparing its legacy
   resolution against v3, per the parent spec's "Existing repository upgrade"
   flow).
-- Retain, role-aware adopt, quality-first, cost-conscious, and custom exact
-  paths produce deterministic plans, for both a v3-opted profile and a
-  mapping-v2 profile choosing to adopt v3.
+- Retain, role-aware adopt, quality-first, and cost-conscious paths produce
+  deterministic plans, for both a v3-opted profile and a mapping-v2 profile
+  choosing to adopt v3. (Custom exact was originally listed here too; see
+  the amendment in Non-goals above - it is tracked separately, not part of
+  this item's acceptance bar.)
 - Declining the upgrade (or choosing Retain) writes nothing: a v3-opted
   profile's lock `modelPolicy` block stays byte-identical, and a mapping-v2
   profile stays on legacy resolution with no `modelPolicy` block written.
@@ -74,7 +93,8 @@ the lock, computes a fresh comparison, or renders an old/new model table.
 Focused CLI upgrade tests proving: a changed bundled catalog produces a
 correct old/new table with the right reason per row for a v3-opted profile;
 an enabled mapping-v2 profile produces a correct legacy-vs-v3 comparison
-table and the same five planning paths; each planning path yields the
+table and the same four planning paths (retain/adopt/quality-first/
+cost-conscious); each planning path yields the
 documented deterministic plan for both profile shapes; declining (or an
 unchanged v3 profile choosing Retain) produces a byte-identical no-op.
 
@@ -127,7 +147,7 @@ atomic write-plan guarantees for any actual write.
 ## Documentation impact
 
 Upgrade lifecycle walkthrough, old/new comparison example, retain/adopt/
-customize path descriptions.
+quality-first/cost-conscious path descriptions.
 
 ## Implementation context
 

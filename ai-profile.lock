@@ -38,19 +38,19 @@
       "id": "targets/claude-subagents/code-quality-reviewer@1",
       "target": "claude-subagents",
       "version": "1",
-      "sha256": "60d82f3e80b6963b4bfea423f1394a05872f7f105eb102a32aced0ca6c5253a5"
+      "sha256": "0b54a95f8d92f7623461cdb1f45579b8dd1956b958daa612d30da0f2eed4700b"
     },
     {
       "id": "targets/claude-subagents/implementer@1",
       "target": "claude-subagents",
       "version": "1",
-      "sha256": "42142a3518a7bb92bb8204446847609cd770213374797a40c9c2f5a665b13651"
+      "sha256": "42d995ad73b5629b27fff0d50ff735e484e5278ce3a57027a7653a171e1cb3cb"
     },
     {
       "id": "targets/claude-subagents/spec-reviewer@1",
       "target": "claude-subagents",
       "version": "1",
-      "sha256": "39d6fe498ec20d516c90cc94a51ccb644a3404b8847881ab5eb63f7c7944731c"
+      "sha256": "9361040d080b5dd1d6a143718bd61987a3b0b12f8e682ba8d70b793a5c83e3c1"
     },
     {
       "id": "targets/claude-workflow-skills/final-review@1",
@@ -216,21 +216,21 @@
       "target": "claude-subagents",
       "templateId": "targets/claude-subagents/code-quality-reviewer@1",
       "ownership": "generated-owned",
-      "sha256": "60d82f3e80b6963b4bfea423f1394a05872f7f105eb102a32aced0ca6c5253a5"
+      "sha256": "0b54a95f8d92f7623461cdb1f45579b8dd1956b958daa612d30da0f2eed4700b"
     },
     {
       "path": ".claude/agents/implementer.md",
       "target": "claude-subagents",
       "templateId": "targets/claude-subagents/implementer@1",
       "ownership": "generated-owned",
-      "sha256": "42142a3518a7bb92bb8204446847609cd770213374797a40c9c2f5a665b13651"
+      "sha256": "42d995ad73b5629b27fff0d50ff735e484e5278ce3a57027a7653a171e1cb3cb"
     },
     {
       "path": ".claude/agents/spec-reviewer.md",
       "target": "claude-subagents",
       "templateId": "targets/claude-subagents/spec-reviewer@1",
       "ownership": "generated-owned",
-      "sha256": "39d6fe498ec20d516c90cc94a51ccb644a3404b8847881ab5eb63f7c7944731c"
+      "sha256": "9361040d080b5dd1d6a143718bd61987a3b0b12f8e682ba8d70b793a5c83e3c1"
     },
     {
       "path": ".claude/settings.json",

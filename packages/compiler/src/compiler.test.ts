@@ -2374,7 +2374,7 @@ test("phase-13 expanded template contents match the spec verbatim", async () => 
   assert.ok(implementer);
   assert.equal(implementer.toolScope, "workspace-write");
   assert.equal(implementer.modelPreference, "balanced");
-  assert.equal(implementer.maxTurns, 18);
+  assert.equal(implementer.maxTurns, 30);
   assert.equal(implementer.timeoutMinutes, 20);
   assert.deepEqual(implementer.mcpServers, []);
   assert.equal(
@@ -2392,7 +2392,7 @@ test("phase-13 expanded template contents match the spec verbatim", async () => 
   assert.ok(specReviewer);
   assert.equal(specReviewer.toolScope, "read-only");
   assert.equal(specReviewer.modelPreference, "capable");
-  assert.equal(specReviewer.maxTurns, 10);
+  assert.equal(specReviewer.maxTurns, 18);
   assert.equal(specReviewer.timeoutMinutes, 8);
   assert.equal(
     specReviewer.prompt.includes(

@@ -154,7 +154,15 @@ function toLockModelPolicyResolution(
   };
 }
 
-function compareModelPolicyResolutions(
+/**
+ * Canonical `(client, role)` sort order for `modelPolicy.resolutions`,
+ * enforced by `validateLockfileText`'s deterministic-order check. Exported
+ * so any caller that builds a `LockModelPolicyV2` outside `buildLockfile`
+ * (e.g. the CLI's `upgrade --model-policy-strategy adopt --write` path,
+ * Phase 31.5 I6a cycle 5) can sort into the same order before serializing,
+ * instead of re-deriving this comparator.
+ */
+export function compareModelPolicyResolutions(
   left: LockModelPolicyResolutionV2,
   right: LockModelPolicyResolutionV2,
 ): number {

@@ -633,9 +633,16 @@ export function toLockModelPolicyFromTargetTable(
  * guidance table) builds from, so this lockfile block and those generated
  * files can never disagree about a retained role/client resolution (Phase
  * 31.5 I6 fix: previously this reconciliation happened only here, after the
- * generated files had already been rendered from the live catalog). Tabnine
- * rows are unaffected (Phase 31.5 I3's Tabnine adapter is out of this
- * cycle's scope).
+ * generated files had already been rendered from the live catalog).
+ *
+ * `previousModelPolicy`'s `client: "tabnine"` rows (if any) ARE preserved
+ * too, but only as a fallback: since the fresh Tabnine computation above
+ * always emits zero rows today, discarding a preserved row unconditionally
+ * would silently delete provenance a caller's plan had just previewed to
+ * the user (PR review finding). This means a preserved Tabnine row is
+ * effectively resurrected on every subsequent compile until a real
+ * override source exists and the fresh computation can produce rows of its
+ * own (at which point fresh always wins, per the fallback condition below).
  */
 export function resolveModelPolicyLockfile(
   profile: AiProfile,
@@ -651,9 +658,27 @@ export function resolveModelPolicyLockfile(
     preset,
     buildModelPolicyTargetTable(preset, roleOverrides, previousModelPolicy),
   );
-  const tabnine = toLockModelPolicyTabnineResolutions(
+  const freshTabnine = toLockModelPolicyTabnineResolutions(
     buildModelPolicyTabnineTargetTable(preset),
   );
+  // `freshTabnine` is empty today (see this function's own doc comment: no
+  // profile field yet supplies an explicit Tabnine override, so every role
+  // resolves to guided manual selection). A caller's `planModelPolicyUpgrade`
+  // plan can still legitimately carry PRESERVED prior `client: "tabnine"`
+  // rows forward (the lockfile schema explicitly supports a mixed
+  // Codex/Claude/Tabnine block) -- discarding them here, unconditionally,
+  // would make the actually-written lock disagree with the plan that was
+  // just previewed to the user, the exact "preview lied about what write
+  // would do" defect class this whole area has been fixing (PR review
+  // finding). Fall back to the previous block's Tabnine rows only when the
+  // fresh computation produced none; once a real Tabnine override source
+  // exists and `freshTabnine` can be non-empty, fresh always wins.
+  const tabnine =
+    freshTabnine.length > 0
+      ? freshTabnine
+      : (previousModelPolicy?.resolutions.filter(
+          (row) => row.client === "tabnine",
+        ) ?? []);
 
   return {
     catalogVersion: codexClaude.catalogVersion,
