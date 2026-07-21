@@ -36,7 +36,7 @@ import {
 } from "@agent-profile/compiler";
 import { withNetworkSentinel } from "../../../packages/core/test/fixtures/preset/network-sentinel.js";
 
-import { runCli, type CliIo, type UpgradePrompts } from "./index.js";
+import { CLI_VERSION, runCli, type CliIo, type UpgradePrompts } from "./index.js";
 import type { CliPrompts } from "./wizard.js";
 import { WizardCancelled } from "./wizard.js";
 
@@ -197,6 +197,300 @@ test("upgrade scripted mutation inserts recommended capabilities and stamps the 
     await readFile(path.join(root, "ai-profile.lock"), "utf8"),
   ) as { upgrade?: { catalogVersion?: number } };
   assert.equal(lock.upgrade?.catalogVersion, CAPABILITY_CATALOG_VERSION);
+});
+
+test("upgrade declines the optional update check by default: zero network calls", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(["upgrade", "--root", root], { io: output }),
+  );
+
+  assert.equal(code, 0);
+});
+
+test("upgrade --check-for-updates reports a newer registry version with manual guidance and never installs", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  let requestedUrl: string | undefined;
+  let requestInit: RequestInit | undefined;
+  globalThis.fetch = (async (
+    url: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    requestedUrl = String(url);
+    requestInit = init;
+    return new Response(JSON.stringify({ version: "999.0.0" }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(
+    requestedUrl,
+    "https://registry.npmjs.org/%40agent-profile%2Fcli/latest",
+  );
+  // Full outgoing-request shape: exactly a GET, no body, no credentials
+  // (cookies), no auth/telemetry headers, and a redirect refusal -- not just
+  // an absent `headers` field, which alone wouldn't catch a regression that
+  // added `credentials`/`body`/other fields.
+  assert.equal(requestInit?.method, "GET");
+  assert.equal(requestInit?.headers, undefined);
+  assert.equal(requestInit?.body, undefined);
+  assert.equal(requestInit?.credentials, undefined);
+  assert.equal(requestInit?.redirect, "error");
+  assert.deepEqual(Object.keys(requestInit ?? {}).sort(), [
+    "method",
+    "redirect",
+    "signal",
+  ]);
+  assert.match(
+    output.stdoutText(),
+    /A newer @agent-profile\/cli version is available: 999\.0\.0/u,
+  );
+  assert.match(
+    output.stdoutText(),
+    /npm install -g @agent-profile\/cli@latest/u,
+  );
+});
+
+test("upgrade --check-for-updates reports current version when registry matches installed version", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ version: CLI_VERSION }), {
+      status: 200,
+    })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /is up to date/u);
+});
+
+test("upgrade --check-for-updates degrades to 'could not check' when the registry response is malformed", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("not json", { status: 200 })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+});
+
+test("upgrade --check-for-updates degrades to 'could not check' when the version field is not a well-formed version string", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ version: "garbage" }), {
+      status: 200,
+    })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // Must degrade to "could not check" -- never silently accept a garbage
+  // string as a comparable version and report a false older/current result.
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+  assert.doesNotMatch(output.stdoutText(), /is up to date/u);
+  assert.doesNotMatch(output.stdoutText(), /is newer than/u);
+});
+
+test("upgrade --check-for-updates degrades to 'could not check' when the registry response body exceeds the size limit", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  const oversizedBody = JSON.stringify({
+    version: "1.0.0",
+    padding: "x".repeat(200_000),
+  });
+  globalThis.fetch = (async () =>
+    new Response(oversizedBody, { status: 200 })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+});
+
+test("upgrade --check-for-updates degrades to 'could not check' rather than following a registry redirect", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (
+    _url: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    // Real `fetch` rejects with a TypeError when `redirect: "error"` meets an
+    // actual redirect response; this stub mirrors that contract directly
+    // rather than needing a real HTTP redirect chain.
+    if (init?.redirect === "error") {
+      throw new TypeError("unable to follow redirect with redirect: error");
+    }
+    return new Response(JSON.stringify({ version: "999.0.0" }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+  assert.doesNotMatch(
+    output.stdoutText(),
+    /A newer @agent-profile\/cli version is available/u,
+  );
+});
+
+test("upgrade --check-for-updates degrades to 'could not check' when the fetch itself throws", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new Error("network is down");
+  }) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+  assert.match(output.stdoutText(), /network is down/u);
+});
+
+test("upgrade --check-for-updates aborts a hung registry request once the timeout fires, rather than hanging forever", async () => {
+  // Unlike the "fetch itself throws" test above (which only proves the
+  // generic catch-block degrades ANY rejected fetch promise to "unknown"),
+  // this proves the AbortController/timeout mechanism itself is what
+  // terminates a genuinely hung request: the stub never resolves or rejects
+  // on its own -- it only rejects when the signal it was given aborts,
+  // mirroring real `fetch` abort semantics.
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  let observedSignal: AbortSignal | undefined;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    observedSignal = init?.signal ?? undefined;
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    });
+  }) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output, updateCheckTimeoutMs: 10 },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.ok(observedSignal, "expected fetch to receive an AbortSignal");
+  assert.equal(observedSignal?.aborted, true);
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+});
+
+test("upgrade --check-for-updates reports the installed version is newer than the registry's (older status)", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ version: "0.0.1" }), {
+      status: 200,
+    })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(
+    output.stdoutText(),
+    /current version \(.+\) is newer than the registry's latest \(0\.0\.1\)/u,
+  );
+});
+
+test("upgrade rejects --check-for-updates combined with --json instead of silently ignoring it", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(
+      ["upgrade", "--root", root, "--check-for-updates", "--json"],
+      { io: output },
+    ),
+  );
+
+  assert.equal(code, 2);
+  assert.match(
+    output.stderrText(),
+    /--check-for-updates cannot be combined with --json/u,
+  );
 });
 
 test("upgrade JSON remains one clean machine-readable record in report and write modes", async () => {
