@@ -237,10 +237,24 @@ test("upgrade --check-for-updates reports a newer registry version with manual g
     globalThis.fetch = originalFetch;
   }
 
-  assert.match(requestedUrl ?? "", /registry\.npmjs\.org/u);
-  assert.match(requestedUrl ?? "", /agent-profile/u);
-  // No auth headers/credentials sent as part of the request.
+  assert.equal(
+    requestedUrl,
+    "https://registry.npmjs.org/%40agent-profile%2Fcli/latest",
+  );
+  // Full outgoing-request shape: exactly a GET, no body, no credentials
+  // (cookies), no auth/telemetry headers, and a redirect refusal -- not just
+  // an absent `headers` field, which alone wouldn't catch a regression that
+  // added `credentials`/`body`/other fields.
+  assert.equal(requestInit?.method, "GET");
   assert.equal(requestInit?.headers, undefined);
+  assert.equal(requestInit?.body, undefined);
+  assert.equal(requestInit?.credentials, undefined);
+  assert.equal(requestInit?.redirect, "error");
+  assert.deepEqual(Object.keys(requestInit ?? {}).sort(), [
+    "method",
+    "redirect",
+    "signal",
+  ]);
   assert.match(
     output.stdoutText(),
     /A newer @agent-profile\/cli version is available: 999\.0\.0/u,
@@ -291,6 +305,92 @@ test("upgrade --check-for-updates degrades to 'could not check' when the registr
   }
 
   assert.match(output.stdoutText(), /Could not check for updates/u);
+});
+
+test("upgrade --check-for-updates degrades to 'could not check' when the version field is not a well-formed version string", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ version: "garbage" }), {
+      status: 200,
+    })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  // Must degrade to "could not check" -- never silently accept a garbage
+  // string as a comparable version and report a false older/current result.
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+  assert.doesNotMatch(output.stdoutText(), /is up to date/u);
+  assert.doesNotMatch(output.stdoutText(), /is newer than/u);
+});
+
+test("upgrade --check-for-updates degrades to 'could not check' when the registry response body exceeds the size limit", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  const oversizedBody = JSON.stringify({
+    version: "1.0.0",
+    padding: "x".repeat(200_000),
+  });
+  globalThis.fetch = (async () =>
+    new Response(oversizedBody, { status: 200 })) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+});
+
+test("upgrade --check-for-updates degrades to 'could not check' rather than following a registry redirect", async () => {
+  const root = await createUpgradeRoot(23);
+  const output = createOutput();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (
+    _url: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    // Real `fetch` rejects with a TypeError when `redirect: "error"` meets an
+    // actual redirect response; this stub mirrors that contract directly
+    // rather than needing a real HTTP redirect chain.
+    if (init?.redirect === "error") {
+      throw new TypeError("unable to follow redirect with redirect: error");
+    }
+    return new Response(JSON.stringify({ version: "999.0.0" }), {
+      status: 200,
+    });
+  }) as typeof fetch;
+
+  try {
+    const code = await runCli(
+      ["upgrade", "--root", root, "--check-for-updates"],
+      { io: output },
+    );
+    assert.equal(code, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(output.stdoutText(), /Could not check for updates/u);
+  assert.doesNotMatch(
+    output.stdoutText(),
+    /A newer @agent-profile\/cli version is available/u,
+  );
 });
 
 test("upgrade --check-for-updates degrades to 'could not check' when the fetch itself throws", async () => {

@@ -64,12 +64,73 @@ type CheckForPackageUpdateOptions = {
 
 const DEFAULT_TIMEOUT_MS = 5000;
 
+/** Upper bound on the registry response body, in bytes. The npm registry's
+ * `/latest` metadata document for a single package is a few KiB at most;
+ * this guards the optional check against an oversized or malicious response
+ * exhausting memory instead of degrading to "unknown" (see code review). */
+const MAX_RESPONSE_BODY_BYTES = 65536;
+
+/** A version string is only accepted if it looks like a dotted numeric
+ * version (optionally with a `-`/`+` prerelease/build suffix), e.g. `1.2.3`
+ * or `1.2.3-beta.1`. Rejects non-version strings like `"garbage"` up front so
+ * `compareVersions`'s lenient numeric parsing (which treats a non-numeric
+ * segment as `0`) never silently turns a malformed response into a false
+ * `older`/`current` report instead of the required "could not check"
+ * guidance (see code review). */
+function isWellFormedVersionString(value: string): boolean {
+  return /^\d+(\.\d+)*(?:[-+][0-9A-Za-z.]+)?$/u.test(value);
+}
+
+/**
+ * Reads a `Response` body up to `maxBytes` and parses it as JSON. Throws if
+ * the body exceeds the limit or is not valid JSON; callers must catch and
+ * degrade rather than let this propagate.
+ */
+async function readBoundedJson(
+  response: Response,
+  maxBytes: number,
+): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    // Environments/mocks without a streamable body (e.g. some test doubles):
+    // fall back to a length-checked `text()` read.
+    const text = await response.text();
+    if (text.length > maxBytes) {
+      throw new Error("registry response exceeded the size limit");
+    }
+    return JSON.parse(text) as unknown;
+  }
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error("registry response exceeded the size limit");
+      }
+      chunks.push(value);
+    }
+  }
+  const combined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder().decode(combined)) as unknown;
+}
+
 /**
  * Performs the single, read-only, unauthenticated metadata lookup and
  * compares it against `currentVersion`. Never throws: every failure mode
- * (network error, timeout, non-OK response, malformed JSON, missing version
- * field) degrades to `{ status: "unknown", reason }` so the surrounding
- * `upgrade` command never hard-fails because of this optional check.
+ * (network error, timeout, non-OK response, redirect, oversized or malformed
+ * body, missing/invalid version field) degrades to
+ * `{ status: "unknown", reason }` so the surrounding `upgrade` command never
+ * hard-fails because of this optional check.
  */
 export async function checkForPackageUpdate(
   options: CheckForPackageUpdateOptions,
@@ -85,58 +146,72 @@ export async function checkForPackageUpdate(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-  let response: Response;
   try {
-    response = await fetchImpl(url, {
-      method: "GET",
-      signal: controller.signal,
-      // Explicitly no auth headers, no cookies, no body: this is a public,
-      // unauthenticated, read-only metadata lookup only.
-    });
-  } catch (error) {
-    return {
-      status: "unknown",
-      reason: error instanceof Error ? error.message : "network error",
-    };
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        method: "GET",
+        signal: controller.signal,
+        // Never follow a redirect: this check promises exactly one
+        // metadata-only request, and a redirect target (e.g. a tarball or
+        // other large asset) would break that promise (see code review).
+        redirect: "error",
+        // Explicitly no auth headers, no cookies, no body: this is a public,
+        // unauthenticated, read-only metadata lookup only.
+      });
+    } catch (error) {
+      return {
+        status: "unknown",
+        reason: error instanceof Error ? error.message : "network error",
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        status: "unknown",
+        reason: `registry responded with HTTP ${response.status}`,
+      };
+    }
+
+    let body: unknown;
+    try {
+      body = await readBoundedJson(response, MAX_RESPONSE_BODY_BYTES);
+    } catch {
+      return { status: "unknown", reason: "malformed registry response" };
+    }
+
+    const latestVersion =
+      body && typeof body === "object" && "version" in body
+        ? (body as { version?: unknown }).version
+        : undefined;
+    if (
+      typeof latestVersion !== "string" ||
+      latestVersion.length === 0 ||
+      !isWellFormedVersionString(latestVersion)
+    ) {
+      return { status: "unknown", reason: "malformed registry response" };
+    }
+
+    const comparison = compareVersions(latestVersion, currentVersion);
+    if (comparison > 0) {
+      return {
+        status: "newer",
+        currentVersion,
+        latestVersion,
+        guidance: manualUpdateGuidance(packageName),
+      };
+    }
+    if (comparison < 0) {
+      return { status: "older", currentVersion, latestVersion };
+    }
+    return { status: "current", currentVersion, latestVersion };
   } finally {
+    // Kept alive across the fetch AND the body read/parse above: clearing it
+    // right after `fetch()` resolves would let a slow-arriving body stall
+    // past the intended timeout instead of degrading to "unknown" (see code
+    // review).
     clearTimeout(timer);
   }
-
-  if (!response.ok) {
-    return {
-      status: "unknown",
-      reason: `registry responded with HTTP ${response.status}`,
-    };
-  }
-
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    return { status: "unknown", reason: "malformed registry response" };
-  }
-
-  const latestVersion =
-    body && typeof body === "object" && "version" in body
-      ? (body as { version?: unknown }).version
-      : undefined;
-  if (typeof latestVersion !== "string" || latestVersion.length === 0) {
-    return { status: "unknown", reason: "malformed registry response" };
-  }
-
-  const comparison = compareVersions(latestVersion, currentVersion);
-  if (comparison > 0) {
-    return {
-      status: "newer",
-      currentVersion,
-      latestVersion,
-      guidance: manualUpdateGuidance(packageName),
-    };
-  }
-  if (comparison < 0) {
-    return { status: "older", currentVersion, latestVersion };
-  }
-  return { status: "current", currentVersion, latestVersion };
 }
 
 /** Minimal numeric dotted-version comparison (major.minor.patch...), not a
