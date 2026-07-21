@@ -2,7 +2,13 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import fsPromises, {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -1792,10 +1798,11 @@ test("upgrade --model-policy-strategy adopt --write on a mapping-v2 profile writ
   assert.equal(code, 0);
   // A mapping-v2 write always involves a yaml edit, so the same file-level
   // preview mechanism the bulk-preset-switch case uses must fire here too --
-  // labelled by the resolved target preset ("role-aware"), the same label the
-  // preview uses for an explicit bulk preset switch (it previews per-preset,
-  // not per-strategy).
-  assert.match(output.stdoutText(), /File changes \(role-aware\):/u);
+  // labelled by the strategy itself ("adopt"), the same label every
+  // strategy's preview uses now that "adopt" on a v3-opted profile also
+  // gets a real content preview (PR review finding), not just the two
+  // strategies that always edit the profile.
+  assert.match(output.stdoutText(), /File changes \(adopt\):/u);
   assert.match(output.stdoutText(), /- ai-profile\.yaml \((create|change)\)/u);
 
   const profileAfter = await readFile(
@@ -2794,6 +2801,71 @@ test("upgrade --model-policy-strategy adopt --write shows the exact old/new mode
   assert.ok(reportIndex < confirmIndex);
 });
 
+test("upgrade --model-policy-strategy adopt --write previews the exact on-disk-to-planned content diff before applying, not just the model-policy comparison table (PR review finding)", async () => {
+  // The model-policy comparison table (checked by the previous test) is a
+  // SUMMARY (old/new model names), not an exact on-disk-to-planned content
+  // diff -- before this fix, "adopt" (targetPreset === undefined) was
+  // explicitly excluded from the file-level preview the bulk-preset-switch
+  // strategies already had, so a v3 profile's real generated-file mutation
+  // (.codex/config.toml, AGENTS.md, CLAUDE.md) still had no exact diff
+  // shown first, breaking the same preview-before-mutation contract this
+  // repository's other write paths already follow.
+  const fresh = liveModelPolicy();
+  const implementerCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "implementer",
+  );
+  assert.ok(implementerCodex);
+  const stale: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "implementer"
+        ? { ...row, model: `${row.model}-superseded` }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    stale,
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const stdout = output.stdoutText();
+  assert.match(stdout, /File changes \(adopt\):/u);
+  assert.match(stdout, /- \.codex\/config\.toml \((create|change)\)/u);
+  // A real content diff must show both the removed (stale) and added
+  // (fresh) implementer model lines, not just the path+action label.
+  assert.match(
+    stdout,
+    new RegExp(
+      `^ {2}-.*${escapeRegExp(`${implementerCodex.model}-superseded`)}`,
+      "mu",
+    ),
+  );
+  assert.match(
+    stdout,
+    new RegExp(`^ {2}\\+.*${escapeRegExp(implementerCodex.model)}`, "mu"),
+  );
+  const previewIndex = stdout.indexOf("File changes (adopt):");
+  const confirmIndex = stdout.indexOf("Updated ai-profile.lock and regenerated");
+  assert.ok(previewIndex >= 0);
+  assert.ok(confirmIndex >= 0);
+  assert.ok(previewIndex < confirmIndex);
+});
+
 test("upgrade --model-policy-strategy adopt --write proceeds when Tabnine's guideline path is manual-owned but adopting Codex/Claude changes cannot alter its bytes (PR review finding)", async () => {
   // Tabnine's task-capsule guideline depends only on the profile's
   // preset/role overrides, which "adopt" never changes -- adopting a fresh
@@ -3505,6 +3577,94 @@ test("upgrade --model-policy-strategy adopt --write refuses when a prior Tabnine
   assert.match(output.stderrText(), /no longer an enabled client/u);
   assert.equal(await readFile(profilePath, "utf8"), profileBefore);
   assert.equal(await readFile(lockPath, "utf8"), lockBefore);
+});
+
+test("upgrade --model-policy-strategy quality-first --write reports which specific files could not be rolled back, instead of a generic 'unsafe path' message (PR review finding)", async () => {
+  // `applyWritePlanAtomic`'s own rollback-incomplete mechanics are already
+  // covered by `packages/compiler/src/write-plan.test.ts`; this proves the
+  // CLI-level catch actually surfaces `AtomicWritePlanError`'s `stage`/
+  // `unrestoredPaths` instead of discarding them behind the blanket
+  // "unsafe path" message the same catch block also handles. Force a
+  // commit-phase failure on a LATER write (so an EARLIER one, ai-profile.yaml,
+  // already committed and must be rolled back), then force that specific
+  // rollback's restore to fail too -- the only way to reach
+  // `stage: "rollback-incomplete"`.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+
+  // Match by normalized path SUFFIX, not exact string equality:
+  // `applyWritePlanAtomic` resolves `rootDir` via `fs.realpath` internally,
+  // which can legitimately differ from this test's own `path.join(root,
+  // ...)` construction (e.g. a symlinked temp directory), so an exact-string
+  // comparison would silently never match and this test would fail
+  // (or, worse, pass for the wrong reason) depending on the platform.
+  const normalize = (value: unknown): string =>
+    typeof value === "string" ? value.replaceAll("\\", "/") : "";
+  const isCodexConfigPath = (value: unknown): boolean =>
+    normalize(value).endsWith(".codex/config.toml");
+  const isProfilePath = (value: unknown): boolean =>
+    normalize(value).endsWith("ai-profile.yaml");
+
+  // `applyWritePlanAtomic` commits targets in the plan's (alphabetical) path
+  // order, so `.codex/config.toml` renames successfully BEFORE `ai-profile.yaml`
+  // is reached -- the commit failure must be on the LATER path (`ai-profile.yaml`)
+  // so an EARLIER path (`.codex/config.toml`) is already renamed and in need of
+  // a restore by the time rollback runs; then that restore is the one that fails.
+  const realRename = fsPromises.rename;
+  const realWriteFile = fsPromises.writeFile;
+  (fsPromises as unknown as { rename: unknown }).rename = async (
+    src: unknown,
+    dest: unknown,
+    ...rest: unknown[]
+  ): Promise<void> => {
+    if (isProfilePath(dest)) {
+      throw Object.assign(new Error("commit blocked"), { code: "EPERM" });
+    }
+    return (realRename as (...args: unknown[]) => Promise<void>)(
+      src,
+      dest,
+      ...rest,
+    );
+  };
+  (fsPromises as unknown as { writeFile: unknown }).writeFile = async (
+    file: unknown,
+    ...rest: unknown[]
+  ): Promise<void> => {
+    if (isCodexConfigPath(file)) {
+      throw Object.assign(new Error("restore blocked"), { code: "EPERM" });
+    }
+    return (realWriteFile as (...args: unknown[]) => Promise<void>)(
+      file,
+      ...rest,
+    );
+  };
+
+  const output = createOutput();
+  let code: number;
+  try {
+    code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "quality-first",
+        "--write",
+      ],
+      { io: output },
+    );
+  } finally {
+    (fsPromises as unknown as { rename: unknown }).rename = realRename;
+    (fsPromises as unknown as { writeFile: unknown }).writeFile = realWriteFile;
+  }
+
+  assert.equal(code, 1);
+  assert.doesNotMatch(output.stderrText(), /unsafe path/u);
+  assert.match(output.stderrText(), /could not fully roll back/u);
+  assert.match(output.stderrText(), /\.codex[\\/]config\.toml/u);
 });
 
 test("upgrade --model-policy-strategy adopt --write refuses cleanly when a generated target file has drifted from the lock, leaving every file byte-unchanged", async () => {

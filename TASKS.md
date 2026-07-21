@@ -435,6 +435,54 @@ findings resolved as GitHub review threads. State stays `ready`, not
 adopting-v3 writes, "custom exact" strategy, interactive-UI triggering,
 Tabnine reconciliation deferred to I6d).
 
+I6a PR review fix round 10 (2026-07-21, PR #125), after I6a was already
+marked `done`: addressed 2 new Codex bot findings (P1) on the same
+already-shipped `upgrade` write paths: (1) the file-changes preview
+(`previewBulkPresetSwitchWrites`, added round 7/8) was still gated to only
+the two bulk-preset-switch strategies via `targetPreset !== undefined`, so
+`--model-policy-strategy adopt --write` on a v3-opted profile showed only
+the model-policy comparison table - a summary, not an exact
+on-disk-to-planned content diff - even though "adopt" can still regenerate
+`.codex/config.toml`/`AGENTS.md`/`CLAUDE.md` - fixed by removing the gate
+entirely (every strategy that can change target bytes now gets the same
+exact preview) and renaming the function to `previewModelPolicyWrites`,
+replacing its now-unused `targetPreset: ModelPolicyPreset` parameter with
+`strategyLabel: string` used only for the printed header; (2)
+`createOrApplyWritePlan`'s catch block discarded `AtomicWritePlanError`'s
+`stage`/`unrestoredPaths` fields entirely, always printing the generic
+"unsafe path" refusal even when `applyWritePlanAtomic` (round 8) reported
+`stage: "rollback-incomplete"` - a genuinely more urgent situation where
+specific files may still hold new, possibly incomplete, bytes rather than
+their original content - fixed by special-casing that stage when
+`unrestoredPaths` is non-empty, printing the exact affected paths and
+reconciliation guidance (`git diff`/`git checkout`) instead of the generic
+message, falling through to the existing generic message for every other
+error shape. Two new `apps/cli/src/upgrade.test.ts` regression tests: one
+exercises the "adopt" preview end-to-end (asserts the preview text appears
+before the write's success confirmation, with real before/after content
+lines); the other forces a genuine two-stage failure - a mid-commit rename
+failure on `ai-profile.yaml` (the last target in the plan's alphabetical
+commit order) after `.codex/config.toml` has already committed, then a
+forced failure restoring that already-committed file - reaching a real
+`rollback-incomplete` state (not mocked at the `AtomicWritePlanError`
+boundary) via a shared default import of `node:fs/promises`, matching the
+mutation style already established in
+`packages/compiler/src/write-plan.test.ts`, restored in a `finally` block.
+Getting this second test's mocked failures onto the correct files took one
+iteration: `applyWritePlanAtomic` commits targets in alphabetical path
+order (via `normalizeWrites`'s sort), not write-array order, so the first
+attempt (fail-commit on the alphabetically-earlier `.codex/config.toml`)
+never reached a prior successfully-committed file needing restoration -
+corrected by swapping which file fails at which stage once the real commit
+order was confirmed by instrumenting the write-plan directly. Spec review
+passed COMPLIANT for both findings. Code-quality review passed ACCEPTABLE
+with one non-blocking doc-comment polish (a stale `targetPreset` parameter
+reference in `previewModelPolicyWrites`'s doc comment, left over from
+before the round-10 signature change) - fixed. Tests: `apps/cli` 560/556,
+all 0 failures, 4 pre-existing skips; `packages/compiler` 313/312, all 0
+failures, 1 pre-existing skip; clean typecheck (including
+`tsconfig.test.json`).
+
 I6a PR review fix round 9 (2026-07-21, PR #125), after I6a was already
 marked `done`: addressed 4 new Codex bot findings (1 P1, 3 P2) on the same
 `upgrade` write paths, all fresh evidence surfaced against round 8's own

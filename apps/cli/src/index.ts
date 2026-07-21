@@ -13,6 +13,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applyWritePlan,
   applyWritePlanAtomic,
+  AtomicWritePlanError,
   buildPhase14ImportReport,
   compareModelPolicyUpgrade,
   compareModelPolicyUpgradeFromLegacy,
@@ -1343,15 +1344,25 @@ function formatTextDiff(oldText: string, newText: string): string {
 
 /**
  * Prints a `File changes (...)` preview of every non-"unchanged" write
- * action before a bulk preset switch is actually applied, computed from the
- * EXACT SAME `allWrites` array the real write uses right after this call --
- * so the preview can never diverge from what's actually about to happen. A
- * bulk preset switch mutates `ai-profile.yaml` itself, unlike "adopt" (which
- * never touches it and keeps its existing model-policy-comparison-only
- * preview); without this, that was the only write path in the repository
- * that mutated a file's content with no exact diff shown first, breaking
- * the mutation contract every other write path (capability-catalog
- * inserts, `configure`, the interactive wizard) already follows.
+ * action before ANY model-policy strategy's write is actually applied,
+ * computed from the EXACT SAME `allWrites` array the real write uses right
+ * after this call -- so the preview can never diverge from what's actually
+ * about to happen. Without this, model-policy writes mutated file content
+ * with no exact diff shown first, breaking the mutation contract every
+ * other write path (capability-catalog inserts, `configure`, the
+ * interactive wizard) already follows.
+ *
+ * Originally shipped for "quality-first"/"cost-conscious" only (the two
+ * strategies that edit `ai-profile.yaml` itself); "adopt" was excluded
+ * because it never touches the profile and already had its own
+ * model-policy-comparison-only preview. A PR review finding pointed out
+ * that comparison table is NOT an exact on-disk-to-planned content diff --
+ * "adopt" still regenerates `.codex/config.toml`/`AGENTS.md`/`CLAUDE.md`
+ * with no file-level preview at all, so it must run this preview too; this
+ * function is called for every strategy now, including "adopt", which never
+ * edits `ai-profile.yaml`, so `ai-profile.yaml` never appears as a changed
+ * action below for that strategy and its yaml-specific branch is simply
+ * never reached.
  *
  * The action label alone (`path (change)`) was still not enough -- a PR
  * review finding after this preview first shipped pointed out it discarded
@@ -1375,11 +1386,11 @@ function formatTextDiff(oldText: string, newText: string): string {
  * Returns `false` if the dry-run itself failed (already reported via
  * `io.stderr`); `true` otherwise.
  */
-async function previewBulkPresetSwitchWrites(
+async function previewModelPolicyWrites(
   rootDir: string,
   io: CliIo,
   allWrites: PlannedWrite[],
-  targetPreset: ModelPolicyPreset,
+  strategyLabel: string,
   profile: AiProfile,
   writeProfile: AiProfile,
 ): Promise<boolean> {
@@ -1393,7 +1404,7 @@ async function previewBulkPresetSwitchWrites(
   if (changedPreviewActions.length === 0) {
     return true;
   }
-  const lines: string[] = [`File changes (${targetPreset}):`];
+  const lines: string[] = [`File changes (${strategyLabel}):`];
   for (const action of changedPreviewActions) {
     lines.push(`- ${action.path} (${action.action})`);
     if (action.path === "ai-profile.yaml") {
@@ -1688,14 +1699,21 @@ async function runModelPolicyWrite(input: {
 
   const allWrites = profileYamlWrite ? [profileYamlWrite, ...writes] : writes;
 
+  // Every strategy that can change target bytes gets an exact
+  // on-disk-to-planned preview here, not just the two that edit
+  // `ai-profile.yaml` -- "adopt" (`targetPreset === undefined`) still
+  // regenerates `.codex/config.toml`/`AGENTS.md`/`CLAUDE.md`, and the
+  // model-policy comparison table printed earlier is a summary, not an
+  // exact content diff, so it alone does not satisfy the
+  // preview-before-mutation contract (PR review finding: the preview gate
+  // explicitly excluded "adopt").
   if (
     !json &&
-    targetPreset !== undefined &&
-    !(await previewBulkPresetSwitchWrites(
+    !(await previewModelPolicyWrites(
       rootDir,
       io,
       allWrites,
-      targetPreset,
+      strategyLabel,
       profile,
       writeProfile,
     ))
@@ -4897,7 +4915,28 @@ async function createOrApplyWritePlan(
     return options.atomic
       ? await applyWritePlanAtomic({ rootDir, writes })
       : await applyWritePlan({ rootDir, writes });
-  } catch {
+  } catch (error) {
+    // `applyWritePlanAtomic` throws `AtomicWritePlanError` with a `stage`
+    // and, for `stage === "rollback-incomplete"`, the specific
+    // `unrestoredPaths` that could NOT be restored to their pre-transaction
+    // bytes -- a genuinely different, more urgent situation than "nothing
+    // was touched" (the blanket "unsafe path" message below). Discarding
+    // both fields left a user with no way to know the write may have
+    // stopped mid-transaction with some files still holding new bytes (PR
+    // review finding); report them explicitly whenever they're available,
+    // rather than always claiming a clean no-op refusal.
+    if (
+      error instanceof AtomicWritePlanError &&
+      error.stage === "rollback-incomplete" &&
+      error.unrestoredPaths.length > 0
+    ) {
+      io.stderr(
+        `Refusing write-plan: an atomic write failed partway through and could not fully roll back. The following paths may still hold NEW (not necessarily complete) bytes rather than their original content:\n${error.unrestoredPaths
+          .map((path) => `- ${path}`)
+          .join("\n")}\nInspect and reconcile these files manually (e.g. via \`git diff\`/\`git checkout\`) before retrying.\n`,
+      );
+      return undefined;
+    }
     io.stderr(
       formatSimpleError(
         "write-plan",
