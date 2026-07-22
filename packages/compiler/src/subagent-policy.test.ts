@@ -341,6 +341,7 @@ test("an uncatalogued Tabnine model cell renders the literal 'organization/priva
     modelStatus: "unverified",
     effort: undefined,
     effortStatus: "unsupported",
+    catalogVersion: 1,
   });
   assert.equal(
     cell,
@@ -358,6 +359,7 @@ test("an uncatalogued Tabnine model cell renders the literal 'organization/priva
     modelStatus: "advisory",
     effort: undefined,
     effortStatus: "unsupported",
+    catalogVersion: 1,
   });
   assert.equal(catalogued, "gpt-5.4 / current (advisory)");
 });

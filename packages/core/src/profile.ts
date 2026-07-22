@@ -483,12 +483,25 @@ export type SubagentPolicyClaudeRoleOverride = {
   effort?: SubagentPolicyEffort;
 };
 
+// Phase 31.5 (I6d): unlike Codex/Claude, Tabnine has no closed pinned-model
+// enum (its catalog is organization/admin-controlled and never validated as a
+// closed list even in v2 -- see model-policy-tabnine-adapter.ts's own module
+// comment), so `model` is a plain `string`, not a `SubagentPolicyTabnineModel`
+// union. Tabnine also has no confirmed effort/reasoning control, so this type
+// intentionally carries no `effort` field.
+export type SubagentPolicyTabnineRoleOverride = {
+  model?: string;
+};
+
 export type SubagentPolicyRoleOverride =
-  SubagentPolicyCodexRoleOverride | SubagentPolicyClaudeRoleOverride;
+  | SubagentPolicyCodexRoleOverride
+  | SubagentPolicyClaudeRoleOverride
+  | SubagentPolicyTabnineRoleOverride;
 
 export type SubagentPolicyRoleOverrides = {
   codex?: SubagentPolicyCodexRoleOverride;
   claude?: SubagentPolicyClaudeRoleOverride;
+  tabnine?: SubagentPolicyTabnineRoleOverride;
 };
 
 export type SubagentPolicyRole = {
@@ -639,6 +652,9 @@ export function resolveEffectiveSubagentPolicy(
         ...(role.overrides?.claude === undefined
           ? {}
           : { claude: { ...role.overrides.claude } }),
+        ...(role.overrides?.tabnine === undefined
+          ? {}
+          : { tabnine: { ...role.overrides.tabnine } }),
       },
     };
   }
@@ -1164,6 +1180,23 @@ function validateSubagentPolicySemantics(
         });
       }
     }
+    // Phase 31.5 (I6d): Tabnine has no legacy v2 override precedent at all
+    // (this field is new), so there is no closed list to preserve for
+    // backward compatibility -- always validate with the same open bounded-
+    // length/control-character rule the v3 Codex/Claude branch uses,
+    // regardless of `isV3OptIn`.
+    const tabnineModel = role.overrides?.tabnine?.model;
+    if (tabnineModel !== undefined && !isValidOpenModelPolicyOverride(tabnineModel)) {
+      issues.push({
+        code: "subagent_policy_override_model",
+        path: `/subagentPolicy/roles/${roleId}/overrides/tabnine/model`,
+        expected:
+          "a non-empty string under 200 characters with no control characters",
+        actual: "invalid override string",
+        message:
+          "/subagentPolicy role override model must be a non-empty string under 200 characters with no control characters.",
+      });
+    }
   }
 
   return issues;
@@ -1391,6 +1424,16 @@ function buildSubagentPolicyDoc(
             overrideDoc["effort"] = override.effort;
           }
           overrides[target] = overrideDoc;
+        }
+        // Tabnine has no `effort` field (see `SubagentPolicyTabnineRoleOverride`),
+        // so it is special-cased rather than forced through the loop above.
+        const tabnineOverride = role.overrides.tabnine;
+        if (tabnineOverride !== undefined) {
+          const overrideDoc: Record<string, unknown> = {};
+          if (tabnineOverride.model !== undefined) {
+            overrideDoc["model"] = tabnineOverride.model;
+          }
+          overrides["tabnine"] = overrideDoc;
         }
         if (Object.keys(overrides).length > 0) {
           roleDoc["overrides"] = overrides;

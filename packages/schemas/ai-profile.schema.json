@@ -502,6 +502,9 @@
             },
             "claude": {
               "$ref": "#/definitions/subagentPolicyClaudeRoleOverride"
+            },
+            "tabnine": {
+              "$ref": "#/definitions/subagentPolicyTabnineRoleOverride"
             }
           }
         }
@@ -528,6 +531,15 @@
         },
         "effort": {
           "$ref": "#/definitions/subagentPolicyEffort"
+        }
+      }
+    },
+    "subagentPolicyTabnineRoleOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": "string"
         }
       }
     },
