@@ -80,6 +80,7 @@ export {
   CLAUDE_MODEL_POLICY_CATALOG,
   CODEX_MODEL_POLICY_CATALOG,
   deriveModelPolicyRoleOverrides,
+  deriveModelPolicyTabnineRoleOverrides,
   MODEL_POLICY_PRIMARY_ROLE,
   MODEL_POLICY_TARGET_CATALOG_VERSION,
   modelPolicyEffortFromTargetEffort,
@@ -92,8 +93,14 @@ export type {
   ModelPolicyTargetClientResolution,
   ModelPolicyTargetRow,
 } from "./model-policy-target-adapter.js";
-export { compareModelPolicyUpgrade } from "./model-policy-upgrade-comparison.js";
-export type { ModelPolicyUpgradeComparisonRow } from "./model-policy-upgrade-comparison.js";
+export {
+  compareModelPolicyTabnineUpgrade,
+  compareModelPolicyUpgrade,
+} from "./model-policy-upgrade-comparison.js";
+export type {
+  ModelPolicyTabnineUpgradeComparisonRow,
+  ModelPolicyUpgradeComparisonRow,
+} from "./model-policy-upgrade-comparison.js";
 export { compareModelPolicyUpgradeFromLegacy } from "./model-policy-legacy-upgrade-comparison.js";
 export type { ModelPolicyLegacyUpgradeComparisonRow } from "./model-policy-legacy-upgrade-comparison.js";
 export { planModelPolicyUpgrade } from "./model-policy-upgrade-planning.js";

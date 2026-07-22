@@ -15,10 +15,12 @@ import {
   applyWritePlanAtomic,
   AtomicWritePlanError,
   buildPhase14ImportReport,
+  compareModelPolicyTabnineUpgrade,
   compareModelPolicyUpgrade,
   compareModelPolicyUpgradeFromLegacy,
   compileProfile,
   deriveModelPolicyRoleOverrides,
+  deriveModelPolicyTabnineRoleOverrides,
   getLocalRuntimeGitignoreFindings,
   MODEL_POLICY_PRIMARY_ROLE,
   modelPolicyEffortFromTargetEffort,
@@ -49,6 +51,7 @@ import {
   type MixedOutputDescriptor,
   type ModelPolicyLegacyUpgradeComparisonRow,
   type ModelPolicyTabnineSettingsPlan,
+  type ModelPolicyTabnineUpgradeComparisonRow,
   type ModelPolicyUpgradeBulkStrategy,
   type ModelPolicyUpgradeComparisonRow,
   type ModelPolicyUpgradePlan,
@@ -970,6 +973,22 @@ async function runUpgrade(
           deriveModelPolicyRoleOverrides(subagentPolicy.roles),
         ).filter((row) => row.changed)
       : undefined;
+  // Phase 31.5 (I6d PR review Finding 3): Tabnine rows now participate in
+  // the upgrade comparison table on the same terms as Codex/Claude (I6d's
+  // own approved brief's Behavior Slice step 3). Visibility only -- this
+  // does not add a new write/plan path; `planModelPolicyUpgrade` already
+  // reconciles Tabnine rows for the target preset (Finding 4).
+  const modelPolicyTabnineChanges:
+    | readonly ModelPolicyTabnineUpgradeComparisonRow[]
+    | undefined = hasV3ModelPreset(subagentPolicy)
+    ? compareModelPolicyTabnineUpgrade(
+        lockfileView?.modelPolicy,
+        modelPolicyComparisonPreset,
+        deriveModelPolicyTabnineRoleOverrides(
+          deriveModelPolicyRoleOverrides(subagentPolicy.roles),
+        ),
+      ).filter((row) => row.changed)
+    : undefined;
   const legacyEffectivePolicy = isEnabledMappingV2Policy(subagentPolicy)
     ? resolveEffectiveSubagentPolicy(subagentPolicy)
     : undefined;
@@ -1065,6 +1084,8 @@ async function runUpgrade(
           modelPolicyChanges,
           modelPolicyPlan,
           modelPolicyLegacyChanges,
+          undefined,
+          modelPolicyTabnineChanges,
         );
       }
       if (parsed.json) {
@@ -1079,6 +1100,7 @@ async function runUpgrade(
               modelPolicyChanges,
               modelPolicyPlan,
               modelPolicyLegacyChanges,
+              modelPolicyTabnineChanges,
             ),
           })}\n`,
         );
@@ -1147,6 +1169,7 @@ async function runUpgrade(
           modelPolicyPlan,
           modelPolicyLegacyChanges,
           modelProbeReport,
+          modelPolicyTabnineChanges,
         );
       }
       // An ACCEPTED probe that could not confirm one of the exact candidates
@@ -1212,6 +1235,8 @@ async function runUpgrade(
       modelPolicyChanges,
       modelPolicyPlan,
       modelPolicyLegacyChanges,
+      undefined,
+      modelPolicyTabnineChanges,
     );
   }
 
@@ -1224,6 +1249,7 @@ async function runUpgrade(
       modelPolicyChanges,
       modelPolicyPlan,
       modelPolicyLegacyChanges,
+      modelPolicyTabnineChanges,
     );
   }
   if (offered.length === 0) {
@@ -1236,6 +1262,7 @@ async function runUpgrade(
         modelPolicyChanges,
         modelPolicyPlan,
         modelPolicyLegacyChanges,
+        modelPolicyTabnineChanges,
       );
     }
     if (interactive && !scriptedWrite) {
@@ -1257,6 +1284,7 @@ async function runUpgrade(
         modelPolicyChanges,
         modelPolicyPlan,
         modelPolicyLegacyChanges,
+        modelPolicyTabnineChanges,
       );
     }
     return 0;
@@ -2145,12 +2173,31 @@ function buildModelPolicyJsonFields(
   modelPolicyLegacyChanges:
     | readonly ModelPolicyLegacyUpgradeComparisonRow[]
     | undefined,
+  modelPolicyTabnineChanges?:
+    | readonly ModelPolicyTabnineUpgradeComparisonRow[]
+    | undefined,
 ): Record<string, unknown> {
   return {
     ...(modelPolicyChanges === undefined
       ? {}
       : {
           modelPolicyChanges: modelPolicyChanges.map((row) => ({
+            role: row.role,
+            client: row.client,
+            old: row.old ?? null,
+            fresh: row.fresh,
+            reason: row.reason,
+          })),
+        }),
+    // Phase 31.5 (I6d PR review Finding 3): Tabnine rows on the same terms
+    // as Codex/Claude's `modelPolicyChanges` above, under a distinctly
+    // labeled field (Tabnine's row shape has no
+    // effort/targetEffort/primaryStatus/skillStatus, so it is never merged
+    // into `modelPolicyChanges` itself).
+    ...(modelPolicyTabnineChanges === undefined
+      ? {}
+      : {
+          modelPolicyTabnineChanges: modelPolicyTabnineChanges.map((row) => ({
             role: row.role,
             client: row.client,
             old: row.old ?? null,
@@ -2296,6 +2343,7 @@ function emitUpgradeReport(
   modelPolicyChanges?: readonly ModelPolicyUpgradeComparisonRow[],
   modelPolicyPlan?: ModelPolicyUpgradePlan,
   modelPolicyLegacyChanges?: readonly ModelPolicyLegacyUpgradeComparisonRow[],
+  modelPolicyTabnineChanges?: readonly ModelPolicyTabnineUpgradeComparisonRow[],
 ): void {
   if (json) {
     io.stdout(
@@ -2308,6 +2356,7 @@ function emitUpgradeReport(
           modelPolicyChanges,
           modelPolicyPlan,
           modelPolicyLegacyChanges,
+          modelPolicyTabnineChanges,
         ),
       })}\n`,
     );
@@ -2343,12 +2392,28 @@ function buildModelPolicyReportLines(
     | readonly ModelPolicyLegacyUpgradeComparisonRow[]
     | undefined,
   modelProbeReport?: ModelProbeReport,
+  modelPolicyTabnineChanges?:
+    | readonly ModelPolicyTabnineUpgradeComparisonRow[]
+    | undefined,
 ): string[] {
   const lines: string[] = [];
   if (modelPolicyChanges !== undefined && modelPolicyChanges.length > 0) {
     lines.push(
       "model policy changes:",
       ...modelPolicyChanges.map(formatModelPolicyChangeLine),
+    );
+  }
+  // Phase 31.5 (I6d PR review Finding 3): a distinctly-labeled Tabnine
+  // section, using Tabnine's own honest row shape (no
+  // effort/status-surface split) rather than reshaping it to fit the
+  // Codex/Claude line format above.
+  if (
+    modelPolicyTabnineChanges !== undefined &&
+    modelPolicyTabnineChanges.length > 0
+  ) {
+    lines.push(
+      "model policy changes (tabnine):",
+      ...modelPolicyTabnineChanges.map(formatModelPolicyTabnineChangeLine),
     );
   }
   if (modelPolicyPlan !== undefined) {
@@ -2422,12 +2487,16 @@ function printModelPolicyTextReport(
     | readonly ModelPolicyLegacyUpgradeComparisonRow[]
     | undefined,
   modelProbeReport?: ModelProbeReport,
+  modelPolicyTabnineChanges?:
+    | readonly ModelPolicyTabnineUpgradeComparisonRow[]
+    | undefined,
 ): void {
   const lines = buildModelPolicyReportLines(
     modelPolicyChanges,
     modelPolicyPlan,
     modelPolicyLegacyChanges,
     modelProbeReport,
+    modelPolicyTabnineChanges,
   );
   if (lines.length > 0) {
     io.stdout(`${lines.join("\n")}\n`);
@@ -2452,6 +2521,28 @@ function formatModelPolicyChangeLine(
     `model ${row.old?.model ?? "(none)"} -> ${row.fresh.model}, ` +
     `effort ${row.old?.effort ?? "(none)"} -> ${row.fresh.effort}, ` +
     `effort status ${row.old?.effortStatus ?? "(none)"} -> ${row.fresh.effortStatus}, ` +
+    `status ${row.old?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
+    `alternatives [${formatAlternativesList(row.old?.alternatives ?? [])}] -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
+    `lifecycle ${row.old?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle}, ` +
+    `source ${row.old?.source ?? "(none)"} -> ${row.fresh.source}, ` +
+    `catalog version ${row.old?.catalogVersion ?? "(none)"} -> ${row.fresh.catalogVersion} ` +
+    `(${row.reason})`
+  );
+}
+
+/**
+ * Tabnine's own counterpart to `formatModelPolicyChangeLine` (Phase 31.5
+ * I6d PR review Finding 3): covers Tabnine's honest row shape (model,
+ * lifecycle, status, alternatives, source, catalog version), never an
+ * effort/target-effort/primary-status/skill-status column, since Tabnine has
+ * none of those concepts.
+ */
+function formatModelPolicyTabnineChangeLine(
+  row: ModelPolicyTabnineUpgradeComparisonRow,
+): string {
+  return (
+    `- ${row.role} ${row.client}: ` +
+    `model ${row.old?.model ?? "(none)"} -> ${row.fresh.model ?? "(none)"}, ` +
     `status ${row.old?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
     `alternatives [${formatAlternativesList(row.old?.alternatives ?? [])}] -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
     `lifecycle ${row.old?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle}, ` +

@@ -423,7 +423,7 @@ export const SUBAGENT_POLICY_ROLE_IDS: readonly SubagentPolicyRoleId[] =
     "mechanical",
   ]);
 
-export type SubagentPolicyOverrideTarget = "codex" | "claude";
+export type SubagentPolicyOverrideTarget = "codex" | "claude" | "tabnine";
 
 /**
  * Versioned source of truth for exact target identifiers (ADR 0016). Core

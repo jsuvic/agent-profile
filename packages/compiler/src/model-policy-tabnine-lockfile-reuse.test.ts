@@ -185,6 +185,103 @@ test("removing a previously-set tabnine exact override re-resolves to guided man
   assert.equal(architectTabnine, undefined);
 });
 
+test("a role touched only for codex/capability/effort reasons (no overrides.tabnine at all) still reuses its prior lock's unrelated Tabnine row (Finding 6)", () => {
+  // The profile declares an override for "architect" that has nothing to do
+  // with Tabnine (a codex-only exact override). Before the Finding 6 fix,
+  // `buildModelPolicyTabnineTargetTable`'s `hasRoleOverride` was true for ANY
+  // role present in `subagentPolicy.roles`, which incorrectly forced this
+  // role's Tabnine resolution to skip prior-lock reuse -- silently deleting
+  // an unrelated, still-valid, locked Tabnine model.
+  const profile = profileWithPreset({
+    enabled: true,
+    preset: "role-aware",
+    roles: {
+      architect: {
+        capability: "strongest",
+        effort: "extra-high",
+        overrides: { codex: { model: "gpt-5.6-sol" } },
+      },
+    },
+  });
+
+  const previousModelPolicy: LockModelPolicyV2 = {
+    catalogVersion: 3,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "organization-model-unrelated-to-codex-override",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "catalog",
+        capabilityStatus: "advisory",
+        catalogVersion: 2,
+      },
+    ],
+  };
+
+  const result = resolveModelPolicyLockfile(profile, previousModelPolicy);
+  assert.ok(result);
+  const architectTabnine = result.resolutions.find(
+    (r) => r.role === "architect" && r.client === "tabnine",
+  );
+  assert.ok(architectTabnine);
+  assert.equal(
+    architectTabnine.model,
+    "organization-model-unrelated-to-codex-override",
+  );
+  assert.equal(architectTabnine.source, "catalog");
+  assert.equal(architectTabnine.catalogVersion, 2);
+});
+
+test("an unchanged explicit tabnine override reuses the prior lock's own catalogVersion instead of stamping the current one (Finding 2)", () => {
+  const profile = profileWithPreset({
+    enabled: true,
+    preset: "role-aware",
+    roles: {
+      architect: {
+        capability: "strongest",
+        effort: "extra-high",
+        overrides: { tabnine: { model: "organization-model-id" } },
+      },
+    },
+  });
+
+  const previousModelPolicy: LockModelPolicyV2 = {
+    catalogVersion: 3,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "organization-model-id",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: 1,
+      },
+    ],
+  };
+
+  const result = resolveModelPolicyLockfile(profile, previousModelPolicy);
+  assert.ok(result);
+  const architectTabnine = result.resolutions.find(
+    (r) => r.role === "architect" && r.client === "tabnine",
+  );
+  assert.ok(architectTabnine);
+  assert.equal(architectTabnine.model, "organization-model-id");
+  assert.equal(architectTabnine.source, "explicit-override");
+  // The unchanged override reuses the prior row's own catalogVersion (1),
+  // not the current MODEL_POLICY_TABNINE_CATALOG_VERSION.
+  assert.equal(architectTabnine.catalogVersion, 1);
+  assert.notEqual(
+    architectTabnine.catalogVersion,
+    MODEL_POLICY_TABNINE_CATALOG_VERSION,
+  );
+});
+
 test("no previous lock (first compile) keeps today's byte-identical fresh behavior (no Tabnine row emitted)", () => {
   const profile = profileWithPreset();
   const result = resolveModelPolicyLockfile(profile);

@@ -18,12 +18,16 @@ import {
 } from "@agent-profile/core";
 
 import type { LockModelPolicyV2 } from "./types.js";
-import { compareModelPolicyUpgrade } from "./model-policy-upgrade-comparison.js";
+import {
+  compareModelPolicyTabnineUpgrade,
+  compareModelPolicyUpgrade,
+} from "./model-policy-upgrade-comparison.js";
 import {
   buildModelPolicyTargetTable,
   toLockModelPolicyFromTargetTable,
   type ModelPolicyRoleOverrides,
 } from "./model-policy-target-adapter.js";
+import { MODEL_POLICY_TABNINE_CATALOG_VERSION } from "./model-policy-tabnine-adapter.js";
 
 test("a role/client whose locked model differs from today's live catalog resolution is reported as changed with a model reason", () => {
   const previous: LockModelPolicyV2 = {
@@ -312,4 +316,95 @@ test("a role/client with no prior locked row at all is reported as changed with 
   assert.equal(row.old, undefined);
   assert.ok(row.reason);
   assert.match(row.reason, /no prior lock entry/i);
+});
+
+// Phase 31.5 (I6d PR review Finding 3): `compareModelPolicyTabnineUpgrade`
+// mirrors `compareModelPolicyUpgrade`'s structural pattern (block-level
+// preset/catalogVersion reasons folded into every row, per-row
+// changed/reason/old/fresh) but is built from Tabnine's own adapter and row
+// shape (no effort/targetEffort/primaryStatus/skillStatus, since Tabnine has
+// none of these concepts).
+
+test("compareModelPolicyTabnineUpgrade reports a changed exact override with a model reason", () => {
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "stale-organization-model",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyTabnineUpgrade(previous, "role-aware", {
+    architect: { model: "new-organization-model" },
+  });
+  const row = rows.find((r) => r.role === "architect");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.match(row.reason, /model/i);
+  assert.equal(row.old?.model, "stale-organization-model");
+  assert.equal(row.fresh.model, "new-organization-model");
+});
+
+test("compareModelPolicyTabnineUpgrade reports an unchanged reused row as changed=false", () => {
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "organization-model-id",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyTabnineUpgrade(previous, "role-aware", {
+    architect: { model: "organization-model-id" },
+  });
+  const row = rows.find((r) => r.role === "architect");
+  assert.ok(row);
+  assert.equal(row.changed, false);
+  assert.equal(row.reason, undefined);
+});
+
+test("compareModelPolicyTabnineUpgrade reports a removed override as changed (forces fresh, guided manual selection)", () => {
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "stale-explicit-override-model",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyTabnineUpgrade(previous, "role-aware");
+  const row = rows.find((r) => r.role === "architect");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.equal(row.fresh.model, undefined);
+  assert.match(row.reason, /model/i);
 });

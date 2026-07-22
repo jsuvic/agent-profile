@@ -379,6 +379,34 @@ test("a v3-opted profile's Tabnine model/effort table honors a per-role capabili
   assert.doesNotMatch(tabnine, /\| implementer \| balanced \| high \|/u);
 });
 
+test("a role's explicit tabnine exact override reaches the Tabnine guideline, not just ai-profile.lock (Finding 1)", () => {
+  // Before the Finding 1 fix, `toModelPolicyTabnineRoleOverrides` only
+  // projected `capability`/`effort` and silently dropped the profile's own
+  // `overrides.tabnine.model`, so the same compile could record an exact
+  // Tabnine model in `ai-profile.lock` while the generated guideline still
+  // reported "no exact model resolved" -- a real disagreement between two
+  // surfaces describing the same compile.
+  const tabnine = fileText(
+    profileWithPolicy({
+      enabled: true,
+      preset: "role-aware",
+      roles: {
+        architect: {
+          capability: "strongest",
+          effort: "extra-high",
+          overrides: { tabnine: { model: "organization-model-id" } },
+        },
+      },
+    }),
+    ".tabnine/guidelines/87-subagent-task-capsules.md",
+  );
+  assert.match(tabnine, /organization-model-id/u);
+  assert.doesNotMatch(
+    tabnine,
+    /\| architect \| strongest \| extra-high \| advisory \(no exact model resolved/u,
+  );
+});
+
 test("a v2/legacy profile (no v3 preset) keeps the Tabnine guideline byte-identical to the pre-I3 baseline", () => {
   const withoutPreset = fileText(
     profileWithPolicy(CANONICAL_POLICY),

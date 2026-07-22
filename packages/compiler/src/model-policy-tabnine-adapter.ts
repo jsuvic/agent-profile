@@ -150,6 +150,13 @@ export type ModelPolicyTabnineRoleOverrides = Partial<
       capability?: ModelPolicyCapability;
       effort?: ModelPolicyEffort;
       model?: string;
+      /** Phase 31.5 (I6d PR review Finding 6): `true` when the profile
+       * explicitly declared `overrides.tabnine` for this role (even with no
+       * `model` set). Only this flag -- never "this role appears in
+       * `roleOverrides` at all" -- may disable Tabnine's own prior-lock
+       * reuse; a role touched only for capability/effort/codex/claude
+       * reasons must still fall through to normal reconciliation. */
+      explicit?: true;
     }>
   >
 >;
@@ -248,6 +255,86 @@ function deriveLockedTabnineOverride(
 }
 
 /**
+ * Build a reused `ModelPolicyTabnineResolution` from a locked
+ * model/source/alternatives/catalogVersion tuple, recomputing
+ * `lifecycle`/`modelStatus` live against the *current* catalog (Phase 31.5
+ * I6 "lifecycle always recomputed" rule): a retained model that has since
+ * been removed from the catalog honestly reports `unverified`/`unrated`
+ * instead of a stale claim. Shared by both the "no explicit override,
+ * prior-lock reuse" branch and the "unchanged explicit override" branch
+ * (Phase 31.5 I6d PR review Finding 2) so this recomputation logic has
+ * exactly one owner.
+ */
+function buildReusedTabnineResolution(
+  locked: Readonly<{
+    model: string;
+    source: ModelPolicyResolutionSource;
+    alternatives: readonly string[];
+    catalogVersion: number;
+  }>,
+  catalog: readonly ModelCatalogEntry[],
+): ModelPolicyTabnineResolution {
+  const catalogued = findModelCatalogEntry(catalog, locked.model);
+  return Object.freeze({
+    model: locked.model,
+    lifecycle: catalogued?.status ?? "unrated",
+    source: locked.source,
+    alternatives: locked.alternatives,
+    modelStatus: catalogued === undefined ? "unverified" : "advisory",
+    effort: undefined,
+    effortStatus: "unsupported",
+    catalogVersion: locked.catalogVersion,
+  });
+}
+
+/**
+ * Find a prior lock's `client: "tabnine"` row for this role/preset that was
+ * itself sourced `"explicit-override"` and still resolves the SAME exact
+ * model the current profile declares (Phase 31.5 I6d PR review Finding 2).
+ * When found, an ordinary compile reuses that prior row's own
+ * `alternatives`/`catalogVersion` verbatim instead of stamping the current
+ * catalog version on every compile, even though no reviewed model change
+ * occurred. A changed model, a differently-sourced prior row, a different
+ * preset, or no prior lock at all all correctly return `undefined`, falling
+ * through to a fresh resolution.
+ */
+function findUnchangedExplicitTabnineOverride(
+  previous: LockModelPolicyV2 | undefined,
+  preset: ModelPolicyPreset,
+  role: ModelPolicyRoleId,
+  model: string,
+):
+  | Readonly<{
+      model: string;
+      source: ModelPolicyResolutionSource;
+      alternatives: readonly string[];
+      catalogVersion: number;
+    }>
+  | undefined {
+  if (previous === undefined || previous.preset !== preset) {
+    return undefined;
+  }
+
+  const previousRow = previous.resolutions.find(
+    (candidate) => candidate.client === "tabnine" && candidate.role === role,
+  );
+  if (
+    previousRow === undefined ||
+    previousRow.source !== "explicit-override" ||
+    previousRow.model !== model
+  ) {
+    return undefined;
+  }
+
+  return {
+    model: previousRow.model,
+    source: previousRow.source,
+    alternatives: previousRow.alternatives,
+    catalogVersion: previousRow.catalogVersion ?? previous.catalogVersion,
+  };
+}
+
+/**
  * Build the deterministic Tabnine resolution table for every role in
  * `MODEL_POLICY_ROLE_IDS`. Pure and deterministic: no filesystem/network/
  * clock access. Mirrors `buildModelPolicyTargetTable`'s shape/precedence
@@ -271,7 +358,13 @@ export function buildModelPolicyTabnineTargetTable(
   return MODEL_POLICY_ROLE_IDS.map((role) => {
     const presetRow = MODEL_POLICY_PRESET_TABLE[preset][role];
     const override = roleOverrides?.[role];
-    const hasRoleOverride = roleOverrides?.[role] !== undefined;
+    // Phase 31.5 (I6d PR review Finding 6): only an explicit
+    // `overrides.tabnine` key for this role (present or absent, per
+    // `override.explicit`) may disable Tabnine's own prior-lock reuse -- NOT
+    // merely "this role appears in `roleOverrides` at all", which is also
+    // true for a role touched only for capability/effort/codex/claude
+    // reasons that have nothing to do with Tabnine.
+    const hasRoleOverride = override?.explicit === true;
     // Same precedence as the Codex/Claude sibling (`buildModelPolicyTargetTable`
     // in model-policy-target-adapter.ts): an explicit role capability/effort
     // wins over the preset's own row for that role, independently per field,
@@ -281,9 +374,25 @@ export function buildModelPolicyTabnineTargetTable(
 
     let tabnine: ModelPolicyTabnineResolution;
     if (override?.model !== undefined) {
-      // An explicit profile-side Tabnine override always wins, ignoring any
-      // stale previous lock row for this role (mirrors Codex/Claude).
-      tabnine = resolveTabnineRow(role, catalog, { model: override.model });
+      // Phase 31.5 (I6d PR review Finding 2): before resolving fresh, check
+      // whether the prior lock (same preset) already recorded this SAME
+      // exact model for this role as an explicit override -- if so, reuse
+      // that prior row's own alternatives/source/catalogVersion verbatim
+      // (recomputing lifecycle/modelStatus live), instead of always
+      // stamping the current catalog version even though no reviewed model
+      // change occurred. A real, reviewed change (a different model) still
+      // falls through to a fresh resolution, ignoring any stale previous
+      // lock row for this role (mirrors Codex/Claude).
+      const unchanged = findUnchangedExplicitTabnineOverride(
+        previousModelPolicy,
+        preset,
+        role,
+        override.model,
+      );
+      tabnine =
+        unchanged === undefined
+          ? resolveTabnineRow(role, catalog, { model: override.model })
+          : buildReusedTabnineResolution(unchanged, catalog);
     } else if (hasRoleOverride) {
       // The profile touched this role's overrides object at all (even just
       // capability/effort, with no Tabnine model) -- mirrors
@@ -296,27 +405,10 @@ export function buildModelPolicyTabnineTargetTable(
         preset,
         role,
       );
-      if (locked === undefined) {
-        tabnine = resolveTabnineRow(role, catalog, undefined);
-      } else {
-        // Reuse the retained row's model/alternatives/source/catalogVersion
-        // verbatim, but always recompute lifecycle/modelStatus against the
-        // *current* catalog (Phase 31.5 I6 "lifecycle always recomputed"
-        // rule): a retained model that has since been removed from the
-        // catalog honestly reports `unverified`/`unrated` instead of a stale
-        // claim.
-        const catalogued = findModelCatalogEntry(catalog, locked.model);
-        tabnine = Object.freeze({
-          model: locked.model,
-          lifecycle: catalogued?.status ?? "unrated",
-          source: locked.source,
-          alternatives: locked.alternatives,
-          modelStatus: catalogued === undefined ? "unverified" : "advisory",
-          effort: undefined,
-          effortStatus: "unsupported",
-          catalogVersion: locked.catalogVersion,
-        });
-      }
+      tabnine =
+        locked === undefined
+          ? resolveTabnineRow(role, catalog, undefined)
+          : buildReusedTabnineResolution(locked, catalog);
     }
 
     return Object.freeze({

@@ -358,6 +358,16 @@ export type ModelPolicyRoleOverrides = Partial<
          * resolves against. Tabnine has its own separate adapter/table
          * (model-policy-tabnine-adapter.ts) and reads this field instead. */
         tabnineModel?: string;
+        /** Phase 31.5 (I6d PR review Finding 6): `true` when the profile
+         * explicitly declared `overrides.tabnine` for this role (even with
+         * no `model` set -- an explicit "clear my override" signal),
+         * distinct from `tabnineModel` being absent merely because the
+         * profile never mentioned Tabnine for this role at all. Only this
+         * flag -- not "is this role mentioned in `subagentPolicy.roles` at
+         * all" -- may gate Tabnine's own prior-lock reuse decision; a role
+         * touched only for capability/effort/codex/claude reasons must still
+         * fall through to normal Tabnine reconciliation. */
+        hasTabnineOverride?: true;
       }>
   >
 >;
@@ -408,9 +418,57 @@ export function deriveModelPolicyRoleOverrides(
       ...(value.overrides?.tabnine?.model === undefined
         ? {}
         : { tabnineModel: value.overrides.tabnine.model }),
+      // Phase 31.5 (I6d PR review Finding 6): recorded whenever the profile
+      // declared `overrides.tabnine` at all for this role, regardless of
+      // whether `.model` is set -- see `hasTabnineOverride`'s own doc
+      // comment above for why this must be independent of `tabnineModel`.
+      ...(value.overrides?.tabnine === undefined
+        ? {}
+        : { hasTabnineOverride: true as const }),
     };
   }
   return overrides;
+}
+
+/**
+ * Single-owner projection from a profile's `ModelPolicyRoleOverrides` (the
+ * shared conversion `deriveModelPolicyRoleOverrides` above produces) into the
+ * Tabnine adapter's own `ModelPolicyTabnineRoleOverrides` shape (Phase 31.5
+ * I6d PR review Finding 1). Both `resolveModelPolicyLockfile` (this file) and
+ * `subagent-policy-guidance.ts`'s Tabnine guideline renderer MUST derive
+ * their Tabnine role-overrides map through this one function so the two
+ * surfaces (`ai-profile.lock` and the generated Tabnine guideline) can never
+ * independently drift out of agreement about a role's Tabnine override
+ * intent -- the exact defect class this fix closes (a hand-rolled second
+ * projection in `subagent-policy-guidance.ts` used to silently drop the
+ * Tabnine `model` override and never carry the `explicit` marker at all).
+ */
+export function deriveModelPolicyTabnineRoleOverrides(
+  roleOverrides: ModelPolicyRoleOverrides | undefined,
+): ModelPolicyTabnineRoleOverrides | undefined {
+  if (roleOverrides === undefined) {
+    return undefined;
+  }
+
+  const tabnineOverrides: {
+    -readonly [K in keyof ModelPolicyTabnineRoleOverrides]: ModelPolicyTabnineRoleOverrides[K];
+  } = {};
+  for (const [role, value] of Object.entries(roleOverrides)) {
+    if (value === undefined) {
+      continue;
+    }
+    tabnineOverrides[role as keyof ModelPolicyTabnineRoleOverrides] = {
+      capability: value.capability,
+      effort: value.effort,
+      ...(value.tabnineModel === undefined
+        ? {}
+        : { model: value.tabnineModel }),
+      ...(value.hasTabnineOverride === true
+        ? { explicit: true as const }
+        : {}),
+    };
+  }
+  return tabnineOverrides;
 }
 
 /**
@@ -691,21 +749,8 @@ export function resolveModelPolicyLockfile(
     preset,
     buildModelPolicyTargetTable(preset, roleOverrides, previousModelPolicy),
   );
-  const tabnineRoleOverrides: ModelPolicyTabnineRoleOverrides | undefined =
-    roleOverrides === undefined
-      ? undefined
-      : Object.fromEntries(
-          Object.entries(roleOverrides).map(([role, value]) => [
-            role,
-            {
-              capability: value?.capability,
-              effort: value?.effort,
-              ...(value?.tabnineModel === undefined
-                ? {}
-                : { model: value.tabnineModel }),
-            },
-          ]),
-        );
+  const tabnineRoleOverrides =
+    deriveModelPolicyTabnineRoleOverrides(roleOverrides);
   const tabnine = toLockModelPolicyTabnineResolutions(
     buildModelPolicyTabnineTargetTable(
       preset,

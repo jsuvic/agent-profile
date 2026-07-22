@@ -160,7 +160,22 @@ test("cost-conscious bulk strategy resolves against the cost-conscious preset an
   );
 });
 
-test("adopt/quality-first/cost-conscious preserve a prior lock's tabnine rows verbatim, since Tabnine reconciliation is out of scope here (PR review finding)", () => {
+test("adopt/quality-first/cost-conscious genuinely reconcile a prior lock's tabnine rows for the target preset, not blindly relabel them (Phase 31.5 I6d PR review Finding 4)", () => {
+  // Superseded PR-review-era behavior: `planModelPolicyUpgrade` used to copy
+  // every prior `client: "tabnine"` row verbatim into the new plan's block,
+  // regardless of the strategy's target preset or whether the row's own
+  // `source: "explicit-override"` provenance is still declared by the
+  // current profile. Writing that block as the new `ai-profile.lock` and
+  // then running an ordinary compile would "reuse" the stale pre-upgrade
+  // Tabnine row under the new preset as if it had always belonged there --
+  // bypassing the changed-preset-forces-fresh guarantee via one upgrade-write
+  // round-trip. Phase 31.5 I6d closes this by actually resolving Tabnine rows
+  // for the target preset through the same reconciliation ordinary compile
+  // uses (`buildModelPolicyTabnineTargetTable`/
+  // `toLockModelPolicyTabnineResolutions`), given no current profile
+  // `roleOverrides` declaring a Tabnine override for "architect": the prior
+  // row's own `source: "explicit-override"` means it must re-resolve to
+  // guided manual selection (no row emitted) instead of being perpetuated.
   const previousWithTabnine: LockModelPolicyV2 = {
     ...PREVIOUS,
     resolutions: [
@@ -189,15 +204,44 @@ test("adopt/quality-first/cost-conscious preserve a prior lock's tabnine rows ve
     const tabnineRow = plan.block.resolutions.find(
       (row) => row.client === "tabnine",
     );
-    assert.ok(
+    assert.equal(
       tabnineRow,
-      `expected strategy "${strategy}" to preserve the tabnine row`,
-    );
-    assert.deepEqual(
-      tabnineRow,
-      previousWithTabnine.resolutions.find((row) => row.client === "tabnine"),
+      undefined,
+      `expected strategy "${strategy}" to re-resolve the removed tabnine override to guided manual selection, not perpetuate the stale row`,
     );
   }
+});
+
+test("adopt under the SAME preset as the prior lock still reuses an unrelated, non-explicit-override tabnine row for a role the profile does not touch (Finding 4 parity with ordinary compile)", () => {
+  const previousWithTabnine: LockModelPolicyV2 = {
+    ...PREVIOUS,
+    resolutions: [
+      ...PREVIOUS.resolutions,
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "organization-model-from-before",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "catalog",
+        capabilityStatus: "advisory",
+        catalogVersion: 2,
+      },
+    ],
+  };
+
+  const plan = planModelPolicyUpgrade(
+    "adopt",
+    previousWithTabnine,
+    "role-aware",
+  );
+  assert.ok(plan.block);
+  const tabnineRow = plan.block.resolutions.find(
+    (row) => row.client === "tabnine",
+  );
+  assert.ok(tabnineRow);
+  assert.equal(tabnineRow.model, "organization-model-from-before");
+  assert.equal(tabnineRow.source, "catalog");
 });
 
 test("planModelPolicyUpgrade is deterministic for identical inputs", () => {

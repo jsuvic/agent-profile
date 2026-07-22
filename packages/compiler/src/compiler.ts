@@ -738,7 +738,7 @@ function renderTarget(
         ),
       ];
     case "tabnine-guidelines":
-      return renderTabnineGuidelines(profile);
+      return renderTabnineGuidelines(profile, previousModelPolicy);
     case "lockfile":
       return [];
     case "tabnine-mcp-config":
@@ -821,7 +821,10 @@ function renderTarget(
   }
 }
 
-function renderTabnineGuidelines(profile: AiProfile): GeneratedFile[] {
+function renderTabnineGuidelines(
+  profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
+): GeneratedFile[] {
   const common = {
     target: "tabnine-guidelines" as const,
   };
@@ -976,7 +979,10 @@ function renderTabnineGuidelines(profile: AiProfile): GeneratedFile[] {
         ".tabnine/guidelines/87-subagent-task-capsules.md",
         common.target,
         "targets/tabnine-guidelines/87-subagent-task-capsules@1",
-        renderSubagentPolicyTabnineGuideline(profile.subagentPolicy),
+        renderSubagentPolicyTabnineGuideline(
+          profile.subagentPolicy,
+          previousModelPolicy,
+        ),
       ),
     );
   }
