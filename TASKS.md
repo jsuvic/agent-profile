@@ -388,6 +388,46 @@ open scope, per this brief's own explicit non-goal: `model-policy-upgrade-compar
 does not yet surface Tabnine rows in I6a's upgrade table - that remains I6a's
 scope, unchanged by this cycle.
 
+I6d PR review fix round (2026-07-22, PR #129): a Codex bot automated review
+found 6 findings against the cycle above, correctly disagreeing with its
+"upgrade comparison table is a pure non-goal" framing - the approved brief's
+own Behavior Slice step 3 requires Tabnine visibility in I6a's comparison
+table, which the prior cycle had wrongly treated as fully out of scope.
+Fixed: (1, P1) `renderSubagentPolicyTabnineGuideline` never received
+`previousModelPolicy` and silently dropped the persisted `tabnine` override,
+so `.tabnine/guidelines/87-subagent-task-capsules.md` could disagree with
+`ai-profile.lock` about a resolved Tabnine model - fixed by extracting a
+single-owner `deriveModelPolicyTabnineRoleOverrides` helper (replacing a
+second hand-rolled, model-dropping projection) and threading
+`previousModelPolicy` through `compiler.ts`'s `renderTarget` ->
+`renderTabnineGuidelines`; (2, P2) an unchanged explicit Tabnine override
+always stamped the current catalog version instead of reusing the prior
+lock row's own recorded version - fixed via `findUnchangedExplicitTabnineOverride`
+plus a shared `buildReusedTabnineResolution` helper; (3, P1) the upgrade
+comparison table excluded Tabnine entirely - fixed by adding a separate
+`compareModelPolicyTabnineUpgrade` (Tabnine's own honest row shape, no
+invented effort/status-surface split) wired into `apps/cli`'s upgrade
+text/JSON report at 3 of its call sites (the two preview paths and the
+retain/no-op path); the scripted-write success/refusal JSON paths for
+adopt/quality-first/cost-conscious remain unwired, a disclosed follow-up
+(purely additive optional parameter, same shape as every other optional
+report field, so the gap is an honest omission, not an inconsistency); (4,
+P1) `planModelPolicyUpgrade` blindly relabeled prior Tabnine rows under a
+new target preset, letting a stale row "launder" through one upgrade-write
+round-trip and then get wrongly treated as validly locked on the next
+ordinary compile - fixed by genuinely reconciling Tabnine rows for the
+target preset via the same adapter functions ordinary compile uses; (5, P2)
+`SubagentPolicyOverrideTarget` widened to include `"tabnine"`; (6, P1) the
+Tabnine reuse-invalidation check fired for ANY role the profile's
+`subagentPolicy.roles` map touched at all (even capability/effort-only or an
+unrelated Codex/Claude override), wrongly wiping unrelated valid locked
+Tabnine rows - fixed via a new `hasTabnineOverride`/`explicit` flag scoped to
+the actual presence of `overrides.tabnine` in the raw profile. All 6 fixes
+RED-first with regression tests. Tests: `packages/core` 217/218,
+`packages/compiler` 324/325, `apps/cli` 576/580, all 0 failures (only
+pre-existing skips); `npm run check` clean. All 6 PR review threads replied
+to and resolved.
+
 I6 completed 2026-07-18 (spec + code-quality review passed) for its own
 foundational scope only: the "ordinary compile reuses the lock" primitive
 for v3 Codex/Claude model resolutions, later hardened 2026-07-19 (generated
