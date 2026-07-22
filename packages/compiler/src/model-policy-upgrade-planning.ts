@@ -56,25 +56,26 @@ export function planModelPolicyUpgrade(
     buildModelPolicyTargetTable(targetPreset, roleOverrides),
   );
 
-  // Phase 31.5 (I6d PR review Finding 4): genuinely reconcile Tabnine rows
-  // for the TARGET preset, mirroring exactly what an ordinary compile's
-  // `resolveModelPolicyLockfile` does -- do not blindly relabel every prior
-  // `client: "tabnine"` row under the new preset as if it had always
-  // resolved there. Without this, writing this plan's block as the new
-  // `ai-profile.lock` would let a stale pre-upgrade Tabnine row "reuse"
-  // itself on the very next ordinary compile (since that compile's own
-  // reconciliation would see `previous.preset === preset` and treat the
-  // relabeled row as legitimately locked under the target preset),
-  // bypassing the changed-preset-forces-fresh guarantee through one
-  // upgrade-write round-trip.
+  // Phase 31.5 (I6d PR review Finding 4, then Finding "resolve adopt plans
+  // from fresh Tabnine state"): genuinely resolve Tabnine rows for the
+  // TARGET preset -- do not blindly relabel every prior `client: "tabnine"`
+  // row under the new preset as if it had always resolved there (the
+  // original defect this fix closed). But also do NOT pass `previous` as
+  // `buildModelPolicyTabnineTargetTable`'s lock-reuse input here: every
+  // bulk-upgrade strategy ("adopt" included) is a deliberate "show/apply
+  // what the live catalog resolves today" operation that intentionally
+  // ignores ordinary-compile lock reuse -- exactly mirroring
+  // `buildModelPolicyTargetTable(targetPreset, roleOverrides)` just above,
+  // which likewise never forwards `previous` for Codex/Claude. Passing
+  // `previous` here would let Tabnine (uniquely among the three clients)
+  // silently reuse a stale catalog-sourced row or stale-catalog-version
+  // explicit override even while `compareModelPolicyTabnineUpgrade` (which
+  // always ignores reuse) reports that row as changing to a fresh value --
+  // a real plan/comparison disagreement (PR review finding).
   const tabnineRoleOverrides =
     deriveModelPolicyTabnineRoleOverrides(roleOverrides);
   const tabnineResolutions = toLockModelPolicyTabnineResolutions(
-    buildModelPolicyTabnineTargetTable(
-      targetPreset,
-      tabnineRoleOverrides,
-      previous,
-    ),
+    buildModelPolicyTabnineTargetTable(targetPreset, tabnineRoleOverrides),
   );
 
   // The lockfile's deterministic-order validation requires

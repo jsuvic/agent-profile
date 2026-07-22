@@ -3263,6 +3263,68 @@ test("upgrade --model-policy-strategy adopt --write --json includes modelPolicyC
   assert.ok((report.modelPolicyPlan?.resolutions.length ?? 0) > 0);
 });
 
+test("upgrade --model-policy-strategy adopt --write --json includes modelPolicyTabnineChanges in the write response, matching the preview/retain JSON paths (PR review round 2 finding)", async () => {
+  // Before this fix, `modelPolicyTabnineChanges` was threaded into the
+  // preview and retain/no-op JSON paths (round 1) but NOT into
+  // `runModelPolicyWrite`'s own final `buildModelPolicyJsonFields` call, so
+  // a genuinely successful `adopt --write --json` response silently omitted
+  // the field even when a real Tabnine row changed -- automation could not
+  // rely on the field's presence being consistent across a successful write
+  // versus a preview.
+  const fresh = liveModelPolicy();
+  const staleWithTabnine: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: [
+      ...fresh.resolutions,
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "stale-organization-model",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: fresh.catalogVersion,
+      },
+    ],
+  };
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    staleWithTabnine,
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyTabnineChanges?: Array<{
+      role: string;
+      client: string;
+      old: { model: string } | null;
+      fresh: { model?: string };
+    }>;
+  };
+  assert.ok(report.modelPolicyTabnineChanges);
+  const row = report.modelPolicyTabnineChanges?.find(
+    (candidate) => candidate.role === "architect" && candidate.client === "tabnine",
+  );
+  assert.ok(row);
+  assert.equal(row?.old?.model, "stale-organization-model");
+  assert.equal(row?.fresh.model, undefined);
+});
+
 test("upgrade --model-policy-strategy adopt --write preserves the capability-catalog report even though it never runs the capability-adoption path (PR review finding)", async () => {
   // The model-policy write path returns early, before the normal
   // capability-catalog computation's report -- unrelated to any model

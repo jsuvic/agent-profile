@@ -212,7 +212,17 @@ test("adopt/quality-first/cost-conscious genuinely reconcile a prior lock's tabn
   }
 });
 
-test("adopt under the SAME preset as the prior lock still reuses an unrelated, non-explicit-override tabnine row for a role the profile does not touch (Finding 4 parity with ordinary compile)", () => {
+test("adopt under the SAME preset as the prior lock does NOT reuse a prior tabnine row -- every bulk-upgrade strategy resolves Tabnine fresh, ignoring ordinary-compile lock reuse, exactly like it already does for Codex/Claude (PR review finding)", () => {
+  // A bulk-upgrade strategy ("adopt" included) is a deliberate "apply what
+  // the live catalog resolves today" operation -- `buildModelPolicyTargetTable`
+  // never receives `previous` for Codex/Claude either (see the plain
+  // `buildModelPolicyTargetTable(targetPreset, roleOverrides)` call above in
+  // model-policy-upgrade-planning.ts, with no third argument). Passing
+  // `previous` into the Tabnine table here would let Tabnine uniquely reuse a
+  // stale row while `compareModelPolicyTabnineUpgrade` (which always ignores
+  // reuse) reports that very row as changing -- a genuine plan/comparison
+  // disagreement a prior fix round introduced and this test now guards
+  // against.
   const previousWithTabnine: LockModelPolicyV2 = {
     ...PREVIOUS,
     resolutions: [
@@ -239,9 +249,11 @@ test("adopt under the SAME preset as the prior lock still reuses an unrelated, n
   const tabnineRow = plan.block.resolutions.find(
     (row) => row.client === "tabnine",
   );
-  assert.ok(tabnineRow);
-  assert.equal(tabnineRow.model, "organization-model-from-before");
-  assert.equal(tabnineRow.source, "catalog");
+  assert.equal(
+    tabnineRow,
+    undefined,
+    "adopt must resolve Tabnine fresh (guided manual selection, no row) for a role with no current override, never reuse a prior catalog-sourced row",
+  );
 });
 
 test("planModelPolicyUpgrade is deterministic for identical inputs", () => {

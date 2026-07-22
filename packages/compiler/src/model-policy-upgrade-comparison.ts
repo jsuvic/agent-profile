@@ -289,6 +289,17 @@ export type ModelPolicyTabnineUpgradeComparisonRow = Readonly<{
         alternatives: readonly string[];
         capabilityStatus: ModelPolicyCapabilityStatus;
         catalogVersion: number;
+        // Phase 31.5 (I6d PR review round 2, "report removal of stale
+        // Tabnine effort metadata"): a validated prior lock row's schema
+        // (`LockModelPolicyResolutionV2`) permits an optional `effort` and
+        // any `effortStatus`, even for a `client: "tabnine"` row (the schema
+        // does not special-case Tabnine) -- so a stale/legacy row could
+        // carry non-default values here even though this adapter itself
+        // never writes them. Surfacing both lets the comparison honestly
+        // report an adopt plan's removal/rewrite of that metadata instead of
+        // silently reporting the row as unchanged.
+        effort: ModelPolicyTargetEffort | undefined;
+        effortStatus: ModelPolicyCapabilityStatus;
       }>
     | undefined;
   fresh: Readonly<{
@@ -298,6 +309,12 @@ export type ModelPolicyTabnineUpgradeComparisonRow = Readonly<{
     alternatives: readonly string[];
     capabilityStatus: ModelPolicyCapabilityStatus;
     catalogVersion: number;
+    /** Always `undefined`: Tabnine has no confirmed effort/reasoning
+     * control, so a fresh resolution never carries one. */
+    effort: undefined;
+    /** Always `"unsupported"`, independent of `capabilityStatus`, mirroring
+     * `ModelPolicyTabnineResolution.effortStatus`'s own fixed value. */
+    effortStatus: ModelPolicyCapabilityStatus;
   }>;
   reason: string | undefined;
 }>;
@@ -370,6 +387,8 @@ export function compareModelPolicyTabnineUpgrade(
         alternatives: freshResolution.alternatives,
         capabilityStatus: freshResolution.modelStatus,
         catalogVersion: freshResolution.catalogVersion,
+        effort: undefined,
+        effortStatus: freshResolution.effortStatus,
       });
 
     const oldRow = findOldTabnineRow(previous, role);
@@ -383,10 +402,23 @@ export function compareModelPolicyTabnineUpgrade(
             alternatives: oldRow.alternatives,
             capabilityStatus: oldRow.capabilityStatus,
             catalogVersion: oldRow.catalogVersion,
+            effort: oldRow.effort,
+            effortStatus: oldRow.effortStatus,
           });
 
     const reasons: string[] = [];
-    if (old === undefined) {
+    // Phase 31.5 (I6d PR review round 2, "suppress nonexistent Tabnine
+    // comparison rows"): the common case -- no prior lock row AND no fresh
+    // model resolved either (guided manual selection on both sides) -- is
+    // NOT a change; both a bare `changed: true` "newly resolved" row here
+    // and the corresponding lockfile row are equally nonexistent, so
+    // reporting it as changed would be misleading noise in every ordinary
+    // v3 upgrade report. Only a genuine transition (something now resolves
+    // that didn't before, or vice versa, or an actual field difference) is a
+    // real change.
+    if (old === undefined && fresh.model === undefined) {
+      // No reasons pushed: both sides agree on "nothing resolved".
+    } else if (old === undefined) {
       reasons.push("newly resolved (no prior lock entry)");
     } else {
       if (old.model !== fresh.model) {
@@ -403,6 +435,12 @@ export function compareModelPolicyTabnineUpgrade(
       }
       if (old.source !== fresh.source) {
         reasons.push("resolution source changed");
+      }
+      if (old.effort !== fresh.effort) {
+        reasons.push("effort changed");
+      }
+      if (old.effortStatus !== fresh.effortStatus) {
+        reasons.push("effort status changed");
       }
     }
     reasons.push(...blockReasons);
