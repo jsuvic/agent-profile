@@ -493,6 +493,401 @@ test("upgrade rejects --check-for-updates combined with --json instead of silent
   );
 });
 
+// Phase 31.5 (I6c): --probe-models is a separate, independent consent from
+// --check-for-updates. All four combinations below prove neither flag's
+// presence/absence affects whether the OTHER's underlying mechanism
+// (`checkForPackageUpdate`'s fetch vs `runModelProbe`'s process runner) is
+// invoked. Wired only on the adopt/bulk-preset-switch `--model-policy-
+// strategy ... --write` path (the real, shipped "role-aware Adopt" path);
+// `liveModelPolicy()` is used as the prior lock so "adopt" has a real block
+// of exact candidate models to build probe selections from.
+type FetchCounter = { calls: number; restore: () => void };
+
+function stubFetchCounter(): FetchCounter {
+  const original = globalThis.fetch;
+  const counter: FetchCounter = {
+    calls: 0,
+    restore: () => {
+      globalThis.fetch = original;
+    },
+  };
+  globalThis.fetch = (async () => {
+    counter.calls += 1;
+    return new Response(JSON.stringify({ version: "0.0.1" }), { status: 200 });
+  }) as typeof fetch;
+  return counter;
+}
+
+type ProbeRunnerStub = {
+  calls: number;
+  runner: {
+    run: () => Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+    }>;
+  };
+};
+
+function stubProbeRunner(): ProbeRunnerStub {
+  const stub: ProbeRunnerStub = {
+    calls: 0,
+    runner: {
+      async run() {
+        stub.calls += 1;
+        return { exitCode: 0, stdout: "OK", stderr: "", timedOut: false };
+      },
+    },
+  };
+  return stub;
+}
+
+test("upgrade declining both --check-for-updates and --probe-models (the default) runs zero network calls and zero probe processes", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const probe = stubProbeRunner();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+      ],
+      { io: output, probeRunner: probe.runner },
+    ),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls, 0, "declining probe consent must start zero processes");
+});
+
+test("upgrade --check-for-updates alone runs the registry check but zero probe processes", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const fetchStub = stubFetchCounter();
+  const probe = stubProbeRunner();
+
+  try {
+    const code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+        "--check-for-updates",
+      ],
+      { io: output, probeRunner: probe.runner },
+    );
+    assert.equal(code, 0, output.stderrText());
+  } finally {
+    fetchStub.restore();
+  }
+
+  assert.equal(fetchStub.calls, 1, "accepting --check-for-updates must fetch exactly once");
+  assert.equal(
+    probe.calls,
+    0,
+    "accepting the registry-check consent must never trigger a probe",
+  );
+});
+
+test("upgrade --probe-models alone runs the probe but zero network calls", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const probe = stubProbeRunner();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+        "--probe-models",
+      ],
+      { io: output, probeRunner: probe.runner },
+    ),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(probe.calls > 0, "accepting probe consent must run at least one process");
+  // PR review finding: --probe-models must disclose what it's about to do
+  // (candidates, bound call count, quota note) BEFORE launching any
+  // provider-facing subprocess, the same way every other explicit consent
+  // flag in this command discloses its plan before acting.
+  assert.match(output.stdoutText(), /Probing exact model availability/u);
+});
+
+test("upgrade --check-for-updates and --probe-models together run both mechanisms independently", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const fetchStub = stubFetchCounter();
+  const probe = stubProbeRunner();
+
+  try {
+    const code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+        "--check-for-updates",
+        "--probe-models",
+      ],
+      { io: output, probeRunner: probe.runner },
+    );
+    assert.equal(code, 0, output.stderrText());
+  } finally {
+    fetchStub.restore();
+  }
+
+  assert.equal(fetchStub.calls, 1);
+  assert.ok(probe.calls > 0);
+});
+
+test("upgrade --probe-models's result is advisory-only: never written to ai-profile.lock or ai-profile.yaml", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const probe = stubProbeRunner();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(probe.calls > 0);
+  // The probe ran and produced a report, but it must never land in either
+  // persisted file -- grep both for any probe-shaped field/word.
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const profileText = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  assert.doesNotMatch(lockText, /probe/iu);
+  assert.doesNotMatch(profileText, /probe/iu);
+});
+
+// PR review finding: a locked resolution block can carry rows for a client
+// the profile never enabled (model-policy resolution doesn't consult
+// `clients.*.enabled`); probing a disabled client would start its executable
+// and contact its provider even though it isn't part of the repository's
+// configured workflow. This stub records which client's executable each
+// invocation targeted (via the pinned per-client command name), so tests can
+// assert exactly which clients were actually probed.
+type RecordingProbeRunnerStub = {
+  commands: string[];
+  runner: {
+    run(invocation: { command: string; args: readonly string[] }): Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+    }>;
+  };
+};
+
+function stubRecordingProbeRunner(
+  respond?: (invocation: { command: string; args: readonly string[] }) => string,
+): RecordingProbeRunnerStub {
+  const stub: RecordingProbeRunnerStub = {
+    commands: [],
+    runner: {
+      async run(invocation) {
+        stub.commands.push(invocation.command);
+        return {
+          exitCode: 0,
+          stdout: respond ? respond(invocation) : "OK",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    },
+  };
+  return stub;
+}
+
+test("upgrade --probe-models only probes clients the profile has enabled, not every client a locked row carries (PR review finding)", async () => {
+  // `liveModelPolicy()` resolves against a fully-enabled profile, so its
+  // block carries both a codex and a claude row for the primary role
+  // regardless of what THIS run's actual on-disk profile enables.
+  const modelPolicy = liveModelPolicy();
+  assert.ok(
+    modelPolicy.resolutions.some(
+      (row) => row.role === MODEL_POLICY_PRIMARY_ROLE && row.client === "claude",
+    ),
+    "fixture precondition: the locked block must carry a primary-role claude row",
+  );
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, modelPolicy);
+  // Disable claude on the actual on-disk profile after the root is created,
+  // so the lock's block (built above) still carries the claude row while the
+  // profile itself no longer has that client enabled.
+  const profileText = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  await writeFile(
+    path.join(root, "ai-profile.yaml"),
+    profileText.replace("claude: { enabled: true }", "claude: { enabled: false }"),
+    "utf8",
+  );
+  const output = createOutput();
+  const probe = stubRecordingProbeRunner();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(probe.commands.includes("codex"), "codex is still enabled and should be probed");
+  assert.ok(
+    !probe.commands.includes("claude"),
+    "claude is disabled on this profile and must never be probed even though the locked block carries a claude row",
+  );
+});
+
+test("upgrade --probe-models carries a locked row's alternatives into the probe plan (PR review finding)", async () => {
+  const fresh = liveModelPolicy();
+  const primaryClaude = fresh.resolutions.find(
+    (row) => row.role === MODEL_POLICY_PRIMARY_ROLE && row.client === "claude",
+  );
+  assert.ok(primaryClaude);
+  const alternativeModel = `${primaryClaude.model}-alt`;
+  const withAlternative: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.role === MODEL_POLICY_PRIMARY_ROLE && row.client === "claude"
+        ? { ...row, alternatives: [alternativeModel] }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, withAlternative);
+  const output = createOutput();
+  // The primary candidate reports "not entitled" (an adverse status that
+  // does NOT halt further calls), so `runModelProbe` moves on to try the
+  // ordered alternative next -- this only happens at all if the alternative
+  // was actually carried into the built plan.
+  const probe = stubRecordingProbeRunner((invocation) =>
+    invocation.args.includes(alternativeModel) ? "OK" : "not entitled for this account",
+  );
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  // The primary candidate itself still could not be confirmed available (it
+  // reported "not entitled"), so the write correctly refuses rather than
+  // silently auto-substituting the alternative into the adopted lock -- but
+  // the alternative must still have actually been probed.
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /could not confirm/u);
+  const probedModels = probe.commands.length;
+  assert.ok(probedModels >= 2, "both the primary candidate and its alternative must be probed");
+});
+
+test("upgrade --probe-models refuses the write when it cannot confirm a candidate's availability, leaving files untouched (PR review finding)", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const profileBefore = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  const output = createOutput();
+  const probe = stubRecordingProbeRunner(() => "not entitled for this account");
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /Refusing to write/u);
+  assert.match(output.stderrText(), /could not confirm/u);
+  const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const profileAfter = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  assert.equal(lockAfter, lockBefore, "a refused write must leave ai-profile.lock byte-unchanged");
+  assert.equal(
+    profileAfter,
+    profileBefore,
+    "a refused write must leave ai-profile.yaml byte-unchanged",
+  );
+});
+
+test("upgrade --probe-models degrades to catalog-only information on a probe-infrastructure failure instead of crashing (PR review finding)", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const failingRunner = {
+    run(): Promise<never> {
+      return Promise.reject(new Error("simulated probe-infrastructure failure"));
+    },
+  };
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: failingRunner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.match(output.stdoutText(), /could not run/u);
+  // The write must still have gone through, catalog-only, rather than the
+  // optional advisory probe crashing the surrounding upgrade command.
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  assert.match(lockText, /modelPolicy/u);
+});
+
 test("upgrade JSON remains one clean machine-readable record in report and write modes", async () => {
   for (const args of [
     ["--json"],

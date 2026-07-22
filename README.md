@@ -321,6 +321,21 @@ and never runs `compile` implicitly. The interactive "Adopt all available"
 choice changes `ai-profile.yaml` only; run `agent-profile compile --write`
 afterward to generate the updated agent files.
 
+`agent-profile upgrade --model-policy-strategy adopt|quality-first|cost-conscious --write`
+optionally accepts `--probe-models`: a separate, off-by-default consent that
+re-runs the same consented, source-free model probe `init`'s interactive
+wizard offers, against the exact primary-role model(s) the write is about to
+adopt for whichever of Codex/Claude the profile actually has enabled, to
+confirm availability before the write happens. It is independent from
+`--check-for-updates`'s own registry-check consent — accepting or declining
+one never affects the other — and its result is never written to
+`ai-profile.lock`, `ai-profile.yaml`, or any other persisted file: it only
+appears in that single run's printed report/JSON output. If the probe cannot
+confirm one of the candidates as available, `upgrade` refuses the write
+entirely (leaving every file byte-unchanged) rather than adopting an
+unconfirmed model; a probe-infrastructure failure (not an availability
+result) instead degrades to proceeding with catalog-only information.
+
 ### Local Migration UI (Phase 16)
 
 For repos where reviewing import findings visually is easier than reading CLI

@@ -112,6 +112,21 @@ const REVERSE_TARGET_EFFORT: Readonly<
   xhigh: "extra-high",
 });
 
+/**
+ * Public counterpart of `REVERSE_TARGET_EFFORT` (Phase 31.5 I6c): converts an
+ * already-target-shaped lockfile `modelPolicy` row's `effort`
+ * (`ModelPolicyTargetEffort`, e.g. `"xhigh"`) back to the core
+ * `ModelPolicyEffort` vocabulary (`"extra-high"`) that
+ * `model-probe.ts`'s `ModelProbeSelection.effort` requires. Exported (rather
+ * than leaving `REVERSE_TARGET_EFFORT` private) so callers outside this
+ * module never need to hand-roll their own copy of this mapping.
+ */
+export function modelPolicyEffortFromTargetEffort(
+  effort: ModelPolicyTargetEffort,
+): ModelPolicyEffort {
+  return REVERSE_TARGET_EFFORT[effort];
+}
+
 export type ModelPolicyTargetClientId = "codex" | "claude";
 
 export type ModelPolicyTargetClientResolution = Readonly<{

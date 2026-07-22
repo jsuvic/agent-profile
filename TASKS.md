@@ -144,7 +144,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I6 | Locked model-resolution reuse primitive (ordinary compile reuses the lock) | done | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
 | I6a | Upgrade command exact comparison and retain/adopt/customize planning | done | [006a-upgrade-comparison-and-planning.md](docs/specs/phase-31.5/issues/006a-upgrade-comparison-and-planning.md) |
 | I6b | Metadata-only package/registry update check | done | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
-| I6c | Upgrade-flow probe consent, separate from update-check consent | sequenced | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
+| I6c | Upgrade-flow probe consent, separate from update-check consent | done | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
 | I6d | Tabnine model-resolution reconciliation | sequenced | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
 | I6e | Upgrade write ownership refusal and rollback | sequenced | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
 | I7 | Offline Doctor model policy and explicit recheck | sequenced | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
@@ -288,6 +288,50 @@ forward as open scope: `README.md`'s "Upgrading existing profiles" section
 still doesn't mention `--check-for-updates` (same disclosed, pre-existing
 gap pattern as I6a's own `--model-policy-strategy` omission - a
 documentation-polish item, not a behavior gap).
+
+I6c completed 2026-07-22 via one RED-first `/implement-next` cycle (plus one
+code-quality follow-up round). Added a new `--probe-models` boolean flag to
+`upgrade`, scoped to the `--model-policy-strategy adopt|quality-first|
+cost-conscious --write` path (the only shipped "role-aware Adopt" path with a
+concrete candidate-model list, since I6a's "Custom-exact" strategy was
+formally descoped and never shipped - probing `--adopt-recommended`'s
+capability rows would have required inventing new candidate-derivation logic
+beyond this brief's own non-goals). Reuses I4's `buildModelProbePlan`/
+`runModelProbe` unchanged (no reimplementation) via a new
+`buildUpgradeModelProbeSelections` helper restricted to
+`MODEL_POLICY_PRIMARY_ROLE`'s codex/claude candidates, mirroring `wizard.ts`'s
+existing I5 restriction. The probe result surfaces only as an advisory text
+line and an advisory `modelProbe` JSON field for that single run; it is never
+merged into the write plan, `ai-profile.lock`, or `ai-profile.yaml`. Added a
+new exported `modelPolicyEffortFromTargetEffort` in
+`packages/compiler/src/model-policy-target-adapter.ts` (a thin public wrapper
+over an existing private reverse-effort table) so the CLI could convert a
+locked row's target-shaped effort back to the vocabulary `model-probe.ts`
+requires. RED proof: 3 of 5 new tests failed against pre-change code with
+"Unknown option: --probe-models" before the flag existed. GREEN proof: 5 new
+tests in `apps/cli/src/upgrade.test.ts` prove all four accept/decline
+combinations of `--probe-models` x `--check-for-updates` are independent via
+separate fetch/process-runner spies, zero probe processes run on decline, and
+a non-persistence test greps the actual written `ai-profile.lock`/
+`ai-profile.yaml` files for `probe` and finds nothing. `--probe-models` +
+`--json` is deliberately not rejected (unlike `--check-for-updates` + `--json`,
+which has a genuine report-shape conflict): the advisory field composes
+cleanly into the existing JSON envelope with no such conflict. Spec review
+passed COMPLIANT. Code-quality review found one Important item - the new
+probe-offer block was left inline in the already-large `runUpgrade` function
+instead of following this task's own established extraction precedent
+(`refuseIfTabnineProvenanceWouldBeLost`, `findManualOwnedModelBearingChanges`,
+`previewModelPolicyWrites`) - fixed by extracting a named
+`runConsentedUpgradeModelProbe` helper; a Minor duplicated-comment
+nice-to-have was also addressed by consolidating the "advisory-only, never
+persisted" explanation to one doc comment referenced from the other call
+sites. Tests after the fix: `apps/cli` 576/572, 0 failures, 4 pre-existing
+skips; `packages/compiler` 313/312, 0 failures, 1 pre-existing skip;
+`packages/core` 213/212, 0 failures, 1 pre-existing skip; clean typecheck
+(`tsc -b` + `tsconfig.test.json --noEmit`) across all workspaces. Not carried
+forward as open scope: README's pre-existing `--check-for-updates`/
+`--model-policy-strategy` documentation gap (unrelated to this cycle, already
+disclosed by I6b/I6a).
 
 I6 completed 2026-07-18 (spec + code-quality review passed) for its own
 foundational scope only: the "ordinary compile reuses the lock" primitive
