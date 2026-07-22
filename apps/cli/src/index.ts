@@ -20,6 +20,8 @@ import {
   compileProfile,
   deriveModelPolicyRoleOverrides,
   getLocalRuntimeGitignoreFindings,
+  MODEL_POLICY_PRIMARY_ROLE,
+  modelPolicyEffortFromTargetEffort,
   parseMixedFile,
   planModelPolicyUpgrade,
   planRootInstructionsAdoption,
@@ -128,7 +130,14 @@ import {
   formatUpdateCheckMessage,
   UPDATE_CHECK_PACKAGE_NAME,
 } from "./update-check.js";
-import type { ModelProbeProcessRunner } from "./model-probe.js";
+import {
+  buildModelProbePlan,
+  createNodeModelProbeProcessRunner,
+  runModelProbe,
+  type ModelProbeProcessRunner,
+  type ModelProbeReport,
+  type ModelProbeSelection,
+} from "./model-probe.js";
 import {
   formatWizardDeclined,
   isNonInteractive,
@@ -275,6 +284,17 @@ type ParsedUpgradeArgs =
        * rejected as a flag; this one isn't, since `upgrade` is already a
        * scriptable, non-interactive-friendly command). */
       checkForUpdates: boolean;
+      /** Phase 31.5 (I6c): explicit, off-by-default opt-in to re-run I4's
+       * consented, source-free model probe against the exact candidate
+       * model(s) an adopt/bulk-preset-switch `--write` is about to adopt, to
+       * help confirm availability before adopting. A SEPARATE consent from
+       * `checkForUpdates` above -- accepting or declining one never affects
+       * the other, and both default to declined. Unlike `init`'s
+       * `--probe-models` (rejected outright: interactive-wizard-only
+       * consent), `upgrade` already treats `checkForUpdates` as a plain
+       * boolean flag rather than an interactive prompt, so this flag follows
+       * that same precedent. */
+      probeModels: boolean;
     }
   | { ok: false; message: string };
 
@@ -414,6 +434,7 @@ export async function runCli(
             ...(options.nonInteractive !== undefined
               ? { nonInteractive: options.nonInteractive }
               : {}),
+            ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
           }),
         configure: () =>
           runConfigure([], cwd, io, {
@@ -487,6 +508,7 @@ export async function runCli(
         ...(options.updateCheckTimeoutMs !== undefined
           ? { updateCheckTimeoutMs: options.updateCheckTimeoutMs }
           : {}),
+        ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
       });
     case "configure":
       return runConfigure(rest, cwd, io, {
@@ -615,6 +637,12 @@ type RunUpgradeOptions = {
    * registry request's abort timeout. Production callers omit this and get
    * `checkForPackageUpdate`'s own default. */
   updateCheckTimeoutMs?: number;
+  /** Test-only seam (Phase 31.5 I6c): injects a fake probe process runner
+   * for `--probe-models`, mirroring `CliOptions.probeRunner`'s existing
+   * `init`-wizard seam. Production callers omit this and get the real Node
+   * runner; only ever invoked when `--probe-models` was passed AND there is
+   * at least one exact candidate model to probe. */
+  probeRunner?: ModelProbeProcessRunner;
 };
 
 /**
@@ -665,6 +693,66 @@ function resolveModelPolicyWriteTargetPreset(
     return bulkPreset;
   }
   return bulkPreset ?? DEFAULT_MODEL_POLICY_PRESET;
+}
+
+/**
+ * Phase 31.5 (I6c): the exact candidate models an adopt/bulk-preset-switch
+ * `--write`'s plan is about to write, restricted to `MODEL_POLICY_PRIMARY_ROLE`
+ * codex/claude rows only -- mirrors `wizard.ts`'s `buildModelProbeSelections`
+ * restriction (a single role keeps the probe's bounded call count small and
+ * matches the existing init-wizard precedent), and skips Tabnine (no
+ * documented source-free one-shot invocation; see `model-probe.ts`'s
+ * invocation-contract table).
+ */
+function buildUpgradeModelProbeSelections(
+  block: LockModelPolicyV2,
+): ModelProbeSelection[] {
+  const selections: ModelProbeSelection[] = [];
+  for (const row of block.resolutions) {
+    if (row.role !== MODEL_POLICY_PRIMARY_ROLE) continue;
+    if (row.client !== "codex" && row.client !== "claude") continue;
+    selections.push({
+      client: row.client,
+      model: row.model,
+      effort: modelPolicyEffortFromTargetEffort(row.effort ?? "medium"),
+    });
+  }
+  return selections;
+}
+
+/**
+ * Phase 31.5 (I6c): the optional, SEPARATELY-consented probe re-run against
+ * the exact candidate model(s) an adopt/bulk-preset-switch `--write`'s plan
+ * is about to adopt. Declining `--probe-models` (the default) never even
+ * builds a plan or calls `runModelProbe` at all, so it provably starts zero
+ * probe processes regardless of `--check-for-updates`'s own (also
+ * independent) consent. The returned report is advisory-only: callers must
+ * fold it only into the printed report/JSON envelope, never into
+ * `modelPolicyPlan`, the lockfile, or `ai-profile.yaml`.
+ */
+async function runConsentedUpgradeModelProbe(input: {
+  probeModels: boolean;
+  block: LockModelPolicyV2 | undefined;
+  rootDir: string;
+  probeRunner: ModelProbeProcessRunner | undefined;
+}): Promise<ModelProbeReport | undefined> {
+  const { probeModels, block, rootDir, probeRunner } = input;
+  if (!probeModels || block === undefined) {
+    return undefined;
+  }
+  const probeSelections = buildUpgradeModelProbeSelections(block);
+  if (probeSelections.length === 0) {
+    return undefined;
+  }
+  const probePlan = buildModelProbePlan(probeSelections);
+  return runModelProbe(
+    probePlan,
+    { granted: true },
+    {
+      runner: probeRunner ?? createNodeModelProbeProcessRunner(),
+      repoRootDir: rootDir,
+    },
+  );
 }
 
 async function runUpgrade(
@@ -930,6 +1018,14 @@ async function runUpgrade(
         subagentPolicy,
         bulkPreset,
       );
+      // See `runConsentedUpgradeModelProbe`'s doc comment for the
+      // consent-independence and non-persistence contract this observes.
+      const modelProbeReport = await runConsentedUpgradeModelProbe({
+        probeModels: parsed.probeModels,
+        block: modelPolicyPlan!.block,
+        rootDir,
+        probeRunner: options.probeRunner,
+      });
       // Explicit `--model-policy-strategy <strategy> --write` is a two-flag
       // scripted write (the same explicit-intent shape as the existing
       // capability-catalog `--write --adopt-recommended` combo, which also
@@ -944,6 +1040,7 @@ async function runUpgrade(
           modelPolicyChanges,
           modelPolicyPlan,
           modelPolicyLegacyChanges,
+          modelProbeReport,
         );
       }
       return runModelPolicyWrite({
@@ -958,6 +1055,7 @@ async function runUpgrade(
         targetPreset,
         modelPolicyChanges,
         modelPolicyLegacyChanges,
+        modelProbeReport,
         recordedVersion,
         offeredIds,
       });
@@ -1523,6 +1621,12 @@ async function runModelPolicyWrite(input: {
   modelPolicyLegacyChanges:
     | readonly ModelPolicyLegacyUpgradeComparisonRow[]
     | undefined;
+  /** Phase 31.5 (I6c): the optional, separately-consented probe result
+   * (`undefined` when `--probe-models` was declined or built no
+   * candidates). Advisory-only -- surfaced in the JSON envelope below, but
+   * NEVER written into the lockfile, `ai-profile.yaml`, or any other
+   * persisted state. */
+  modelProbeReport: ModelProbeReport | undefined;
   /** The SAME capability-catalog discovery `runUpgrade` already computed
    * (unconditionally, before this model-policy dispatch) -- this write path
    * only concerns model policy, but it's still the same `upgrade` command
@@ -1545,6 +1649,7 @@ async function runModelPolicyWrite(input: {
     targetPreset,
     modelPolicyChanges,
     modelPolicyLegacyChanges,
+    modelProbeReport,
     recordedVersion,
     offeredIds,
   } = input;
@@ -1827,6 +1932,19 @@ async function runModelPolicyWrite(input: {
           modelPolicyPlan,
           modelPolicyLegacyChanges,
         ),
+        // Advisory-only per `runConsentedUpgradeModelProbe`'s contract:
+        // ephemeral for this single stdout line, never written to
+        // ai-profile.lock/ai-profile.yaml (this block only ever writes
+        // `allWrites`, built before this probe ever ran). Omitted entirely
+        // when `--probe-models` was declined or built no candidates.
+        ...(modelProbeReport === undefined
+          ? {}
+          : {
+              modelProbe: {
+                executed: modelProbeReport.executed,
+                results: modelProbeReport.results,
+              },
+            }),
       })}\n`,
     );
   } else {
@@ -2099,6 +2217,7 @@ function buildModelPolicyReportLines(
   modelPolicyLegacyChanges:
     | readonly ModelPolicyLegacyUpgradeComparisonRow[]
     | undefined,
+  modelProbeReport?: ModelProbeReport,
 ): string[] {
   const lines: string[] = [];
   if (modelPolicyChanges !== undefined && modelPolicyChanges.length > 0) {
@@ -2145,6 +2264,18 @@ function buildModelPolicyReportLines(
       ...modelPolicyLegacyChanges.map(formatModelPolicyLegacyChangeLine),
     );
   }
+  // Advisory only, per `runConsentedUpgradeModelProbe`'s contract: present
+  // only when `--probe-models` was accepted AND built at least one
+  // candidate (declining, or having no candidate, leaves `modelProbeReport`
+  // `undefined` and prints nothing here).
+  if (modelProbeReport !== undefined) {
+    lines.push(
+      `model probe (advisory only, not persisted; ${modelProbeReport.results.length} result(s)):`,
+      ...modelProbeReport.results.map(
+        (result) => `- ${result.client} ${result.model}: ${result.status}`,
+      ),
+    );
+  }
   return lines;
 }
 
@@ -2165,11 +2296,13 @@ function printModelPolicyTextReport(
   modelPolicyLegacyChanges:
     | readonly ModelPolicyLegacyUpgradeComparisonRow[]
     | undefined,
+  modelProbeReport?: ModelProbeReport,
 ): void {
   const lines = buildModelPolicyReportLines(
     modelPolicyChanges,
     modelPolicyPlan,
     modelPolicyLegacyChanges,
+    modelProbeReport,
   );
   if (lines.length > 0) {
     io.stdout(`${lines.join("\n")}\n`);
@@ -3835,6 +3968,7 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
   let help = false;
   let modelPolicyStrategy: ModelPolicyUpgradeBulkStrategy | undefined;
   let checkForUpdates = false;
+  let probeModels = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     switch (arg) {
@@ -3861,6 +3995,9 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
         break;
       case "--check-for-updates":
         checkForUpdates = true;
+        break;
+      case "--probe-models":
+        probeModels = true;
         break;
       case "--model-policy-strategy": {
         const value = args[index + 1];
@@ -3905,6 +4042,7 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
     help,
     modelPolicyStrategy,
     checkForUpdates,
+    probeModels,
   };
 }
 
@@ -5389,7 +5527,7 @@ Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
   agent-profile doctor [--root <path>] [--json] [--mcp-suggestions]
   agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
-  agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--check-for-updates] [--non-interactive] [--json]
+  agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--check-for-updates] [--probe-models] [--non-interactive] [--json]
   agent-profile configure [--root <path>] [--non-interactive]
   agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 
@@ -5427,6 +5565,17 @@ Commands:
             access. Cannot be combined with --json (rejected outright, since
             its text-only report would break --json's single clean line
             contract); run them as separate invocations.
+            --probe-models opts into re-running the same consented,
+            source-free model probe init's interactive wizard offers,
+            against the exact primary-role Codex/Claude model(s) an
+            "adopt"/"quality-first"/"cost-conscious" --write is about to
+            adopt, to help confirm availability before adopting. This is a
+            SEPARATE consent from --check-for-updates: accepting or
+            declining one never affects the other, and both default to
+            declined (declining --probe-models starts zero probe
+            processes). The probe result is advisory only -- it appears in
+            this run's printed report/JSON, but is never written to
+            ai-profile.lock, ai-profile.yaml, or any other persisted file.
   configure Change or reconcile the agent control posture (interactive).
             Shows the current posture, what each client actually does, and a
             preview before anything is written. The profile, generated files,

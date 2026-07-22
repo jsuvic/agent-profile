@@ -493,6 +493,197 @@ test("upgrade rejects --check-for-updates combined with --json instead of silent
   );
 });
 
+// Phase 31.5 (I6c): --probe-models is a separate, independent consent from
+// --check-for-updates. All four combinations below prove neither flag's
+// presence/absence affects whether the OTHER's underlying mechanism
+// (`checkForPackageUpdate`'s fetch vs `runModelProbe`'s process runner) is
+// invoked. Wired only on the adopt/bulk-preset-switch `--model-policy-
+// strategy ... --write` path (the real, shipped "role-aware Adopt" path);
+// `liveModelPolicy()` is used as the prior lock so "adopt" has a real block
+// of exact candidate models to build probe selections from.
+type FetchCounter = { calls: number; restore: () => void };
+
+function stubFetchCounter(): FetchCounter {
+  const original = globalThis.fetch;
+  const counter: FetchCounter = {
+    calls: 0,
+    restore: () => {
+      globalThis.fetch = original;
+    },
+  };
+  globalThis.fetch = (async () => {
+    counter.calls += 1;
+    return new Response(JSON.stringify({ version: "0.0.1" }), { status: 200 });
+  }) as typeof fetch;
+  return counter;
+}
+
+type ProbeRunnerStub = {
+  calls: number;
+  runner: {
+    run: () => Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+    }>;
+  };
+};
+
+function stubProbeRunner(): ProbeRunnerStub {
+  const stub: ProbeRunnerStub = {
+    calls: 0,
+    runner: {
+      async run() {
+        stub.calls += 1;
+        return { exitCode: 0, stdout: "OK", stderr: "", timedOut: false };
+      },
+    },
+  };
+  return stub;
+}
+
+test("upgrade declining both --check-for-updates and --probe-models (the default) runs zero network calls and zero probe processes", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const probe = stubProbeRunner();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+      ],
+      { io: output, probeRunner: probe.runner },
+    ),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls, 0, "declining probe consent must start zero processes");
+});
+
+test("upgrade --check-for-updates alone runs the registry check but zero probe processes", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const fetchStub = stubFetchCounter();
+  const probe = stubProbeRunner();
+
+  try {
+    const code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+        "--check-for-updates",
+      ],
+      { io: output, probeRunner: probe.runner },
+    );
+    assert.equal(code, 0, output.stderrText());
+  } finally {
+    fetchStub.restore();
+  }
+
+  assert.equal(fetchStub.calls, 1, "accepting --check-for-updates must fetch exactly once");
+  assert.equal(
+    probe.calls,
+    0,
+    "accepting the registry-check consent must never trigger a probe",
+  );
+});
+
+test("upgrade --probe-models alone runs the probe but zero network calls", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const probe = stubProbeRunner();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+        "--probe-models",
+      ],
+      { io: output, probeRunner: probe.runner },
+    ),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(probe.calls > 0, "accepting probe consent must run at least one process");
+});
+
+test("upgrade --check-for-updates and --probe-models together run both mechanisms independently", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const fetchStub = stubFetchCounter();
+  const probe = stubProbeRunner();
+
+  try {
+    const code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+        "--check-for-updates",
+        "--probe-models",
+      ],
+      { io: output, probeRunner: probe.runner },
+    );
+    assert.equal(code, 0, output.stderrText());
+  } finally {
+    fetchStub.restore();
+  }
+
+  assert.equal(fetchStub.calls, 1);
+  assert.ok(probe.calls > 0);
+});
+
+test("upgrade --probe-models's result is advisory-only: never written to ai-profile.lock or ai-profile.yaml", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const probe = stubProbeRunner();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(probe.calls > 0);
+  // The probe ran and produced a report, but it must never land in either
+  // persisted file -- grep both for any probe-shaped field/word.
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const profileText = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  assert.doesNotMatch(lockText, /probe/iu);
+  assert.doesNotMatch(profileText, /probe/iu);
+});
+
 test("upgrade JSON remains one clean machine-readable record in report and write modes", async () => {
   for (const args of [
     ["--json"],
