@@ -117,7 +117,11 @@ export async function applyWritePlan(
 // `applyWritePlan` is intentionally left untouched for its existing callers.
 // ---------------------------------------------------------------------------
 
-export type AtomicWritePlanStage = "prepare" | "commit" | "rollback-incomplete";
+export type AtomicWritePlanStage =
+  | "prepare"
+  | "staging"
+  | "commit"
+  | "rollback-incomplete";
 
 /**
  * Raised when an atomic write plan could not be committed. The filesystem has
@@ -158,6 +162,15 @@ type AtomicTarget = {
    * not exist (a `create`, which keeps the default temp-file mode).
    */
   existingMode: number | undefined;
+  /**
+   * Existing target's owner uid/gid, or undefined when the target did not
+   * exist (a `create`) or ownership could not be determined. Preserved on a
+   * best-effort basis: `chown`-ing to an arbitrary uid/gid requires elevated
+   * privileges, and a normal non-root writer legitimately cannot (and does
+   * not need to, since its own writes already keep the file's own uid/gid
+   * unchanged).
+   */
+  existingOwner: { uid: number; gid: number } | undefined;
   /** Staged temp file, cleared once renamed into place. */
   tempPath: string | undefined;
   renamed: boolean;
@@ -208,6 +221,7 @@ export async function applyWritePlanAtomic(
         bytes: write.bytes,
         backup: undefined,
         existingMode: undefined,
+        existingOwner: undefined,
         tempPath: undefined,
         renamed: false,
       });
@@ -227,13 +241,15 @@ export async function applyWritePlanAtomic(
     for (const target of targets) {
       target.backup = await readOptionalFile(target.absolutePath);
       target.existingMode = await readOptionalMode(target.absolutePath);
+      target.existingOwner = await readOptionalOwner(target.absolutePath);
     }
 
     // --- Prepare: stage every write as a temp file beside its target. -----
-    // A pre-existing target's permission bits are preserved on the staged
-    // temp file before it is ever renamed into place, so there is no window
-    // where the live file holds the wrong mode. A `create` (no existing
-    // target) keeps the default temp-file mode.
+    // A pre-existing target's permission bits (and, best-effort, its
+    // uid/gid) are preserved on the staged temp file before it is ever
+    // renamed into place, so there is no window where the live file holds
+    // the wrong mode or ownership. A `create` (no existing target) keeps the
+    // default temp-file mode/ownership.
     for (const target of targets) {
       const firstCreated = await fsPromises.mkdir(
         path.dirname(target.absolutePath),
@@ -247,12 +263,34 @@ export async function applyWritePlanAtomic(
       if (target.existingMode !== undefined) {
         await fsPromises.chmod(target.tempPath, target.existingMode);
       }
+      if (target.existingOwner !== undefined) {
+        // Best-effort: `chown` to an arbitrary uid/gid requires elevated
+        // privileges. A normal non-root writer that already owns the file
+        // does not need this (its writes keep the existing uid/gid anyway),
+        // and a cross-user/root writer for whom this matters can chown; a
+        // permission failure here must not fail the whole write plan.
+        try {
+          await fsPromises.chown(
+            target.tempPath,
+            target.existingOwner.uid,
+            target.existingOwner.gid,
+          );
+        } catch {
+          // best-effort: ownership preservation is not guaranteed.
+        }
+      }
     }
   } catch (error) {
     // Nothing is renamed yet in this phase, so rollback only clears staging.
+    // This is a genuinely different failure than the path-validation
+    // `"prepare"` case above: paths were valid, but the staging I/O itself
+    // (open/write/chmod/chown) failed, e.g. for a permission or disk-space
+    // reason. Using a distinct stage lets callers describe this accurately
+    // instead of reusing the "unsafe path" message for an I/O failure (PR
+    // review finding).
     await rollbackAtomicTargets(targets, createdDirectories);
     throw new AtomicWritePlanError(
-      "prepare",
+      "staging",
       "Refusing to apply write plan: staging failed and nothing was written.",
       { cause: error },
     );
@@ -295,7 +333,13 @@ async function writeTempBeside(
     try {
       const fd = await fsPromises.open(tempPath, "wx", 0o644);
       try {
-        await fd.write(Buffer.from(bytes));
+        // `FileHandle.write()` is not guaranteed to write the whole buffer in
+        // one call (it can return fewer `bytesWritten` than requested, e.g.
+        // ENOSPC partway through). `FileHandle.writeFile()` loops internally
+        // until every byte is written, so a short underlying write can never
+        // silently stage a truncated temp file that then gets renamed into
+        // place as if it were complete (PR review finding).
+        await fd.writeFile(Buffer.from(bytes));
         await fd.sync();
       } finally {
         await fd.close();
@@ -489,6 +533,27 @@ async function readOptionalMode(
   try {
     const stat = await fsPromises.stat(absolutePath);
     return stat.mode & 0o777;
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Existing target's owner uid/gid, or undefined when the target does not
+ * exist. On win32 (and any other platform where `stat.uid`/`stat.gid` are
+ * not meaningful) `chown` is a documented no-op-ish/unsupported concept, but
+ * calling it with these values is still harmless there.
+ */
+async function readOptionalOwner(
+  absolutePath: string,
+): Promise<{ uid: number; gid: number } | undefined> {
+  try {
+    const stat = await fsPromises.stat(absolutePath);
+    return { uid: stat.uid, gid: stat.gid };
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;

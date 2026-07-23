@@ -1138,6 +1138,140 @@ test("upgrade interactive customize inserts only the selected offered capability
   );
 });
 
+test("upgrade --model-policy-strategy adopt --write leaves a fully schema-valid lockfile with correct modelPolicy rows, per-row catalogVersion, and outputs (I6e AC3, second round)", async () => {
+  // The prior round's regression test (immediately above) only exercised the
+  // insertion-only path against `createUpgradeRoot`, which has `outputs: []`
+  // and no `modelPolicy` block at all -- it could not detect a wrong
+  // model-policy row, a wrong per-row catalogVersion, or a missing/malformed
+  // output record. This exercises a real `--model-policy-strategy adopt
+  // --write` against a fixture that already has real prior model-policy rows
+  // AND real generated target files on disk (`createV3UpgradeRootWithGeneratedFiles`),
+  // then validates the FULL resulting lockfile against AC3's actual scope.
+  const priorModelPolicy = liveModelPolicy();
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    priorModelPolicy,
+  );
+  const fresh = liveModelPolicy();
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const validation = validateLockfileText(lockText);
+  assert.equal(
+    validation.ok,
+    true,
+    `lockfile must be schema-valid after a successful write: ${
+      validation.ok ? "" : JSON.stringify(validation.issues)
+    }`,
+  );
+
+  const lock = JSON.parse(lockText) as {
+    modelPolicy?: {
+      catalogVersion?: number;
+      preset?: string;
+      resolutions: Array<{
+        role: string;
+        client: string;
+        model: string;
+        catalogVersion: number;
+      }>;
+    };
+    outputs: Array<{
+      path: string;
+      ownership: string;
+      sha256?: string;
+    }>;
+  };
+
+  // `LockModelPolicyV2.catalogVersion` is versioned against the MODEL
+  // catalog (`fresh.catalogVersion`), which is a separate counter from
+  // `CAPABILITY_CATALOG_VERSION` (the capability/offer catalog `upgrade`
+  // stamps). Comparing against the wrong constant here would make this
+  // assertion meaningless.
+  assert.equal(lock.modelPolicy?.catalogVersion, fresh.catalogVersion);
+  assert.equal(lock.modelPolicy?.preset, fresh.preset);
+
+  // Every row must match the FRESH catalog resolution exactly, not just the
+  // single row a narrower test happened to spot-check.
+  assert.equal(
+    lock.modelPolicy?.resolutions.length,
+    fresh.resolutions.length,
+    "resolved row count must match the fresh catalog's row count",
+  );
+  const lockResolutions: Array<{
+    role: string;
+    client: string;
+    model: string;
+    catalogVersion: number;
+  }> = lock.modelPolicy?.resolutions ?? [];
+  for (const expected of fresh.resolutions) {
+    const lockRow = lockResolutions.find(
+      (row) => row.role === expected.role && row.client === expected.client,
+    );
+    assert.ok(
+      lockRow,
+      `expected a lock row for role=${expected.role} client=${expected.client}`,
+    );
+    assert.equal(lockRow?.model, expected.model);
+    assert.equal(
+      lockRow?.catalogVersion,
+      expected.catalogVersion,
+      `${expected.role}/${expected.client} row must record the catalog version that produced it`,
+    );
+  }
+
+  // `outputs` must be non-empty (real generated targets exist) and every
+  // record well-formed.
+  assert.ok(lock.outputs.length > 0, "outputs must be non-empty");
+  for (const entry of lock.outputs) {
+    assert.ok(entry.path, "every output record needs a path");
+    assert.ok(
+      entry.ownership === "generated-owned" ||
+        entry.ownership === "mixed" ||
+        entry.ownership === "manual-owned",
+      `unexpected ownership label for ${entry.path}: ${entry.ownership}`,
+    );
+    if (entry.ownership === "generated-owned") {
+      assert.ok(
+        entry.sha256,
+        `${entry.path} is generated-owned and needs a sha256`,
+      );
+    }
+  }
+  const codexConfigOutput = lock.outputs.find(
+    (entry) => entry.path === ".codex/config.toml",
+  );
+  assert.ok(codexConfigOutput, "outputs must include .codex/config.toml");
+
+  const codexConfigAfter = await readFile(
+    path.join(root, ".codex", "config.toml"),
+    "utf8",
+  );
+  const implementerAfter = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "implementer",
+  );
+  assert.ok(implementerAfter);
+  assert.match(
+    codexConfigAfter,
+    new RegExp(escapeRegExp(implementerAfter.model), "u"),
+  );
+});
+
 test("upgrade insertion-only write batch never calls fsPromises.writeFile for ai-profile.yaml/ai-profile.lock, guarding against a regression back to the plain (non-atomic) write path (I6e)", async () => {
   // `applyWritePlanAtomic` stages via `fsPromises.open`/`fd.write` and
   // commits via `fsPromises.rename` -- never `fsPromises.writeFile`. A future
@@ -4600,6 +4734,67 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
   assert.doesNotMatch(output.stderrText(), /unsafe path/u);
   assert.match(output.stderrText(), /could not fully roll back/u);
   assert.match(output.stderrText(), /\.codex[\\/]config\.toml/u);
+});
+
+test("upgrade --model-policy-strategy quality-first --write reports the accurate staging-failure message (not 'unsafe path') when staging I/O fails after every path already validated (PR review finding, second round)", async () => {
+  // Forces a staging I/O failure (`fsPromises.chmod`, now called during
+  // staging per the mode-preservation fix) rather than a path-validation
+  // failure or a commit-phase (rename) failure. Before this fix,
+  // `createOrApplyWritePlan` collapsed this into the SAME generic "unsafe
+  // path" message it uses for a genuine path-validation refusal, even though
+  // nothing about the paths was unsafe here -- only the staging I/O itself
+  // failed.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+
+  const realChmod = fsPromises.chmod;
+  (fsPromises as unknown as { chmod: unknown }).chmod = async (): Promise<void> => {
+    throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+  };
+
+  const output = createOutput();
+  let code: number;
+  try {
+    code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "quality-first",
+        "--write",
+      ],
+      { io: output },
+    );
+  } finally {
+    (fsPromises as unknown as { chmod: unknown }).chmod = realChmod;
+  }
+
+  assert.equal(code, 1);
+  // The OLD generic message's distinctive "actual: unsafe path" line (from
+  // `formatSimpleError`) must NOT appear -- only the new, accurate staging
+  // message should.
+  assert.doesNotMatch(output.stderrText(), /actual: unsafe path/u);
+  assert.match(
+    output.stderrText(),
+    /could not stage the write \(a permission or disk-space problem, not an unsafe path\); nothing was written\./u,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    lockBefore,
+  );
 });
 
 test("upgrade --model-policy-strategy adopt --write refuses cleanly when a generated target file has drifted from the lock, leaving every file byte-unchanged", async () => {

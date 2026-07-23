@@ -5399,6 +5399,18 @@ async function createOrApplyWritePlan(
       );
       return undefined;
     }
+    // `stage === "staging"` means every path passed validation (nothing
+    // unsafe about them) but the staging I/O itself (open/write/chmod/chown)
+    // failed -- a permission or disk-space problem, not an unsafe-path
+    // refusal. Nothing was renamed, so this is still a clean "nothing
+    // written" outcome, but the generic "unsafe path" message below would
+    // misdescribe why (PR review finding).
+    if (error instanceof AtomicWritePlanError && error.stage === "staging") {
+      io.stderr(
+        "write-plan: could not stage the write (a permission or disk-space problem, not an unsafe path); nothing was written.\n",
+      );
+      return undefined;
+    }
     io.stderr(
       formatSimpleError(
         "write-plan",

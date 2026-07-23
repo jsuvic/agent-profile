@@ -474,6 +474,242 @@ test(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Finding E (PR review, second round): a staging I/O failure (paths were all
+// valid, but open/write/chmod/chown failed for a permission or disk-space
+// reason) must be reported with a DIFFERENT stage than a genuine
+// path-validation failure, since the two mean genuinely different things to
+// a caller.
+// ---------------------------------------------------------------------------
+
+test('applyWritePlanAtomic reports stage "staging" (not "prepare") when staging I/O fails after path validation already passed (PR review finding)', async () => {
+  await withTempRoot(async (root) => {
+    await writeFile(path.join(root, "a.txt"), "before\n", "utf8");
+
+    const realChmod = fsPromises.chmod;
+    (fsPromises as unknown as { chmod: unknown }).chmod = async (): Promise<void> => {
+      throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          applyWritePlanAtomic({
+            rootDir: root,
+            writes: [{ path: "a.txt", bytes: "after\n" }],
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof AtomicWritePlanError);
+          // Not "prepare": the path was perfectly valid, only the staging
+          // I/O itself failed.
+          assert.equal(error.stage, "staging");
+          return true;
+        },
+      );
+    } finally {
+      (fsPromises as unknown as { chmod: unknown }).chmod = realChmod;
+    }
+
+    assert.equal(await readFile(path.join(root, "a.txt"), "utf8"), "before\n");
+    assert.deepEqual(await listTempArtifacts(root), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding A (PR review, second round): `writeTempBeside` must stage via
+// `FileHandle.writeFile()` (which loops internally until the whole buffer is
+// written) rather than a single unchecked `FileHandle.write()` call, which is
+// not guaranteed to write the entire buffer in one call and could silently
+// stage (then commit, via rename) a truncated file.
+//
+// A genuine short *disk-full* write is impractical to force in a portable
+// test. `FileHandle.writeFile()` does not internally call the public
+// `FileHandle.prototype.write()` method (verified: patching
+// `FileHandle.prototype.write` is never invoked by `writeFile()`, since
+// `writeFile()` calls the low-level binding directly), so intercepting
+// `.write()` cannot prove which method staging actually uses either. Instead:
+//   1. `fsPromises.open` is wrapped so the exact primitive staging calls is
+//      directly observable, proving staging now calls `.writeFile()` and
+//      never the single-shot `.write()`.
+//   2. A large multi-megabyte payload is round-tripped and compared
+//      byte-for-byte, which would only reveal a truncation bug if
+//      `.writeFile()` itself, or the code that calls it, mishandled a payload
+//      spanning multiple underlying syscalls. This second test's guarantee
+//      ultimately rests on Node's documented `FileHandle.writeFile()`
+//      contract (it writes the entire buffer), not on a forced short-write
+//      reproduction -- an honest limitation, but combined with (1) it proves
+//      staging now goes through the correct, looping API instead of the
+//      unchecked one.
+// ---------------------------------------------------------------------------
+
+test("applyWritePlanAtomic stages via FileHandle.writeFile() (which loops until every byte lands), never the single-shot write() (PR review finding)", async () => {
+  await withTempRoot(async (root) => {
+    const realOpen = fsPromises.open;
+    const calls = { write: 0, writeFile: 0 };
+    (fsPromises as unknown as { open: unknown }).open = async (
+      ...args: unknown[]
+    ) => {
+      const real = await (
+        realOpen as (...openArgs: unknown[]) => Promise<{
+          write: (...writeArgs: unknown[]) => Promise<unknown>;
+          writeFile: (...writeArgs: unknown[]) => Promise<unknown>;
+          sync: () => Promise<void>;
+          close: () => Promise<void>;
+        }>
+      )(...args);
+      return {
+        write: async (...writeArgs: unknown[]) => {
+          calls.write += 1;
+          return real.write(...writeArgs);
+        },
+        writeFile: async (...writeArgs: unknown[]) => {
+          calls.writeFile += 1;
+          return real.writeFile(...writeArgs);
+        },
+        sync: () => real.sync(),
+        close: () => real.close(),
+      };
+    };
+
+    try {
+      await applyWritePlanAtomic({
+        rootDir: root,
+        writes: [{ path: "a.txt", bytes: "hello\n" }],
+      });
+    } finally {
+      (fsPromises as unknown as { open: unknown }).open = realOpen;
+    }
+
+    assert.equal(
+      calls.writeFile,
+      1,
+      "staging must call the looping writeFile() method exactly once",
+    );
+    assert.equal(
+      calls.write,
+      0,
+      "staging must never call the single-shot write() method, which can short-write",
+    );
+    assert.equal(
+      await readFile(path.join(root, "a.txt"), "utf8"),
+      "hello\n",
+    );
+  });
+});
+
+test("applyWritePlanAtomic commits a large multi-megabyte payload byte-for-byte (short-write correctness)", async () => {
+  await withTempRoot(async (root) => {
+    const target = path.join(root, "big.bin");
+    // 8 MiB, deterministically filled, well past a single typical write()
+    // syscall's usual chunk size -- large enough that a truncation bug would
+    // reliably show up as a length or content mismatch.
+    const bytes = Buffer.alloc(8 * 1024 * 1024);
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = i % 256;
+    }
+
+    await applyWritePlanAtomic({
+      rootDir: root,
+      writes: [{ path: "big.bin", bytes }],
+    });
+
+    const written = await readFile(target);
+    assert.equal(
+      written.length,
+      bytes.length,
+      "the committed file must contain every byte, not a short write",
+    );
+    assert.ok(written.equals(bytes), "committed bytes must match exactly");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding B (PR review, second round): best-effort uid/gid preservation.
+//
+// Only a privileged process can actually `chown` a file to a DIFFERENT
+// uid/gid, so a real cross-user privilege-crossing reproduction is not
+// feasible in this test environment. Instead this asserts the primitive
+// itself: `fsPromises.chown` is called with the target's own captured
+// uid/gid (matching this repo's own established "assert the right primitive
+// was invoked" pattern, e.g. the writeFile-call-tracking test above). This
+// does not prove chown SUCCEEDS across users (that is Node's/the OS's
+// documented behavior, gated on privilege the test process does not have);
+// it proves the write path attempts to preserve ownership rather than
+// silently never trying.
+// ---------------------------------------------------------------------------
+
+test("applyWritePlanAtomic calls chown with the existing target's captured uid/gid (best-effort ownership preservation, PR review finding)", async () => {
+  await withTempRoot(async (root) => {
+    const target = path.join(root, "ai-profile.yaml");
+    await writeFile(target, "version: 1\n", "utf8");
+    const existingStat = await fsPromises.stat(target);
+
+    const realChown = fsPromises.chown;
+    const chownCalls: Array<{ path: unknown; uid: unknown; gid: unknown }> =
+      [];
+    (fsPromises as unknown as { chown: unknown }).chown = async (
+      chownPath: unknown,
+      uid: unknown,
+      gid: unknown,
+    ): Promise<void> => {
+      chownCalls.push({ path: chownPath, uid, gid });
+      // Best-effort: a non-root test process legitimately cannot chown to an
+      // arbitrary uid/gid even when it is the file's own uid/gid on some
+      // platforms/configurations, so this must not fail the write.
+      try {
+        await (realChown as (...args: unknown[]) => Promise<void>)(
+          chownPath,
+          uid,
+          gid,
+        );
+      } catch {
+        // ignored -- the write path itself already swallows this.
+      }
+    };
+
+    try {
+      await applyWritePlanAtomic({
+        rootDir: root,
+        writes: [{ path: "ai-profile.yaml", bytes: "version: 2\n" }],
+      });
+    } finally {
+      (fsPromises as unknown as { chown: unknown }).chown = realChown;
+    }
+
+    assert.equal(
+      chownCalls.length,
+      1,
+      "chown must be attempted exactly once for the existing target",
+    );
+    assert.equal(chownCalls[0]?.uid, existingStat.uid);
+    assert.equal(chownCalls[0]?.gid, existingStat.gid);
+    assert.equal(await readFile(target, "utf8"), "version: 2\n");
+  });
+});
+
+test("applyWritePlanAtomic does not fail the write when chown is denied (best-effort ownership preservation, PR review finding)", async () => {
+  await withTempRoot(async (root) => {
+    const target = path.join(root, "ai-profile.yaml");
+    await writeFile(target, "version: 1\n", "utf8");
+
+    const realChown = fsPromises.chown;
+    (fsPromises as unknown as { chown: unknown }).chown = async (): Promise<void> => {
+      throw Object.assign(new Error("chown denied"), { code: "EPERM" });
+    };
+
+    try {
+      await applyWritePlanAtomic({
+        rootDir: root,
+        writes: [{ path: "ai-profile.yaml", bytes: "version: 2\n" }],
+      });
+    } finally {
+      (fsPromises as unknown as { chown: unknown }).chown = realChown;
+    }
+
+    assert.equal(await readFile(target, "utf8"), "version: 2\n");
+  });
+});
+
 test("computeFileEtag: produces sha256: prefixed hex string", () => {
   const etag = computeFileEtag(Buffer.from("hello\n", "utf8"));
   assert.ok(etag.startsWith("sha256:"), "etag has sha256 prefix");
