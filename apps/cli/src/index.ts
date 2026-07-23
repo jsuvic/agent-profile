@@ -5385,6 +5385,20 @@ async function createOrApplyWritePlan(
       );
       return undefined;
     }
+    // `stage === "commit"` means every path resolved and staged fine -- the
+    // failure happened during the rename phase, and rollback restored
+    // everything cleanly (the `rollback-incomplete` branch above is what
+    // fires when that restore itself fails). Reporting this with the
+    // generic "unsafe path" message below would misdescribe a transient
+    // write failure as a path-validation problem, when nothing was actually
+    // unsafe about the paths and the repository is back to its original
+    // state.
+    if (error instanceof AtomicWritePlanError && error.stage === "commit") {
+      io.stderr(
+        "write-plan: the write failed partway through but was rolled back cleanly; nothing was changed.\n",
+      );
+      return undefined;
+    }
     io.stderr(
       formatSimpleError(
         "write-plan",

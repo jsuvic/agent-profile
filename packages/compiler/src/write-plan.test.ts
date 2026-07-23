@@ -449,6 +449,31 @@ test("applyWritePlanAtomic removes created targets when a later rename fails", a
   });
 });
 
+test(
+  "applyWritePlanAtomic preserves an existing target's file mode instead of resetting it to 0644",
+  { skip: process.platform === "win32" ? "POSIX mode bits are not meaningfully enforced on this platform" : false },
+  async () => {
+    await withTempRoot(async (root) => {
+      const target = path.join(root, "ai-profile.yaml");
+      await writeFile(target, "version: 1\n", "utf8");
+      await fsPromises.chmod(target, 0o600);
+
+      await applyWritePlanAtomic({
+        rootDir: root,
+        writes: [{ path: "ai-profile.yaml", bytes: "version: 2\n" }],
+      });
+
+      const after = await fsPromises.stat(target);
+      assert.equal(
+        after.mode & 0o777,
+        0o600,
+        "existing file's mode must survive an atomic write",
+      );
+      assert.equal(await readFile(target, "utf8"), "version: 2\n");
+    });
+  },
+);
+
 test("computeFileEtag: produces sha256: prefixed hex string", () => {
   const etag = computeFileEtag(Buffer.from("hello\n", "utf8"));
   assert.ok(etag.startsWith("sha256:"), "etag has sha256 prefix");

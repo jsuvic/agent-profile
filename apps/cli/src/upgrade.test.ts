@@ -30,6 +30,7 @@ import {
   planModelPolicyUpgrade,
   resolveModelPolicyLockfile,
   serializeLockfile,
+  sha256Hex,
   toLockfileV2View,
   validateLockfileText,
   type LockModelPolicyV2,
@@ -1112,6 +1113,29 @@ test("upgrade interactive customize inserts only the selected offered capability
   const profile = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
   assert.match(profile, /      - automation\n/u);
   assert.doesNotMatch(profile, /loggingGuidance: true/u);
+
+  // I6e acceptance criterion: a successful insertion-only write leaves the
+  // lockfile fully schema-valid, not just individually-correct fields.
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const validation = validateLockfileText(lockText);
+  assert.equal(
+    validation.ok,
+    true,
+    `lockfile must be schema-valid after a successful write: ${
+      validation.ok ? "" : JSON.stringify(validation.issues)
+    }`,
+  );
+
+  const lock = JSON.parse(lockText) as {
+    upgrade?: { catalogVersion?: number };
+    profile?: { sha256?: string };
+  };
+  assert.equal(lock.upgrade?.catalogVersion, CAPABILITY_CATALOG_VERSION);
+  assert.equal(
+    lock.profile?.sha256,
+    sha256Hex(Buffer.from(profile, "utf8")),
+    "lock.profile.sha256 must match the actually-written ai-profile.yaml bytes",
+  );
 });
 
 test("upgrade insertion-only write batch never calls fsPromises.writeFile for ai-profile.yaml/ai-profile.lock, guarding against a regression back to the plain (non-atomic) write path (I6e)", async () => {
@@ -1224,6 +1248,25 @@ test("upgrade insertion-only write batch rolls back an already-committed ai-prof
   assert.equal(
     await readFile(path.join(root, "ai-profile.lock"), "utf8"),
     lockBefore,
+  );
+  // A `stage: "commit"` failure means the rename genuinely started (paths
+  // resolved and staged fine) and rollback restored everything cleanly -- a
+  // different, more accurate story than "the path could not be safely
+  // resolved", which is what a generic prepare-stage refusal means.
+  assert.match(
+    output.stderrText(),
+    /rolled back cleanly/u,
+    "must report the accurate clean-rollback-after-commit-failure message",
+  );
+  assert.doesNotMatch(
+    output.stderrText(),
+    /unsafe path/u,
+    "must not report the misleading generic path-validation message",
+  );
+  assert.doesNotMatch(
+    output.stderrText(),
+    /safely resolved/u,
+    "must not report the misleading generic path-validation message",
   );
 });
 

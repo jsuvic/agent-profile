@@ -153,6 +153,11 @@ type AtomicTarget = {
   readonly bytes: Uint8Array;
   /** Pre-transaction bytes, or undefined when the target did not exist. */
   backup: Uint8Array | undefined;
+  /**
+   * Existing target's POSIX permission bits, or undefined when the target did
+   * not exist (a `create`, which keeps the default temp-file mode).
+   */
+  existingMode: number | undefined;
   /** Staged temp file, cleared once renamed into place. */
   tempPath: string | undefined;
   renamed: boolean;
@@ -202,6 +207,7 @@ export async function applyWritePlanAtomic(
         absolutePath: await assertWritePathContained(rootRealPath, write.path),
         bytes: write.bytes,
         backup: undefined,
+        existingMode: undefined,
         tempPath: undefined,
         renamed: false,
       });
@@ -217,12 +223,17 @@ export async function applyWritePlanAtomic(
   if (targets.length === 0) return plan;
 
   try {
-    // --- Prepare: back up existing targets in memory. ---------------------
+    // --- Prepare: back up existing targets (bytes and mode) in memory. ----
     for (const target of targets) {
       target.backup = await readOptionalFile(target.absolutePath);
+      target.existingMode = await readOptionalMode(target.absolutePath);
     }
 
     // --- Prepare: stage every write as a temp file beside its target. -----
+    // A pre-existing target's permission bits are preserved on the staged
+    // temp file before it is ever renamed into place, so there is no window
+    // where the live file holds the wrong mode. A `create` (no existing
+    // target) keeps the default temp-file mode.
     for (const target of targets) {
       const firstCreated = await fsPromises.mkdir(
         path.dirname(target.absolutePath),
@@ -233,6 +244,9 @@ export async function applyWritePlanAtomic(
         target.absolutePath,
         target.bytes,
       );
+      if (target.existingMode !== undefined) {
+        await fsPromises.chmod(target.tempPath, target.existingMode);
+      }
     }
   } catch (error) {
     // Nothing is renamed yet in this phase, so rollback only clears staging.
@@ -454,6 +468,27 @@ async function readOptionalFile(
 ): Promise<Uint8Array | undefined> {
   try {
     return await fsPromises.readFile(absolutePath);
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Existing target's POSIX permission bits, or undefined when the target does
+ * not exist. On win32 this reports Node's synthetic mode bits (which do not
+ * meaningfully model POSIX permissions), but chmod-ing the temp file to match
+ * is still a harmless no-op there.
+ */
+async function readOptionalMode(
+  absolutePath: string,
+): Promise<number | undefined> {
+  try {
+    const stat = await fsPromises.stat(absolutePath);
+    return stat.mode & 0o777;
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;
