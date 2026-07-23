@@ -147,7 +147,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I6c | Upgrade-flow probe consent, separate from update-check consent | done | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
 | I6d | Tabnine model-resolution reconciliation | done | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
 | I6e | Upgrade write ownership refusal and rollback | done | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
-| I7 | Offline Doctor model policy and explicit recheck | sequenced | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
+| I7 | Offline Doctor model policy and explicit recheck | done | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
 | I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
 | I9 | Published model-selection journey and final integration | sequenced | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
 
@@ -433,6 +433,54 @@ skip), 0 failures (write-plan.ts itself untouched, reused as-is); clean
 carried forward as open scope: `runModelPolicyWrite`/`--model-policy-strategy`
 write paths (I6a's already-reviewed scope) and `write-plan.ts` itself were
 both deliberately untouched.
+
+I7 completed 2026-07-23 via one RED-first `/implement-next` cycle (plus a
+spec-review fix round and a code-quality-review fix round). Added an
+opt-in `doctor --models` category, entirely offline: a new pure classifier
+(`packages/doctor/src/model-policy-doctor.ts`) reuses `compareModelPolicyUpgrade`/
+`compareModelPolicyTabnineUpgrade` from `@agent-profile/compiler` (never
+recomputing catalog/target support itself, per the brief's own
+implementation-context note) to distinguish all ten required offline states
+(current, supported-legacy, deprecated, retired, uncatalogued/private,
+missing provenance, drifted configuration, advisory, unsupported,
+unverified) as new `LINT-MODEL-001`..`009` codes. A separate `--probe` flag
+reuses I4's `buildModelProbePlan`/`runModelProbe` unchanged via an
+injectable `DoctorModelProbeRunner` port defined in `packages/doctor`
+(keeping the correct dependency direction - `packages/doctor` never imports
+`apps/cli`) with the real adapter wired in from `apps/cli/src/index.ts`
+(`createDoctorModelProbeRunner`), following the same "explicit flag is the
+consent, printed disclosure before any process starts" pattern I6c
+established for `upgrade --probe-models`. Probe rows are additive
+(`LINT-MODEL-PROBE-001`) and never alter another issue's severity from
+ambiguous `unknown` evidence. Both flags are off by default; plain
+`doctor` output stays byte-identical, proven via a CLI test running under
+the existing `withNetworkSentinel` fixture. Spec review's first pass found
+3 gaps, all fixed: (1) `LINT-MODEL-008`'s top-level "no configurable
+model-policy surface" branch had no direct test (only its Tabnine-effort
+sub-branch did) - fixed by exporting `classifyModelPolicyRow`/
+`ComparableModelPolicyRow` (test-only, not re-exported from the package's
+`index.ts`) so a fixture could reach it directly; (2) Tabnine's
+legacy-lifecycle wording (`LINT-MODEL-001`) used the same generic message
+as Codex/Claude, not explaining organization scope as the brief requires -
+fixed by branching on `row.client === "tabnine"` for that specific message;
+(3) the brief's "Documentation impact" section had no standalone doc page -
+fixed by adding a `doctor --models` / `--probe` section with a full
+`LINT-MODEL-*` code/severity table to `docs/cli/README.md`, following that
+file's existing `LINT-HOOK-*` prose-block precedent (no separate
+codes-reference file exists in this repo to follow instead). Code-quality
+review passed with one non-blocking Important note - the new model-policy
+block was inlined directly in `runDoctor` instead of following every
+sibling check's `checkXxx`-helper extraction convention - fixed by
+extracting `checkModelPolicyCategory` as a pure refactor (no behavior
+change). Two Minor notes (a duplicated `row.client === "tabnine"` check,
+and the test-only `classifyModelPolicyRow` export) were left as-is per the
+reviewer's own judgment that both are reasonable, disclosed tradeoffs.
+Tests: `packages/doctor` 104/104, `apps/cli` 587/587 (4 pre-existing
+skips), both 0 failures; `npm run check` clean across all workspaces. Not
+carried forward as open scope, per the brief's own non-goals: automatic
+repair/remapping/provider login/update installation, and no warning merely
+for Tabnine using an older organization-approved model (Tabnine's
+legacy/deprecated rows stay informational only, never actionable).
 
 I6d PR review fix round (2026-07-22, PR #129): a Codex bot automated review
 found 6 findings against the cycle above, correctly disagreeing with its

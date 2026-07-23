@@ -362,6 +362,50 @@ before `init` resolves `--root`, reads any file, or dispatches the wizard —
 so it never starts a client/provider/package process and never touches the
 filesystem, regardless of any other flags supplied alongside it.
 
+### `doctor --models` / `--probe` (Phase 31.5 I7)
+
+`agent-profile doctor --models` adds an opt-in, entirely offline model-policy
+category: it compares `ai-profile.lock`'s `modelPolicy` block against a fresh
+resolution of `ai-profile.yaml` and the bundled Codex/Claude/Tabnine catalogs.
+Omitting `--models` leaves doctor's default output byte-identical to today,
+and `--models` alone never starts a client or network process.
+
+Findings use stable `LINT-MODEL-*` codes, one issue per role/client
+(`/modelPolicy/<role>/<client>`), distinguishing:
+
+| Code                  | Severity | Meaning                                                                                        |
+| --------------------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `LINT-MODEL-001`      | info     | Locked model's catalog lifecycle is `current` or `supported-legacy` — informational only. Tabnine rows use organization-scope wording (an admin-controlled catalog choice, never a quality judgment) instead of the generic Codex/Claude phrasing. |
+| `LINT-MODEL-002`      | warning  | Locked model's catalog lifecycle is `deprecated` — actionable, but still usable today.          |
+| `LINT-MODEL-003`      | error    | Locked model's catalog lifecycle is `retired` — actionable, more severe than deprecated.        |
+| `LINT-MODEL-004`      | info     | An explicit exact override that is not found in the catalog (uncatalogued/private) — never treated as broken merely for being new or organization-private. |
+| `LINT-MODEL-005`      | warning  | `subagentPolicy.enabled` is true but `ai-profile.lock` has no `modelPolicy` block, or no row for a role/client that should have one (missing provenance). |
+| `LINT-MODEL-006`      | warning  | The locked resolution disagrees with a fresh resolution of the current profile (drifted/stale lock). |
+| `LINT-MODEL-007`      | info     | Guidance-only surface (Agent Profile does not write this role/client's model directly).         |
+| `LINT-MODEL-008`      | info     | No configurable model-policy surface for this role/client (e.g. a capability with no ordinary catalog candidate, or — at the `/modelPolicy/<role>/tabnine/effort` path — Tabnine's permanently absent effort/reasoning control). |
+| `LINT-MODEL-009`      | info     | The row's real-world availability has not been checked offline; run `--probe` for ephemeral evidence. |
+| `LINT-MODEL-PROBE-001`| info/warning | An ephemeral `--probe` availability row (see below). `info` for `available`/`unknown` (ambiguous or simply not confirmed unavailable); `warning` (actionable) for a confirmed negative probe result — `not-entitled`, `temporarily-limited`, `unsupported-client`, `provider-unavailable`, or `auth-required`. |
+
+`--probe` additionally re-runs the same consented, source-free model probe
+(`apps/cli/src/model-probe.ts`, Phase 31.5 I4) that `init`/`upgrade
+--probe-models` offer, restricted to the primary-role exact candidate(s) for
+whichever of Codex/Claude the profile has enabled. It only takes effect
+combined with `--models` (`--probe` alone is a documented no-op: zero probe
+calls). The probe result is never written anywhere, and probe evidence —
+including an ambiguous `unknown` status — never changes any OFFLINE
+`LINT-MODEL-001`–`LINT-MODEL-009` finding's severity; it is purely additive.
+The `LINT-MODEL-PROBE-001` row's OWN severity does reflect the probe's
+evidence: `info` for `available`/`unknown`, `warning` for a confirmed
+negative result (see the table above). Every row carries only the closed
+probe status/evidence vocabulary (never raw client output or account data).
+
+This CLI reference is the primary documentation surface for `--models`/
+`--probe`'s codes, severities, and offline/probe distinction (alongside
+`agent-profile doctor --help`); there is no separate doctor-codes reference
+document in this repository (`docs/specs/phase-04/*.md` document earlier
+`LINT-*` families the same way, as prose inside the owning spec/reference
+rather than a standalone table file).
+
 ## Init Clients
 
 `agent-profile init` preserves the phase 5 default profile bytes unless client

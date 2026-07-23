@@ -45,6 +45,11 @@ import {
 } from "@agent-profile/core";
 
 import { scanMcpSuggestions } from "./mcpSuggestions.js";
+import {
+  buildModelPolicyDoctorIssues,
+  buildModelPolicyProbeCandidates,
+  buildModelProbeResultIssue,
+} from "./model-policy-doctor.js";
 import { evaluatePermissionDoctorIssues } from "./permission-doctor.js";
 import type {
   DoctorIssue,
@@ -167,6 +172,13 @@ export async function runDoctor(
       issues,
     });
   }
+
+  await checkModelPolicyCategory(
+    profileResult.profile,
+    lockfileV2,
+    request,
+    issues,
+  );
 
   await checkPermissionPosture(rootDir, profileResult.profile, issues);
   const permissionPlan = resolvePermissionPosture(profileResult.profile);
@@ -1220,6 +1232,48 @@ async function checkLockfileDrift(input: DriftInput): Promise<void> {
         ),
       );
     }
+  }
+}
+
+// Phase 31.5 (I7): opt-in, offline model-policy category. Off by default;
+// without `--models` (`request.models`), doctor output stays byte-identical
+// to today. `request.probe` alone (without `models`) is a documented no-op
+// -- it only extends the model-policy category.
+async function checkModelPolicyCategory(
+  profile: AiProfile,
+  lockfileV2: AiProfileLockV2 | undefined,
+  request: DoctorRequest,
+  issues: DoctorIssue[],
+): Promise<void> {
+  if (!request.models) {
+    return;
+  }
+
+  issues.push(
+    ...buildModelPolicyDoctorIssues(profile, lockfileV2?.modelPolicy),
+  );
+
+  if (!request.probe || !request.modelProbeRunner) {
+    return;
+  }
+
+  const candidates = buildModelPolicyProbeCandidates(
+    profile,
+    lockfileV2?.modelPolicy,
+  );
+  if (candidates.length === 0) {
+    return;
+  }
+
+  try {
+    const results = await request.modelProbeRunner(candidates);
+    for (const result of results) {
+      issues.push(buildModelProbeResultIssue(result));
+    }
+  } catch {
+    // Advisory-only: a probe-infrastructure failure must never fail doctor
+    // itself (mirrors runConsentedUpgradeModelProbe's degrade precedent in
+    // apps/cli/src/index.ts).
   }
 }
 
