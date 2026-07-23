@@ -1391,25 +1391,31 @@ async function runUpgrade(
         upgrade: { catalogVersion: CAPABILITY_CATALOG_VERSION },
       }
     : undefined;
-  try {
-    // The explicit flag pair or interactive confirmation approves one write plan;
-    // provenance is included when a usable lockfile exists and otherwise deferred.
-    await applyWritePlan({
-      rootDir,
-      writes: [
-        { path: "ai-profile.yaml", bytes: edit.source },
-        ...(stampedLockfile
-          ? [
-              {
-                path: "ai-profile.lock",
-                bytes: serializeLockfile(stampedLockfile),
-              },
-            ]
-          : []),
-      ],
-    });
-  } catch {
-    io.stderr("Upgrade write plan could not be applied safely under --root.\n");
+  // The explicit flag pair or interactive confirmation approves one write plan;
+  // provenance is included when a usable lockfile exists and otherwise deferred.
+  // Uses `atomic: true` (staged-then-committed, rolled back cleanly on any
+  // failure) because this batch can span both `ai-profile.yaml` and
+  // `ai-profile.lock`, and a mid-write failure leaving the profile updated but
+  // the lock stale (or vice versa) would be worse than refusing the whole
+  // write -- same precedent as the model-policy write path.
+  const upgradeWritePlan = await createOrApplyWritePlan(
+    rootDir,
+    [
+      { path: "ai-profile.yaml", bytes: edit.source },
+      ...(stampedLockfile
+        ? [
+            {
+              path: "ai-profile.lock",
+              bytes: serializeLockfile(stampedLockfile),
+            },
+          ]
+        : []),
+    ],
+    true,
+    io,
+    { atomic: true },
+  );
+  if (!upgradeWritePlan) {
     return 1;
   }
 
@@ -5376,6 +5382,32 @@ async function createOrApplyWritePlan(
         `Refusing write-plan: an atomic write failed partway through and could not fully roll back. The following paths may still hold NEW (not necessarily complete) bytes rather than their original content:\n${error.unrestoredPaths
           .map((path) => `- ${path}`)
           .join("\n")}\nInspect and reconcile these files manually (e.g. via \`git diff\`/\`git checkout\`) before retrying.\n`,
+      );
+      return undefined;
+    }
+    // `stage === "commit"` means every path resolved and staged fine -- the
+    // failure happened during the rename phase, and rollback restored
+    // everything cleanly (the `rollback-incomplete` branch above is what
+    // fires when that restore itself fails). Reporting this with the
+    // generic "unsafe path" message below would misdescribe a transient
+    // write failure as a path-validation problem, when nothing was actually
+    // unsafe about the paths and the repository is back to its original
+    // state.
+    if (error instanceof AtomicWritePlanError && error.stage === "commit") {
+      io.stderr(
+        "write-plan: the write failed partway through but was rolled back cleanly; nothing was changed.\n",
+      );
+      return undefined;
+    }
+    // `stage === "staging"` means every path passed validation (nothing
+    // unsafe about them) but the staging I/O itself (open/write/chmod/chown)
+    // failed -- a permission or disk-space problem, not an unsafe-path
+    // refusal. Nothing was renamed, so this is still a clean "nothing
+    // written" outcome, but the generic "unsafe path" message below would
+    // misdescribe why (PR review finding).
+    if (error instanceof AtomicWritePlanError && error.stage === "staging") {
+      io.stderr(
+        "write-plan: could not stage the write (a permission or disk-space problem, not an unsafe path); nothing was written.\n",
       );
       return undefined;
     }

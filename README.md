@@ -336,6 +336,31 @@ entirely (leaving every file byte-unchanged) rather than adopting an
 unconfirmed model; a probe-infrastructure failure (not an availability
 result) instead degrades to proceeding with catalog-only information.
 
+`upgrade` and `compile` share the same underlying write-plan primitives
+(`planWrites`/`applyWritePlan`, path containment checks, and symlink
+refusal). Generated-file ownership/drift refusal specifically applies to
+`compile` and to `upgrade`'s `--model-policy-strategy ... --write` path,
+both of which inspect and write generated target files — a manually-edited
+`.codex/config.toml`, for example, refuses either of those before any file
+is touched. It does not apply to `upgrade`'s insertion-only capability write
+(the default `upgrade --write`/`--adopt-recommended` path): that path's
+write batch only ever contains `ai-profile.yaml` and, optionally,
+`ai-profile.lock`, so it never inspects `.codex/config.toml` or any other
+generated target file and has nothing there to refuse. They differ in
+atomicity: both `upgrade` write paths — the insertion-only capability write
+(which can span `ai-profile.yaml` and, optionally, `ai-profile.lock`) and the
+`--model-policy-strategy ... --write` path (which can additionally span
+affected generated target files) — go through the atomic all-or-nothing
+write-plan variant (`applyWritePlanAtomic`), the same one `configure`
+already uses. A mid-write failure in one of these batches
+rolls back every already-committed file in that batch, leaving the repository
+byte-identical to before (for example, a transient write error while renaming
+`ai-profile.lock` into place after `ai-profile.yaml` has already been
+committed restores `ai-profile.yaml` to its prior bytes too). `compile`'s own
+writes are not (yet) atomic across multiple files: it still applies the plain,
+sequential `applyWritePlan`, so a mid-batch failure there can leave some
+files updated and others not.
+
 ### Local Migration UI (Phase 16)
 
 For repos where reviewing import findings visually is easier than reading CLI

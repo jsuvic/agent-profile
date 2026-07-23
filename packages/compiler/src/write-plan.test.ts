@@ -449,6 +449,418 @@ test("applyWritePlanAtomic removes created targets when a later rename fails", a
   });
 });
 
+test(
+  "applyWritePlanAtomic preserves an existing target's file mode instead of resetting it to 0644",
+  { skip: process.platform === "win32" ? "POSIX mode bits are not meaningfully enforced on this platform" : false },
+  async () => {
+    await withTempRoot(async (root) => {
+      const target = path.join(root, "ai-profile.yaml");
+      await writeFile(target, "version: 1\n", "utf8");
+      await fsPromises.chmod(target, 0o600);
+
+      await applyWritePlanAtomic({
+        rootDir: root,
+        writes: [{ path: "ai-profile.yaml", bytes: "version: 2\n" }],
+      });
+
+      const after = await fsPromises.stat(target);
+      assert.equal(
+        after.mode & 0o777,
+        0o600,
+        "existing file's mode must survive an atomic write",
+      );
+      assert.equal(await readFile(target, "utf8"), "version: 2\n");
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Finding 1 (PR review, third round): a read-only already-committed target
+// must still be correctly restored (bytes AND mode) when a LATER target's
+// commit fails and triggers rollback. Previously, `rollbackAtomicTargets`
+// restored an already-renamed target via a direct
+// `fsPromises.writeFile(target.absolutePath, target.backup)`, which requires
+// write permission on the EXISTING (already-committed, possibly read-only)
+// target and can fail with EACCES -- defeating the rollback guarantee for
+// exactly the class of files most likely to be protected this way.
+// ---------------------------------------------------------------------------
+
+test(
+  "applyWritePlanAtomic restores a read-only already-committed target's bytes and mode when a later target's commit fails (PR review finding, third round)",
+  { skip: process.platform === "win32" ? "POSIX mode bits are not meaningfully enforced on this platform" : false },
+  async () => {
+    await withTempRoot(async (root) => {
+      const readonlyTarget = path.join(root, "a-readonly.txt");
+      await writeFile(readonlyTarget, "original\n", "utf8");
+      await fsPromises.chmod(readonlyTarget, 0o444);
+
+      try {
+        // "a-readonly.txt" sorts before "zdir"/"zdir/x.txt", so it commits
+        // (renames) first; the "zdir" vs "zdir/x.txt" collision then forces
+        // a commit-phase failure on a LATER target, exercising rollback of
+        // the already-renamed read-only target.
+        await assert.rejects(
+          () =>
+            applyWritePlanAtomic({
+              rootDir: root,
+              writes: [
+                { path: "a-readonly.txt", bytes: "modified\n" },
+                { path: "zdir", bytes: "file-at-dir-path\n" },
+                { path: "zdir/x.txt", bytes: "inner\n" },
+              ],
+            }),
+          (error: unknown) => {
+            assert.ok(error instanceof AtomicWritePlanError);
+            assert.equal(error.stage, "commit");
+            // The regression this proves: a genuinely un-restorable target
+            // must not be misreported as a clean rollback.
+            assert.deepEqual(error.unrestoredPaths, []);
+            return true;
+          },
+        );
+
+        assert.equal(
+          await readFile(readonlyTarget, "utf8"),
+          "original\n",
+          "read-only target's original bytes must be restored",
+        );
+        assert.equal(
+          (await fsPromises.stat(readonlyTarget)).mode & 0o777,
+          0o444,
+          "read-only target's original mode must be restored",
+        );
+        assert.deepEqual(await listTempArtifacts(root), []);
+      } finally {
+        // Restore write permission so the temp-root cleanup in withTempRoot
+        // can actually remove the directory afterward.
+        await fsPromises.chmod(readonlyTarget, 0o600).catch(() => {});
+      }
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Finding 2 (PR review, third round): the staged temp file must never sit at
+// a mode WIDER than the target's own captured existing mode while it already
+// holds content. Previously `writeTempBeside` always opened at a hardcoded
+// 0o644 and wrote content, and only a separate call AFTER it returned
+// narrowed the mode -- leaving a window where a restrictive-mode target's
+// content sat in a 0644 temp file. This is proven indirectly: intercepting
+// `fsPromises.open` shows the intended mode is now passed directly to
+// `open()` (before any content is written), rather than applied afterward.
+// ---------------------------------------------------------------------------
+
+test(
+  "applyWritePlanAtomic opens the staged temp file directly at the existing target's restrictive mode (never a wider mode first) (PR review finding, third round)",
+  { skip: process.platform === "win32" ? "POSIX mode bits are not meaningfully enforced on this platform" : false },
+  async () => {
+    await withTempRoot(async (root) => {
+      const target = path.join(root, "restricted.txt");
+      await writeFile(target, "before\n", "utf8");
+      await fsPromises.chmod(target, 0o600);
+
+      const realOpen = fsPromises.open;
+      const openModes: number[] = [];
+      (fsPromises as unknown as { open: unknown }).open = async (
+        ...args: unknown[]
+      ) => {
+        const [openPath, , mode] = args as [string, string, number?];
+        if (openPath.includes(".tmp-") && mode !== undefined) {
+          openModes.push(mode);
+        }
+        return (realOpen as (...openArgs: unknown[]) => Promise<unknown>)(
+          ...args,
+        );
+      };
+
+      try {
+        await applyWritePlanAtomic({
+          rootDir: root,
+          writes: [{ path: "restricted.txt", bytes: "after\n" }],
+        });
+      } finally {
+        (fsPromises as unknown as { open: unknown }).open = realOpen;
+      }
+
+      assert.equal(openModes.length, 1, "temp file must be opened exactly once");
+      assert.equal(
+        openModes[0],
+        0o600,
+        "temp file must be opened directly at the target's captured mode, never the wider 0o644 default",
+      );
+      assert.equal(
+        (await fsPromises.stat(target)).mode & 0o777,
+        0o600,
+        "committed file must still end at the correct restrictive mode",
+      );
+      assert.equal(await readFile(target, "utf8"), "after\n");
+    });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Finding E (PR review, second round): a staging I/O failure (paths were all
+// valid, but open/write/chmod/chown failed for a permission or disk-space
+// reason) must be reported with a DIFFERENT stage than a genuine
+// path-validation failure, since the two mean genuinely different things to
+// a caller.
+// ---------------------------------------------------------------------------
+
+test('applyWritePlanAtomic reports stage "staging" (not "prepare") when staging I/O fails after path validation already passed (PR review finding)', async () => {
+  await withTempRoot(async (root) => {
+    await writeFile(path.join(root, "a.txt"), "before\n", "utf8");
+
+    const realChmod = fsPromises.chmod;
+    (fsPromises as unknown as { chmod: unknown }).chmod = async (): Promise<void> => {
+      throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          applyWritePlanAtomic({
+            rootDir: root,
+            writes: [{ path: "a.txt", bytes: "after\n" }],
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof AtomicWritePlanError);
+          // Not "prepare": the path was perfectly valid, only the staging
+          // I/O itself failed.
+          assert.equal(error.stage, "staging");
+          return true;
+        },
+      );
+    } finally {
+      (fsPromises as unknown as { chmod: unknown }).chmod = realChmod;
+    }
+
+    assert.equal(await readFile(path.join(root, "a.txt"), "utf8"), "before\n");
+    assert.deepEqual(await listTempArtifacts(root), []);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding A (PR review, second round): `writeTempBeside` must stage via
+// `FileHandle.writeFile()` (which loops internally until the whole buffer is
+// written) rather than a single unchecked `FileHandle.write()` call, which is
+// not guaranteed to write the entire buffer in one call and could silently
+// stage (then commit, via rename) a truncated file.
+//
+// A genuine short *disk-full* write is impractical to force in a portable
+// test. `FileHandle.writeFile()` does not internally call the public
+// `FileHandle.prototype.write()` method (verified: patching
+// `FileHandle.prototype.write` is never invoked by `writeFile()`, since
+// `writeFile()` calls the low-level binding directly), so intercepting
+// `.write()` cannot prove which method staging actually uses either. Instead:
+//   1. `fsPromises.open` is wrapped so the exact primitive staging calls is
+//      directly observable, proving staging now calls `.writeFile()` and
+//      never the single-shot `.write()`.
+//   2. A large multi-megabyte payload is round-tripped and compared
+//      byte-for-byte, which would only reveal a truncation bug if
+//      `.writeFile()` itself, or the code that calls it, mishandled a payload
+//      spanning multiple underlying syscalls. This second test's guarantee
+//      ultimately rests on Node's documented `FileHandle.writeFile()`
+//      contract (it writes the entire buffer), not on a forced short-write
+//      reproduction -- an honest limitation, but combined with (1) it proves
+//      staging now goes through the correct, looping API instead of the
+//      unchecked one.
+// ---------------------------------------------------------------------------
+
+test("applyWritePlanAtomic stages via FileHandle.writeFile() (which loops until every byte lands), never the single-shot write() (PR review finding)", async () => {
+  await withTempRoot(async (root) => {
+    const realOpen = fsPromises.open;
+    const calls = { write: 0, writeFile: 0 };
+    (fsPromises as unknown as { open: unknown }).open = async (
+      ...args: unknown[]
+    ) => {
+      const real = await (
+        realOpen as (...openArgs: unknown[]) => Promise<{
+          write: (...writeArgs: unknown[]) => Promise<unknown>;
+          writeFile: (...writeArgs: unknown[]) => Promise<unknown>;
+          sync: () => Promise<void>;
+          close: () => Promise<void>;
+        }>
+      )(...args);
+      return {
+        write: async (...writeArgs: unknown[]) => {
+          calls.write += 1;
+          return real.write(...writeArgs);
+        },
+        writeFile: async (...writeArgs: unknown[]) => {
+          calls.writeFile += 1;
+          return real.writeFile(...writeArgs);
+        },
+        sync: () => real.sync(),
+        close: () => real.close(),
+      };
+    };
+
+    try {
+      await applyWritePlanAtomic({
+        rootDir: root,
+        writes: [{ path: "a.txt", bytes: "hello\n" }],
+      });
+    } finally {
+      (fsPromises as unknown as { open: unknown }).open = realOpen;
+    }
+
+    assert.equal(
+      calls.writeFile,
+      1,
+      "staging must call the looping writeFile() method exactly once",
+    );
+    assert.equal(
+      calls.write,
+      0,
+      "staging must never call the single-shot write() method, which can short-write",
+    );
+    assert.equal(
+      await readFile(path.join(root, "a.txt"), "utf8"),
+      "hello\n",
+    );
+  });
+});
+
+test("applyWritePlanAtomic commits a large multi-megabyte payload byte-for-byte (short-write correctness)", async () => {
+  await withTempRoot(async (root) => {
+    const target = path.join(root, "big.bin");
+    // 8 MiB, deterministically filled, well past a single typical write()
+    // syscall's usual chunk size -- large enough that a truncation bug would
+    // reliably show up as a length or content mismatch.
+    const bytes = Buffer.alloc(8 * 1024 * 1024);
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = i % 256;
+    }
+
+    await applyWritePlanAtomic({
+      rootDir: root,
+      writes: [{ path: "big.bin", bytes }],
+    });
+
+    const written = await readFile(target);
+    assert.equal(
+      written.length,
+      bytes.length,
+      "the committed file must contain every byte, not a short write",
+    );
+    assert.ok(written.equals(bytes), "committed bytes must match exactly");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Finding B (PR review, second round): best-effort uid/gid preservation.
+//
+// Only a privileged process can actually `chown` a file to a DIFFERENT
+// uid/gid, so a real cross-user privilege-crossing reproduction is not
+// feasible in this test environment. Instead this asserts the primitive
+// itself: `fsPromises.chown` is called with the target's own captured
+// uid/gid (matching this repo's own established "assert the right primitive
+// was invoked" pattern, e.g. the writeFile-call-tracking test above). This
+// does not prove chown SUCCEEDS across users (that is Node's/the OS's
+// documented behavior, gated on privilege the test process does not have);
+// it proves the write path attempts to preserve ownership rather than
+// silently never trying.
+// ---------------------------------------------------------------------------
+
+test(
+  "applyWritePlanAtomic calls chown with the existing target's captured uid/gid (best-effort ownership preservation, PR review finding)",
+  { skip: process.platform === "win32" ? "ownership preservation is a POSIX-only concern; chown is never attempted on win32 (see the dedicated win32 test below)" : false },
+  async () => {
+  await withTempRoot(async (root) => {
+    const target = path.join(root, "ai-profile.yaml");
+    await writeFile(target, "version: 1\n", "utf8");
+    const existingStat = await fsPromises.stat(target);
+
+    const realChown = fsPromises.chown;
+    const chownCalls: Array<{ path: unknown; uid: unknown; gid: unknown }> =
+      [];
+    (fsPromises as unknown as { chown: unknown }).chown = async (
+      chownPath: unknown,
+      uid: unknown,
+      gid: unknown,
+    ): Promise<void> => {
+      chownCalls.push({ path: chownPath, uid, gid });
+      // Best-effort: a non-root test process legitimately cannot chown to an
+      // arbitrary uid/gid even when it is the file's own uid/gid on some
+      // platforms/configurations, so this must not fail the write.
+      try {
+        await (realChown as (...args: unknown[]) => Promise<void>)(
+          chownPath,
+          uid,
+          gid,
+        );
+      } catch {
+        // ignored -- the write path itself already swallows this.
+      }
+    };
+
+    try {
+      await applyWritePlanAtomic({
+        rootDir: root,
+        writes: [{ path: "ai-profile.yaml", bytes: "version: 2\n" }],
+      });
+    } finally {
+      (fsPromises as unknown as { chown: unknown }).chown = realChown;
+    }
+
+    assert.equal(
+      chownCalls.length,
+      1,
+      "chown must be attempted exactly once for the existing target",
+    );
+    assert.equal(chownCalls[0]?.uid, existingStat.uid);
+    assert.equal(chownCalls[0]?.gid, existingStat.gid);
+    assert.equal(await readFile(target, "utf8"), "version: 2\n");
+  });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Finding 3 (PR review, third round): a chown failure must ABORT the write
+// plan, not be silently swallowed. Previously this test proved the opposite
+// (chown failure did not fail the write); it now proves a chown failure DOES
+// fail the whole write plan, with stage "staging", and rolls back cleanly.
+// ---------------------------------------------------------------------------
+
+test(
+  "applyWritePlanAtomic fails the whole write plan (stage \"staging\") and rolls back cleanly when chown fails (PR review finding, third round)",
+  { skip: process.platform === "win32" ? "ownership preservation is a POSIX-only concern; chown is never attempted on win32 (see the dedicated win32 test below)" : false },
+  async () => {
+  await withTempRoot(async (root) => {
+    const target = path.join(root, "ai-profile.yaml");
+    await writeFile(target, "version: 1\n", "utf8");
+
+    const realChown = fsPromises.chown;
+    (fsPromises as unknown as { chown: unknown }).chown = async (): Promise<void> => {
+      throw Object.assign(new Error("chown denied"), { code: "EPERM" });
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          applyWritePlanAtomic({
+            rootDir: root,
+            writes: [{ path: "ai-profile.yaml", bytes: "version: 2\n" }],
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof AtomicWritePlanError);
+          assert.equal(error.stage, "staging");
+          return true;
+        },
+      );
+    } finally {
+      (fsPromises as unknown as { chown: unknown }).chown = realChown;
+    }
+
+    // A chown failure must not silently proceed with a changed-ownership
+    // rename: the original content must remain untouched and no temp
+    // artifacts must be left behind.
+    assert.equal(await readFile(target, "utf8"), "version: 1\n");
+    assert.deepEqual(await listTempArtifacts(root), []);
+  });
+  },
+);
+
 test("computeFileEtag: produces sha256: prefixed hex string", () => {
   const etag = computeFileEtag(Buffer.from("hello\n", "utf8"));
   assert.ok(etag.startsWith("sha256:"), "etag has sha256 prefix");
@@ -465,26 +877,35 @@ test("applyWritePlanAtomic reports paths it could not restore instead of claimin
     await writeFile(path.join(root, "a.txt"), "original\n", "utf8");
     const target = path.join(root, "a.txt");
 
-    // `a.txt` commits first, then the `zdir` collision fails the commit and the
-    // rollback tries to restore `a.txt`. Failing that restore is the realistic
-    // case — whatever broke the commit (a lock, a permission change) often
-    // blocks the restore too — and it is the only way the writer can end up
-    // leaving new bytes on disk. Only the restore write is intercepted:
-    // staging uses a file handle, and the test's own named `writeFile` import
-    // is a separate binding, so neither is affected.
-    const realWriteFile = fsPromises.writeFile;
+    // `a.txt` commits first, then the `zdir` collision fails the commit and
+    // the rollback tries to restore `a.txt`. Failing that restore is the
+    // realistic case — whatever broke the commit (a lock, a permission
+    // change) often blocks the restore too — and it is the only way the
+    // writer can end up leaving new bytes on disk. The restore now goes
+    // through `writeTempBeside` + `rename` (PR review finding, third round:
+    // restoring an already-committed, possibly read-only target via a direct
+    // `writeFile` onto it could itself fail with EACCES), so the SECOND
+    // `rename` targeting `a.txt` -- the first is the original commit, which
+    // must succeed -- is what's intercepted to force the restore to fail.
+    const realRename = fsPromises.rename;
+    let renamesOntoTarget = 0;
     let restoreAttempted = false;
-    (fsPromises as unknown as { writeFile: unknown }).writeFile = async (
-      file: unknown,
-      ...rest: unknown[]
+    (fsPromises as unknown as { rename: unknown }).rename = async (
+      src: unknown,
+      dest: unknown,
     ): Promise<void> => {
-      if (file === target) {
-        restoreAttempted = true;
-        throw Object.assign(new Error("restore blocked"), { code: "EPERM" });
+      if (dest === target) {
+        renamesOntoTarget += 1;
+        if (renamesOntoTarget === 2) {
+          restoreAttempted = true;
+          throw Object.assign(new Error("restore blocked"), {
+            code: "EPERM",
+          });
+        }
       }
-      return (realWriteFile as (...args: unknown[]) => Promise<void>)(
-        file,
-        ...rest,
+      return (realRename as (...args: unknown[]) => Promise<void>)(
+        src,
+        dest,
       );
     };
 
@@ -508,8 +929,7 @@ test("applyWritePlanAtomic reports paths it could not restore instead of claimin
         },
       );
     } finally {
-      (fsPromises as unknown as { writeFile: unknown }).writeFile =
-        realWriteFile;
+      (fsPromises as unknown as { rename: unknown }).rename = realRename;
     }
 
     assert.ok(restoreAttempted, "the restore was actually attempted");
@@ -517,6 +937,137 @@ test("applyWritePlanAtomic reports paths it could not restore instead of claimin
     assert.equal(await readFile(target, "utf8"), "modified\n");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Finding 1 (PR review, third round): a chown failure during ROLLBACK RESTORE
+// (not forward staging) must not silently proceed with a rename that leaves
+// the wrong owner. It must be treated as this target's restore failing, via
+// the same existing `unrestored` mechanism every other restore failure in
+// this function already uses.
+// ---------------------------------------------------------------------------
+
+test(
+  "applyWritePlanAtomic reports a target as unrestored (not a clean rollback) when chown fails during rollback restore, without touching the forward-staging chown",
+  { skip: process.platform === "win32" ? "ownership preservation is a POSIX-only concern; chown is never attempted on win32 (see the dedicated win32 test below)" : false },
+  async () => {
+  await withTempRoot(async (root) => {
+    await writeFile(path.join(root, "a.txt"), "original\n", "utf8");
+    const target = path.join(root, "a.txt");
+
+    // `a.txt` exists beforehand, so it gets a forward-staging chown (which
+    // must succeed) and, once the commit fails and rollback restores it, a
+    // second chown during the restore-via-rename path (which this test
+    // forces to fail). `zdir`/`zdir/x.txt` are new, so they never trigger
+    // chown at all, and their own directory-vs-file conflict is what fails
+    // the commit and triggers rollback in the first place.
+    const realChown = fsPromises.chown;
+    let chownCallsOnTarget = 0;
+    let restoreChownAttempted = false;
+    (fsPromises as unknown as { chown: unknown }).chown = async (
+      chownPath: unknown,
+      uid: unknown,
+      gid: unknown,
+    ): Promise<void> => {
+      if (typeof chownPath === "string" && chownPath.startsWith(target)) {
+        chownCallsOnTarget += 1;
+        if (chownCallsOnTarget === 2) {
+          restoreChownAttempted = true;
+          throw Object.assign(new Error("restore chown denied"), {
+            code: "EPERM",
+          });
+        }
+      }
+      return (realChown as (...args: unknown[]) => Promise<void>)(
+        chownPath,
+        uid,
+        gid,
+      );
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          applyWritePlanAtomic({
+            rootDir: root,
+            writes: [
+              { path: "a.txt", bytes: "modified\n" },
+              { path: "zdir", bytes: "file-at-dir-path\n" },
+              { path: "zdir/x.txt", bytes: "inner\n" },
+            ],
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof AtomicWritePlanError);
+          // The honest signal: NOT "commit", which promises a clean rollback.
+          assert.equal(error.stage, "rollback-incomplete");
+          assert.deepEqual(error.unrestoredPaths, ["a.txt"]);
+          return true;
+        },
+      );
+    } finally {
+      (fsPromises as unknown as { chown: unknown }).chown = realChown;
+    }
+
+    assert.ok(
+      restoreChownAttempted,
+      "the restore chown was actually attempted",
+    );
+    // The error told the truth: the file really did keep the new bytes,
+    // because a chown failure during restore must not proceed with a rename
+    // that would silently leave the wrong owner.
+    assert.equal(await readFile(target, "utf8"), "modified\n");
+    assert.deepEqual(await listTempArtifacts(root), []);
+  });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Finding 1 (PR review, fourth round): ownership preservation is a POSIX-only
+// concern. `fsPromises.stat` reports synthetic uid/gid on win32, and
+// `fsPromises.chown` can reject there with `ENOSYS` on some Node/Windows
+// configurations even for a captured no-op uid/gid; since a chown failure is
+// intentionally fatal (see the tests above), attempting chown at all on
+// win32 would risk aborting every atomic write to an EXISTING target on
+// affected platforms. This test runs ONLY on win32 (the inverse of the
+// POSIX-only chown tests above, which skip there) and proves chown is never
+// even attempted, regardless of whether the real underlying chown would
+// succeed or fail on this machine.
+// ---------------------------------------------------------------------------
+
+test(
+  "applyWritePlanAtomic never calls chown on win32 (PR review finding, fourth round)",
+  { skip: process.platform === "win32" ? false : "this test is win32-specific; ownership preservation applies on POSIX platforms (see the chown tests above)" },
+  async () => {
+    await withTempRoot(async (root) => {
+      const target = path.join(root, "ai-profile.yaml");
+      await writeFile(target, "version: 1\n", "utf8");
+
+      const realChown = fsPromises.chown;
+      let chownCalls = 0;
+      (fsPromises as unknown as { chown: unknown }).chown = async (): Promise<void> => {
+        chownCalls += 1;
+        throw Object.assign(new Error("chown not implemented"), {
+          code: "ENOSYS",
+        });
+      };
+
+      try {
+        await applyWritePlanAtomic({
+          rootDir: root,
+          writes: [{ path: "ai-profile.yaml", bytes: "version: 2\n" }],
+        });
+      } finally {
+        (fsPromises as unknown as { chown: unknown }).chown = realChown;
+      }
+
+      assert.equal(
+        chownCalls,
+        0,
+        "chown must never be attempted on win32, even when the mocked chown would throw ENOSYS",
+      );
+      assert.equal(await readFile(target, "utf8"), "version: 2\n");
+    });
+  },
+);
 
 test("applyWritePlanAtomic does not report a created file as unrestored when the directory sweep removed it", async () => {
   await withTempRoot(async (root) => {

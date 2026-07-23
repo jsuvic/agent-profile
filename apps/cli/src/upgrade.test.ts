@@ -30,6 +30,7 @@ import {
   planModelPolicyUpgrade,
   resolveModelPolicyLockfile,
   serializeLockfile,
+  sha256Hex,
   toLockfileV2View,
   validateLockfileText,
   type LockModelPolicyV2,
@@ -1112,6 +1113,341 @@ test("upgrade interactive customize inserts only the selected offered capability
   const profile = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
   assert.match(profile, /      - automation\n/u);
   assert.doesNotMatch(profile, /loggingGuidance: true/u);
+
+  // I6e acceptance criterion: a successful insertion-only write leaves the
+  // lockfile fully schema-valid, not just individually-correct fields.
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const validation = validateLockfileText(lockText);
+  assert.equal(
+    validation.ok,
+    true,
+    `lockfile must be schema-valid after a successful write: ${
+      validation.ok ? "" : JSON.stringify(validation.issues)
+    }`,
+  );
+
+  const lock = JSON.parse(lockText) as {
+    upgrade?: { catalogVersion?: number };
+    profile?: { sha256?: string };
+  };
+  assert.equal(lock.upgrade?.catalogVersion, CAPABILITY_CATALOG_VERSION);
+  assert.equal(
+    lock.profile?.sha256,
+    sha256Hex(Buffer.from(profile, "utf8")),
+    "lock.profile.sha256 must match the actually-written ai-profile.yaml bytes",
+  );
+});
+
+test("upgrade --model-policy-strategy adopt --write leaves a fully schema-valid lockfile with correct modelPolicy rows, per-row catalogVersion, and outputs (I6e AC3, second round)", async () => {
+  // The prior round's regression test (immediately above) only exercised the
+  // insertion-only path against `createUpgradeRoot`, which has `outputs: []`
+  // and no `modelPolicy` block at all -- it could not detect a wrong
+  // model-policy row, a wrong per-row catalogVersion, or a missing/malformed
+  // output record. This exercises a real `--model-policy-strategy adopt
+  // --write` against a fixture that already has real prior model-policy rows
+  // AND real generated target files on disk (`createV3UpgradeRootWithGeneratedFiles`),
+  // then validates the FULL resulting lockfile against AC3's actual scope.
+  //
+  // PR review finding (third round): the prior lock and the "fresh" expected
+  // state must NOT be seeded from the same `liveModelPolicy()` call -- doing
+  // so lets `adopt --write` succeed as a complete no-op (zero rows actually
+  // changed) and the assertions below would still pass even if the real
+  // adopt-write logic were broken. So the prior lock's codex/architect row
+  // is deliberately superseded (same stale-lock construction pattern used
+  // elsewhere in this file, e.g. the "...preserves the capability-catalog
+  // report..." test above) before running the write, and the resulting row
+  // is asserted to have actually CHANGED away from that stale value.
+  const fresh = liveModelPolicy();
+  const staleArchitectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(staleArchitectCodex);
+  const priorModelPolicy: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded`, catalogVersion: row.catalogVersion - 1 }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    priorModelPolicy,
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const validation = validateLockfileText(lockText);
+  assert.equal(
+    validation.ok,
+    true,
+    `lockfile must be schema-valid after a successful write: ${
+      validation.ok ? "" : JSON.stringify(validation.issues)
+    }`,
+  );
+
+  const lock = JSON.parse(lockText) as {
+    modelPolicy?: {
+      catalogVersion?: number;
+      preset?: string;
+      resolutions: Array<{
+        role: string;
+        client: string;
+        model: string;
+        catalogVersion: number;
+      }>;
+    };
+    outputs: Array<{
+      path: string;
+      ownership: string;
+      sha256?: string;
+    }>;
+  };
+
+  // `LockModelPolicyV2.catalogVersion` is versioned against the MODEL
+  // catalog (`fresh.catalogVersion`), which is a separate counter from
+  // `CAPABILITY_CATALOG_VERSION` (the capability/offer catalog `upgrade`
+  // stamps). Comparing against the wrong constant here would make this
+  // assertion meaningless.
+  assert.equal(lock.modelPolicy?.catalogVersion, fresh.catalogVersion);
+  assert.equal(lock.modelPolicy?.preset, fresh.preset);
+
+  // Every row must match the FRESH catalog resolution exactly, not just the
+  // single row a narrower test happened to spot-check.
+  assert.equal(
+    lock.modelPolicy?.resolutions.length,
+    fresh.resolutions.length,
+    "resolved row count must match the fresh catalog's row count",
+  );
+  const lockResolutions: Array<{
+    role: string;
+    client: string;
+    model: string;
+    catalogVersion: number;
+  }> = lock.modelPolicy?.resolutions ?? [];
+  for (const expected of fresh.resolutions) {
+    const lockRow = lockResolutions.find(
+      (row) => row.role === expected.role && row.client === expected.client,
+    );
+    assert.ok(
+      lockRow,
+      `expected a lock row for role=${expected.role} client=${expected.client}`,
+    );
+    assert.equal(lockRow?.model, expected.model);
+    assert.equal(
+      lockRow?.catalogVersion,
+      expected.catalogVersion,
+      `${expected.role}/${expected.client} row must record the catalog version that produced it`,
+    );
+  }
+
+  // Genuine-mutation proof: the codex/architect row was deliberately seeded
+  // stale above. Asserting it now differs from that seeded value (in
+  // addition to the "every row matches fresh" loop above) proves the write
+  // actually changed something on disk, rather than the fixture already
+  // matching the expected output before `adopt --write` ran at all.
+  const architectRow = lockResolutions.find(
+    (row) => row.role === "architect" && row.client === "codex",
+  );
+  assert.ok(architectRow, "expected a lock row for role=architect client=codex");
+  assert.notEqual(
+    architectRow?.model,
+    staleArchitectCodex?.model + "-superseded",
+    "the stale codex/architect model must have been overwritten by the write",
+  );
+  assert.notEqual(
+    architectRow?.catalogVersion,
+    (staleArchitectCodex?.catalogVersion ?? 0) - 1,
+    "the stale codex/architect catalogVersion must have been overwritten by the write",
+  );
+  assert.equal(
+    architectRow?.model,
+    staleArchitectCodex?.model,
+    "the codex/architect row must land on the fresh (non-superseded) model",
+  );
+
+  // `outputs` must be non-empty (real generated targets exist) and every
+  // record well-formed.
+  assert.ok(lock.outputs.length > 0, "outputs must be non-empty");
+  for (const entry of lock.outputs) {
+    assert.ok(entry.path, "every output record needs a path");
+    assert.ok(
+      entry.ownership === "generated-owned" ||
+        entry.ownership === "mixed" ||
+        entry.ownership === "manual-owned",
+      `unexpected ownership label for ${entry.path}: ${entry.ownership}`,
+    );
+    if (entry.ownership === "generated-owned") {
+      assert.ok(
+        entry.sha256,
+        `${entry.path} is generated-owned and needs a sha256`,
+      );
+    }
+  }
+  const codexConfigOutput = lock.outputs.find(
+    (entry) => entry.path === ".codex/config.toml",
+  );
+  assert.ok(codexConfigOutput, "outputs must include .codex/config.toml");
+
+  const codexConfigAfter = await readFile(
+    path.join(root, ".codex", "config.toml"),
+    "utf8",
+  );
+  const implementerAfter = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "implementer",
+  );
+  assert.ok(implementerAfter);
+  assert.match(
+    codexConfigAfter,
+    new RegExp(escapeRegExp(implementerAfter.model), "u"),
+  );
+});
+
+test("upgrade insertion-only write batch never calls fsPromises.writeFile for ai-profile.yaml/ai-profile.lock, guarding against a regression back to the plain (non-atomic) write path (I6e)", async () => {
+  // `applyWritePlanAtomic` stages via `fsPromises.open`/`fd.write` and
+  // commits via `fsPromises.rename` -- never `fsPromises.writeFile`. A future
+  // regression reverting this call site to plain `applyWritePlan` (which
+  // writes via `fsPromises.writeFile`) would show up here as a nonzero call
+  // count. Rollback itself is proved separately by the rename-based test
+  // immediately below.
+  const root = await createUpgradeRoot(21);
+
+  const normalize = (value: unknown): string =>
+    typeof value === "string" ? value.replaceAll("\\", "/") : "";
+  const isTrackedTarget = (value: unknown): boolean =>
+    normalize(value).endsWith("ai-profile.yaml") ||
+    normalize(value).endsWith("ai-profile.lock");
+
+  const trackedCalls: string[] = [];
+  const realWriteFile = fsPromises.writeFile;
+  (fsPromises as unknown as { writeFile: unknown }).writeFile = async (
+    file: unknown,
+    ...rest: unknown[]
+  ): Promise<void> => {
+    if (isTrackedTarget(file)) {
+      trackedCalls.push(normalize(file));
+    }
+    return (realWriteFile as (...args: unknown[]) => Promise<void>)(
+      file,
+      ...rest,
+    );
+  };
+
+  const output = createOutput();
+  const prompts = upgradePrompts({
+    choose: "customize",
+    customize: ["skills.automation"],
+    confirm: true,
+  });
+  let code: number;
+  try {
+    code = await runCli(["upgrade", "--root", root], {
+      io: output,
+      nonInteractive: false,
+      upgradePrompts: prompts,
+    });
+  } finally {
+    (fsPromises as unknown as { writeFile: unknown }).writeFile = realWriteFile;
+  }
+
+  assert.equal(code, 0);
+  assert.deepEqual(trackedCalls, []);
+});
+
+test("upgrade insertion-only write batch rolls back an already-committed ai-profile.lock rename when the ai-profile.yaml rename fails during commit (I6e)", async () => {
+  // Complements the writeFile-based test above by forcing a failure at the
+  // atomic write plan's actual commit primitive (`fsPromises.rename`),
+  // matching the established precedent
+  // ("...quality-first --write reports which specific files could not be
+  // rolled back..."). `applyWritePlanAtomic` commits targets in alphabetical
+  // path order, so "ai-profile.lock" is renamed into place BEFORE
+  // "ai-profile.yaml" is reached; forcing the ai-profile.yaml rename to fail
+  // means ai-profile.lock is already committed and must be rolled back.
+  const root = await createUpgradeRoot(21);
+  const profileBefore = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+
+  const normalize = (value: unknown): string =>
+    typeof value === "string" ? value.replaceAll("\\", "/") : "";
+  const isProfilePath = (value: unknown): boolean =>
+    normalize(value).endsWith("ai-profile.yaml");
+
+  const realRename = fsPromises.rename;
+  (fsPromises as unknown as { rename: unknown }).rename = async (
+    src: unknown,
+    dest: unknown,
+    ...rest: unknown[]
+  ): Promise<void> => {
+    if (isProfilePath(dest)) {
+      throw Object.assign(new Error("commit blocked"), { code: "EPERM" });
+    }
+    return (realRename as (...args: unknown[]) => Promise<void>)(
+      src,
+      dest,
+      ...rest,
+    );
+  };
+
+  const output = createOutput();
+  const prompts = upgradePrompts({
+    choose: "customize",
+    customize: ["skills.automation"],
+    confirm: true,
+  });
+  let code: number;
+  try {
+    code = await runCli(["upgrade", "--root", root], {
+      io: output,
+      nonInteractive: false,
+      upgradePrompts: prompts,
+    });
+  } finally {
+    (fsPromises as unknown as { rename: unknown }).rename = realRename;
+  }
+
+  assert.equal(code, 1);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    lockBefore,
+  );
+  // A `stage: "commit"` failure means the rename genuinely started (paths
+  // resolved and staged fine) and rollback restored everything cleanly -- a
+  // different, more accurate story than "the path could not be safely
+  // resolved", which is what a generic prepare-stage refusal means.
+  assert.match(
+    output.stderrText(),
+    /rolled back cleanly/u,
+    "must report the accurate clean-rollback-after-commit-failure message",
+  );
+  assert.doesNotMatch(
+    output.stderrText(),
+    /unsafe path/u,
+    "must not report the misleading generic path-validation message",
+  );
+  assert.doesNotMatch(
+    output.stderrText(),
+    /safely resolved/u,
+    "must not report the misleading generic path-validation message",
+  );
 });
 
 test("upgrade interactive cancel exits 0 and writes nothing", async () => {
@@ -1134,6 +1470,34 @@ test("upgrade interactive cancel exits 0 and writes nothing", async () => {
   assert.equal(
     await readFile(path.join(root, "ai-profile.lock"), "utf8"),
     beforeLock,
+  );
+});
+
+test("upgrade interactive customize declined at final confirmation writes nothing (I6e AC4)", async () => {
+  const root = await createUpgradeRoot(21);
+  const profileBefore = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+
+  const output = createOutput();
+  const prompts = upgradePrompts({
+    choose: "customize",
+    customize: ["skills.automation"],
+    confirm: false,
+  });
+  const code = await runCli(["upgrade", "--root", root], {
+    io: output,
+    nonInteractive: false,
+    upgradePrompts: prompts,
+  });
+
+  assert.equal(code, 0);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    lockBefore,
   );
 });
 
@@ -4363,8 +4727,15 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
   // is reached -- the commit failure must be on the LATER path (`ai-profile.yaml`)
   // so an EARLIER path (`.codex/config.toml`) is already renamed and in need of
   // a restore by the time rollback runs; then that restore is the one that fails.
+  //
+  // PR review finding (third round): rollback now restores an
+  // already-committed target via `writeTempBeside` + `rename` (never a
+  // direct `writeFile` onto the possibly-read-only target), so forcing the
+  // restore to fail means intercepting the SECOND `rename` targeting
+  // `.codex/config.toml` -- the first is the original commit, which must
+  // succeed.
   const realRename = fsPromises.rename;
-  const realWriteFile = fsPromises.writeFile;
+  let codexConfigRenames = 0;
   (fsPromises as unknown as { rename: unknown }).rename = async (
     src: unknown,
     dest: unknown,
@@ -4373,21 +4744,15 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
     if (isProfilePath(dest)) {
       throw Object.assign(new Error("commit blocked"), { code: "EPERM" });
     }
+    if (isCodexConfigPath(dest)) {
+      codexConfigRenames += 1;
+      if (codexConfigRenames === 2) {
+        throw Object.assign(new Error("restore blocked"), { code: "EPERM" });
+      }
+    }
     return (realRename as (...args: unknown[]) => Promise<void>)(
       src,
       dest,
-      ...rest,
-    );
-  };
-  (fsPromises as unknown as { writeFile: unknown }).writeFile = async (
-    file: unknown,
-    ...rest: unknown[]
-  ): Promise<void> => {
-    if (isCodexConfigPath(file)) {
-      throw Object.assign(new Error("restore blocked"), { code: "EPERM" });
-    }
-    return (realWriteFile as (...args: unknown[]) => Promise<void>)(
-      file,
       ...rest,
     );
   };
@@ -4409,13 +4774,73 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
     );
   } finally {
     (fsPromises as unknown as { rename: unknown }).rename = realRename;
-    (fsPromises as unknown as { writeFile: unknown }).writeFile = realWriteFile;
   }
 
   assert.equal(code, 1);
   assert.doesNotMatch(output.stderrText(), /unsafe path/u);
   assert.match(output.stderrText(), /could not fully roll back/u);
   assert.match(output.stderrText(), /\.codex[\\/]config\.toml/u);
+});
+
+test("upgrade --model-policy-strategy quality-first --write reports the accurate staging-failure message (not 'unsafe path') when staging I/O fails after every path already validated (PR review finding, second round)", async () => {
+  // Forces a staging I/O failure (`fsPromises.chmod`, now called during
+  // staging per the mode-preservation fix) rather than a path-validation
+  // failure or a commit-phase (rename) failure. Before this fix,
+  // `createOrApplyWritePlan` collapsed this into the SAME generic "unsafe
+  // path" message it uses for a genuine path-validation refusal, even though
+  // nothing about the paths was unsafe here -- only the staging I/O itself
+  // failed.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+
+  const realChmod = fsPromises.chmod;
+  (fsPromises as unknown as { chmod: unknown }).chmod = async (): Promise<void> => {
+    throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+  };
+
+  const output = createOutput();
+  let code: number;
+  try {
+    code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "quality-first",
+        "--write",
+      ],
+      { io: output },
+    );
+  } finally {
+    (fsPromises as unknown as { chmod: unknown }).chmod = realChmod;
+  }
+
+  assert.equal(code, 1);
+  // The OLD generic message's distinctive "actual: unsafe path" line (from
+  // `formatSimpleError`) must NOT appear -- only the new, accurate staging
+  // message should.
+  assert.doesNotMatch(output.stderrText(), /actual: unsafe path/u);
+  assert.match(
+    output.stderrText(),
+    /could not stage the write \(a permission or disk-space problem, not an unsafe path\); nothing was written\./u,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    lockBefore,
+  );
 });
 
 test("upgrade --model-policy-strategy adopt --write refuses cleanly when a generated target file has drifted from the lock, leaving every file byte-unchanged", async () => {
