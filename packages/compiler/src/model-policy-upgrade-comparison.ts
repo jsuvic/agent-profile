@@ -408,16 +408,26 @@ export function compareModelPolicyTabnineUpgrade(
 
     const reasons: string[] = [];
     // Phase 31.5 (I6d PR review round 2, "suppress nonexistent Tabnine
-    // comparison rows"): the common case -- no prior lock row AND no fresh
-    // model resolved either (guided manual selection on both sides) -- is
-    // NOT a change; both a bare `changed: true` "newly resolved" row here
-    // and the corresponding lockfile row are equally nonexistent, so
-    // reporting it as changed would be misleading noise in every ordinary
-    // v3 upgrade report. Only a genuine transition (something now resolves
-    // that didn't before, or vice versa, or an actual field difference) is a
-    // real change.
-    if (old === undefined && fresh.model === undefined) {
-      // No reasons pushed: both sides agree on "nothing resolved".
+    // comparison rows", then a further round-3 finding on the same branch):
+    // the common case -- no prior lock row AND no fresh model resolved
+    // either (guided manual selection on both sides) -- is NOT a change for
+    // THIS role, regardless of `blockReasons`: a block-level preset/catalog-
+    // version migration is a real mutation of the lock's `modelPolicy`
+    // block, but it cannot possibly affect a role/client pair that emits no
+    // row on either side of it (there is nothing to "change" for a role with
+    // no Tabnine row before or after). Folding `blockReasons` into every
+    // role indiscriminately -- as the Codex/Claude sibling comparison
+    // correctly does, since EVERY role there always has both an old and a
+    // fresh row -- would misreport every one of the (typically nine)
+    // no-override roles as changed purely because of an unrelated preset/
+    // catalog bump. Only a genuine per-role transition, OR a block-level
+    // migration that actually affects a role with a real row on at least one
+    // side, is a real change.
+    const isAbsentOnBothSides = old === undefined && fresh.model === undefined;
+    if (isAbsentOnBothSides) {
+      // No reasons pushed at all (not even blockReasons): both sides agree
+      // "nothing resolved", so no per-role or block-level mutation touches
+      // this role/client pair.
     } else if (old === undefined) {
       reasons.push("newly resolved (no prior lock entry)");
     } else {
@@ -443,7 +453,9 @@ export function compareModelPolicyTabnineUpgrade(
         reasons.push("effort status changed");
       }
     }
-    reasons.push(...blockReasons);
+    if (!isAbsentOnBothSides) {
+      reasons.push(...blockReasons);
+    }
 
     const changed = reasons.length > 0;
 

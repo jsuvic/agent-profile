@@ -265,10 +265,27 @@ private — is never rejected merely for being new, private, or historical
 - an uncatalogued identifier renders as `organization/private - unrated` and
   `unverified`, not invalid or outdated.
 
-This issue does not yet add a `subagentPolicy.roles[id].overrides.tabnine`
-profile-schema field; `buildModelPolicyTabnineTargetTable`'s `roleOverrides`
-parameter accepts an explicit override directly for adapter-level callers and
-tests. See "Known scope narrowing" below.
+A persisted `subagentPolicy.roles[id].overrides.tabnine.model` profile-schema
+field (Phase 31.5 I6d) supplies this override directly in `ai-profile.yaml`:
+
+```yaml
+subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    grill:
+      capability: strongest
+      effort: extra-high
+      overrides:
+        tabnine:
+          model: organization-model-id
+```
+
+An unchanged Tabnine role/exact-override is reused verbatim across an
+ordinary compile (including its recorded `catalogVersion`), exactly like the
+existing Codex/Claude lock-reuse guarantee; removing a previously-set
+override re-resolves to guided manual selection instead of perpetuating a
+stale value. See "Known scope narrowing" below for what remains unwired.
 
 ### Model and effort are independent per-control statuses
 
@@ -356,19 +373,19 @@ In practice this means:
   including a real-filesystem test that an unowned settings file survives the
   atomic write pipeline byte-for-byte.
 
-### Known scope narrowing (I3 / I5R)
+### Known scope narrowing (I3 / I5R / I6d)
 
-- No `subagentPolicy.roles[id].overrides.tabnine` profile-schema field exists
-  yet; an explicit Tabnine override supplied through `ai-profile.yaml` is not
-  possible. `buildModelPolicyTabnineTargetTable`'s `roleOverrides` parameter
-  still accepts an explicit override directly for adapter-level callers and
-  tests, and the interactive init wizard's advanced-override entry point
-  (Phase 31.5 I5R) supplies an ephemeral, non-persisted override at write time
-  — it is not recorded back into `ai-profile.yaml`, so a later
+- A persisted `subagentPolicy.roles[id].overrides.tabnine.model`
+  profile-schema field exists (Phase 31.5 I6d) and is the recommended way to
+  set an explicit Tabnine override going forward; `resolveModelPolicyLockfile`
+  merges it into `ai-profile.lock`'s `modelPolicy` block with the same
+  prior-lock reconciliation Codex/Claude rows already have. The interactive
+  init wizard's advanced-override entry point (Phase 31.5 I5R) predates this
+  field and still supplies an ephemeral, non-persisted override at write
+  time only — it is not recorded back into `ai-profile.yaml`, so a later
   `agent-profile compile --write` without going back through the wizard does
-  not repeat it. `resolveModelPolicyLockfile` is wired to merge Tabnine
-  resolutions into `ai-profile.lock`'s `modelPolicy` block, but with today's
-  profile schema that merge still always contributes zero rows in practice.
+  not repeat it; writing the profile field directly is the persisted
+  alternative.
 - The advanced-override entry point (Phase 31.5 I5R) offers a single exact
   Tabnine model override, not full per-role Codex/Claude customization beyond
   the three named presets; per-role Codex/Claude overrides remain

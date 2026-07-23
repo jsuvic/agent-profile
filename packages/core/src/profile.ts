@@ -423,6 +423,27 @@ export const SUBAGENT_POLICY_ROLE_IDS: readonly SubagentPolicyRoleId[] =
     "mechanical",
   ]);
 
+/**
+ * Every role ID a v3-opted profile's `subagentPolicy.roles` may key on --
+ * `SUBAGENT_POLICY_ROLE_IDS` plus `"routine-implementer"` (Phase 31.5 I1R;
+ * see `ModelPolicyRoleId`'s own doc comment in `model-policy.ts`). Used only
+ * by `buildSubagentPolicyDoc`'s serialization loop below, so a role's
+ * persisted fields (capability/effort/overrides, including a Tabnine
+ * override -- Phase 31.5 I6d PR review round 3) round-trip through
+ * `renderProfileYaml` for EVERY schema-supported role, not just the closed
+ * v1/v2 vocabulary. Deliberately duplicated here rather than imported as
+ * `MODEL_POLICY_ROLE_IDS` from `./model-policy.js`: that file has an
+ * unconditional runtime import edge back into this one (see the `import
+ * type`-only comment near this file's top), so importing a VALUE from it
+ * here would create a genuine circular-import crash. This array's
+ * membership must stay in lockstep with `MODEL_POLICY_ROLE_IDS`; a parity
+ * test enforces that.
+ */
+const ALL_MODEL_POLICY_ROLE_IDS: readonly ModelPolicyRoleId[] = Object.freeze([
+  ...SUBAGENT_POLICY_ROLE_IDS,
+  "routine-implementer",
+]);
+
 export type SubagentPolicyOverrideTarget = "codex" | "claude" | "tabnine";
 
 /**
@@ -1400,7 +1421,13 @@ function buildSubagentPolicyDoc(
 
   if (policy.roles !== undefined) {
     const roles: Record<string, unknown> = {};
-    for (const id of SUBAGENT_POLICY_ROLE_IDS) {
+    // Phase 31.5 (I6d PR review round 3): iterate the FULL v3 role
+    // vocabulary (`ALL_MODEL_POLICY_ROLE_IDS`), not just the closed v1/v2
+    // `SUBAGENT_POLICY_ROLE_IDS` list -- a v3-opted profile can validly set
+    // `roles["routine-implementer"]` (including a Tabnine override), and the
+    // closed list silently dropped it from every `renderProfileYaml` call,
+    // failing the persisted round-trip contract for that role.
+    for (const id of ALL_MODEL_POLICY_ROLE_IDS) {
       const role = policy.roles[id];
       if (role === undefined) {
         continue;

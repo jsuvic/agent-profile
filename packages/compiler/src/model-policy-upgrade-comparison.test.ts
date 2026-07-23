@@ -472,3 +472,33 @@ test("compareModelPolicyTabnineUpgrade reports a stale prior row's leftover effo
   assert.equal(row.old?.effort, "high");
   assert.equal(row.fresh.effort, undefined);
 });
+
+test("compareModelPolicyTabnineUpgrade does not report a role as changed due to a block-level preset/catalog-version migration when neither side has a Tabnine model for that role", () => {
+  // Phase 31.5 (I6d PR review round 3): a preset switch or block-level
+  // catalog-version bump is a real mutation of the lock's `modelPolicy`
+  // block, but it cannot affect a role/client pair that emits no Tabnine row
+  // on either side of it -- there is nothing for that migration to change
+  // for a role with no Tabnine override before or after. Before this fix,
+  // `blockReasons` was still unconditionally appended after the "absent on
+  // both sides" branch, so every no-override role was misreported as
+  // changed purely because of the unrelated preset bump.
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+    // Different preset than the one passed below, so `blockReasons` picks up
+    // "preset changed" -- exactly the scenario the finding described.
+    preset: "cost-conscious",
+    resolutions: [],
+  };
+
+  const rows = compareModelPolicyTabnineUpgrade(previous, "role-aware");
+  for (const row of rows) {
+    assert.equal(row.old, undefined);
+    assert.equal(row.fresh.model, undefined);
+    assert.equal(
+      row.changed,
+      false,
+      `role "${row.role}" should not be reported as changed by a block-level migration when it has no Tabnine row on either side`,
+    );
+    assert.equal(row.reason, undefined);
+  }
+});
