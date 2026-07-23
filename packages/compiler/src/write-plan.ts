@@ -241,7 +241,21 @@ export async function applyWritePlanAtomic(
     for (const target of targets) {
       target.backup = await readOptionalFile(target.absolutePath);
       target.existingMode = await readOptionalMode(target.absolutePath);
-      target.existingOwner = await readOptionalOwner(target.absolutePath);
+      // Ownership preservation is a POSIX-only concern (matching this file's
+      // existing mode-preservation tests, which already skip on win32 for the
+      // same reason). `stat.uid`/`stat.gid` are non-meaningful synthetic
+      // values on Windows, and `fsPromises.chown` can reject there with
+      // `ENOSYS` on some Node/Windows configurations even for a captured
+      // no-op uid/gid -- and a chown failure is intentionally fatal (see
+      // below), so capturing an owner at all on win32 would risk aborting
+      // every atomic write to an existing target on affected platforms (PR
+      // review finding). Leaving `existingOwner` undefined here makes both
+      // the forward staging chown and the rollback-restore chown below no-ops
+      // on win32, exactly as they already are for a `create` target.
+      target.existingOwner =
+        process.platform === "win32"
+          ? undefined
+          : await readOptionalOwner(target.absolutePath);
     }
 
     // --- Prepare: stage every write as a temp file beside its target. -----
@@ -629,9 +643,13 @@ async function readOptionalMode(
 
 /**
  * Existing target's owner uid/gid, or undefined when the target does not
- * exist. On win32 (and any other platform where `stat.uid`/`stat.gid` are
- * not meaningful) `chown` is a documented no-op-ish/unsupported concept, but
- * calling it with these values is still harmless there.
+ * exist. Callers should not invoke this on win32: `stat.uid`/`stat.gid` are
+ * not meaningful there, and `fsPromises.chown` can reject with `ENOSYS` on
+ * some Node/Windows configurations -- since a chown failure is intentionally
+ * fatal for callers of this value, capturing an owner at all on win32 would
+ * risk aborting every atomic write to an existing target on affected
+ * platforms. See the platform gate at this function's call site in
+ * `applyWritePlanAtomic`.
  */
 async function readOptionalOwner(
   absolutePath: string,

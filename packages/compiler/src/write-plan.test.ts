@@ -762,7 +762,10 @@ test("applyWritePlanAtomic commits a large multi-megabyte payload byte-for-byte 
 // silently never trying.
 // ---------------------------------------------------------------------------
 
-test("applyWritePlanAtomic calls chown with the existing target's captured uid/gid (best-effort ownership preservation, PR review finding)", async () => {
+test(
+  "applyWritePlanAtomic calls chown with the existing target's captured uid/gid (best-effort ownership preservation, PR review finding)",
+  { skip: process.platform === "win32" ? "ownership preservation is a POSIX-only concern; chown is never attempted on win32 (see the dedicated win32 test below)" : false },
+  async () => {
   await withTempRoot(async (root) => {
     const target = path.join(root, "ai-profile.yaml");
     await writeFile(target, "version: 1\n", "utf8");
@@ -809,7 +812,8 @@ test("applyWritePlanAtomic calls chown with the existing target's captured uid/g
     assert.equal(chownCalls[0]?.gid, existingStat.gid);
     assert.equal(await readFile(target, "utf8"), "version: 2\n");
   });
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Finding 3 (PR review, third round): a chown failure must ABORT the write
@@ -818,7 +822,10 @@ test("applyWritePlanAtomic calls chown with the existing target's captured uid/g
 // fail the whole write plan, with stage "staging", and rolls back cleanly.
 // ---------------------------------------------------------------------------
 
-test("applyWritePlanAtomic fails the whole write plan (stage \"staging\") and rolls back cleanly when chown fails (PR review finding, third round)", async () => {
+test(
+  "applyWritePlanAtomic fails the whole write plan (stage \"staging\") and rolls back cleanly when chown fails (PR review finding, third round)",
+  { skip: process.platform === "win32" ? "ownership preservation is a POSIX-only concern; chown is never attempted on win32 (see the dedicated win32 test below)" : false },
+  async () => {
   await withTempRoot(async (root) => {
     const target = path.join(root, "ai-profile.yaml");
     await writeFile(target, "version: 1\n", "utf8");
@@ -851,7 +858,8 @@ test("applyWritePlanAtomic fails the whole write plan (stage \"staging\") and ro
     assert.equal(await readFile(target, "utf8"), "version: 1\n");
     assert.deepEqual(await listTempArtifacts(root), []);
   });
-});
+  },
+);
 
 test("computeFileEtag: produces sha256: prefixed hex string", () => {
   const etag = computeFileEtag(Buffer.from("hello\n", "utf8"));
@@ -938,7 +946,10 @@ test("applyWritePlanAtomic reports paths it could not restore instead of claimin
 // this function already uses.
 // ---------------------------------------------------------------------------
 
-test("applyWritePlanAtomic reports a target as unrestored (not a clean rollback) when chown fails during rollback restore, without touching the forward-staging chown", async () => {
+test(
+  "applyWritePlanAtomic reports a target as unrestored (not a clean rollback) when chown fails during rollback restore, without touching the forward-staging chown",
+  { skip: process.platform === "win32" ? "ownership preservation is a POSIX-only concern; chown is never attempted on win32 (see the dedicated win32 test below)" : false },
+  async () => {
   await withTempRoot(async (root) => {
     await writeFile(path.join(root, "a.txt"), "original\n", "utf8");
     const target = path.join(root, "a.txt");
@@ -1006,7 +1017,57 @@ test("applyWritePlanAtomic reports a target as unrestored (not a clean rollback)
     assert.equal(await readFile(target, "utf8"), "modified\n");
     assert.deepEqual(await listTempArtifacts(root), []);
   });
-});
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Finding 1 (PR review, fourth round): ownership preservation is a POSIX-only
+// concern. `fsPromises.stat` reports synthetic uid/gid on win32, and
+// `fsPromises.chown` can reject there with `ENOSYS` on some Node/Windows
+// configurations even for a captured no-op uid/gid; since a chown failure is
+// intentionally fatal (see the tests above), attempting chown at all on
+// win32 would risk aborting every atomic write to an EXISTING target on
+// affected platforms. This test runs ONLY on win32 (the inverse of the
+// POSIX-only chown tests above, which skip there) and proves chown is never
+// even attempted, regardless of whether the real underlying chown would
+// succeed or fail on this machine.
+// ---------------------------------------------------------------------------
+
+test(
+  "applyWritePlanAtomic never calls chown on win32 (PR review finding, fourth round)",
+  { skip: process.platform === "win32" ? false : "this test is win32-specific; ownership preservation applies on POSIX platforms (see the chown tests above)" },
+  async () => {
+    await withTempRoot(async (root) => {
+      const target = path.join(root, "ai-profile.yaml");
+      await writeFile(target, "version: 1\n", "utf8");
+
+      const realChown = fsPromises.chown;
+      let chownCalls = 0;
+      (fsPromises as unknown as { chown: unknown }).chown = async (): Promise<void> => {
+        chownCalls += 1;
+        throw Object.assign(new Error("chown not implemented"), {
+          code: "ENOSYS",
+        });
+      };
+
+      try {
+        await applyWritePlanAtomic({
+          rootDir: root,
+          writes: [{ path: "ai-profile.yaml", bytes: "version: 2\n" }],
+        });
+      } finally {
+        (fsPromises as unknown as { chown: unknown }).chown = realChown;
+      }
+
+      assert.equal(
+        chownCalls,
+        0,
+        "chown must never be attempted on win32, even when the mocked chown would throw ENOSYS",
+      );
+      assert.equal(await readFile(target, "utf8"), "version: 2\n");
+    });
+  },
+);
 
 test("applyWritePlanAtomic does not report a created file as unrestored when the directory sweep removed it", async () => {
   await withTempRoot(async (root) => {
