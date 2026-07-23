@@ -149,6 +149,7 @@ test("model-policy doctor: LINT-MODEL-008's primary branch fires when a role/cli
     role: "mechanical",
     client: "claude",
     changed: false,
+    reason: undefined,
     old: { lifecycle: "unrated" },
     fresh: {
       model: undefined,
@@ -249,18 +250,45 @@ test("model-policy doctor: Tabnine uncatalogued/private explicit override is inf
   );
 });
 
+test("model-policy doctor: Tabnine guided-advisory rows (no override, no lock row) are NOT reported as missing provenance", () => {
+  // Default profile: Tabnine enabled, no per-role exact override anywhere.
+  // `toLockModelPolicyTabnineResolutions` never persists a row for guided/
+  // advisory-only Tabnine selections, so `old === undefined` here is correct
+  // and expected -- recompiling can never create this row. Must NOT be
+  // reported as LINT-MODEL-005 (missing provenance); must still surface the
+  // intended LINT-MODEL-007 (advisory) classification.
+  const profile = baseProfile();
+  const lock = resolvedLock(profile);
+
+  const issues = buildModelPolicyDoctorIssues(profile, lock);
+
+  assert.equal(
+    findIssue(issues, "LINT-MODEL-005", "/modelPolicy/explorer/tabnine"),
+    undefined,
+    JSON.stringify(issues, null, 2),
+  );
+  const advisory = findIssue(issues, "LINT-MODEL-007", "/modelPolicy/explorer/tabnine");
+  assert.notEqual(advisory, undefined, JSON.stringify(issues, null, 2));
+  assert.equal(advisory?.severity, "info");
+});
+
 test("model-policy doctor: missing provenance is actionable, both per-row and block-level", () => {
   const profile = baseProfile();
   const lock = resolvedLock(profile);
 
-  const withoutArchitectCodexRow: LockModelPolicyV2 = {
+  // implementer/codex is the single row whose fresh capabilityStatus is
+  // "configured" (the primary-role project-local write surface,
+  // `.codex/config.toml`) -- the signal that a real, expected-to-be-
+  // persisted resolution exists (see the `row.old === undefined` branch's
+  // own doc comment in model-policy-doctor.ts).
+  const withoutImplementerCodexRow: LockModelPolicyV2 = {
     ...lock,
     resolutions: lock.resolutions.filter(
-      (row) => !(row.role === "architect" && row.client === "codex"),
+      (row) => !(row.role === "implementer" && row.client === "codex"),
     ),
   };
-  const rowIssues = buildModelPolicyDoctorIssues(profile, withoutArchitectCodexRow);
-  const rowFound = findIssue(rowIssues, "LINT-MODEL-005", "/modelPolicy/architect/codex");
+  const rowIssues = buildModelPolicyDoctorIssues(profile, withoutImplementerCodexRow);
+  const rowFound = findIssue(rowIssues, "LINT-MODEL-005", "/modelPolicy/implementer/codex");
   assert.notEqual(rowFound, undefined, JSON.stringify(rowIssues, null, 2));
   assert.equal(rowFound?.severity, "warning");
 
@@ -270,11 +298,32 @@ test("model-policy doctor: missing provenance is actionable, both per-row and bl
   assert.equal(blockIssues.length, 1);
 });
 
-test("model-policy doctor: drifted configuration is actionable when the lock disagrees with a fresh resolution", () => {
+test("model-policy doctor: real profile-side drift (preset changed) is actionable", () => {
   const profile = baseProfile();
   const lock = resolvedLock(profile);
 
-  const driftedLock: LockModelPolicyV2 = {
+  // The lock's block-level preset disagrees with the profile's current
+  // `subagentPolicy.preset` -- a genuine profile-side configuration change,
+  // not a mere catalog-recommendation update.
+  const staleLock: LockModelPolicyV2 = { ...lock, preset: "cost-conscious" };
+
+  const issues = buildModelPolicyDoctorIssues(profile, staleLock);
+  const found = findIssue(issues, "LINT-MODEL-006", "/modelPolicy/implementer/codex");
+  assert.notEqual(found, undefined, JSON.stringify(issues, null, 2));
+  assert.equal(found?.severity, "warning");
+});
+
+test("model-policy doctor: a pure catalog-recommendation update (old model still current) is not actionable drift", () => {
+  const profile = baseProfile();
+  const lock = resolvedLock(profile);
+
+  // Only the row's own recorded `model` differs from what a fresh resolution
+  // would pick; every other field (source, capabilityStatus, alternatives,
+  // catalogVersion) is untouched, and the locked model is still `current`.
+  // Ordinary compile (I6) would reuse this locked, non-explicit-override row
+  // verbatim, so "run the compiler" is not effective remediation here -- this
+  // must stay informational (LINT-MODEL-001), not actionable (LINT-MODEL-006).
+  const catalogOnlyLock: LockModelPolicyV2 = {
     ...lock,
     resolutions: lock.resolutions.map((row) =>
       row.role === "mechanical" && row.client === "claude"
@@ -282,18 +331,20 @@ test("model-policy doctor: drifted configuration is actionable when the lock dis
         : row,
     ),
   };
-  // Confirm the fixture actually differs from the fresh value before
-  // asserting doctor reports it (RED-proof sanity check for the fixture
-  // itself, not the classifier).
   const mechanicalClaudeRow = lock.resolutions.find(
     (row) => row.role === "mechanical" && row.client === "claude",
   );
   assert.notEqual(mechanicalClaudeRow?.model, "claude-opus-4-8");
 
-  const issues = buildModelPolicyDoctorIssues(profile, driftedLock);
-  const found = findIssue(issues, "LINT-MODEL-006", "/modelPolicy/mechanical/claude");
-  assert.notEqual(found, undefined, JSON.stringify(issues, null, 2));
-  assert.equal(found?.severity, "warning");
+  const issues = buildModelPolicyDoctorIssues(profile, catalogOnlyLock);
+  assert.equal(
+    findIssue(issues, "LINT-MODEL-006", "/modelPolicy/mechanical/claude"),
+    undefined,
+    JSON.stringify(issues, null, 2),
+  );
+  const lifecycle = findIssue(issues, "LINT-MODEL-001", "/modelPolicy/mechanical/claude");
+  assert.notEqual(lifecycle, undefined, JSON.stringify(issues, null, 2));
+  assert.equal(lifecycle?.actual, "current");
 });
 
 test("model-policy doctor: a profile without v3 model-policy opted in reports no model-policy issues", () => {
@@ -318,7 +369,22 @@ test("model-policy doctor: probe candidates are bounded to enabled codex/claude 
   }
 });
 
-test("model-policy doctor: probe result rows are always info severity, even for unknown evidence", () => {
+test("model-policy doctor: probe candidates still build from the profile alone when the lock has no modelPolicy block", () => {
+  const profile = baseProfile();
+
+  const candidates = buildModelPolicyProbeCandidates(profile, undefined);
+
+  assert.equal(candidates.length, 2);
+  assert.deepEqual(
+    candidates.map((candidate) => candidate.client).sort(),
+    ["claude", "codex"],
+  );
+  for (const candidate of candidates) {
+    assert.equal(typeof candidate.model, "string");
+  }
+});
+
+test("model-policy doctor: probe result rows are info for available/unknown, warning (actionable) for confirmed-negative statuses", () => {
   const available = buildModelProbeResultIssue({
     client: "codex",
     model: "gpt-5.6-terra",
@@ -333,9 +399,25 @@ test("model-policy doctor: probe result rows are always info severity, even for 
     probed: true,
     evidence: "ambiguous",
   });
+  const notEntitled = buildModelProbeResultIssue({
+    client: "codex",
+    model: "gpt-5.6-sol",
+    status: "not-entitled",
+    probed: true,
+    evidence: "pattern:entitlement",
+  });
+  const authRequired = buildModelProbeResultIssue({
+    client: "claude",
+    model: "claude-fable-5",
+    status: "auth-required",
+    probed: true,
+    evidence: "pattern:auth",
+  });
 
   assert.equal(available.severity, "info");
   assert.equal(unknown.severity, "info");
-  assert.equal(available.code, "LINT-MODEL-PROBE-001");
-  assert.equal(unknown.code, "LINT-MODEL-PROBE-001");
+  assert.equal(notEntitled.severity, "warning");
+  assert.equal(authRequired.severity, "warning");
+  assert.match(notEntitled.guidance, /Confirmed unavailable via probe evidence/u);
 });
+

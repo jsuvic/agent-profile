@@ -49,6 +49,12 @@ export type ComparableModelPolicyRow = {
   role: string;
   client: string;
   changed: boolean;
+  /** Human-readable "; "-joined change reasons, mirroring
+   * `ModelPolicyUpgradeComparisonRow.reason`/`ModelPolicyTabnineUpgradeComparisonRow.reason`.
+   * `undefined` when `changed` is false. Used to distinguish a genuine
+   * profile-side configuration change from a mere catalog-recommendation
+   * update (see `isCatalogOnlyChange`). */
+  reason: string | undefined;
   old:
     | {
         lifecycle: string;
@@ -62,6 +68,42 @@ export type ComparableModelPolicyRow = {
     effortStatus: string;
   };
 };
+
+/** Change-reason tokens that reflect only the bundled catalog's own
+ * recommendation shifting (a newer preferred model, a catalog version bump,
+ * or reordered alternatives) -- never a real profile/configuration change.
+ * Ordinary compile (Phase 31.5 I6) intentionally reuses the locked, non-
+ * explicit-override resolution across exactly these changes, so "run the
+ * compiler" is not effective remediation for them. */
+const CATALOG_ONLY_REASON_TOKENS: ReadonlySet<string> = new Set([
+  "model changed",
+  "alternatives changed",
+  "catalog version changed",
+  "block catalog version changed",
+]);
+
+/**
+ * `true` when `row.changed` is entirely explained by a catalog-only
+ * recommendation update (see `CATALOG_ONLY_REASON_TOKENS`) AND the locked
+ * model's own lifecycle is still `current`/`supported-legacy` (an already
+ * `deprecated`/`retired` locked selection stays actionable regardless of
+ * which reason tokens fired -- that is real, independently-actionable
+ * information, not something a catalog-only update should mask).
+ */
+function isCatalogOnlyChange(row: ComparableModelPolicyRow): boolean {
+  if (row.old === undefined) {
+    return false;
+  }
+  if (row.old.lifecycle !== "current" && row.old.lifecycle !== "supported-legacy") {
+    return false;
+  }
+  if (row.reason === undefined) {
+    return false;
+  }
+  return row.reason
+    .split("; ")
+    .every((token) => CATALOG_ONLY_REASON_TOKENS.has(token));
+}
 
 function modelIssue(
   code: DoctorIssueCode,
@@ -81,88 +123,95 @@ export function classifyModelPolicyRow(
   const findings: DoctorIssue[] = [];
   const rowPath = `/modelPolicy/${row.role}/${row.client}`;
 
-  if (row.old === undefined) {
-    // Missing provenance: the profile has model-policy enabled and this
-    // role/client combination should have a locked resolution (its fresh
-    // resolution is not merely "unsupported"), but ai-profile.lock has no
-    // recorded row for it yet.
-    if (row.fresh.capabilityStatus !== "unsupported") {
+  if (row.old !== undefined) {
+    if (row.old.lifecycle === "retired") {
       findings.push(
         modelIssue(
-          "LINT-MODEL-005",
+          "LINT-MODEL-003",
+          "error",
+          rowPath,
+          "current or supported-legacy catalog lifecycle",
+          "retired",
+          `${rowPath}'s locked model has a retired catalog lifecycle.`,
+          "Select a current or supported-legacy model for this role/client.",
+        ),
+      );
+    } else if (row.old.lifecycle === "deprecated") {
+      findings.push(
+        modelIssue(
+          "LINT-MODEL-002",
           "warning",
           rowPath,
-          "a locked modelPolicy resolution for this role/client",
-          "no prior lock entry",
-          `${rowPath} has no recorded modelPolicy provenance in ai-profile.lock.`,
-          "Run the compiler so this role/client's model-policy resolution is recorded in ai-profile.lock.",
+          "current or supported-legacy catalog lifecycle",
+          "deprecated",
+          `${rowPath}'s locked model has a deprecated catalog lifecycle.`,
+          "Consider selecting a current model for this role/client; deprecated remains usable today.",
+        ),
+      );
+    } else if (row.old.lifecycle === "current" || row.old.lifecycle === "supported-legacy") {
+      // Informational only, per the parent spec's non-goal: an older
+      // organization-approved (or simply not-yet-newest) model is never
+      // itself an actionable finding. Tabnine gets its own wording (parent
+      // spec: "Tabnine private/legacy rows explain organization scope
+      // without judging model quality") -- a `supported-legacy`/`current`
+      // Tabnine model reflects the organization's own admin-controlled
+      // catalog, not an Agent Profile ranking, so the message says so
+      // instead of reusing the generic Codex/Claude phrasing.
+      const isTabnine = row.client === "tabnine";
+      findings.push(
+        modelIssue(
+          "LINT-MODEL-001",
+          "info",
+          rowPath,
+          "current or supported-legacy catalog lifecycle",
+          row.old.lifecycle,
+          isTabnine
+            ? `${rowPath}'s locked Tabnine model has a ${row.old.lifecycle} catalog lifecycle, reflecting the organization's own approved/configured model.`
+            : `${rowPath}'s locked model has a ${row.old.lifecycle} catalog lifecycle.`,
+          isTabnine
+            ? "Informational only; this is the organization's own admin-controlled model choice, not a quality judgment -- no action needed."
+            : "Informational only; no action needed.",
         ),
       );
     }
-    return findings;
-  }
 
-  if (row.old.lifecycle === "retired") {
+    // Drift is only actionable when it reflects a genuine profile-side
+    // configuration change (preset switch, an override added/removed/
+    // changed, or a capability/effort status regression) -- never a mere
+    // catalog-recommendation update, which ordinary compile (I6) already
+    // reuses the locked resolution across (see `isCatalogOnlyChange`).
+    if (row.changed && !isCatalogOnlyChange(row)) {
+      findings.push(
+        modelIssue(
+          "LINT-MODEL-006",
+          "warning",
+          rowPath,
+          "ai-profile.lock modelPolicy matches a fresh resolution of ai-profile.yaml",
+          "lock disagrees with a fresh resolution",
+          `${rowPath}'s locked modelPolicy resolution is stale relative to ai-profile.yaml.`,
+          "Run the compiler (or agent-profile upgrade) to refresh ai-profile.lock's modelPolicy block.",
+        ),
+      );
+    }
+  } else if (row.fresh.capabilityStatus === "configured") {
+    // Missing provenance: a genuine resolution exists that was meant to be
+    // persisted (the "configured" status is the signal a real project-local
+    // write/lock row should exist, per model-policy-target-adapter.ts's
+    // `resolveModelPolicy`/target table) but ai-profile.lock has no recorded
+    // row for it. A guided/advisory-only Tabnine selection (or any other
+    // non-"configured" fresh status) legitimately has no lock row at all --
+    // `toLockModelPolicyTabnineResolutions` never persists one, and
+    // recompiling can never create it, so that case must NOT be reported
+    // here (PR review finding).
     findings.push(
       modelIssue(
-        "LINT-MODEL-003",
-        "error",
-        rowPath,
-        "current or supported-legacy catalog lifecycle",
-        "retired",
-        `${rowPath}'s locked model has a retired catalog lifecycle.`,
-        "Select a current or supported-legacy model for this role/client.",
-      ),
-    );
-  } else if (row.old.lifecycle === "deprecated") {
-    findings.push(
-      modelIssue(
-        "LINT-MODEL-002",
+        "LINT-MODEL-005",
         "warning",
         rowPath,
-        "current or supported-legacy catalog lifecycle",
-        "deprecated",
-        `${rowPath}'s locked model has a deprecated catalog lifecycle.`,
-        "Consider selecting a current model for this role/client; deprecated remains usable today.",
-      ),
-    );
-  } else if (row.old.lifecycle === "current" || row.old.lifecycle === "supported-legacy") {
-    // Informational only, per the parent spec's non-goal: an older
-    // organization-approved (or simply not-yet-newest) model is never itself
-    // an actionable finding. Tabnine gets its own wording (parent spec:
-    // "Tabnine private/legacy rows explain organization scope without
-    // judging model quality") -- a `supported-legacy`/`current` Tabnine
-    // model reflects the organization's own admin-controlled catalog, not an
-    // Agent Profile ranking, so the message says so instead of reusing the
-    // generic Codex/Claude phrasing.
-    const isTabnine = row.client === "tabnine";
-    findings.push(
-      modelIssue(
-        "LINT-MODEL-001",
-        "info",
-        rowPath,
-        "current or supported-legacy catalog lifecycle",
-        row.old.lifecycle,
-        isTabnine
-          ? `${rowPath}'s locked Tabnine model has a ${row.old.lifecycle} catalog lifecycle, reflecting the organization's own approved/configured model.`
-          : `${rowPath}'s locked model has a ${row.old.lifecycle} catalog lifecycle.`,
-        isTabnine
-          ? "Informational only; this is the organization's own admin-controlled model choice, not a quality judgment -- no action needed."
-          : "Informational only; no action needed.",
-      ),
-    );
-  }
-
-  if (row.changed) {
-    findings.push(
-      modelIssue(
-        "LINT-MODEL-006",
-        "warning",
-        rowPath,
-        "ai-profile.lock modelPolicy matches a fresh resolution of ai-profile.yaml",
-        "lock disagrees with a fresh resolution",
-        `${rowPath}'s locked modelPolicy resolution is stale relative to ai-profile.yaml.`,
-        "Run the compiler (or agent-profile upgrade) to refresh ai-profile.lock's modelPolicy block.",
+        "a locked modelPolicy resolution for this role/client",
+        "no prior lock entry",
+        `${rowPath} has no recorded modelPolicy provenance in ai-profile.lock.`,
+        "Run the compiler so this role/client's model-policy resolution is recorded in ai-profile.lock.",
       ),
     );
   }
@@ -317,9 +366,16 @@ export function buildModelPolicyProbeCandidates(
   lockModelPolicy: LockModelPolicyV2 | undefined,
 ): DoctorModelProbeCandidate[] {
   const policy = profile.subagentPolicy;
-  if (policy?.enabled !== true || policy.preset === undefined || lockModelPolicy === undefined) {
+  if (policy?.enabled !== true || policy.preset === undefined) {
     return [];
   }
+  // `lockModelPolicy` may legitimately be `undefined` (no prior lock, or a
+  // legacy lock without a `modelPolicy` block): `compareModelPolicyUpgrade`
+  // accepts `previous: LockModelPolicyV2 | undefined` and still produces
+  // `fresh`-resolved rows from the profile's current preset alone, and the
+  // `row.old?.model ?? row.fresh.model` fallback below already handles that
+  // case correctly -- so probe candidates must still build from the profile
+  // alone rather than degrading to zero candidates (PR review finding).
 
   const roleOverrides = deriveModelPolicyRoleOverrides(policy.roles);
   const rows = compareModelPolicyUpgrade(lockModelPolicy, policy.preset, roleOverrides);
@@ -346,21 +402,34 @@ export function buildModelPolicyProbeCandidates(
   return candidates;
 }
 
-/** Ephemeral, additive, informational-only probe result issue. Always
- * `info` severity, regardless of the probe's own status: an `unknown` (or
- * any other) probe status is disclosed evidence only and never changes any
- * offline issue's severity. */
+/** Statuses that are ambiguous or simply "not performed" -- never a
+ * confirmed negative signal, so they stay `info`. Every other closed status
+ * (`not-entitled`, `temporarily-limited`, `unsupported-client`,
+ * `provider-unavailable`, `auth-required`) is a CONFIRMED negative probe
+ * result and is actionable (`warning`). This never changes any OTHER
+ * (offline) issue's severity -- it is still additive-only; only the probe
+ * row's own severity reflects confirmed-vs-ambiguous evidence. */
+const AMBIGUOUS_PROBE_STATUSES: ReadonlySet<DoctorModelProbeResultRow["status"]> =
+  new Set(["available", "unknown"]);
+
+/** Ephemeral, additive probe result issue. `info` for `available`/`unknown`
+ * (ambiguous or simply not confirmed unavailable); `warning` (actionable)
+ * for every other closed status, since those are confirmed negative probe
+ * evidence (see `AMBIGUOUS_PROBE_STATUSES`). */
 export function buildModelProbeResultIssue(result: DoctorModelProbeResultRow): DoctorIssue {
   const rowPath = `/modelPolicy/probe/${result.client}/${result.model}`;
+  const ambiguous = AMBIGUOUS_PROBE_STATUSES.has(result.status);
   return modelIssue(
     "LINT-MODEL-PROBE-001",
-    "info",
+    ambiguous ? "info" : "warning",
     rowPath,
     "closed probe status/evidence vocabulary",
     result.status,
     `Probe evidence for ${result.client}/${result.model}: ${result.status} (${result.evidence}).`,
     result.status === "unknown"
       ? "Probe evidence is ambiguous; this does not change any offline finding's severity."
-      : "Ephemeral, read-only evidence; no state was written and no offline finding's severity changed.",
+      : ambiguous
+        ? "Ephemeral, read-only evidence; no state was written and no offline finding's severity changed."
+        : "Confirmed unavailable via probe evidence; select an available alternative model for this role/client, or resolve entitlement/access with the provider before relying on this selection.",
   );
 }

@@ -384,7 +384,7 @@ Findings use stable `LINT-MODEL-*` codes, one issue per role/client
 | `LINT-MODEL-007`      | info     | Guidance-only surface (Agent Profile does not write this role/client's model directly).         |
 | `LINT-MODEL-008`      | info     | No configurable model-policy surface for this role/client (e.g. a capability with no ordinary catalog candidate, or — at the `/modelPolicy/<role>/tabnine/effort` path — Tabnine's permanently absent effort/reasoning control). |
 | `LINT-MODEL-009`      | info     | The row's real-world availability has not been checked offline; run `--probe` for ephemeral evidence. |
-| `LINT-MODEL-PROBE-001`| info     | An ephemeral `--probe` availability row (see below). Always `info`, regardless of the probe's own status. |
+| `LINT-MODEL-PROBE-001`| info/warning | An ephemeral `--probe` availability row (see below). `info` for `available`/`unknown` (ambiguous or simply not confirmed unavailable); `warning` (actionable) for a confirmed negative probe result — `not-entitled`, `temporarily-limited`, `unsupported-client`, `provider-unavailable`, or `auth-required`. |
 
 `--probe` additionally re-runs the same consented, source-free model probe
 (`apps/cli/src/model-probe.ts`, Phase 31.5 I4) that `init`/`upgrade
@@ -392,10 +392,12 @@ Findings use stable `LINT-MODEL-*` codes, one issue per role/client
 whichever of Codex/Claude the profile has enabled. It only takes effect
 combined with `--models` (`--probe` alone is a documented no-op: zero probe
 calls). The probe result is never written anywhere, and probe evidence —
-including an ambiguous `unknown` status — never changes any offline
-`LINT-MODEL-*` finding's severity; it is purely additive, informational
-`LINT-MODEL-PROBE-001` rows carrying only the closed probe status/evidence
-vocabulary (never raw client output or account data).
+including an ambiguous `unknown` status — never changes any OFFLINE
+`LINT-MODEL-001`–`LINT-MODEL-009` finding's severity; it is purely additive.
+The `LINT-MODEL-PROBE-001` row's OWN severity does reflect the probe's
+evidence: `info` for `available`/`unknown`, `warning` for a confirmed
+negative result (see the table above). Every row carries only the closed
+probe status/evidence vocabulary (never raw client output or account data).
 
 This CLI reference is the primary documentation surface for `--models`/
 `--probe`'s codes, severities, and offline/probe distinction (alongside

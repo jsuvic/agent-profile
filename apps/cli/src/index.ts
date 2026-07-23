@@ -2777,6 +2777,12 @@ function createDoctorModelProbeRunner(input: {
   json: boolean;
 }): DoctorModelProbeRunner {
   const { rootDir, probeRunner, io, json } = input;
+  // Repeat the consent notice immediately before execution regardless of
+  // `--json`: a client/provider process is about to start either way. `json`
+  // mode keeps stdout reserved for the single clean JSON line, so both
+  // disclosure messages route to stderr instead of being silently dropped
+  // (PR review finding).
+  const emit = json ? io.stderr : io.stdout;
   return async (candidates) => {
     const selections: ModelProbeSelection[] = candidates.map((candidate) => ({
       client: candidate.client,
@@ -2785,13 +2791,11 @@ function createDoctorModelProbeRunner(input: {
       alternatives: candidate.alternatives,
     }));
     const plan = buildModelProbePlan(selections);
-    if (!json) {
-      io.stdout(
-        `Probing exact model availability (--probe): ` +
-          `${selections.map((selection) => `${selection.client}/${selection.model}`).join(", ")}. ` +
-          `${plan.quotaNote}\n`,
-      );
-    }
+    emit(
+      `Probing exact model availability (--probe): ` +
+        `${selections.map((selection) => `${selection.client}/${selection.model}`).join(", ")}. ` +
+        `${plan.quotaNote}\n`,
+    );
     try {
       const report = await runModelProbe(
         plan,
@@ -2809,12 +2813,10 @@ function createDoctorModelProbeRunner(input: {
         evidence: result.evidence,
       }));
     } catch {
-      if (!json) {
-        io.stdout(
-          "Model probe could not run (a probe-infrastructure failure); " +
-            "proceeding with offline-only information.\n",
-        );
-      }
+      emit(
+        "Model probe could not run (a probe-infrastructure failure); " +
+          "proceeding with offline-only information.\n",
+      );
       return [];
     }
   };

@@ -317,6 +317,25 @@ test("doctor --models --probe calls the injected probeRunner and adds advisory r
   assert.deepEqual(nonProbeIssues, baseline.issues);
 });
 
+test("doctor --models --probe --json still repeats the pre-probe consent disclosure (on stderr, keeping stdout a single clean JSON line)", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+  const probe = createProbeRunnerStub();
+
+  const code = await runCli(
+    ["doctor", "--root", rootDir, "--models", "--probe", "--json"],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls > 0, true);
+  assert.match(output.stderrText(), /Probing exact model availability \(--probe\)/u);
+  // stdout stays exactly one clean JSON record: the disclosure never leaks
+  // into it.
+  assert.doesNotThrow(() => JSON.parse(output.stdoutText()));
+  assert.doesNotMatch(output.stdoutText(), /Probing exact model availability/u);
+});
+
 // --- TTY-gating: piped/non-interactive runs stay byte-identical (no color) ---
 
 const ANSI_ESCAPE = "[";
