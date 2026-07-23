@@ -1391,25 +1391,31 @@ async function runUpgrade(
         upgrade: { catalogVersion: CAPABILITY_CATALOG_VERSION },
       }
     : undefined;
-  try {
-    // The explicit flag pair or interactive confirmation approves one write plan;
-    // provenance is included when a usable lockfile exists and otherwise deferred.
-    await applyWritePlan({
-      rootDir,
-      writes: [
-        { path: "ai-profile.yaml", bytes: edit.source },
-        ...(stampedLockfile
-          ? [
-              {
-                path: "ai-profile.lock",
-                bytes: serializeLockfile(stampedLockfile),
-              },
-            ]
-          : []),
-      ],
-    });
-  } catch {
-    io.stderr("Upgrade write plan could not be applied safely under --root.\n");
+  // The explicit flag pair or interactive confirmation approves one write plan;
+  // provenance is included when a usable lockfile exists and otherwise deferred.
+  // Uses `atomic: true` (staged-then-committed, rolled back cleanly on any
+  // failure) because this batch can span both `ai-profile.yaml` and
+  // `ai-profile.lock`, and a mid-write failure leaving the profile updated but
+  // the lock stale (or vice versa) would be worse than refusing the whole
+  // write -- same precedent as the model-policy write path.
+  const upgradeWritePlan = await createOrApplyWritePlan(
+    rootDir,
+    [
+      { path: "ai-profile.yaml", bytes: edit.source },
+      ...(stampedLockfile
+        ? [
+            {
+              path: "ai-profile.lock",
+              bytes: serializeLockfile(stampedLockfile),
+            },
+          ]
+        : []),
+    ],
+    true,
+    io,
+    { atomic: true },
+  );
+  if (!upgradeWritePlan) {
     return 1;
   }
 

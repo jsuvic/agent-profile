@@ -1114,6 +1114,119 @@ test("upgrade interactive customize inserts only the selected offered capability
   assert.doesNotMatch(profile, /loggingGuidance: true/u);
 });
 
+test("upgrade insertion-only write batch never calls fsPromises.writeFile for ai-profile.yaml/ai-profile.lock, guarding against a regression back to the plain (non-atomic) write path (I6e)", async () => {
+  // `applyWritePlanAtomic` stages via `fsPromises.open`/`fd.write` and
+  // commits via `fsPromises.rename` -- never `fsPromises.writeFile`. A future
+  // regression reverting this call site to plain `applyWritePlan` (which
+  // writes via `fsPromises.writeFile`) would show up here as a nonzero call
+  // count. Rollback itself is proved separately by the rename-based test
+  // immediately below.
+  const root = await createUpgradeRoot(21);
+
+  const normalize = (value: unknown): string =>
+    typeof value === "string" ? value.replaceAll("\\", "/") : "";
+  const isTrackedTarget = (value: unknown): boolean =>
+    normalize(value).endsWith("ai-profile.yaml") ||
+    normalize(value).endsWith("ai-profile.lock");
+
+  const trackedCalls: string[] = [];
+  const realWriteFile = fsPromises.writeFile;
+  (fsPromises as unknown as { writeFile: unknown }).writeFile = async (
+    file: unknown,
+    ...rest: unknown[]
+  ): Promise<void> => {
+    if (isTrackedTarget(file)) {
+      trackedCalls.push(normalize(file));
+    }
+    return (realWriteFile as (...args: unknown[]) => Promise<void>)(
+      file,
+      ...rest,
+    );
+  };
+
+  const output = createOutput();
+  const prompts = upgradePrompts({
+    choose: "customize",
+    customize: ["skills.automation"],
+    confirm: true,
+  });
+  let code: number;
+  try {
+    code = await runCli(["upgrade", "--root", root], {
+      io: output,
+      nonInteractive: false,
+      upgradePrompts: prompts,
+    });
+  } finally {
+    (fsPromises as unknown as { writeFile: unknown }).writeFile = realWriteFile;
+  }
+
+  assert.equal(code, 0);
+  assert.deepEqual(trackedCalls, []);
+});
+
+test("upgrade insertion-only write batch rolls back an already-committed ai-profile.lock rename when the ai-profile.yaml rename fails during commit (I6e)", async () => {
+  // Complements the writeFile-based test above by forcing a failure at the
+  // atomic write plan's actual commit primitive (`fsPromises.rename`),
+  // matching the established precedent
+  // ("...quality-first --write reports which specific files could not be
+  // rolled back..."). `applyWritePlanAtomic` commits targets in alphabetical
+  // path order, so "ai-profile.lock" is renamed into place BEFORE
+  // "ai-profile.yaml" is reached; forcing the ai-profile.yaml rename to fail
+  // means ai-profile.lock is already committed and must be rolled back.
+  const root = await createUpgradeRoot(21);
+  const profileBefore = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+
+  const normalize = (value: unknown): string =>
+    typeof value === "string" ? value.replaceAll("\\", "/") : "";
+  const isProfilePath = (value: unknown): boolean =>
+    normalize(value).endsWith("ai-profile.yaml");
+
+  const realRename = fsPromises.rename;
+  (fsPromises as unknown as { rename: unknown }).rename = async (
+    src: unknown,
+    dest: unknown,
+    ...rest: unknown[]
+  ): Promise<void> => {
+    if (isProfilePath(dest)) {
+      throw Object.assign(new Error("commit blocked"), { code: "EPERM" });
+    }
+    return (realRename as (...args: unknown[]) => Promise<void>)(
+      src,
+      dest,
+      ...rest,
+    );
+  };
+
+  const output = createOutput();
+  const prompts = upgradePrompts({
+    choose: "customize",
+    customize: ["skills.automation"],
+    confirm: true,
+  });
+  let code: number;
+  try {
+    code = await runCli(["upgrade", "--root", root], {
+      io: output,
+      nonInteractive: false,
+      upgradePrompts: prompts,
+    });
+  } finally {
+    (fsPromises as unknown as { rename: unknown }).rename = realRename;
+  }
+
+  assert.equal(code, 1);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    lockBefore,
+  );
+});
+
 test("upgrade interactive cancel exits 0 and writes nothing", async () => {
   const root = await createUpgradeRoot(23);
   const beforeLock = await readFile(path.join(root, "ai-profile.lock"), "utf8");
@@ -1134,6 +1247,34 @@ test("upgrade interactive cancel exits 0 and writes nothing", async () => {
   assert.equal(
     await readFile(path.join(root, "ai-profile.lock"), "utf8"),
     beforeLock,
+  );
+});
+
+test("upgrade interactive customize declined at final confirmation writes nothing (I6e AC4)", async () => {
+  const root = await createUpgradeRoot(21);
+  const profileBefore = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+
+  const output = createOutput();
+  const prompts = upgradePrompts({
+    choose: "customize",
+    customize: ["skills.automation"],
+    confirm: false,
+  });
+  const code = await runCli(["upgrade", "--root", root], {
+    io: output,
+    nonInteractive: false,
+    upgradePrompts: prompts,
+  });
+
+  assert.equal(code, 0);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    lockBefore,
   );
 });
 

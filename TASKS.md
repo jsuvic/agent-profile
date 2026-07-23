@@ -146,7 +146,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I6b | Metadata-only package/registry update check | done | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
 | I6c | Upgrade-flow probe consent, separate from update-check consent | done | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
 | I6d | Tabnine model-resolution reconciliation | done | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
-| I6e | Upgrade write ownership refusal and rollback | sequenced | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
+| I6e | Upgrade write ownership refusal and rollback | done | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
 | I7 | Offline Doctor model policy and explicit recheck | sequenced | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
 | I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
 | I9 | Published model-selection journey and final integration | sequenced | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
@@ -387,6 +387,52 @@ pre-existing skip), `packages/compiler` 318/317 (1 pre-existing skip),
 open scope, per this brief's own explicit non-goal: `model-policy-upgrade-comparison.ts`
 does not yet surface Tabnine rows in I6a's upgrade table - that remains I6a's
 scope, unchanged by this cycle.
+
+I6e completed 2026-07-23 via one RED-first `/implement-next` cycle. AC1
+(unowned/drifted target-file refusal parity with `compile`) and AC4
+(declining at the final confirmation writes nothing) were already covered by
+tests built during I6a's PR review rounds, confirmed still intact rather than
+re-derived. The genuine gap this cycle closed was AC2: the older,
+insertion-only `agent-profile upgrade` write path (ADR 0009 - the plain
+`upgrade`/`upgrade --write --adopt-recommended` flow that inserts offered
+capability-catalog entries into `ai-profile.yaml`, distinct from I6a's
+`--model-policy-strategy` write path) wrote `ai-profile.yaml` and
+`ai-profile.lock` together via the plain, non-atomic `applyWritePlan` (a
+sequential per-file `writeFile` loop with no staging or rollback) instead of
+the atomic `applyWritePlanAtomic` machinery I6a's write path already uses -
+so a failure between the two writes could leave the repo inconsistent (e.g.
+the lock stamped with a new `catalogVersion`/`sha256` while the profile
+write failed and reverted). Fixed by switching that one call site
+(`apps/cli/src/index.ts`'s `runUpgrade`, ~line 1394) to the existing
+`createOrApplyWritePlan(rootDir, writes, true, io, { atomic: true })` helper
+- already used by the model-policy write path - introducing no new write-plan
+mechanism. RED proof: forcing `fsPromises.writeFile` to fail on
+`ai-profile.yaml` against the pre-fix code showed `ai-profile.lock` commit
+with the new `catalogVersion`/`sha256` while `ai-profile.yaml` reverted, a
+genuine cross-file inconsistency; a second RED check (forcing
+`fsPromises.rename` to fail) showed the pre-fix code never engaged any
+atomic/rollback machinery at all (silently exited 0). GREEN proof: a new
+rename-forced-failure regression test in `apps/cli/src/upgrade.test.ts`
+(~line 1192) proves the fixed path exits 1 and restores both files to their
+pre-transaction bytes; a second new test proves the mocked `writeFile` is
+never invoked for either target path post-fix (a real regression guard
+against reverting to the plain writer, not just a success-path check); a
+third new test proves declining at `confirmWrite` writes nothing (AC4,
+already-correct pre-existing behavior, now covered). Spec review found one
+Medium issue - the first new test's name/comments overstated what it proved
+(it didn't exercise any failure) - fixed by rewriting it to assert on mock
+invocation counts instead of the success path, making it a genuine
+regression guard. Code-quality review passed ACCEPTABLE with one non-blocking
+Important item (same test, independently flagged) - fixed the same way; a
+Minor note on triplicated path-suffix-matching test helpers was left as-is
+per the reviewer's own "skip if it'd expand scope" caveat, matching this
+file's existing tolerance for that duplication. Tests: `apps/cli` 584/580 (4
+pre-existing skips), 0 failures; `packages/compiler` 328/327 (1 pre-existing
+skip), 0 failures (write-plan.ts itself untouched, reused as-is); clean
+`npm run check` (including `tsconfig.test.json`) on both workspaces. Not
+carried forward as open scope: `runModelPolicyWrite`/`--model-policy-strategy`
+write paths (I6a's already-reviewed scope) and `write-plan.ts` itself were
+both deliberately untouched.
 
 I6d PR review fix round (2026-07-22, PR #129): a Codex bot automated review
 found 6 findings against the cycle above, correctly disagreeing with its
