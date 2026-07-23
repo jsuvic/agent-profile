@@ -38,6 +38,7 @@ import type {
 import {
   buildModelPolicyTabnineTargetTable,
   toLockModelPolicyTabnineResolutions,
+  type ModelPolicyTabnineRoleOverrides,
 } from "./model-policy-tabnine-adapter.js";
 
 export const MODEL_POLICY_TARGET_CATALOG_VERSION = MODEL_POLICY_CATALOG_VERSION;
@@ -349,6 +350,24 @@ export type ModelPolicyRoleOverrides = Partial<
             Readonly<{ model?: string; effort?: ModelPolicyEffort }>
           >
         >;
+        /** Phase 31.5 (I6d): the profile's own explicit
+         * `subagentPolicy.roles[id].overrides.tabnine.model` passthrough.
+         * Deliberately NOT folded into the `overrides` record above: that
+         * record is keyed by `ModelPolicyTargetClientId` ("codex" | "claude"
+         * only), the Codex/Claude-only client union `buildModelPolicyTargetTable`
+         * resolves against. Tabnine has its own separate adapter/table
+         * (model-policy-tabnine-adapter.ts) and reads this field instead. */
+        tabnineModel?: string;
+        /** Phase 31.5 (I6d PR review Finding 6): `true` when the profile
+         * explicitly declared `overrides.tabnine` for this role (even with
+         * no `model` set -- an explicit "clear my override" signal),
+         * distinct from `tabnineModel` being absent merely because the
+         * profile never mentioned Tabnine for this role at all. Only this
+         * flag -- not "is this role mentioned in `subagentPolicy.roles` at
+         * all" -- may gate Tabnine's own prior-lock reuse decision; a role
+         * touched only for capability/effort/codex/claude reasons must still
+         * fall through to normal Tabnine reconciliation. */
+        hasTabnineOverride?: true;
       }>
   >
 >;
@@ -393,9 +412,63 @@ export function deriveModelPolicyRoleOverrides(
                 : { claude: value.overrides.claude }),
             },
           }),
+      // Phase 31.5 (I6d): the profile's own explicit Tabnine override
+      // passthrough (see `ModelPolicyRoleOverrides.tabnineModel`'s own doc
+      // comment for why this isn't folded into the `overrides` record above).
+      ...(value.overrides?.tabnine?.model === undefined
+        ? {}
+        : { tabnineModel: value.overrides.tabnine.model }),
+      // Phase 31.5 (I6d PR review Finding 6): recorded whenever the profile
+      // declared `overrides.tabnine` at all for this role, regardless of
+      // whether `.model` is set -- see `hasTabnineOverride`'s own doc
+      // comment above for why this must be independent of `tabnineModel`.
+      ...(value.overrides?.tabnine === undefined
+        ? {}
+        : { hasTabnineOverride: true as const }),
     };
   }
   return overrides;
+}
+
+/**
+ * Single-owner projection from a profile's `ModelPolicyRoleOverrides` (the
+ * shared conversion `deriveModelPolicyRoleOverrides` above produces) into the
+ * Tabnine adapter's own `ModelPolicyTabnineRoleOverrides` shape (Phase 31.5
+ * I6d PR review Finding 1). Both `resolveModelPolicyLockfile` (this file) and
+ * `subagent-policy-guidance.ts`'s Tabnine guideline renderer MUST derive
+ * their Tabnine role-overrides map through this one function so the two
+ * surfaces (`ai-profile.lock` and the generated Tabnine guideline) can never
+ * independently drift out of agreement about a role's Tabnine override
+ * intent -- the exact defect class this fix closes (a hand-rolled second
+ * projection in `subagent-policy-guidance.ts` used to silently drop the
+ * Tabnine `model` override and never carry the `explicit` marker at all).
+ */
+export function deriveModelPolicyTabnineRoleOverrides(
+  roleOverrides: ModelPolicyRoleOverrides | undefined,
+): ModelPolicyTabnineRoleOverrides | undefined {
+  if (roleOverrides === undefined) {
+    return undefined;
+  }
+
+  const tabnineOverrides: {
+    -readonly [K in keyof ModelPolicyTabnineRoleOverrides]: ModelPolicyTabnineRoleOverrides[K];
+  } = {};
+  for (const [role, value] of Object.entries(roleOverrides)) {
+    if (value === undefined) {
+      continue;
+    }
+    tabnineOverrides[role as keyof ModelPolicyTabnineRoleOverrides] = {
+      capability: value.capability,
+      effort: value.effort,
+      ...(value.tabnineModel === undefined
+        ? {}
+        : { model: value.tabnineModel }),
+      ...(value.hasTabnineOverride === true
+        ? { explicit: true as const }
+        : {}),
+    };
+  }
+  return tabnineOverrides;
 }
 
 /**
@@ -650,14 +723,17 @@ export function toLockModelPolicyFromTargetTable(
  * 31.5 I6 fix: previously this reconciliation happened only here, after the
  * generated files had already been rendered from the live catalog).
  *
- * `previousModelPolicy`'s `client: "tabnine"` rows (if any) ARE preserved
- * too, but only as a fallback: since the fresh Tabnine computation above
- * always emits zero rows today, discarding a preserved row unconditionally
- * would silently delete provenance a caller's plan had just previewed to
- * the user (PR review finding). This means a preserved Tabnine row is
- * effectively resurrected on every subsequent compile until a real
- * override source exists and the fresh computation can produce rows of its
- * own (at which point fresh always wins, per the fallback condition below).
+ * `previousModelPolicy`'s `client: "tabnine"` rows now participate in the
+ * same per-role reconciliation as Codex/Claude (Phase 31.5 I6d): a role the
+ * profile's own override intent does not touch, resolved under the same
+ * preset as the previous lock, reuses its previously-recorded (non-explicit-
+ * override-sourced) Tabnine row instead of silently collapsing back to
+ * guided manual selection. This replaces the earlier block-level fallback
+ * (unconditionally reusing every previous Tabnine row whenever the fresh
+ * computation produced none at all) -- that fallback predated any real
+ * Tabnine override input and could not tell "unchanged" apart from "removed
+ * override" or even "preset changed", the exact ambiguity `buildModelPolicy-
+ * TabnineTargetTable`'s new per-role reconciliation now resolves correctly.
  */
 export function resolveModelPolicyLockfile(
   profile: AiProfile,
@@ -673,27 +749,15 @@ export function resolveModelPolicyLockfile(
     preset,
     buildModelPolicyTargetTable(preset, roleOverrides, previousModelPolicy),
   );
-  const freshTabnine = toLockModelPolicyTabnineResolutions(
-    buildModelPolicyTabnineTargetTable(preset),
+  const tabnineRoleOverrides =
+    deriveModelPolicyTabnineRoleOverrides(roleOverrides);
+  const tabnine = toLockModelPolicyTabnineResolutions(
+    buildModelPolicyTabnineTargetTable(
+      preset,
+      tabnineRoleOverrides,
+      previousModelPolicy,
+    ),
   );
-  // `freshTabnine` is empty today (see this function's own doc comment: no
-  // profile field yet supplies an explicit Tabnine override, so every role
-  // resolves to guided manual selection). A caller's `planModelPolicyUpgrade`
-  // plan can still legitimately carry PRESERVED prior `client: "tabnine"`
-  // rows forward (the lockfile schema explicitly supports a mixed
-  // Codex/Claude/Tabnine block) -- discarding them here, unconditionally,
-  // would make the actually-written lock disagree with the plan that was
-  // just previewed to the user, the exact "preview lied about what write
-  // would do" defect class this whole area has been fixing (PR review
-  // finding). Fall back to the previous block's Tabnine rows only when the
-  // fresh computation produced none; once a real Tabnine override source
-  // exists and `freshTabnine` can be non-empty, fresh always wins.
-  const tabnine =
-    freshTabnine.length > 0
-      ? freshTabnine
-      : (previousModelPolicy?.resolutions.filter(
-          (row) => row.client === "tabnine",
-        ) ?? []);
 
   return {
     catalogVersion: codexClaude.catalogVersion,

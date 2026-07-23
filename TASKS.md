@@ -145,7 +145,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I6a | Upgrade command exact comparison and retain/adopt/customize planning | done | [006a-upgrade-comparison-and-planning.md](docs/specs/phase-31.5/issues/006a-upgrade-comparison-and-planning.md) |
 | I6b | Metadata-only package/registry update check | done | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
 | I6c | Upgrade-flow probe consent, separate from update-check consent | done | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
-| I6d | Tabnine model-resolution reconciliation | sequenced | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
+| I6d | Tabnine model-resolution reconciliation | done | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
 | I6e | Upgrade write ownership refusal and rollback | sequenced | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
 | I7 | Offline Doctor model policy and explicit recheck | sequenced | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
 | I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
@@ -332,6 +332,101 @@ skips; `packages/compiler` 313/312, 0 failures, 1 pre-existing skip;
 forward as open scope: README's pre-existing `--check-for-updates`/
 `--model-policy-strategy` documentation gap (unrelated to this cycle, already
 disclosed by I6b/I6a).
+
+I6d completed 2026-07-22 via one RED-first `/implement-next` cycle. Closed the
+brief's own disclosed prerequisite gap first: added a persisted, schema-backed
+`tabnine` per-role override (`SubagentPolicyTabnineRoleOverride`, model-only,
+no effort field - Tabnine has no confirmed effort control) to
+`SubagentPolicyRoleOverrides` in `packages/core/src/profile.ts`, threaded
+through `resolveEffectiveSubagentPolicy`, unconditional
+`isValidOpenModelPolicyOverride` validation (no `isV3OptIn` gate - there is no
+legacy v2 Tabnine precedent to preserve), `buildSubagentPolicyDoc` emission,
+and a new `subagentPolicyTabnineRoleOverride` JSON Schema definition
+referenced from `subagentPolicyRole.overrides.tabnine`. Extended the base I6
+"ordinary compile reuses the lock" mechanism to Tabnine: added
+`deriveLockedTabnineOverride` (Tabnine twin of
+`deriveLockedClientOverride`) and a `previousModelPolicy?` parameter on
+`buildModelPolicyTabnineTargetTable`
+(`packages/compiler/src/model-policy-tabnine-adapter.ts`), with the same
+same-preset/non-explicit-override-source reuse gate; added a per-row
+`catalogVersion` field to `ModelPolicyTabnineResolution` so
+`toLockModelPolicyTabnineResolutions` stamps each row's own fresh-vs-reused
+version instead of always-current. `resolveModelPolicyLockfile`
+(`model-policy-target-adapter.ts`) now derives a `ModelPolicyTabnineRoleOverrides`
+map (via a new `tabnineModel?` field on `ModelPolicyRoleOverrides`, kept
+deliberately separate from the Codex/Claude-only `overrides` record) and
+passes it plus `previousModelPolicy` through; this required removing the old
+block-level "preserve every previous tabnine row when fresh is empty"
+fallback, since it had no preset-match or per-role staleness check and would
+have silently reintroduced the same "changed preset still reuses" /
+"removed override still perpetuated" bug class the base I6 fix closed for
+Codex/Claude - the new per-role reconciliation fully subsumes it, confirmed
+by updating one pre-existing test that had encoded the old (incorrect)
+contract. RED proof: 2 of 5 new `packages/core` validation tests failed
+(unknown-key schema rejection, override lost on round-trip) and 3 of 5 new
+`packages/compiler` reconciliation tests failed (explicit override, changed
+preset, and removed override all wrongly reused the stale prior row) against
+pre-change code. GREEN proof: new
+`packages/compiler/src/model-policy-tabnine-lockfile-reuse.test.ts` (5 cases
+mirroring the existing Codex/Claude parity suite) plus a new
+`packages/core/src/subagent-policy.test.ts` validation block. Spec review
+passed COMPLIANT, verifying real behavioral parity (not just structural
+similarity) against the Codex/Claude mechanism and confirming
+`.tabnine/agent/settings.json` ownership/write semantics
+(`planTabnineModelSettingsWrite`) and `model-policy-upgrade-comparison.ts`
+(I6a's owned file, still hardcodes `["codex","claude"]`) were untouched, per
+this brief's own non-goals. Code-quality review's only flagged item - an
+embedded raw NUL byte detected in `packages/core/src/subagent-policy.test.ts`
+- was traced to line 621, a pre-existing Codex control-character test
+predating this diff entirely (confirmed via `git diff`), not something this
+cycle introduced; no fix needed. Tests: `packages/core` 218/217 (1
+pre-existing skip), `packages/compiler` 318/317 (1 pre-existing skip),
+`apps/cli` 580/576 (4 pre-existing skips), `packages/scanner`+`packages/doctor`
+88/88, all 0 failures; `npm run check` (incl. `tsconfig.test.json` and
+`svelte-check`) and `npm run verify:pack` both clean. Not carried forward as
+open scope, per this brief's own explicit non-goal: `model-policy-upgrade-comparison.ts`
+does not yet surface Tabnine rows in I6a's upgrade table - that remains I6a's
+scope, unchanged by this cycle.
+
+I6d PR review fix round (2026-07-22, PR #129): a Codex bot automated review
+found 6 findings against the cycle above, correctly disagreeing with its
+"upgrade comparison table is a pure non-goal" framing - the approved brief's
+own Behavior Slice step 3 requires Tabnine visibility in I6a's comparison
+table, which the prior cycle had wrongly treated as fully out of scope.
+Fixed: (1, P1) `renderSubagentPolicyTabnineGuideline` never received
+`previousModelPolicy` and silently dropped the persisted `tabnine` override,
+so `.tabnine/guidelines/87-subagent-task-capsules.md` could disagree with
+`ai-profile.lock` about a resolved Tabnine model - fixed by extracting a
+single-owner `deriveModelPolicyTabnineRoleOverrides` helper (replacing a
+second hand-rolled, model-dropping projection) and threading
+`previousModelPolicy` through `compiler.ts`'s `renderTarget` ->
+`renderTabnineGuidelines`; (2, P2) an unchanged explicit Tabnine override
+always stamped the current catalog version instead of reusing the prior
+lock row's own recorded version - fixed via `findUnchangedExplicitTabnineOverride`
+plus a shared `buildReusedTabnineResolution` helper; (3, P1) the upgrade
+comparison table excluded Tabnine entirely - fixed by adding a separate
+`compareModelPolicyTabnineUpgrade` (Tabnine's own honest row shape, no
+invented effort/status-surface split) wired into `apps/cli`'s upgrade
+text/JSON report at 3 of its call sites (the two preview paths and the
+retain/no-op path); the scripted-write success/refusal JSON paths for
+adopt/quality-first/cost-conscious remain unwired, a disclosed follow-up
+(purely additive optional parameter, same shape as every other optional
+report field, so the gap is an honest omission, not an inconsistency); (4,
+P1) `planModelPolicyUpgrade` blindly relabeled prior Tabnine rows under a
+new target preset, letting a stale row "launder" through one upgrade-write
+round-trip and then get wrongly treated as validly locked on the next
+ordinary compile - fixed by genuinely reconciling Tabnine rows for the
+target preset via the same adapter functions ordinary compile uses; (5, P2)
+`SubagentPolicyOverrideTarget` widened to include `"tabnine"`; (6, P1) the
+Tabnine reuse-invalidation check fired for ANY role the profile's
+`subagentPolicy.roles` map touched at all (even capability/effort-only or an
+unrelated Codex/Claude override), wrongly wiping unrelated valid locked
+Tabnine rows - fixed via a new `hasTabnineOverride`/`explicit` flag scoped to
+the actual presence of `overrides.tabnine` in the raw profile. All 6 fixes
+RED-first with regression tests. Tests: `packages/core` 217/218,
+`packages/compiler` 324/325, `apps/cli` 576/580, all 0 failures (only
+pre-existing skips); `npm run check` clean. All 6 PR review threads replied
+to and resolved.
 
 I6 completed 2026-07-18 (spec + code-quality review passed) for its own
 foundational scope only: the "ordinary compile reuses the lock" primitive

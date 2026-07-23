@@ -176,6 +176,7 @@ export type {
   SubagentPolicyRoleOverride,
   SubagentPolicyRoleOverrides,
   SubagentPolicyRoles,
+  SubagentPolicyTabnineRoleOverride,
   SubagentTemplateName,
   SubagentToolScope,
 } from "./profile.js";

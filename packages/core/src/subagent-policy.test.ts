@@ -733,3 +733,156 @@ describe("subagentPolicy v3 opt-in (preset, routine-implementer, open override)"
     }
   });
 });
+
+// Phase 31.5 (I6d): a persisted, schema-backed `tabnine` per-role override,
+// mirroring the existing codex/claude override validation contract (open
+// bounded-length/control-character rules, unconditionally -- there is no
+// legacy v2 Tabnine override precedent to preserve).
+describe("subagentPolicy tabnine role override validation", () => {
+  it("accepts a valid tabnine override model string", () => {
+    const result = validateProfileValue(
+      withPolicy({
+        enabled: true,
+        preset: "role-aware",
+        roles: {
+          grill: {
+            capability: "strongest",
+            effort: "high",
+            overrides: { tabnine: { model: "organization-model-id" } },
+          },
+        },
+      }),
+    );
+    assert.equal(
+      result.ok,
+      true,
+      result.ok ? "" : JSON.stringify(result.issues, null, 2),
+    );
+  });
+
+  it("rejects an empty tabnine override string", () => {
+    assert.equal(
+      firstCode(
+        withPolicy({
+          enabled: true,
+          preset: "role-aware",
+          roles: {
+            grill: {
+              capability: "strongest",
+              effort: "high",
+              overrides: { tabnine: { model: "" } },
+            },
+          },
+        }),
+      ),
+      "subagent_policy_override_model",
+    );
+  });
+
+  it("rejects an over-length tabnine override string", () => {
+    assert.equal(
+      firstCode(
+        withPolicy({
+          enabled: true,
+          preset: "role-aware",
+          roles: {
+            grill: {
+              capability: "strongest",
+              effort: "high",
+              overrides: { tabnine: { model: "x".repeat(201) } },
+            },
+          },
+        }),
+      ),
+      "subagent_policy_override_model",
+    );
+  });
+
+  it("rejects a tabnine override string containing a control character", () => {
+    assert.equal(
+      firstCode(
+        withPolicy({
+          enabled: true,
+          preset: "role-aware",
+          roles: {
+            grill: {
+              capability: "strongest",
+              effort: "high",
+              overrides: { tabnine: { model: "bad\tid" } },
+            },
+          },
+        }),
+      ),
+      "subagent_policy_override_model",
+    );
+  });
+
+  it("round-trips a tabnine override through parseProfileYaml/renderProfileYaml", () => {
+    // Deliberately omits `preset` here: `AiProfileSubagentPolicy.preset`'s own
+    // render round-trip is a pre-existing gap unrelated to this task's scope
+    // (renderProfileYaml never emits `preset` at all today -- see
+    // buildSubagentPolicyDoc). This test only proves the new `tabnine`
+    // override field itself survives serialize/parse, which does not depend
+    // on `preset` (tabnine override validation is unconditional, not gated by
+    // `isV3OptIn`).
+    const profile: AiProfile = {
+      ...BASE_PROFILE,
+      subagentPolicy: {
+        enabled: true,
+        roles: {
+          grill: {
+            capability: "strongest",
+            effort: "high",
+            overrides: { tabnine: { model: "organization-model-id" } },
+          },
+        },
+      },
+    };
+    const yaml = renderProfileYaml(profile);
+    assert.ok(yaml.includes("tabnine:"));
+    const result = parseProfileYaml(yaml);
+    assert.equal(
+      result.ok,
+      true,
+      result.ok ? "" : JSON.stringify(result.issues),
+    );
+    if (!result.ok) throw new Error("unreachable");
+    assert.deepEqual(result.profile, profile);
+  });
+
+  it("round-trips a tabnine override on routine-implementer, a v3-only role outside the closed v1/v2 SUBAGENT_POLICY_ROLE_IDS vocabulary (PR review round 3)", () => {
+    // Phase 31.5 (I6d PR review round 3): `buildSubagentPolicyDoc` used to
+    // iterate only the closed v1/v2 `SUBAGENT_POLICY_ROLE_IDS` list, which
+    // deliberately excludes "routine-implementer" (Phase 31.5 I1R's own
+    // v3-only role addition). A v3-opted profile validly setting
+    // `roles["routine-implementer"].overrides.tabnine.model` therefore
+    // parsed and resolved correctly but was silently dropped by every
+    // `renderProfileYaml` call -- failing the persisted round-trip contract
+    // for that one role. `buildSubagentPolicyDoc` now iterates the full v3
+    // role vocabulary instead.
+    const profile: AiProfile = {
+      ...BASE_PROFILE,
+      subagentPolicy: {
+        enabled: true,
+        roles: {
+          "routine-implementer": {
+            capability: "balanced",
+            effort: "medium",
+            overrides: { tabnine: { model: "organization-model-id" } },
+          },
+        },
+      },
+    };
+    const yaml = renderProfileYaml(profile);
+    assert.ok(yaml.includes("routine-implementer:"));
+    assert.ok(yaml.includes("tabnine:"));
+    const result = parseProfileYaml(yaml);
+    assert.equal(
+      result.ok,
+      true,
+      result.ok ? "" : JSON.stringify(result.issues),
+    );
+    if (!result.ok) throw new Error("unreachable");
+    assert.deepEqual(result.profile, profile);
+  });
+});

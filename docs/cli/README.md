@@ -338,11 +338,14 @@ recognize:
   `/model`/`/about` guidance is shown instead — the same whole-file
   ownership discipline every other generated file follows (ADR 0020), never a
   structural JSON merge or a guess at existing content.
-- This override is **not** persisted into `ai-profile.yaml` (no
-  `subagentPolicy.roles[id].overrides.tabnine` schema field exists yet): it
-  only affects the write performed by this `init` run. A later
+- This wizard-entered override is **not** persisted into `ai-profile.yaml`:
+  it only affects the write performed by this `init` run. A later
   `agent-profile compile --write` run, without going back through the wizard,
-  has no exact model to offer and stays advisory-only for Tabnine.
+  has no exact model to offer and stays advisory-only for Tabnine unless the
+  profile also sets `subagentPolicy.roles[id].overrides.tabnine.model`
+  directly (Phase 31.5 I6d) — see `docs/targets/subagent-policy.md`, which
+  persists across ordinary compiles with the same lock-reuse guarantee
+  Codex/Claude overrides already have.
 
 ### Offline, non-interactive, and `--probe-models`
 
