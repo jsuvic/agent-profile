@@ -1147,12 +1147,33 @@ test("upgrade --model-policy-strategy adopt --write leaves a fully schema-valid 
   // --write` against a fixture that already has real prior model-policy rows
   // AND real generated target files on disk (`createV3UpgradeRootWithGeneratedFiles`),
   // then validates the FULL resulting lockfile against AC3's actual scope.
-  const priorModelPolicy = liveModelPolicy();
+  //
+  // PR review finding (third round): the prior lock and the "fresh" expected
+  // state must NOT be seeded from the same `liveModelPolicy()` call -- doing
+  // so lets `adopt --write` succeed as a complete no-op (zero rows actually
+  // changed) and the assertions below would still pass even if the real
+  // adopt-write logic were broken. So the prior lock's codex/architect row
+  // is deliberately superseded (same stale-lock construction pattern used
+  // elsewhere in this file, e.g. the "...preserves the capability-catalog
+  // report..." test above) before running the write, and the resulting row
+  // is asserted to have actually CHANGED away from that stale value.
+  const fresh = liveModelPolicy();
+  const staleArchitectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(staleArchitectCodex);
+  const priorModelPolicy: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded`, catalogVersion: row.catalogVersion - 1 }
+        : row,
+    ),
+  };
   const root = await createV3UpgradeRootWithGeneratedFiles(
     CAPABILITY_CATALOG_VERSION,
     priorModelPolicy,
   );
-  const fresh = liveModelPolicy();
 
   const output = createOutput();
   const code = await runCli(
@@ -1234,6 +1255,31 @@ test("upgrade --model-policy-strategy adopt --write leaves a fully schema-valid 
       `${expected.role}/${expected.client} row must record the catalog version that produced it`,
     );
   }
+
+  // Genuine-mutation proof: the codex/architect row was deliberately seeded
+  // stale above. Asserting it now differs from that seeded value (in
+  // addition to the "every row matches fresh" loop above) proves the write
+  // actually changed something on disk, rather than the fixture already
+  // matching the expected output before `adopt --write` ran at all.
+  const architectRow = lockResolutions.find(
+    (row) => row.role === "architect" && row.client === "codex",
+  );
+  assert.ok(architectRow, "expected a lock row for role=architect client=codex");
+  assert.notEqual(
+    architectRow?.model,
+    staleArchitectCodex?.model + "-superseded",
+    "the stale codex/architect model must have been overwritten by the write",
+  );
+  assert.notEqual(
+    architectRow?.catalogVersion,
+    (staleArchitectCodex?.catalogVersion ?? 0) - 1,
+    "the stale codex/architect catalogVersion must have been overwritten by the write",
+  );
+  assert.equal(
+    architectRow?.model,
+    staleArchitectCodex?.model,
+    "the codex/architect row must land on the fresh (non-superseded) model",
+  );
 
   // `outputs` must be non-empty (real generated targets exist) and every
   // record well-formed.
@@ -4681,8 +4727,15 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
   // is reached -- the commit failure must be on the LATER path (`ai-profile.yaml`)
   // so an EARLIER path (`.codex/config.toml`) is already renamed and in need of
   // a restore by the time rollback runs; then that restore is the one that fails.
+  //
+  // PR review finding (third round): rollback now restores an
+  // already-committed target via `writeTempBeside` + `rename` (never a
+  // direct `writeFile` onto the possibly-read-only target), so forcing the
+  // restore to fail means intercepting the SECOND `rename` targeting
+  // `.codex/config.toml` -- the first is the original commit, which must
+  // succeed.
   const realRename = fsPromises.rename;
-  const realWriteFile = fsPromises.writeFile;
+  let codexConfigRenames = 0;
   (fsPromises as unknown as { rename: unknown }).rename = async (
     src: unknown,
     dest: unknown,
@@ -4691,21 +4744,15 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
     if (isProfilePath(dest)) {
       throw Object.assign(new Error("commit blocked"), { code: "EPERM" });
     }
+    if (isCodexConfigPath(dest)) {
+      codexConfigRenames += 1;
+      if (codexConfigRenames === 2) {
+        throw Object.assign(new Error("restore blocked"), { code: "EPERM" });
+      }
+    }
     return (realRename as (...args: unknown[]) => Promise<void>)(
       src,
       dest,
-      ...rest,
-    );
-  };
-  (fsPromises as unknown as { writeFile: unknown }).writeFile = async (
-    file: unknown,
-    ...rest: unknown[]
-  ): Promise<void> => {
-    if (isCodexConfigPath(file)) {
-      throw Object.assign(new Error("restore blocked"), { code: "EPERM" });
-    }
-    return (realWriteFile as (...args: unknown[]) => Promise<void>)(
-      file,
       ...rest,
     );
   };
@@ -4727,7 +4774,6 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
     );
   } finally {
     (fsPromises as unknown as { rename: unknown }).rename = realRename;
-    (fsPromises as unknown as { writeFile: unknown }).writeFile = realWriteFile;
   }
 
   assert.equal(code, 1);

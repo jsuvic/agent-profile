@@ -245,11 +245,13 @@ export async function applyWritePlanAtomic(
     }
 
     // --- Prepare: stage every write as a temp file beside its target. -----
-    // A pre-existing target's permission bits (and, best-effort, its
-    // uid/gid) are preserved on the staged temp file before it is ever
-    // renamed into place, so there is no window where the live file holds
-    // the wrong mode or ownership. A `create` (no existing target) keeps the
-    // default temp-file mode/ownership.
+    // A pre-existing target's permission bits are applied to the staged temp
+    // file AT CREATION TIME (never widened afterward), and its uid/gid is
+    // preserved on a best-effort basis, before it is ever renamed into place.
+    // This means there is no window where the live file, OR the staged temp
+    // file holding its content, is more permissive than the target's own
+    // captured mode. A `create` (no existing target) keeps the default
+    // temp-file mode/ownership.
     for (const target of targets) {
       const firstCreated = await fsPromises.mkdir(
         path.dirname(target.absolutePath),
@@ -259,25 +261,24 @@ export async function applyWritePlanAtomic(
       target.tempPath = await writeTempBeside(
         target.absolutePath,
         target.bytes,
+        target.existingMode,
       );
-      if (target.existingMode !== undefined) {
-        await fsPromises.chmod(target.tempPath, target.existingMode);
-      }
       if (target.existingOwner !== undefined) {
-        // Best-effort: `chown` to an arbitrary uid/gid requires elevated
-        // privileges. A normal non-root writer that already owns the file
-        // does not need this (its writes keep the existing uid/gid anyway),
-        // and a cross-user/root writer for whom this matters can chown; a
-        // permission failure here must not fail the whole write plan.
-        try {
-          await fsPromises.chown(
-            target.tempPath,
-            target.existingOwner.uid,
-            target.existingOwner.gid,
-          );
-        } catch {
-          // best-effort: ownership preservation is not guaranteed.
-        }
+        // `chown` to the target's own captured uid/gid is a no-op for the
+        // common case (a process writing as the file's own owner, which any
+        // owner can always do without elevated privilege). It only fails in
+        // the genuinely cross-user case -- where this call would otherwise
+        // silently leave the staged file's ownership changed to the current
+        // process's uid/gid, an unannounced, potentially security-relevant
+        // metadata change. So a failure here must propagate and abort the
+        // whole write plan (via the catch below) rather than be swallowed
+        // (PR review finding): a caller must not report a clean write when
+        // ownership silently changed.
+        await fsPromises.chown(
+          target.tempPath,
+          target.existingOwner.uid,
+          target.existingOwner.gid,
+        );
       }
     }
   } catch (error) {
@@ -323,16 +324,40 @@ export async function applyWritePlanAtomic(
   return plan;
 }
 
-/** Stage bytes next to their target so the commit is a same-directory rename. */
+/**
+ * Stage bytes next to their target so the commit is a same-directory rename.
+ *
+ * When `mode` is given (an existing target's captured permission bits), the
+ * temp file is opened directly with that mode -- a process's umask can only
+ * make the actually-created mode MORE restrictive than requested, never
+ * wider, so the temp is never briefly WIDER than the target's real intended
+ * mode -- and then, while the file is still empty (before any content is
+ * written), `chmod`-ed to the exact same mode to guarantee an exact match
+ * regardless of umask narrowing. That chmod is harmless because nothing
+ * sensitive has been written yet at that point. This closes the window a
+ * hardcoded `0o644` open would otherwise leave a restrictive-mode target's
+ * content briefly readable at a wider mode than intended (PR review finding).
+ *
+ * When `mode` is omitted (a `create`, no prior target), the temp keeps the
+ * previous default: opened at `0o644` with no extra chmod.
+ */
 async function writeTempBeside(
   absoluteTarget: string,
   bytes: Uint8Array,
+  mode?: number,
 ): Promise<string> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const tempPath = `${absoluteTarget}.tmp-${randomBytes(8).toString("hex")}`;
+    let opened = false;
     try {
-      const fd = await fsPromises.open(tempPath, "wx", 0o644);
+      const fd = await fsPromises.open(tempPath, "wx", mode ?? 0o644);
+      opened = true;
       try {
+        if (mode !== undefined) {
+          // Still empty at this point -- nothing sensitive written yet, so
+          // narrowing (or, in principle, widening) the mode here is safe.
+          await fsPromises.chmod(tempPath, mode);
+        }
         // `FileHandle.write()` is not guaranteed to write the whole buffer in
         // one call (it can return fewer `bytesWritten` than requested, e.g.
         // ENOSPC partway through). `FileHandle.writeFile()` loops internally
@@ -348,6 +373,18 @@ async function writeTempBeside(
     } catch (error) {
       // Only a name collision is retryable; anything else is a real failure.
       if (isNodeError(error) && error.code === "EEXIST") continue;
+      if (opened) {
+        // The temp file was created (and may now hold the chmod-narrowed
+        // mode and/or partial content) before this failure. Callers rely on
+        // rollback to clean up a temp recorded on `target.tempPath`, but this
+        // helper hasn't returned yet, so nothing is tracking this path --
+        // clean it up here instead of leaking it.
+        try {
+          await fsPromises.rm(tempPath, { force: true });
+        } catch {
+          // best-effort cleanup; must not mask the real failure.
+        }
+      }
       throw error;
     }
   }
@@ -376,7 +413,55 @@ async function rollbackAtomicTargets(
         if (target.backup === undefined) {
           await fsPromises.rm(target.absolutePath, { force: true });
         } else {
-          await fsPromises.writeFile(target.absolutePath, target.backup);
+          // A direct `writeFile(target.absolutePath, ...)` requires write
+          // permission on the EXISTING file's own mode bits. If this target's
+          // captured mode is restrictive (e.g. read-only, exactly the class
+          // of file most likely to be protected this way), that direct write
+          // can fail with EACCES even though the file was just successfully
+          // renamed into place moments ago -- defeating the rollback
+          // guarantee for read-only targets (PR review finding). Instead,
+          // stage the backup bytes as a new temp file (at the target's own
+          // captured mode, so the restored file lands with the correct
+          // original mode from the start) and rename it over the target:
+          // renaming a file over another only requires write permission on
+          // the containing DIRECTORY, not on the target's own mode bits.
+          let restoreTempPath: string | undefined;
+          try {
+            restoreTempPath = await writeTempBeside(
+              target.absolutePath,
+              target.backup,
+              target.existingMode,
+            );
+            if (target.existingOwner !== undefined) {
+              // Mirror the forward staging path: renaming this restore temp
+              // over the target replaces the inode, so without an explicit
+              // chown here the restored file would silently end up owned by
+              // the current process instead of the original captured owner.
+              // A failure here must NOT proceed with a rename that would
+              // leave the wrong owner -- unlike the forward path (where
+              // nothing has been committed yet and a full abort is safe),
+              // this is already inside rollback's own partial-failure
+              // recovery, so the correct signal is to record this target as
+              // unrestored via the existing mechanism, not to invent a new
+              // state (PR review finding, third round, item 1).
+              await fsPromises.chown(
+                restoreTempPath,
+                target.existingOwner.uid,
+                target.existingOwner.gid,
+              );
+            }
+            await fsPromises.rename(restoreTempPath, target.absolutePath);
+            restoreTempPath = undefined;
+          } finally {
+            if (restoreTempPath !== undefined) {
+              try {
+                await fsPromises.rm(restoreTempPath, { force: true });
+              } catch {
+                // best-effort cleanup; must not mask the real restore
+                // failure already propagating out of the outer try.
+              }
+            }
+          }
         }
       } catch {
         // The target keeps the new bytes: record it instead of reporting a
