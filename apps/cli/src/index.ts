@@ -94,6 +94,7 @@ import {
 import {
   runDoctor,
   type DoctorIssue,
+  type DoctorModelProbeRunner,
   type DoctorResult,
 } from "@agent-profile/doctor";
 
@@ -250,6 +251,11 @@ type ParsedDoctorArgs =
       root: string;
       json: boolean;
       mcpSuggestions: boolean;
+      // Phase 31.5 (I7): opt-in, offline model-policy category.
+      models: boolean;
+      // Phase 31.5 (I7): opt-in, ADDITIVE ephemeral availability rows. Only
+      // takes effect combined with `models`; alone it is a documented no-op.
+      probe: boolean;
       help: boolean;
     }
   | {
@@ -423,7 +429,10 @@ export async function runCli(
       io,
       options,
       {
-        doctor: () => runDoctorCommand([], cwd, io),
+        doctor: () =>
+          runDoctorCommand([], cwd, io, {
+            ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
+          }),
         init: () =>
           runInit([], cwd, io, {
             ...(options.prompts ? { prompts: options.prompts } : {}),
@@ -491,7 +500,9 @@ export async function runCli(
           : {}),
       });
     case "doctor":
-      return runDoctorCommand(rest, cwd, io);
+      return runDoctorCommand(rest, cwd, io, {
+        ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
+      });
     case "init":
       return runInit(rest, cwd, io, {
         ...(options.presetNow ? { presetNow: options.presetNow } : {}),
@@ -2743,10 +2754,77 @@ async function runUi(
   });
 }
 
+type RunDoctorOptions = {
+  probeRunner?: ModelProbeProcessRunner;
+};
+
+/**
+ * Phase 31.5 (I7): builds the injected `DoctorModelProbeRunner` port `runDoctor`
+ * calls when `--models --probe` are both set. This is the ONLY place doctor's
+ * `--probe` wiring reuses the I4 consented, source-free probe adapter
+ * (`buildModelProbePlan`/`runModelProbe`); `@agent-profile/doctor` itself
+ * never imports it, keeping the package dependency direction correct and the
+ * probe port injectable (mock boundary) for tests. Prints a one-line
+ * disclosure before any process starts, mirroring
+ * `runConsentedUpgradeModelProbe`'s own informed-consent precedent -- doctor
+ * is non-interactive/scripted, so the explicit `--probe` flag itself is the
+ * consent, with no additional confirm prompt.
+ */
+function createDoctorModelProbeRunner(input: {
+  rootDir: string;
+  probeRunner: ModelProbeProcessRunner | undefined;
+  io: CliIo;
+  json: boolean;
+}): DoctorModelProbeRunner {
+  const { rootDir, probeRunner, io, json } = input;
+  return async (candidates) => {
+    const selections: ModelProbeSelection[] = candidates.map((candidate) => ({
+      client: candidate.client,
+      model: candidate.model,
+      effort: candidate.effort,
+      alternatives: candidate.alternatives,
+    }));
+    const plan = buildModelProbePlan(selections);
+    if (!json) {
+      io.stdout(
+        `Probing exact model availability (--probe): ` +
+          `${selections.map((selection) => `${selection.client}/${selection.model}`).join(", ")}. ` +
+          `${plan.quotaNote}\n`,
+      );
+    }
+    try {
+      const report = await runModelProbe(
+        plan,
+        { granted: true },
+        {
+          runner: probeRunner ?? createNodeModelProbeProcessRunner(),
+          repoRootDir: rootDir,
+        },
+      );
+      return report.results.map((result) => ({
+        client: result.client as "codex" | "claude",
+        model: result.model,
+        status: result.status,
+        probed: result.probed,
+        evidence: result.evidence,
+      }));
+    } catch {
+      if (!json) {
+        io.stdout(
+          "Model probe could not run (a probe-infrastructure failure); " +
+            "proceeding with offline-only information.\n",
+        );
+      }
+      return [];
+    }
+  };
+}
+
 async function runDoctorCommand(
   args: string[],
   cwd: string,
   io: CliIo,
+  options: RunDoctorOptions = {},
 ): Promise<number> {
   const parsed = parseDoctorArgs(args);
 
@@ -2760,9 +2838,22 @@ async function runDoctorCommand(
     return 0;
   }
 
+  const rootDir = path.resolve(cwd, parsed.root);
   const request = {
-    rootDir: path.resolve(cwd, parsed.root),
+    rootDir,
     mcpSuggestions: parsed.mcpSuggestions,
+    models: parsed.models,
+    probe: parsed.probe,
+    ...(parsed.models && parsed.probe
+      ? {
+          modelProbeRunner: createDoctorModelProbeRunner({
+            rootDir,
+            probeRunner: options.probeRunner,
+            io,
+            json: parsed.json,
+          }),
+        }
+      : {}),
   };
 
   // Interactive rendering is gated behind a real TTY and never applies to
@@ -4303,6 +4394,8 @@ function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
   let root = ".";
   let json = false;
   let mcpSuggestions = false;
+  let models = false;
+  let probe = false;
   let help = false;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -4326,6 +4419,12 @@ function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
       case "--mcp-suggestions":
         mcpSuggestions = true;
         break;
+      case "--models":
+        models = true;
+        break;
+      case "--probe":
+        probe = true;
+        break;
       case "--help":
       case "-h":
         help = true;
@@ -4335,7 +4434,7 @@ function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
     }
   }
 
-  return { ok: true, root, json, mcpSuggestions, help };
+  return { ok: true, root, json, mcpSuggestions, models, probe, help };
 }
 
 function parseCompileArgs(args: string[]): ParsedCompileArgs {
@@ -5804,7 +5903,7 @@ function formatHelp(): string {
 
 Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
-  agent-profile doctor [--root <path>] [--json] [--mcp-suggestions]
+  agent-profile doctor [--root <path>] [--json] [--mcp-suggestions] [--models] [--probe]
   agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
   agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--check-for-updates] [--probe-models] [--non-interactive] [--json]
   agent-profile configure [--root <path>] [--non-interactive]
@@ -5817,6 +5916,22 @@ Commands:
             dependencies newer than APC's pinned baseline and points to
             curated MCP candidate ids. It never installs, configures, or
             fetches anything and never changes the exit code.
+            --models adds an opt-in, entirely offline model-policy category:
+            it compares ai-profile.lock's modelPolicy block against a fresh
+            resolution of ai-profile.yaml and the bundled catalogs to report
+            catalog lifecycle (current/supported-legacy/deprecated/retired),
+            uncatalogued/private overrides, missing provenance, drifted
+            (stale) configuration, and target capability status
+            (advisory/unsupported/unverified). Never starts a client or
+            network process and never changes doctor's default output when
+            omitted. --probe additionally re-runs the same consented,
+            source-free model probe init/upgrade offer, restricted to the
+            primary-role exact candidate(s) for whichever of Codex/Claude the
+            profile has enabled, to add ephemeral availability rows. Only
+            takes effect combined with --models (--probe alone is a no-op).
+            The probe result is never written anywhere and never changes any
+            offline finding's severity, even when its evidence is
+            unknown/ambiguous.
   init      Create a starting ai-profile.yaml (interactive wizard with no args).
   upgrade   Report or insert newly available capabilities (preview first).
             --write --adopt-recommended adopts all offered capabilities.

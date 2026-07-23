@@ -11,6 +11,7 @@ import test from "node:test";
 import {
   compileProfile,
   createLockfileFile,
+  resolveModelPolicyLockfile,
   type AiProfileLockV2,
 } from "@agent-profile/compiler";
 import { parseProfileYaml } from "@agent-profile/core";
@@ -1019,6 +1020,101 @@ capabilities:
   );
 });
 
+test("doctor --models is opt-in: default doctor output never includes model-policy findings", async () => {
+  const rootDir = await createGeneratedProject({
+    extraYaml: `
+subagentPolicy:
+  enabled: true
+  preset: role-aware
+`,
+  });
+
+  const withoutFlag = await runDoctor({ rootDir });
+  assert.equal(
+    withoutFlag.issues.some((issue) => issue.code.startsWith("LINT-MODEL")),
+    false,
+  );
+
+  const withFlag = await runDoctor({ rootDir, models: true });
+  assert.equal(
+    withFlag.issues.some((issue) => issue.code.startsWith("LINT-MODEL")),
+    true,
+  );
+});
+
+test("doctor --models --probe adds ephemeral rows without changing status/severity for unknown evidence, and never calls the probe runner when declined", async () => {
+  const rootDir = await createGeneratedProject({
+    extraYaml: `
+subagentPolicy:
+  enabled: true
+  preset: role-aware
+`,
+    includeModelPolicyLock: true,
+  });
+
+  let calls = 0;
+  const modelProbeRunner = async (
+    candidates: readonly { client: "codex" | "claude"; model: string }[],
+  ) =>
+    candidates.map((candidate) => {
+      calls += 1;
+      return {
+        client: candidate.client,
+        model: candidate.model,
+        status: "unknown" as const,
+        probed: true,
+        evidence: "ambiguous",
+      };
+    });
+
+  const withoutProbeFlag = await runDoctor({
+    rootDir,
+    models: true,
+    modelProbeRunner,
+  });
+  assert.equal(calls, 0);
+  assert.equal(
+    withoutProbeFlag.issues.some((issue) => issue.code === "LINT-MODEL-PROBE-001"),
+    false,
+  );
+
+  const baseline = await runDoctor({ rootDir, models: true });
+
+  const withProbe = await runDoctor({
+    rootDir,
+    models: true,
+    probe: true,
+    modelProbeRunner,
+  });
+  assert.equal(calls > 0, true);
+  const probeRows = withProbe.issues.filter(
+    (issue) => issue.code === "LINT-MODEL-PROBE-001",
+  );
+  assert.equal(probeRows.length > 0, true);
+  assert.equal(
+    probeRows.every((issue) => issue.severity === "info"),
+    true,
+  );
+  // Probe evidence never retroactively changes any offline finding's status
+  // or severity: every non-probe issue stays byte-identical to the
+  // `--models`-only baseline.
+  const nonProbeIssues = withProbe.issues.filter(
+    (issue) => issue.code !== "LINT-MODEL-PROBE-001",
+  );
+  assert.deepEqual(nonProbeIssues, baseline.issues);
+  assert.equal(withProbe.status, baseline.status);
+
+  // `--probe` alone (without `--models`) is a documented no-op: zero probe
+  // calls, zero probe rows.
+  calls = 0;
+  const probeAlone = await runDoctor({ rootDir, probe: true, modelProbeRunner });
+  assert.equal(calls, 0);
+  assert.equal(
+    probeAlone.issues.some((issue) => issue.code === "LINT-MODEL-PROBE-001"),
+    false,
+  );
+});
+
 test("doctor issue ordering is deterministic", async () => {
   const rootDir = await createGeneratedProject({
     extraYaml: `
@@ -1036,7 +1132,11 @@ permissions:
 });
 
 async function createGeneratedProject(
-  options: { extraYaml?: string; languages?: string[] } = {},
+  options: {
+    extraYaml?: string;
+    languages?: string[];
+    includeModelPolicyLock?: boolean;
+  } = {},
 ): Promise<string> {
   const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-doctor-"));
   let profileYaml = await getProfileYaml(options.extraYaml);
@@ -1072,10 +1172,14 @@ async function createGeneratedProject(
     await writeProjectFile(rootDir, file.path, file.bytes);
   }
 
+  const modelPolicy = options.includeModelPolicyLock
+    ? resolveModelPolicyLockfile(profileResult.profile)
+    : undefined;
   const lockfile = createLockfileFile({
     profileBytes,
     templates: compileResult.templates,
     files: compileResult.files,
+    ...(modelPolicy ? { modelPolicy } : {}),
   });
   await writeProjectFile(rootDir, lockfile.path, lockfile.bytes);
 

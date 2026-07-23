@@ -24,6 +24,11 @@ import {
   parseProfileYaml,
   type PresetTokenPayloadV1,
 } from "@agent-profile/core";
+import {
+  compileProfile,
+  createLockfileFile,
+  resolveModelPolicyLockfile,
+} from "@agent-profile/compiler";
 
 import { runCli } from "./index.js";
 import {
@@ -193,6 +198,123 @@ test("doctor without --mcp-suggestions emits no MCP suggestion codes", async () 
 
   assert.equal(code, 0);
   assert.doesNotMatch(output.stdoutText(), /MCP-SUGGEST/u);
+});
+
+// --- Phase 31.5 (I7): doctor --models / --probe ---
+
+test("doctor without --models never emits model-policy findings (default output unchanged)", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+  const code = await runCli(["doctor", "--root", rootDir], { io: output });
+
+  assert.equal(code, 0);
+  assert.doesNotMatch(output.stdoutText(), /LINT-MODEL/u);
+});
+
+test("doctor --models runs zero client/network processes", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(["doctor", "--root", rootDir, "--models"], { io: output }),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.match(output.stdoutText(), /LINT-MODEL/u);
+});
+
+test("doctor declining --probe never touches the injected probeRunner", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+  const probe = createProbeRunnerStub();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(["doctor", "--root", rootDir, "--models"], {
+      io: output,
+      probeRunner: probe.runner,
+    }),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls, 0);
+  assert.doesNotMatch(output.stdoutText(), /LINT-MODEL-PROBE-001/u);
+});
+
+test("doctor --probe alone (without --models) is a documented no-op: zero probe calls", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+  const probe = createProbeRunnerStub();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(["doctor", "--root", rootDir, "--probe"], {
+      io: output,
+      probeRunner: probe.runner,
+    }),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls, 0);
+  assert.doesNotMatch(output.stdoutText(), /LINT-MODEL-PROBE-001/u);
+});
+
+test("doctor --models --probe calls the injected probeRunner and adds advisory rows without changing status for unknown evidence", async () => {
+  const rootDir = await createModelsRoot();
+  const baselineOutput = createOutput();
+  const baselineCode = await runCli(
+    ["doctor", "--root", rootDir, "--models", "--json"],
+    { io: baselineOutput },
+  );
+  assert.equal(baselineCode, 0, baselineOutput.stderrText());
+  const baseline = JSON.parse(baselineOutput.stdoutText()) as {
+    status: string;
+    issues: Array<{ code: string }>;
+  };
+
+  const output = createOutput();
+  const probe = createProbeRunnerStub();
+  const code = await runCli(
+    ["doctor", "--root", rootDir, "--models", "--probe", "--json"],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls > 0, true);
+  const parsed = JSON.parse(output.stdoutText()) as {
+    status: string;
+    issues: Array<{
+      code: string;
+      severity: string;
+      actual: string;
+    }>;
+  };
+  const probeIssues = parsed.issues.filter(
+    (issue) => issue.code === "LINT-MODEL-PROBE-001",
+  );
+  assert.equal(probeIssues.length > 0, true);
+  assert.equal(
+    probeIssues.every((issue) => issue.severity === "info"),
+    true,
+  );
+  // Closed status/evidence vocabulary only -- no raw client output leaks.
+  const CLOSED_PROBE_STATUSES = new Set([
+    "available",
+    "not-entitled",
+    "temporarily-limited",
+    "unsupported-client",
+    "provider-unavailable",
+    "auth-required",
+    "unknown",
+  ]);
+  for (const issue of probeIssues) {
+    assert.equal(CLOSED_PROBE_STATUSES.has(issue.actual), true, issue.actual);
+  }
+  // Probe evidence never retroactively changes an offline finding's status
+  // or the non-probe issue set.
+  assert.equal(parsed.status, baseline.status);
+  const nonProbeIssues = parsed.issues.filter(
+    (issue) => issue.code !== "LINT-MODEL-PROBE-001",
+  );
+  assert.deepEqual(nonProbeIssues, baseline.issues);
 });
 
 // --- TTY-gating: piped/non-interactive runs stay byte-identical (no color) ---
@@ -2004,6 +2126,81 @@ async function createProfileOnlyRoot(): Promise<string> {
   );
   await writeFile(path.join(rootDir, ".gitignore"), ".env\n.env.*\n", "utf8");
   return rootDir;
+}
+
+// Phase 31.5 (I7): a doctor --models fixture. Enables v3 model-policy
+// (subagentPolicy.enabled + preset) and records a matching, freshly-resolved
+// `ai-profile.lock` modelPolicy block, so `--models` has real rows to
+// classify and `--probe`'s primary-role candidate list is non-empty.
+async function createModelsRoot(): Promise<string> {
+  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-cli-models-"));
+  const profileYaml = `${(
+    await readFile(path.join(fixtureDir, "ai-profile.yaml"), "utf8")
+  ).trimEnd()}\nsubagentPolicy:\n  enabled: true\n  preset: role-aware\n`;
+  await writeFile(path.join(rootDir, "ai-profile.yaml"), profileYaml, "utf8");
+  await writeFile(
+    path.join(rootDir, ".gitignore"),
+    ".env\n.env.*\n.cce/\n.mcp.json\n.claude/settings.local.json\n.claude/worktrees/\n.codex/config.toml\n.codex/hooks.json\n",
+    "utf8",
+  );
+
+  const profileBytes = Buffer.from(profileYaml, "utf8");
+  const profileResult = parseProfileYaml(profileYaml);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return rootDir;
+
+  const compileResult = compileProfile({ profile: profileResult.profile });
+  assert.equal(compileResult.ok, true);
+  if (!compileResult.ok) return rootDir;
+
+  for (const file of compileResult.files) {
+    await mkdir(path.join(rootDir, path.dirname(file.path)), {
+      recursive: true,
+    });
+    await writeFile(path.join(rootDir, file.path), file.bytes);
+  }
+
+  const modelPolicy = resolveModelPolicyLockfile(profileResult.profile);
+  const lockfile = createLockfileFile({
+    profileBytes,
+    templates: compileResult.templates,
+    files: compileResult.files,
+    ...(modelPolicy ? { modelPolicy } : {}),
+  });
+  await writeFile(path.join(rootDir, lockfile.path), lockfile.bytes);
+
+  return rootDir;
+}
+
+function createProbeRunnerStub(): {
+  runner: {
+    run(): Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+    }>;
+  };
+  calls: number;
+} {
+  const stub = {
+    calls: 0,
+    runner: {
+      async run() {
+        stub.calls += 1;
+        // Deliberately ambiguous: no closed-vocabulary pattern matches, so
+        // the classifier reports "unknown" -- proving unknown evidence never
+        // changes any offline finding's severity.
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    },
+  };
+  return stub;
 }
 
 async function createTypescriptRoot(): Promise<string> {
