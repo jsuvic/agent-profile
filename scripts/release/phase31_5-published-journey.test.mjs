@@ -10,12 +10,32 @@
 //      runtime assets, and none of the three tarballs contain a test-only
 //      model-probe/catalog fixture path.
 //   2. Role-aware default via packed `init`: the packed CLI's non-interactive
-//      (scripted-prompt) init wizard renders the exact per-role model/effort/
-//      status summary for the recommended `role-aware` preset before any
-//      write commits.
+//      (scripted-prompt) init wizard (a) resolves the exact per-role/per-client
+//      model/effort/status TABLE DATA for the recommended `role-aware` preset
+//      -- asserted via a full `assert.deepEqual` against the packed
+//      compiler's own `buildModelPolicyTargetTable` output, covering every
+//      role, not just the primary one -- and (b) prints the exact primary-role
+//      Codex/Claude model/effort/status SUMMARY lines to stdout before any
+//      write commits (this is the only summary `formatModelPolicySummary`
+//      ever prints, by design; see its doc comment in apps/cli/src/wizard.ts).
+//      Disclosed gap: this file exercises the headless (non-clack)
+//      `promptsOverride` seam, not `createClackPrompts`'s own on-screen
+//      rendering of the expanded table via `formatModelPresetTables`
+//      (apps/cli/src/wizard-clack.ts). That renderer is separately unit-tested
+//      (see apps/cli/src/wizard-clack.test.ts's "selectModelPreset renders
+//      the expanded exact per-role model/effort/status table..." test), but
+//      is not re-exercised against the packed artifact here: `createClackPrompts`
+//      is not part of the packed CLI's public surface (the tarball ships a
+//      single bundled dist/index.js, and `createClackPrompts` is only
+//      dynamically imported internally when no `promptsOverride` is
+//      supplied), and `CliOptions` has no stream-injection seam that would
+//      let a test drive it for real. Accepted for a future cycle to
+//      reconsider if `CliOptions` ever grows a clack-stream-injection option.
 //   3. Zero-network proof: the whole init scenario above runs inside
 //      `withRuntimeSentinels`, so a real fetch/child-process/net call during
-//      that exact call would fail the test.
+//      that exact call would fail the test, including one that is caught
+//      and normalized internally (the sentinel records denied surfaces and
+//      asserts none were reached, even when swallowed).
 //
 // Every other I9 acceptance-criteria bullet (probe consent, Tabnine
 // organization/private manual and write-path scenarios, compile lock reuse,
@@ -193,9 +213,18 @@ async function withRuntimeSentinels(action) {
     httpsRequest: https.request,
     httpsGet: https.get,
   };
+  // Record every denied surface *before* throwing, so that if the code under
+  // test catches and normalizes the thrown error (e.g. a probe/update-check
+  // path that treats a transport failure as "no result" rather than letting
+  // it propagate), the forbidden call is still visible after `action()`
+  // returns instead of silently passing. The throw itself is preserved too,
+  // since callers that do NOT catch it should still fail immediately.
+  const deniedCalls = [];
   const deny = (surface) => () => {
+    deniedCalls.push(surface);
     throw new Error(`forbidden runtime surface used: ${surface}`);
   };
+  let result;
   try {
     globalThis.fetch = deny("fetch");
     for (const name of Object.keys(originalChild)) {
@@ -208,7 +237,7 @@ async function withRuntimeSentinels(action) {
     https.request = deny("https.request");
     https.get = deny("https.get");
     syncBuiltinESMExports();
-    return await action();
+    result = await action();
   } finally {
     globalThis.fetch = originalFetch;
     Object.assign(childProcess, originalChild);
@@ -219,6 +248,58 @@ async function withRuntimeSentinels(action) {
     https.request = originalNet.httpsRequest;
     https.get = originalNet.httpsGet;
     syncBuiltinESMExports();
+  }
+  // A normal `action()` throw already propagated out of the `try` block
+  // above (this line is unreachable in that case); this assertion only runs
+  // when `action()` returned normally, so it exists specifically to catch a
+  // forbidden call that was reached but then swallowed internally.
+  assert.deepEqual(
+    deniedCalls,
+    [],
+    `forbidden runtime surface(s) were reached and then swallowed: ${deniedCalls.join(", ")}`,
+  );
+  return result;
+}
+
+// Opt-in sibling to withRuntimeSentinels: patches the node:fs/promises
+// mutating surface (the same module apps/cli/src/index.ts imports as
+// `fsPromises`, and the same underlying object as `fs.promises`) so a
+// caller can assert zero filesystem mutations occurred during `action()`,
+// even if a write-then-restore sequence would leave the final on-disk state
+// unchanged. Deliberately NOT folded into withRuntimeSentinels itself
+// (which stays network/process-only) because later I9 cycles need real
+// writes to succeed (e.g. a Tabnine settings-file write-path scenario).
+async function withFsWriteSentinel(action) {
+  const mutatingMethods = [
+    "writeFile",
+    "mkdir",
+    "rename",
+    "rm",
+    "unlink",
+    "copyFile",
+    "appendFile",
+    "symlink",
+  ];
+  const original = Object.fromEntries(
+    mutatingMethods.map((name) => [name, fs.promises[name]]),
+  );
+  const calls = [];
+  try {
+    for (const name of mutatingMethods) {
+      fs.promises[name] = (...args) => {
+        calls.push(`${name}(${String(args[0])})`);
+        return original[name](...args);
+      };
+    }
+    const result = await action();
+    assert.deepEqual(
+      calls,
+      [],
+      `expected zero filesystem mutations, but observed: ${calls.join(", ")}`,
+    );
+    return result;
+  } finally {
+    Object.assign(fs.promises, original);
   }
 }
 
@@ -295,7 +376,16 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   // -------------------------------------------------------------------
   // Slices 2 & 3: role-aware default via packed `init`, entirely inside
   // withRuntimeSentinels so a real network/child-process call during this
-  // exact scenario fails the test.
+  // exact scenario fails the test (including one caught-and-swallowed
+  // internally -- withRuntimeSentinels records denied surfaces and asserts
+  // none were reached even when the throw itself is not observed by the
+  // caller). Slice 2's table-data assertion covers the packed compiler's
+  // exact per-role/per-client resolution reaching the wizard for EVERY role
+  // (via assert.deepEqual against buildModelPolicyTargetTable below), while
+  // the stdout assertions cover only the primary-role summary that
+  // formatModelPolicySummary actually prints in this headless path -- see
+  // the file header comment above for the disclosed gap around
+  // createClackPrompts's own on-screen table rendering.
   // -------------------------------------------------------------------
   const nodeModules = path.join(temporary, "graph", "node_modules");
   extractPackage(
@@ -309,7 +399,6 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   const packedCliUrl = pathToFileURL(
     path.join(nodeModules, "@agent-profile", "cli", "dist", "index.js"),
   ).href;
-  const { runCli } = await import(packedCliUrl);
 
   // Compute the expected role-aware table from the exact same built dist
   // module that Slice 1 just confirmed gets packed into the
@@ -386,8 +475,8 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
     async confirmWritePlan() {
       return false;
     },
-    async selectModelPreset({ default: def }) {
-      promptCalls.push({ kind: "selectModelPreset", default: def });
+    async selectModelPreset({ default: def, tables }) {
+      promptCalls.push({ kind: "selectModelPreset", default: def, tables });
       return def;
     },
     async confirmModelProbe({ default: def }) {
@@ -399,18 +488,32 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   const before = snapshot(repository);
   let stdout = "";
   let stderr = "";
+  // Both the dynamic import of the packed CLI entry point AND the runCli()
+  // call itself must happen while the runtime sentinels are installed, so a
+  // network/child-process/net side effect during module initialization
+  // cannot bypass the guard. withFsWriteSentinel additionally instruments
+  // node:fs/promises's mutating surface for the declined-write scenario:
+  // the before/after snapshot() comparison below only proves the final
+  // on-disk bytes are unchanged, which a write-then-restore (or an
+  // empty-directory creation, which snapshot() silently ignores) would not
+  // catch. Asserting zero mutating fs/promises calls occurred is the
+  // primary, more rigorous proof; the snapshot comparison is kept as a
+  // belt-and-braces final-state check.
   const exitCode = await withRuntimeSentinels(() =>
-    runCli(["init", "--root", repository], {
-      io: {
-        stdout(text) {
-          stdout += text;
+    withFsWriteSentinel(async () => {
+      const { runCli } = await import(packedCliUrl);
+      return runCli(["init", "--root", repository], {
+        io: {
+          stdout(text) {
+            stdout += text;
+          },
+          stderr(text) {
+            stderr += text;
+          },
         },
-        stderr(text) {
-          stderr += text;
-        },
-      },
-      nonInteractive: false,
-      prompts,
+        nonInteractive: false,
+        prompts,
+      });
     }),
   );
 
@@ -429,6 +532,20 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
     presetCall.default,
     "role-aware",
     "role-aware must be the recommended default preset",
+  );
+  // Assert the *entire* role-aware table (every role, not just the primary
+  // role that formatModelPolicySummary prints) that reached the prompt seam
+  // matches the packed compiler's own resolution exactly. This is the real
+  // proof that a corrupted/omitted non-primary role would be caught: the
+  // stdout assertions below only ever cover the primary role's Codex/Claude
+  // summary lines by design (see formatModelPolicySummary's doc comment in
+  // apps/cli/src/wizard.ts), so without this deepEqual a broken non-primary
+  // role would slip through unnoticed.
+  assert.deepEqual(
+    presetCall.tables?.["role-aware"],
+    expectedTable,
+    "the role-aware table passed to selectModelPreset must match the packed " +
+      "compiler's buildModelPolicyTargetTable output for every role",
   );
 
   assert.match(stdout, /Model preset: role-aware/u);
