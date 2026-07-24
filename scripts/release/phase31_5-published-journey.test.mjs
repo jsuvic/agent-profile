@@ -62,8 +62,9 @@ const root = path.resolve(import.meta.dirname, "..", "..");
 // @agent-profile/scanner (a real runtime dependency of the packed CLI's own
 // manifest -- see computeRuntimeDependencyGraph below, which needs its
 // packed package.json to derive the runtime dependency graph instead of
-// hard-coding it). @agent-profile/web is intentionally out of scope for this
-// file (never built, packed, or touched).
+// hard-coding it). @agent-profile/web is intentionally never built, packed,
+// or extracted here -- see assertWebDependencyVersionMatches below for the
+// narrower, disclosed partial check this file does perform on it instead.
 const workspaces = [
   "agent-profile",
   "@agent-profile/cli",
@@ -80,6 +81,20 @@ const buildWorkspaces = [
   "@agent-profile/scanner",
   "@agent-profile/cli",
 ];
+
+// Directory (relative to repo root) each buildWorkspaces entry's own build
+// script writes its `dist/` output into -- used below to clean stale
+// artifacts before rebuilding. Only covers the workspaces actually built by
+// this file: @agent-profile/schemas ships tracked source (no build step, no
+// `dist/`) and the `agent-profile` wrapper package has no build step either,
+// so neither belongs here.
+const buildWorkspaceDirectories = {
+  "@agent-profile/cli": path.join("apps", "cli"),
+  "@agent-profile/core": path.join("packages", "core"),
+  "@agent-profile/compiler": path.join("packages", "compiler"),
+  "@agent-profile/doctor": path.join("packages", "doctor"),
+  "@agent-profile/scanner": path.join("packages", "scanner"),
+};
 
 function runNpm(args) {
   const npmExecPath =
@@ -114,8 +129,47 @@ function runNpm(args) {
   });
 }
 
+// `tsc -b`'s incremental build (used by every buildWorkspaces entry's own
+// `build` script) does not prune output files whose source was since
+// deleted or renamed -- it only adds/updates outputs for sources that still
+// exist. A stale orphaned dist/ file from an earlier build would therefore
+// still be present (and still satisfy this file's required-asset/file-list
+// assertions, and still ship in the packed tarball) even though a real clean
+// checkout's build would never produce it. Removing each workspace's own
+// dist/ directory before invoking its build script makes the packed
+// artifacts this file inspects match what a clean-checkout build would
+// actually produce.
+//
+// Deleting dist/ alone is NOT sufficient, and was confirmed to actively
+// regress this fix during manual verification: `tsc -b` decides whether a
+// project needs recompiling from its `tsconfig.tsbuildinfo` incremental
+// cache (source-file hashes/timestamps), which lives next to tsconfig.json
+// -- NOT inside dist/ -- for every workspace here. With only dist/ removed,
+// `tsc -b` sees unchanged source hashes in the still-present buildinfo file,
+// concludes the project is already up to date, and skips emitting any
+// output at all, leaving dist/ completely empty (worse than the stale-file
+// problem this fix exists to solve). The buildinfo file must be removed
+// alongside dist/ so `tsc -b` performs a genuine full rebuild.
+function cleanBuildOutput(workspace) {
+  const directory = buildWorkspaceDirectories[workspace];
+  assert.ok(
+    directory,
+    `no known build output directory for workspace ${workspace} -- add it ` +
+      "to buildWorkspaceDirectories above",
+  );
+  const workspacePath = path.join(root, directory);
+  fs.rmSync(path.join(workspacePath, "dist"), {
+    recursive: true,
+    force: true,
+  });
+  fs.rmSync(path.join(workspacePath, "tsconfig.tsbuildinfo"), {
+    force: true,
+  });
+}
+
 function buildPackedWorkspaces() {
   for (const workspace of buildWorkspaces) {
+    cleanBuildOutput(workspace);
     runNpm(["run", "build", "--workspace", workspace]);
   }
 }
@@ -536,6 +590,16 @@ async function withFsWriteSentinel(action) {
         },
       });
     };
+    // Node's ESM named imports (e.g. `import { mkdir } from
+    // "node:fs/promises"`, used by shipped modules such as
+    // apps/cli/src/personal-activation.ts and model-probe.ts) are live
+    // bindings resolved from Node's synthetic ESM exports for the builtin
+    // module at link time -- patching properties on `fs.promises` alone does
+    // not update an already-linked named binding. `syncBuiltinESMExports()`
+    // re-syncs those bindings to the just-patched functions so a caller that
+    // uses the named-import form is instrumented too, exactly like
+    // withRuntimeSentinels above already does for its own patches.
+    syncBuiltinESMExports();
     const result = await action();
     assert.deepEqual(
       calls,
@@ -546,11 +610,77 @@ async function withFsWriteSentinel(action) {
   } finally {
     Object.assign(fs.promises, original);
     fs.promises.open = originalOpen;
+    syncBuiltinESMExports();
   }
 }
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Disclosed PARTIAL mitigation for "the packed graph never includes
+// @agent-profile/web" (this file's own workspaces/buildWorkspaces arrays
+// deliberately exclude it -- see the comment on `workspaces` above).
+//
+// A prior review round asked this file to build, pack, and extract
+// @agent-profile/web into the same runtime dependency graph as every other
+// declared @agent-profile/cli dependency, so a stale/missing/unusable
+// version of it would be caught the same way the other internal
+// dependencies are (via computeRuntimeDependencyGraph's exact-version
+// equality check). This file intentionally does NOT do that, for three
+// reasons:
+//   1. apps/cli/bundle.mjs's own comment documents that @agent-profile/web
+//      (the SvelteKit UI server) is kept external on purpose and is a
+//      separate build artifact, resolved at runtime via `require.resolve`
+//      ONLY for the `ui`/web-launch subcommand. Unlike core/compiler/doctor/
+//      scanner (which esbuild inlines via `alias`, so every code path
+//      through the bundled dist/index.js needs them unconditionally),
+//      @agent-profile/web is a lazy, conditional dependency.
+//   2. This file's only packed scenario is `init` (see the role-aware
+//      scenario below), which never touches the `ui` subcommand and
+//      therefore never exercises this dependency edge at all.
+//   3. The already-shipped sibling file
+//      scripts/release/phase31-published-journey.test.mjs has this exact
+//      same exclusion in its own `workspaces` array, and was never flagged
+//      for it.
+// Fully building/packing/extracting a SvelteKit app (a meaningfully heavier
+// build than any other workspace here) purely to validate a dependency edge
+// that nothing in this test's actual scenario exercises would be a
+// disproportionate scope expansion for a review-fix round.
+//
+// What this DOES check, cheaply, as a genuine (if narrower) sanity check: the
+// version of @agent-profile/web declared in apps/cli/package.json's
+// `dependencies` exactly matches @agent-profile/web's own `version` field, as
+// read directly from the SOURCE tree (no build or pack required for this
+// specific check -- it is a manifest-consistency check, not full
+// packed-artifact validation). This catches the cheap, common failure mode
+// (a stale version bump left behind in one manifest but not the other)
+// without paying for a full SvelteKit build. A future cycle that actually
+// tests the `ui` subcommand would need to build/pack/extract
+// @agent-profile/web for real, the way this file already does for every
+// other internal dependency.
+function assertWebDependencyVersionMatches() {
+  const cliManifest = JSON.parse(
+    fs.readFileSync(path.join(root, "apps", "cli", "package.json"), "utf8"),
+  );
+  const webManifest = JSON.parse(
+    fs.readFileSync(path.join(root, "apps", "web", "package.json"), "utf8"),
+  );
+  const declared = cliManifest.dependencies?.["@agent-profile/web"];
+  assert.ok(
+    declared,
+    "apps/cli/package.json must declare a @agent-profile/web dependency " +
+      "version for this cheap sanity check to validate",
+  );
+  assert.equal(
+    declared,
+    webManifest.version,
+    "apps/cli/package.json declares @agent-profile/web@" +
+      `${declared}, but apps/web/package.json's own version is ` +
+      `${webManifest.version} -- an actual consumer install of the packed ` +
+      "CLI would resolve a different @agent-profile/web release than the " +
+      "one actually built alongside it",
+  );
 }
 
 test("published Phase 31.5 model-selection journey: packed model-policy assets and role-aware init table (I9 bounded slice)", async (t) => {
@@ -560,6 +690,12 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const packDestination = path.join(temporary, "tarballs");
   fs.mkdirSync(packDestination);
+
+  // See assertWebDependencyVersionMatches's own doc comment above for why
+  // this is a disclosed partial mitigation (a source-tree manifest-version
+  // check) rather than the full packed-artifact validation a prior review
+  // round asked for.
+  assertWebDependencyVersionMatches();
 
   buildPackedWorkspaces();
   const packed = new Map(
@@ -606,8 +742,18 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
     ],
     "@agent-profile/doctor": ["dist/model-policy-doctor.js"],
   };
+  // Broadened beyond just `__fixtures__/` and the exact `.test.js`/`.test.ts`
+  // extensions: also match a plain `fixtures/` path segment (no leading
+  // double underscore, e.g. `dist/fixtures/model-policy.json`), a `.fixture.`
+  // infix anywhere in the filename (e.g. `model-policy.fixture.json`),
+  // `.spec.` suffixed files, and the `.mjs` extension for both `.test.` and
+  // (implicitly, via the shared alternation below) any other test-ish
+  // suffix, so a catalog/probe asset shipped under any of these ordinary
+  // fixture/test naming conventions is still caught. The `model-probe.*
+  // fixture`/`catalog.*fixture` substring checks are kept as an additional
+  // semantic-name catch-all independent of file layout.
   const testOnlyFixturePathPattern =
-    /(^|\/)__fixtures__\/|\.test\.(js|ts)$|model-probe.*fixture|catalog.*fixture/i;
+    /(^|\/)__fixtures__\/|(^|\/)fixtures\/|\.fixture\.|\.spec\.(js|ts|mjs)$|\.test\.(js|ts|mjs)$|model-probe.*fixture|catalog.*fixture/i;
 
   // Reads the tracked golden npm-pack fixture (fixtures/npm-pack/
   // agent-profile-<short-name>.json) for a given workspace name, so the
@@ -718,13 +864,32 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   const packedCompilerUrl = pathToFileURL(
     path.join(nodeModules, "@agent-profile", "compiler", "dist", "index.js"),
   ).href;
+  // Guarded the same way as the packed CLI import/runCli call below, and for
+  // the same reason: dist/index.js re-exports the compiler's broad module
+  // surface, so a network/child-process/net side effect in a compiler-only
+  // module that the CLI bundle tree-shakes away would otherwise execute here
+  // unrecorded. This is a separate withRuntimeSentinels call from the later
+  // one guarding the `init` scenario -- the compiler-oracle computation and
+  // the CLI init scenario are two conceptually distinct guarded actions, not
+  // merged into one closure. The immediately-following
+  // buildModelPolicyTargetTable("role-aware") call is pure computation, but
+  // stays inside the same guarded closure alongside the import it depends on.
   const {
-    buildModelPolicyTargetTable,
     MODEL_POLICY_PRIMARY_ROLE,
     MODEL_POLICY_TARGET_CATALOG_VERSION,
-  } = await import(packedCompilerUrl);
-
-  const expectedTable = buildModelPolicyTargetTable("role-aware");
+    expectedTable,
+  } = await withRuntimeSentinels(async () => {
+    const {
+      buildModelPolicyTargetTable,
+      MODEL_POLICY_PRIMARY_ROLE,
+      MODEL_POLICY_TARGET_CATALOG_VERSION,
+    } = await import(packedCompilerUrl);
+    return {
+      MODEL_POLICY_PRIMARY_ROLE,
+      MODEL_POLICY_TARGET_CATALOG_VERSION,
+      expectedTable: buildModelPolicyTargetTable("role-aware"),
+    };
+  });
   const expectedPrimaryRow = expectedTable.find(
     (row) => row.role === MODEL_POLICY_PRIMARY_ROLE,
   );
@@ -899,7 +1064,11 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   assert.match(stdoutAtConfirmation, /Model preset: role-aware/u);
   assert.match(stdoutAtConfirmation, modelCatalogVersionPattern);
   assert.match(stdoutAtConfirmation, codexSummaryPattern, stdoutAtConfirmation);
-  assert.match(stdoutAtConfirmation, claudeSummaryPattern, stdoutAtConfirmation);
+  assert.match(
+    stdoutAtConfirmation,
+    claudeSummaryPattern,
+    stdoutAtConfirmation,
+  );
 
   assert.match(stdout, /Model preset: role-aware/u);
   assert.match(stdout, modelCatalogVersionPattern);
