@@ -149,7 +149,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I6e | Upgrade write ownership refusal and rollback | done | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
 | I7 | Offline Doctor model policy and explicit recheck | done | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
 | I8 | Local UI model policy and user documentation | ready | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
-| I9 | Published model-selection journey and final integration | sequenced | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
+| I9 | Published model-selection journey and final integration | ready | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
 
 I1R added 2026-07-17: I1 was marked done but never wired `preset`, the
 `routine-implementer` role, or open exact-override acceptance into the public
@@ -1355,6 +1355,59 @@ unverified and Tabnine organization/private status rendering, retired-entry
 picker handling, and the entire documentation-impact deliverable (root/
 package README, schema, target, CLI, privacy, release docs). State stays
 `ready`, not `done`.
+
+I9 first RED-first `/implement-next` cycle completed 2026-07-24, a disclosed
+partial slice: added `scripts/release/phase31_5-published-journey.test.mjs`
+(picked up automatically by root `test:release`'s `scripts/release/*.test.mjs`
+glob), mirroring the already-shipped Phase 31 I8 precedent
+(`scripts/release/phase31-published-journey.test.mjs`)'s helper shape
+(`runNpm`, `buildPackedWorkspaces`, `npmPack`, `extractPackage`,
+`linkRuntimeDependency`, `snapshot`, `withRuntimeSentinels`) and building/
+packing the same six workspaces (`@agent-profile/web` excluded, as before).
+Proceeded despite I9's own `Dependencies: I1-I8` line technically being
+unsatisfied (I8 is still `ready`, not `done`) because I8's only remaining
+open scope is the web app's advanced-override UI and documentation, which
+none of I9's own acceptance criteria touch - disclosed, not silently
+resolved. This cycle closes three of I9's acceptance-criteria bullets, for
+the packed CLI `init` scenario only: (1) packed `@agent-profile/core`/
+`compiler`/`doctor` tarballs are proven (against the real
+`fixtures/npm-pack/agent-profile-*.json` file-list fixtures) to include their
+model-policy dist runtime assets and to contain no test-only model-probe/
+catalog fixture path; (2) the packed CLI's non-interactive-scripted `init`
+wizard is proven to render the exact role-aware default per-role model/
+effort/status summary in stdout before any write commits, with expected
+values computed from the actually-built `packages/compiler/dist/index.js`'s
+`buildModelPolicyTargetTable("role-aware")` output rather than hand-guessed
+strings; (3) that entire scenario runs inside a `withRuntimeSentinels`
+deny-all wrapper (fetch/child_process/net), proving zero external calls.
+One environment-only addition beyond the Phase 31 precedent: a `toTarPath`
+helper converts absolute Windows paths to POSIX-style (`/c/...`) form before
+invoking `tar`, working around a Git-for-Windows/MSYS `tar` quirk (confirmed,
+not assumed, to also affect the untouched Phase 31 precedent file on the same
+machine) that misparses `C:\...` paths as remote-host specs; scoped only to
+the new file, deliberately not backported to the precedent file. RED proof:
+the file did not exist before this cycle. GREEN proof: the new file's own
+`node --test` run passes 1/1; `npm run check` and `npm run verify:pack` both
+pass. The full `npm test` (every workspace plus all `scripts/release/*.test.mjs`)
+was not run this cycle, a disclosed time-budget tradeoff substituted with
+`npm run check` + `npm run verify:pack` + the new file's own direct run.
+Spec review passed COMPLIANT (verified the package-contents assertions
+against the real pack fixtures, traced the full `init` call chain to confirm
+the asserted stdout shape matches already-shipped, already-tested wizard
+output verbatim, and confirmed the network sentinel wraps the exact call
+under test). Code-quality review passed ACCEPTABLE with three non-blocking
+Minor notes (left as-is): inconsistent-but-currently-safe `escapeRegExp`
+usage across closed-enum vs. free-form interpolations, a doc comment on
+`toTarPath` that overclaims cross-platform-Windows-tar safety when only
+Git-for-Windows/MSYS tar was actually verified (CI is Ubuntu-only), and an
+unused `confirmModelProbe` prompt-call tracking field. Still left open for
+later I9 cycles: probe consent/decline and one normalized probe path,
+Tabnine organization/private manual path and the ownership-aware
+settings-file write path (absent/generated-owned reaching a real write;
+unowned staying preserved/advisory), normal compile lock reuse, upgrade
+retain/adopt, offline Doctor, the full published-asset inventory beyond
+model-policy assets, the final spec-to-test matrix document, and release-
+notes/documentation-impact deliverables. State stays `ready`, not `done`.
 
 ## phase-31.9: Upgrade "custom exact" model-policy strategy (`docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`)
 
