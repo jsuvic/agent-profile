@@ -1409,6 +1409,84 @@ retain/adopt, offline Doctor, the full published-asset inventory beyond
 model-policy assets, the final spec-to-test matrix document, and release-
 notes/documentation-impact deliverables. State stays `ready`, not `done`.
 
+I9 cycle 1 PR review fix rounds (2026-07-24, PR #133): a Codex bot automated
+review found and confirmed 12 real findings across three rounds against
+`scripts/release/phase31_5-published-journey.test.mjs`, all fixed with
+RED-first regression evidence (typically a scratch script proving the old
+code missed a synthetic violation the new code catches), all replied to and
+resolved as GitHub review threads. Round 1 (4 findings): (1) the role-aware
+table assertion checked only the primary role's stdout summary, missing a
+corrupted/omitted non-primary role - fixed by `assert.deepEqual`-ing the
+*entire* per-role table passed to `selectModelPreset` against the packed
+compiler's own `buildModelPolicyTargetTable` output (disclosed as a partial
+fix: exercising `createClackPrompts`'s own on-screen rendering of that table
+remains out of reach without a product-code change, since it is not part of
+the packed CLI's public surface today); (2) `withRuntimeSentinels`'s `deny()`
+only threw, so a forbidden call caught-and-normalized internally (e.g. a
+future probe/update-check path) would pass silently - fixed by recording
+denied surfaces and asserting none were reached after `action()` completes;
+(3) the packed CLI's dynamic import happened outside the sentinel-guarded
+closure - moved inside; (4) the declined-write assertion relied only on a
+before/after directory snapshot, which a write-then-restore sequence would
+not catch - fixed with a new opt-in `withFsWriteSentinel` instrumenting
+`node:fs/promises`'s mutating surface. Round 2 (4 more findings, all
+confirmed via investigation before fixing): (1) the `--force-local`/
+`toTarPath` tar workaround was GNU-tar-specific and would break on macOS/
+native Windows bsdtar - fixed with a cached `tarIsGnu()` runtime detection
+that only applies the workaround for GNU tar; (2) the four runtime
+dependencies (`ajv`/`yaml`/`jsonc-parser`/`@clack/prompts`) linked into the
+isolated `node_modules` graph were hard-coded rather than derived from the
+packed CLI's own manifest - fixed with `computeRuntimeDependencyGraph`, a
+BFS over each packed workspace's own published `package.json` starting from
+the packed CLI (added `@agent-profile/scanner` to the built/packed
+workspaces, since the CLI's manifest depends on it); (3) the role-aware
+table oracle imported from the raw workspace `packages/compiler/dist/
+index.js` rather than the packed compiler tarball, so a broken published
+entry point would go undetected - fixed by importing from the
+extracted, packed `@agent-profile/compiler` tarball instead; (4) the
+test-only-fixture-path scan covered only the three model-policy-owning
+workspaces, missing e.g. a fixture accidentally published by
+`@agent-profile/cli` itself - fixed by scanning every packed workspace.
+Round 3 (3 P2 findings plus one P1): (1) `computeRuntimeDependencyGraph`
+derived the dependency graph but discarded every declared version/range,
+so a stale or incompatible pin would still silently extract/link whatever
+was present - fixed by asserting internal `@agent-profile/*` edges'
+declared versions exactly match the dependency's own packed version, and
+external dependencies' declared ranges are satisfied by the linked root
+`node_modules` package, via a new deliberately minimal
+`satisfiesDeclaredVersionRange` comparator (exact versions and
+`^major.minor.patch` only, matching this repo's actual manifests - no
+`semver` dependency added, none is resolvable from this repo); (2)
+`withFsWriteSentinel` patched only module-level `fs.promises.*` functions,
+completely missing the real production write path
+(`packages/compiler/src/write-plan.ts`'s `writeTempBeside`, which mutates
+bytes and permissions through a `FileHandle`'s own instance methods after
+`fsPromises.open`) - fixed by wrapping `fs.promises.open` so the returned
+handle is a `Proxy` intercepting its mutating instance methods
+(`write`/`writev`/`writeFile`/`chmod`/`truncate`/`appendFile`/`datasync`),
+plus adding `chmod`/`chown` to the module-level list; (3) the preview
+assertions only checked the final accumulated stdout, not that the preview
+rendered *before* `confirmWritePlan` fired - fixed by snapshotting stdout
+inside that prompt callback and asserting the preview lines are already
+present in that snapshot, in addition to the final-stdout check. The P1
+finding asked for the full validation suite to actually be run before
+treating this cycle as reviewed and compliant (a prior round had
+substituted `npm run check`/`verify:pack` for time-budget reasons) - `npm
+test` was run in full: 1537 tests, 1523 pass, 1 fail, 13 skipped; the one
+failure is the untouched sibling `scripts/release/phase31-published-
+journey.test.mjs` hitting the identical MSYS/Git-for-Windows tar
+drive-letter bug already fixed in this cycle's own file but deliberately
+not backported to the sibling (a pre-existing, disclosed, environment-
+specific issue unrelated to this change); `npm run doctor` exits 1 on
+pre-existing `.claude/settings.json`/`.claude/settings.local.json`/
+`.mcp.json` drift unrelated to this file; no separate golden-test command
+exists (golden fixtures are ordinary `node:test` cases already inside
+`npm run test --workspace @agent-profile/compiler`, itself part of `npm
+test`). All three rounds' fixes were scoped to the one owned file; no
+product code, `TASKS.md` (until this entry), or the sibling precedent file
+were touched. State stays `ready`, not `done` - same open scope as the
+cycle-1 entry above.
+
 ## phase-31.9: Upgrade "custom exact" model-policy strategy (`docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`)
 
 Descoped from Phase 31.5 I6a on 2026-07-21 (see I6a's own brief amendment):
