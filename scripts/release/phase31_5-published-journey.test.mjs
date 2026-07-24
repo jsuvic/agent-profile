@@ -212,8 +212,16 @@ function linkRuntimeDependency(nodeModules, packageName) {
 // Deliberately minimal semver-range comparator covering exactly the two
 // version-string shapes present anywhere in this repo's manifests today (see
 // packages/*/package.json and apps/cli/package.json): an exact version
-// (equality), and a `^major.minor.patch` caret range (same major version,
-// and the actual version >= the declared minor.patch within that major).
+// (equality), and a `^major.minor.patch` caret range implementing real
+// npm/node-semver caret semantics, including the zero-major special cases:
+//   - declared major > 0: same major, and minor.patch >= the declared
+//     minor.patch within that major (`^2.9.0` allows `2.9.5` but not `3.0.0`).
+//   - declared major === 0 and declared minor > 0: same major.minor, and
+//     patch >= the declared patch (`^0.2.0` allows `0.2.5` but not `0.3.0` or
+//     `0.1.9`) -- minor is locked because pre-1.0 minor bumps are breaking.
+//   - declared major === 0 and declared minor === 0: locks to that EXACT
+//     version only (`^0.0.3` allows only `0.0.3`) -- pre-0.1.0 patch bumps
+//     are breaking too.
 // This is NOT a general-purpose npm semver-range implementation -- no
 // `semver` package is resolvable from this repo (this file must not add a
 // new dependency), and a full implementation is unnecessary for the shapes
@@ -242,9 +250,18 @@ function satisfiesDeclaredVersionRange(declaredRange, actualVersion) {
   const actualMajor = Number(actual[1]);
   const actualMinor = Number(actual[2]);
   const actualPatch = Number(actual[3]);
-  if (actualMajor !== declaredMajor) return false;
-  if (actualMinor !== declaredMinor) return actualMinor > declaredMinor;
-  return actualPatch >= declaredPatch;
+  if (declaredMajor > 0) {
+    if (actualMajor !== declaredMajor) return false;
+    if (actualMinor !== declaredMinor) return actualMinor > declaredMinor;
+    return actualPatch >= declaredPatch;
+  }
+  if (declaredMinor > 0) {
+    if (actualMajor !== 0 || actualMinor !== declaredMinor) return false;
+    return actualPatch >= declaredPatch;
+  }
+  return (
+    actualMajor === 0 && actualMinor === 0 && actualPatch === declaredPatch
+  );
 }
 
 // Derives the runtime dependency graph reachable from the packed CLI's own
@@ -554,10 +571,20 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
 
   // -------------------------------------------------------------------
   // Slice 1: packed model-policy runtime assets, and no test-only fixture
-  // paths. Required-asset paths were confirmed against the already-tracked
-  // golden fixtures at fixtures/npm-pack/agent-profile-{core,compiler,
-  // doctor}.json (which grep for "model-policy" there listed these exact
-  // paths). The test-only fixture-path pattern below was confirmed by
+  // paths. The required-asset paths below are checked against TWO
+  // independent, live sources of truth -- not just hard-coded against a
+  // human's one-time manual reading of the golden fixtures -- so a
+  // divergence in either pairing fails loudly instead of silently
+  // tolerating drift:
+  //   (a) the already-tracked golden fixtures at
+  //       fixtures/npm-pack/agent-profile-{core,compiler,doctor}.json, read
+  //       from disk below via readNpmPackFixture and asserted to still list
+  //       every required path in their own `files` array; and
+  //   (b) the freshly packed tarball's own `files` list, produced by the
+  //       real `npm pack` invocation above.
+  // This creates genuine three-way runtime coupling: this hard-coded
+  // expectation list <-> the golden fixture file <-> the actual fresh pack
+  // output. The test-only fixture-path pattern below was confirmed by
   // reading apps/cli/src/model-probe.test.ts and
   // packages/doctor/src/model-policy-doctor.test.ts in full: both build their
   // fixture profiles/catalog rows as inline object literals in the test file
@@ -582,14 +609,39 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   const testOnlyFixturePathPattern =
     /(^|\/)__fixtures__\/|\.test\.(js|ts)$|model-probe.*fixture|catalog.*fixture/i;
 
+  // Reads the tracked golden npm-pack fixture (fixtures/npm-pack/
+  // agent-profile-<short-name>.json) for a given workspace name, so the
+  // required-asset assertions below can be checked against that fixture's
+  // own recorded `files` array at runtime instead of trusting a one-time
+  // manual cross-check.
+  function readNpmPackFixture(workspace) {
+    const shortName = workspace.replace(/^@agent-profile\//, "");
+    const fixturePath = path.join(
+      root,
+      "fixtures",
+      "npm-pack",
+      `agent-profile-${shortName}.json`,
+    );
+    return JSON.parse(fs.readFileSync(fixturePath, "utf8"));
+  }
+
   for (const [workspace, requiredAssets] of Object.entries(
     modelPolicyRequiredByWorkspace,
   )) {
     const files = packed.get(workspace).files;
+    const fixtureFiles = readNpmPackFixture(workspace).files;
     for (const asset of requiredAssets) {
       assert.ok(
         files.includes(asset),
         `${workspace} missing required model-policy runtime asset ${asset}`,
+      );
+      assert.ok(
+        fixtureFiles.includes(asset),
+        `${workspace}'s tracked golden npm-pack fixture (fixtures/npm-pack/` +
+          `agent-profile-${workspace.replace(/^@agent-profile\//, "")}.json) ` +
+          `no longer lists required model-policy runtime asset ${asset} -- ` +
+          "this hard-coded expectation and the golden fixture have drifted " +
+          "apart",
       );
     }
   }
