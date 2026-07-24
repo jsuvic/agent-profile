@@ -7,6 +7,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
+import { parseProfileYaml } from "@agent-profile/core";
+
 import {
   computeProfileDiff,
   readJsonRequestBody,
@@ -219,6 +221,63 @@ test("validateCandidate returns invalid_encoding for NUL characters", () => {
       assert.deepEqual(result.paths, ["/profile/description"]);
     }
   }
+});
+
+test("validateCandidate forces subagentPolicy to the subagentPolicyOverride option, ignoring the candidate's own value", () => {
+  const onDiskSubagentPolicy = {
+    enabled: true,
+    preset: "quality-first",
+    roles: {
+      implementer: {
+        capability: "strongest",
+        effort: "high",
+      },
+    },
+  } as const;
+
+  // Simulate what the browser now always sends: no subagentPolicy key at all.
+  const candidateWithoutSubagentPolicy = { ...VALID_PROFILE_VALUE };
+  const result = validateCandidate(candidateWithoutSubagentPolicy, {
+    subagentPolicyOverride: onDiskSubagentPolicy,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.match(result.yaml, /subagentPolicy:/u);
+  assert.match(result.yaml, /preset: quality-first/u);
+
+  const reparsed = parseProfileYaml(result.yaml);
+  assert.equal(reparsed.ok, true);
+  if (!reparsed.ok) return;
+  assert.deepEqual(reparsed.profile.subagentPolicy, onDiskSubagentPolicy);
+});
+
+test("validateCandidate forces subagentPolicy to undefined via subagentPolicyOverride when disk has none, even if the candidate supplies one", () => {
+  const candidateWithSubagentPolicy = {
+    ...VALID_PROFILE_VALUE,
+    subagentPolicy: { enabled: true },
+  };
+
+  const result = validateCandidate(candidateWithSubagentPolicy, {
+    subagentPolicyOverride: undefined,
+  });
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.ok(!result.yaml.includes("subagentPolicy:"));
+});
+
+test("validateCandidate leaves the candidate's own subagentPolicy untouched when options is omitted", () => {
+  const candidateWithSubagentPolicy = {
+    ...VALID_PROFILE_VALUE,
+    subagentPolicy: { enabled: true, preset: "cost-conscious" },
+  };
+
+  const result = validateCandidate(candidateWithSubagentPolicy);
+
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.match(result.yaml, /preset: cost-conscious/u);
 });
 
 test("readJsonRequestBody rejects raw NUL bytes", async () => {

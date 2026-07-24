@@ -114,6 +114,80 @@ test("profile apply enforces the JSON body size cap", async () => {
   });
 });
 
+const VALID_YAML_WITH_SUBAGENT_POLICY = `version: 1
+profile:
+  name: route-test-profile
+  description: Route test profile.
+stack:
+  languages: [typescript]
+  frameworks: [sveltekit]
+  packageManagers: [npm]
+  testing: []
+clients:
+  tabnine: { enabled: false }
+  codex: { enabled: true }
+  claude: { enabled: true }
+workflow:
+  sdd: true
+  tdd: true
+  finalReview: false
+subagentPolicy:
+  enabled: true
+  preset: quality-first
+`;
+
+test("profile plan preserves the on-disk subagentPolicy (preset included) even when the submitted candidate omits it", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "agent-profile-routes-"));
+  const previousRoot = process.env.AGENT_PROFILE_ROOT;
+  process.env.AGENT_PROFILE_ROOT = dir;
+  _clearStoresForTesting();
+  try {
+    await writeFile(
+      path.join(dir, "ai-profile.yaml"),
+      VALID_YAML_WITH_SUBAGENT_POLICY,
+      "utf8",
+    );
+    const csrfToken = issueCsrfToken();
+    const base = await currentEtag();
+
+    // The candidate mirrors what the browser now always sends: no
+    // subagentPolicy key at all.
+    const response = await planProfile({
+      request: jsonRequest(
+        "/api/profile/plan",
+        { candidate: CANDIDATE, baseEtag: base },
+        csrfToken,
+      ),
+    } as Parameters<typeof planProfile>[0]);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.action, "change");
+
+    // Response body must never leak the raw subagentPolicy value.
+    assert.equal(JSON.stringify(body).includes("subagentPolicy"), false);
+
+    const { parseProfileYaml } = await import("@agent-profile/core");
+    const { consumePlan } = await import("./tokenStore.js");
+    const plan = consumePlan(body.planToken as string);
+    assert.ok(plan);
+    const reparsed = parseProfileYaml(plan!.candidateYaml);
+    assert.equal(reparsed.ok, true);
+    if (!reparsed.ok) return;
+    assert.deepEqual(reparsed.profile.subagentPolicy, {
+      enabled: true,
+      preset: "quality-first",
+    });
+  } finally {
+    _clearStoresForTesting();
+    if (previousRoot === undefined) {
+      delete process.env.AGENT_PROFILE_ROOT;
+    } else {
+      process.env.AGENT_PROFILE_ROOT = previousRoot;
+    }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("profile apply writes a reviewed plan and consumes its plan token", async () => {
   await withTempProject(async (rootDir) => {
     const csrfToken = issueCsrfToken();

@@ -175,24 +175,42 @@ export async function readJsonRequestBody(
   }
 }
 
-export function validateCandidate(candidate: unknown): CandidateValidation {
+export function validateCandidate(
+  candidate: unknown,
+  options?: { subagentPolicyOverride?: AiProfile["subagentPolicy"] },
+): CandidateValidation {
   const result = validateProfileValue(candidate);
   if (!result.ok) {
     return { ok: false, reason: "invalid", issues: result.issues };
   }
 
-  const nulPaths = findNulStringPaths(result.profile);
+  // The web UI does not (this cycle) let a user edit subagentPolicy, so the
+  // server is the sole source of truth for it: when `options` is supplied,
+  // the caller-supplied value (the trusted on-disk profile) always wins,
+  // regardless of what the submitted candidate did or didn't contain -
+  // including overriding to `undefined` when disk has no subagentPolicy at
+  // all. Do NOT simplify this to
+  // `options?.subagentPolicyOverride ?? result.profile.subagentPolicy`;
+  // that would silently turn "override to absent" into "leave alone" and
+  // reopen the exact bug this option exists to prevent. Omitting `options`
+  // entirely (not `{ subagentPolicyOverride: undefined }`) is the only way
+  // to mean "leave the candidate's own subagentPolicy untouched".
+  const profile: AiProfile = options
+    ? { ...result.profile, subagentPolicy: options.subagentPolicyOverride }
+    : result.profile;
+
+  const nulPaths = findNulStringPaths(profile);
   if (nulPaths.length > 0) {
     return { ok: false, reason: "invalid_encoding", paths: nulPaths };
   }
 
   // Check all string-valued fields for secret-like literals.
-  const secretPaths = findSecretLikePaths(result.profile);
+  const secretPaths = findSecretLikePaths(profile);
   if (secretPaths.length > 0) {
     return { ok: false, reason: "secret_like", paths: secretPaths };
   }
 
-  const yaml = renderProfileYaml(result.profile);
+  const yaml = renderProfileYaml(profile);
   return { ok: true, yaml, etag: computeFileEtag(Buffer.from(yaml, "utf8")) };
 }
 
