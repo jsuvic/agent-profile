@@ -209,6 +209,44 @@ function linkRuntimeDependency(nodeModules, packageName) {
   fs.symlinkSync(source, destination, "junction");
 }
 
+// Deliberately minimal semver-range comparator covering exactly the two
+// version-string shapes present anywhere in this repo's manifests today (see
+// packages/*/package.json and apps/cli/package.json): an exact version
+// (equality), and a `^major.minor.patch` caret range (same major version,
+// and the actual version >= the declared minor.patch within that major).
+// This is NOT a general-purpose npm semver-range implementation -- no
+// `semver` package is resolvable from this repo (this file must not add a
+// new dependency), and a full implementation is unnecessary for the shapes
+// this repo actually uses. An unrecognized shape throws rather than silently
+// passing, so a future manifest using syntax this comparator does not
+// understand (e.g. `~`, `>=`, `||`) fails loudly instead of masking a real
+// mismatch.
+function satisfiesDeclaredVersionRange(declaredRange, actualVersion) {
+  if (/^\d+\.\d+\.\d+$/.test(declaredRange)) {
+    return declaredRange === actualVersion;
+  }
+  const caret = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(declaredRange);
+  if (!caret) {
+    throw new Error(
+      `unsupported dependency version-range shape "${declaredRange}" -- ` +
+        "this comparator only understands exact versions and " +
+        "^major.minor.patch caret ranges, the only two shapes this repo's " +
+        "manifests currently use",
+    );
+  }
+  const declaredMajor = Number(caret[1]);
+  const declaredMinor = Number(caret[2]);
+  const declaredPatch = Number(caret[3]);
+  const actual = /^(\d+)\.(\d+)\.(\d+)/.exec(actualVersion);
+  if (!actual) return false;
+  const actualMajor = Number(actual[1]);
+  const actualMinor = Number(actual[2]);
+  const actualPatch = Number(actual[3]);
+  if (actualMajor !== declaredMajor) return false;
+  if (actualMinor !== declaredMinor) return actualMinor > declaredMinor;
+  return actualPatch >= declaredPatch;
+}
+
 // Derives the runtime dependency graph reachable from the packed CLI's own
 // PUBLISHED package.json, instead of hard-coding it: starting from
 // @agent-profile/cli, reads each packed tarball's own package.json
@@ -224,9 +262,23 @@ function linkRuntimeDependency(nodeModules, packageName) {
 // module" failure when the packed CLI (or, for Slice 2's oracle below, the
 // packed compiler) is actually imported and run, rather than being masked by
 // a hard-coded list that happens to match today's dependency tree.
+//
+// This also validates every declared dependency's version/range against the
+// runtime evidence actually available at pack time, so a stale or
+// incompatible pin fails loudly here instead of this fixture silently
+// extracting/linking whatever happens to be present: for each internal
+// @agent-profile/* edge, the declared version must exactly equal the
+// dependency's own packed tarball version (an actual consumer install would
+// otherwise resolve a different release or fail); for each external
+// dependency, the declared range must be satisfied by the version already
+// installed at this repo's own root node_modules/<name> (the same package
+// linkRuntimeDependency will symlink into the graph below).
 function computeRuntimeDependencyGraph(packed) {
   const workspaceClosure = new Set();
   const externalDependencies = new Set();
+  const packedVersionsByWorkspace = new Map();
+  const internalDependencyEdges = [];
+  const externalDependencyEdges = [];
   const queue = ["@agent-profile/cli"];
   while (queue.length > 0) {
     const workspaceName = queue.shift();
@@ -240,15 +292,64 @@ function computeRuntimeDependencyGraph(packed) {
         "buildWorkspaces arrays",
     );
     const manifest = readPackedPackageJson(entry.tarball);
-    for (const dependencyName of Object.keys(manifest.dependencies ?? {})) {
+    packedVersionsByWorkspace.set(workspaceName, manifest.version);
+    for (const [dependencyName, declaredVersion] of Object.entries(
+      manifest.dependencies ?? {},
+    )) {
       if (dependencyName === "@agent-profile/web") continue;
       if (dependencyName.startsWith("@agent-profile/")) {
         queue.push(dependencyName);
+        internalDependencyEdges.push({
+          from: workspaceName,
+          to: dependencyName,
+          declared: declaredVersion,
+        });
       } else {
         externalDependencies.add(dependencyName);
+        externalDependencyEdges.push({
+          from: workspaceName,
+          name: dependencyName,
+          declared: declaredVersion,
+        });
       }
     }
   }
+
+  for (const { from, to, declared } of internalDependencyEdges) {
+    const actual = packedVersionsByWorkspace.get(to);
+    assert.equal(
+      declared,
+      actual,
+      `${from}'s packed package.json declares internal dependency ` +
+        `${to}@${declared}, but the packed ${to} tarball is version ` +
+        `${actual} -- an actual consumer install would resolve a different ` +
+        "release or fail",
+    );
+  }
+  for (const { from, name, declared } of externalDependencyEdges) {
+    const installedManifestPath = path.join(
+      root,
+      "node_modules",
+      ...name.split("/"),
+      "package.json",
+    );
+    assert.ok(
+      fs.existsSync(installedManifestPath),
+      `expected external dependency ${name} (required by ${from}) to be ` +
+        `installed at the repo root ${installedManifestPath}`,
+    );
+    const installedVersion = JSON.parse(
+      fs.readFileSync(installedManifestPath, "utf8"),
+    ).version;
+    assert.ok(
+      satisfiesDeclaredVersionRange(declared, installedVersion),
+      `${from}'s packed package.json declares external dependency ` +
+        `${name}@${declared}, but the linked root node_modules/${name} ` +
+        `package is version ${installedVersion}, which does not satisfy ` +
+        "that range",
+    );
+  }
+
   return { workspaceClosure, externalDependencies };
 }
 
@@ -349,6 +450,30 @@ async function withRuntimeSentinels(action) {
 // unchanged. Deliberately NOT folded into withRuntimeSentinels itself
 // (which stays network/process-only) because later I9 cycles need real
 // writes to succeed (e.g. a Tabnine settings-file write-path scenario).
+// `chmod`/`chown` are plain module-level fs.promises functions like the
+// other entries below and are instrumented the same way. `fs.promises.open`
+// is different: it returns a `FileHandle`, and the actual bytes/metadata
+// mutations the shipped writer performs (packages/compiler/src/write-plan.ts
+// writeTempBeside's `fd.writeFile(...)`/`fd.sync()` and its `chmod`) happen
+// via that handle's OWN instance methods, which are separate function
+// objects untouched by patching the module-level fs.promises functions
+// alone. `fs.promises.open` is therefore wrapped so the returned handle is
+// replaced with a `Proxy` that intercepts only its mutating instance methods
+// (`write`, `writev`, `writeFile`, `chmod`, `truncate`, `appendFile`,
+// `datasync`) -- not `read`, `stat`, `sync`, or `close`, which do not mutate
+// content -- recording a call and then delegating to the real method (bound
+// to the underlying handle so `this` stays correct); every other property
+// (including non-function ones like `.fd`) passes through untouched.
+const fileHandleMutatingMethods = [
+  "write",
+  "writev",
+  "writeFile",
+  "chmod",
+  "truncate",
+  "appendFile",
+  "datasync",
+];
+
 async function withFsWriteSentinel(action) {
   const mutatingMethods = [
     "writeFile",
@@ -359,10 +484,13 @@ async function withFsWriteSentinel(action) {
     "copyFile",
     "appendFile",
     "symlink",
+    "chmod",
+    "chown",
   ];
   const original = Object.fromEntries(
     mutatingMethods.map((name) => [name, fs.promises[name]]),
   );
+  const originalOpen = fs.promises.open;
   const calls = [];
   try {
     for (const name of mutatingMethods) {
@@ -371,6 +499,26 @@ async function withFsWriteSentinel(action) {
         return original[name](...args);
       };
     }
+    fs.promises.open = async (...args) => {
+      const handle = await originalOpen(...args);
+      const openPath = String(args[0]);
+      return new Proxy(handle, {
+        get(target, property) {
+          const value = Reflect.get(target, property, target);
+          if (typeof value !== "function") return value;
+          if (
+            typeof property === "string" &&
+            fileHandleMutatingMethods.includes(property)
+          ) {
+            return (...callArgs) => {
+              calls.push(`FileHandle.${property}(${openPath})`);
+              return value.apply(target, callArgs);
+            };
+          }
+          return value.bind(target);
+        },
+      });
+    };
     const result = await action();
     assert.deepEqual(
       calls,
@@ -380,6 +528,7 @@ async function withFsWriteSentinel(action) {
     return result;
   } finally {
     Object.assign(fs.promises, original);
+    fs.promises.open = originalOpen;
   }
 }
 
@@ -582,6 +731,13 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       return def;
     },
     async confirmWritePlan() {
+      // Snapshot stdout at the exact moment confirmation is requested (see
+      // stdoutAtConfirmation below), so the model-policy preview assertions
+      // prove the preview actually rendered *before* this callback fires --
+      // not merely that it appears somewhere in the final accumulated
+      // stdout, which would not catch a regression that emitted the preview
+      // after this callback instead of before it.
+      stdoutAtConfirmation = stdout;
       return false;
     },
     async selectModelPreset({ default: def, tables }) {
@@ -597,6 +753,9 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   const before = snapshot(repository);
   let stdout = "";
   let stderr = "";
+  // Set by prompts.confirmWritePlan above, the moment confirmation is
+  // requested -- see the preview-before-confirmation assertions below.
+  let stdoutAtConfirmation;
   // Both the dynamic import of the packed CLI entry point AND the runCli()
   // call itself must happen while the runtime sentinels are installed, so a
   // network/child-process/net side effect during module initialization
@@ -657,28 +816,42 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       "compiler's buildModelPolicyTargetTable output for every role",
   );
 
+  // The four regexes below assert the required model-policy preview summary
+  // lines. Assert them first against stdoutAtConfirmation -- the stdout
+  // snapshot captured *inside* prompts.confirmWritePlan, before it returns
+  // -- so this proves the preview genuinely rendered before the confirmation
+  // prompt fired, not merely that it appears somewhere in the final
+  // accumulated stdout (which a regression that reordered the preview to
+  // print *after* confirmation would not be caught by). The same assertions
+  // are then repeated against the final stdout as a belt-and-braces check
+  // that the preview content also survives to the end unmodified.
+  assert.ok(
+    stdoutAtConfirmation !== undefined,
+    "prompts.confirmWritePlan must be invoked during the role-aware init " +
+      "scenario",
+  );
+  const modelCatalogVersionPattern = new RegExp(
+    `Model catalog version: ${MODEL_POLICY_TARGET_CATALOG_VERSION}\\b`,
+  );
+  const codexSummaryPattern = new RegExp(
+    `Codex \\(${expectedPrimaryRow.role}\\): ` +
+      `${escapeRegExp(expectedPrimaryRow.codex.model ?? "(none)")} ` +
+      `\\[${expectedPrimaryRow.codex.lifecycle}, ${expectedPrimaryRow.codex.primaryStatus}\\]`,
+  );
+  const claudeSummaryPattern = new RegExp(
+    `Claude \\(${expectedPrimaryRow.role}\\): ` +
+      `${escapeRegExp(expectedPrimaryRow.claude.model ?? "(none)")} ` +
+      `\\[${expectedPrimaryRow.claude.lifecycle}, ${expectedPrimaryRow.claude.primaryStatus}\\]`,
+  );
+
+  assert.match(stdoutAtConfirmation, /Model preset: role-aware/u);
+  assert.match(stdoutAtConfirmation, modelCatalogVersionPattern);
+  assert.match(stdoutAtConfirmation, codexSummaryPattern, stdoutAtConfirmation);
+  assert.match(stdoutAtConfirmation, claudeSummaryPattern, stdoutAtConfirmation);
+
   assert.match(stdout, /Model preset: role-aware/u);
-  assert.match(
-    stdout,
-    new RegExp(`Model catalog version: ${MODEL_POLICY_TARGET_CATALOG_VERSION}\\b`),
-  );
-  assert.match(
-    stdout,
-    new RegExp(
-      `Codex \\(${expectedPrimaryRow.role}\\): ` +
-        `${escapeRegExp(expectedPrimaryRow.codex.model ?? "(none)")} ` +
-        `\\[${expectedPrimaryRow.codex.lifecycle}, ${expectedPrimaryRow.codex.primaryStatus}\\]`,
-    ),
-    stdout,
-  );
-  assert.match(
-    stdout,
-    new RegExp(
-      `Claude \\(${expectedPrimaryRow.role}\\): ` +
-        `${escapeRegExp(expectedPrimaryRow.claude.model ?? "(none)")} ` +
-        `\\[${expectedPrimaryRow.claude.lifecycle}, ${expectedPrimaryRow.claude.primaryStatus}\\]`,
-    ),
-    stdout,
-  );
+  assert.match(stdout, modelCatalogVersionPattern);
+  assert.match(stdout, codexSummaryPattern, stdout);
+  assert.match(stdout, claudeSummaryPattern, stdout);
   assert.match(stdout, /No files written\./u);
 });
