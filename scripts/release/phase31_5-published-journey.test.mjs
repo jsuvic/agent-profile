@@ -58,21 +58,26 @@ import { pathToFileURL } from "node:url";
 
 const root = path.resolve(import.meta.dirname, "..", "..");
 
-// Same six packed workspaces as the Phase 31 published journey: the packed
-// `agent-profile` CLI needs all of them at runtime. @agent-profile/web is
-// intentionally out of scope for this file (never built, packed, or touched).
+// Same six packed workspaces as the Phase 31 published journey, plus
+// @agent-profile/scanner (a real runtime dependency of the packed CLI's own
+// manifest -- see computeRuntimeDependencyGraph below, which needs its
+// packed package.json to derive the runtime dependency graph instead of
+// hard-coding it). @agent-profile/web is intentionally out of scope for this
+// file (never built, packed, or touched).
 const workspaces = [
   "agent-profile",
   "@agent-profile/cli",
   "@agent-profile/core",
   "@agent-profile/compiler",
   "@agent-profile/doctor",
+  "@agent-profile/scanner",
   "@agent-profile/schemas",
 ];
 const buildWorkspaces = [
   "@agent-profile/core",
   "@agent-profile/compiler",
   "@agent-profile/doctor",
+  "@agent-profile/scanner",
   "@agent-profile/cli",
 ];
 
@@ -148,16 +153,36 @@ function toTarPath(absolutePath) {
     .replace(/^([A-Za-z]):\//, (_match, drive) => `/${drive.toLowerCase()}/`);
 }
 
+// The `--force-local` + POSIX-path workaround above only applies to GNU tar
+// (bundled with Git-for-Windows/MSYS, and the default on the ubuntu-latest
+// CI runner); bsdtar (macOS, and the tar.exe shipped in System32 on native
+// Windows 10+) does not understand `--force-local` at all and rejects it
+// before extraction, and has no MSYS drive-letter "host:path" misparsing
+// problem to work around in the first place, so plain absolute paths and no
+// extra flags are correct there. Detect the actual local `tar` implementation
+// once and cache the result, rather than re-spawning `tar --version` for
+// every extraction call in this file.
+let tarIsGnuCache;
+function tarIsGnu() {
+  if (tarIsGnuCache === undefined) {
+    let version = "";
+    try {
+      version = execFileSync("tar", ["--version"], { encoding: "utf8" });
+    } catch {
+      version = "";
+    }
+    tarIsGnuCache = version.includes("GNU tar");
+  }
+  return tarIsGnuCache;
+}
+
 function extractPackage(tarball, destination) {
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), "apc-pack-extract-"));
   try {
-    execFileSync("tar", [
-      "--force-local",
-      "-xzf",
-      toTarPath(tarball),
-      "-C",
-      toTarPath(staging),
-    ]);
+    const args = tarIsGnu()
+      ? ["--force-local", "-xzf", toTarPath(tarball), "-C", toTarPath(staging)]
+      : ["-xzf", tarball, "-C", staging];
+    execFileSync("tar", args);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.renameSync(path.join(staging, "package"), destination);
   } finally {
@@ -165,11 +190,66 @@ function extractPackage(tarball, destination) {
   }
 }
 
+// Reads a single member's bytes directly out of an already-packed tarball
+// without a full extraction to disk -- used to inspect the PUBLISHED
+// package.json (not the source-tree one) when deriving the runtime
+// dependency graph below. Applies the same GNU-tar-only workaround as
+// extractPackage above, for the same reason.
+function readPackedPackageJson(tarball) {
+  const args = tarIsGnu()
+    ? ["--force-local", "-xzOf", toTarPath(tarball), "package/package.json"]
+    : ["-xzOf", tarball, "package/package.json"];
+  return JSON.parse(execFileSync("tar", args, { encoding: "utf8" }));
+}
+
 function linkRuntimeDependency(nodeModules, packageName) {
   const source = path.join(root, "node_modules", ...packageName.split("/"));
   const destination = path.join(nodeModules, ...packageName.split("/"));
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.symlinkSync(source, destination, "junction");
+}
+
+// Derives the runtime dependency graph reachable from the packed CLI's own
+// PUBLISHED package.json, instead of hard-coding it: starting from
+// @agent-profile/cli, reads each packed tarball's own package.json
+// (readPackedPackageJson, not the source-tree package.json) and recurses
+// into every @agent-profile/* dependency it declares, except
+// @agent-profile/web (apps/cli/bundle.mjs deliberately keeps it external and
+// resolves it at runtime via require.resolve for command paths this file
+// does not exercise; it is never built or packed here). Every other
+// dependency name encountered is collected as a real npm runtime dependency
+// that must be linked into the node_modules graph below. This makes a future
+// manifest regression -- an omitted or misdeclared dependency in any packed
+// workspace reachable from the CLI -- surface as a genuine "Cannot find
+// module" failure when the packed CLI (or, for Slice 2's oracle below, the
+// packed compiler) is actually imported and run, rather than being masked by
+// a hard-coded list that happens to match today's dependency tree.
+function computeRuntimeDependencyGraph(packed) {
+  const workspaceClosure = new Set();
+  const externalDependencies = new Set();
+  const queue = ["@agent-profile/cli"];
+  while (queue.length > 0) {
+    const workspaceName = queue.shift();
+    if (workspaceClosure.has(workspaceName)) continue;
+    workspaceClosure.add(workspaceName);
+    const entry = packed.get(workspaceName);
+    assert.ok(
+      entry,
+      `packed workspace ${workspaceName} not found while deriving the ` +
+        "runtime dependency graph -- add it to this file's workspaces/" +
+        "buildWorkspaces arrays",
+    );
+    const manifest = readPackedPackageJson(entry.tarball);
+    for (const dependencyName of Object.keys(manifest.dependencies ?? {})) {
+      if (dependencyName === "@agent-profile/web") continue;
+      if (dependencyName.startsWith("@agent-profile/")) {
+        queue.push(dependencyName);
+      } else {
+        externalDependencies.add(dependencyName);
+      }
+    }
+  }
+  return { workspaceClosure, externalDependencies };
 }
 
 function snapshot(directory) {
@@ -363,7 +443,18 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         `${workspace} missing required model-policy runtime asset ${asset}`,
       );
     }
-    const testOnlyFixturePaths = files.filter((filePath) =>
+  }
+
+  // The forbidden-fixture-path scan is intentionally NOT scoped to just the
+  // three model-policy-owning workspaces above: a fixture could just as
+  // easily be accidentally published by @agent-profile/cli (which owns the
+  // model-probe implementation) or by any other packed workspace, so this
+  // covers every entry in `packed` -- the whole published graph -- kept
+  // separate from the required-runtime-asset assertions above, which stay
+  // scoped to the three workspaces that actually ship model-policy runtime
+  // assets.
+  for (const [workspace, entry] of packed) {
+    const testOnlyFixturePaths = entry.files.filter((filePath) =>
       testOnlyFixturePathPattern.test(filePath),
     );
     assert.deepEqual(
@@ -388,11 +479,26 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   // createClackPrompts's own on-screen table rendering.
   // -------------------------------------------------------------------
   const nodeModules = path.join(temporary, "graph", "node_modules");
-  extractPackage(
-    packed.get("@agent-profile/cli").tarball,
-    path.join(nodeModules, "@agent-profile", "cli"),
-  );
-  for (const dependency of ["ajv", "yaml", "jsonc-parser", "@clack/prompts"]) {
+  const { workspaceClosure, externalDependencies } =
+    computeRuntimeDependencyGraph(packed);
+  // Extract every @agent-profile/* workspace actually reachable from the
+  // packed CLI's own published manifest (derived above, not a hard-coded
+  // pair) into the same node_modules graph. This is required for more than
+  // just the CLI itself: Slice 2's oracle below imports the packed
+  // @agent-profile/compiler tarball directly, and the packed compiler's own
+  // compiled dist/index.js contains real, unbundled `import ... from
+  // "@agent-profile/core"` statements (compiler is built with plain `tsc`,
+  // not esbuild, unlike the CLI) which in turn unbundled-imports
+  // "@agent-profile/schemas" -- both of those must be real packages inside
+  // this same graph directory for that import to resolve at all, exactly as
+  // it would for a real npm consumer installation.
+  for (const workspaceName of workspaceClosure) {
+    extractPackage(
+      packed.get(workspaceName).tarball,
+      path.join(nodeModules, ...workspaceName.split("/")),
+    );
+  }
+  for (const dependency of externalDependencies) {
     linkRuntimeDependency(nodeModules, dependency);
   }
 
@@ -400,19 +506,22 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
     path.join(nodeModules, "@agent-profile", "cli", "dist", "index.js"),
   ).href;
 
-  // Compute the expected role-aware table from the exact same built dist
-  // module that Slice 1 just confirmed gets packed into the
-  // @agent-profile/compiler tarball (packages/compiler/dist/index.js on disk
-  // after buildPackedWorkspaces() above) -- real production output, not a
-  // hand-guessed model name.
-  const builtCompilerUrl = pathToFileURL(
-    path.join(root, "packages", "compiler", "dist", "index.js"),
+  // Compute the expected role-aware table from the packed
+  // @agent-profile/compiler tarball itself (extracted into the graph above),
+  // not the raw workspace packages/compiler/dist/index.js on disk. This
+  // makes Slice 2's oracle real runtime evidence that compiler consumers
+  // receive the advertised model-policy API from the PUBLISHED artifact --
+  // if the packed compiler's archived entry point or export wiring ever
+  // became unusable while the CLI bundle stayed healthy, this import would
+  // fail here instead of silently succeeding off the local build output.
+  const packedCompilerUrl = pathToFileURL(
+    path.join(nodeModules, "@agent-profile", "compiler", "dist", "index.js"),
   ).href;
   const {
     buildModelPolicyTargetTable,
     MODEL_POLICY_PRIMARY_ROLE,
     MODEL_POLICY_TARGET_CATALOG_VERSION,
-  } = await import(builtCompilerUrl);
+  } = await import(packedCompilerUrl);
 
   const expectedTable = buildModelPolicyTargetTable("role-aware");
   const expectedPrimaryRow = expectedTable.find(
