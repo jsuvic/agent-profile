@@ -233,6 +233,11 @@ export function buildCandidateProfile(
     candidate["capabilities"] = source.rawCapabilities;
   }
 
+  // subagentPolicy is not editable in the form and is never sent to the
+  // browser (it is preserved server-side in the /api/profile/plan route from
+  // the trusted on-disk profile), so it is intentionally not reconstructed
+  // here.
+
   if (hasExplicitPerms || hasPermissionChanges) {
     candidate["permissions"] = {
       filesystem: { read: draft.filesystemRead, write: draft.filesystemWrite },

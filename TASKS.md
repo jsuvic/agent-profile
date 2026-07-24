@@ -148,7 +148,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I6d | Tabnine model-resolution reconciliation | done | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
 | I6e | Upgrade write ownership refusal and rollback | done | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
 | I7 | Offline Doctor model policy and explicit recheck | done | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
-| I8 | Local UI model policy and user documentation | sequenced | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
+| I8 | Local UI model policy and user documentation | ready | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
 | I9 | Published model-selection journey and final integration | sequenced | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
 
 I1R added 2026-07-17: I1 was marked done but never wired `preset`, the
@@ -1288,6 +1288,72 @@ I6a cycles: interactive clack rendering of the comparison table
 (`apps/cli/src/upgrade-clack.ts` untouched), the mapping-v2 legacy-resolver
 comparison path, the five planning paths, the actual write path, and the
 disclosed lifecycle-comparison gap from the first cycle. State stays
+`ready`, not `done`.
+
+I8 first RED-first `/implement-next` cycle completed 2026-07-24, a disclosed
+partial slice: fixed a genuine data-loss bug in the web profile editor rather
+than yet starting on the brief's UI-rendering/documentation deliverables.
+`apps/web/src/lib/profileEditor.ts`'s `buildCandidateProfile` already passed
+`rawPermissions`/`rawSafety`/`rawCapabilities` through from a loaded profile
+into the save candidate, but never passed through the v3 model-policy block
+`subagentPolicy` (`AiProfileSubagentPolicy`) - so editing and saving any
+profile via the web UI silently deleted its entire preset/per-role
+exact-override/orchestration/evidence configuration, a direct violation of
+AC1 ("preserves all legacy/v3 roles, presets, exact overrides ... and
+unrelated profile fields"). First fixed (initial commit) by adding
+`rawSubagentPolicy` to `ProfileCandidateSource` and a pass-through block in
+`buildCandidateProfile` mirroring the existing `rawCapabilities` block,
+plus threading `rawSubagentPolicy` through `ProfileViewModel`/`load()` in
+`apps/web/src/routes/profile/+page.server.ts` (client-side round-trip
+design). Spec review passed COMPLIANT and code-quality review passed
+ACCEPTABLE on that initial cut.
+
+A subsequent Codex-bot PR review round (PR #132) found the client-side
+design itself had two real problems, both confirmed by reading the code
+before fixing: (P1) `buildSubagentPolicyDoc`
+(`packages/core/src/profile.ts`) never emitted `policy.preset` at all - a
+pre-existing, previously entirely untested gap in the shared
+`renderProfileYaml` renderer (used only by this web app; CLI writes use a
+separate surgical byte-splice editor) that the client-side pass-through
+newly made reachable, silently dropping a v3 profile's preset on every web
+save; (P2) returning `rawSubagentPolicy` from `load()` embedded the raw
+block - including freeform per-role override model strings - into the
+browser's client-visible page data unredacted, unlike the YAML preview
+which goes through `redactIfSecretLike`, even though no UI this cycle lets
+a user view or edit that block at all.
+
+Fixed by moving preservation entirely server-side instead: `preset` is now
+emitted in `buildSubagentPolicyDoc` right after `enabled` (schema field
+order); the client-side `rawSubagentPolicy`/pass-through plumbing added in
+the initial cut was reverted as unnecessary (the block is never sent to
+the browser at all now); `validateCandidate`
+(`apps/web/src/lib/server/profileApiHelpers.ts`) gained an optional
+`{ subagentPolicyOverride }` parameter that, when supplied, unconditionally
+overrides the parsed candidate's `subagentPolicy` with the caller's value
+(even forcing it to `undefined` when disk has none) - `/api/profile/plan`
+calls it with the trusted on-disk value; `/api/profile/apply` deliberately
+untouched (it only re-validates the plan's already-computed
+`candidateYaml`, and the existing etag/staleness check guarantees that
+value still matches disk). RED proof: new tests failed against the pre-fix
+renderer (missing `preset:` in rendered YAML) and pre-fix `validateCandidate`
+(no `options` parameter existed). GREEN proof: `packages/core` 219/219 (1
+pre-existing skip), `apps/web` 196/196, both 0 failures, including a new
+round-trip fixture (`SUBAGENT_POLICY_PROFILE`) and a route-level test
+proving `/api/profile/plan`'s JSON response never contains the string
+"subagentPolicy" while the preserved value (preset included) still lands
+in the stored plan; root `npm run check` clean across all workspaces. Spec
+review passed on this round too (one non-blocking Minor: this very ledger
+entry needed updating to match, now done); code-quality review passed.
+Deferred, disclosed, out of scope for this fix-round: `findSecretLikePaths`/
+`findNulStringPaths` still don't scan subagentPolicy fields for secret-like
+content or NUL bytes - acceptable today since the block is server-preserved-
+only and not yet user-editable via any UI, but must be revisited once a
+future I8 cycle ships an advanced-override UI that lets a user actually
+type into it. Still fully open for later I8 cycles: role-aware preset/
+advanced-override UI controls, per-target configured/advisory/unsupported/
+unverified and Tabnine organization/private status rendering, retired-entry
+picker handling, and the entire documentation-impact deliverable (root/
+package README, schema, target, CLI, privacy, release docs). State stays
 `ready`, not `done`.
 
 ## phase-31.9: Upgrade "custom exact" model-policy strategy (`docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`)

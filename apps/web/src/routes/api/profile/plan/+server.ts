@@ -71,8 +71,12 @@ export const POST: RequestHandler = async ({ request }) => {
     );
   }
 
-  // Validate candidate.
-  const candidateValidation = validateCandidate(body.candidate);
+  // Validate candidate. subagentPolicy is not editable in the web UI this
+  // cycle, so the server always preserves the on-disk value rather than
+  // trusting whatever (if anything) the submitted candidate contains.
+  const candidateValidation = validateCandidate(body.candidate, {
+    subagentPolicyOverride: disk.profile.subagentPolicy,
+  });
   if (!candidateValidation.ok) {
     if (candidateValidation.reason === "secret_like") {
       return json(

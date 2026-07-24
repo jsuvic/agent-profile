@@ -1281,6 +1281,42 @@ const FULL_PROFILE: AiProfile = {
   },
 };
 
+const SUBAGENT_POLICY_PROFILE: AiProfile = {
+  ...FULL_PROFILE,
+  subagentPolicy: {
+    enabled: true,
+    preset: "quality-first",
+    roles: {
+      implementer: {
+        capability: "strongest",
+        effort: "high",
+        overrides: {
+          codex: { model: "custom-codex-model", effort: "high" },
+          tabnine: { model: "custom-tabnine-model" },
+        },
+      },
+      "routine-implementer": {
+        capability: "balanced",
+        effort: "medium",
+      },
+    },
+    orchestration: {
+      maxConcurrentThreads: 2,
+      maxDepth: 1,
+      parallelWrites: false,
+    },
+    context: {
+      handoff: "task-capsule",
+      memory: "targeted",
+      indexed: { mode: "preferred", provider: "cce" },
+    },
+    evidence: {
+      summary: "required",
+      localTrace: { enabled: true, retention: 15 },
+    },
+  },
+};
+
 describe("renderProfileYaml", () => {
   it("produces a string ending with a single newline", () => {
     const yaml = renderProfileYaml(MINIMAL_PROFILE);
@@ -1296,7 +1332,7 @@ describe("renderProfileYaml", () => {
   });
 
   it("round-trips: parseProfileYaml(renderProfileYaml(p)).profile deep-equals p", () => {
-    for (const profile of [MINIMAL_PROFILE, FULL_PROFILE]) {
+    for (const profile of [MINIMAL_PROFILE, FULL_PROFILE, SUBAGENT_POLICY_PROFILE]) {
       const yaml = renderProfileYaml(profile);
       const result = parseProfileYaml(yaml);
       if (!result.ok)
@@ -1436,6 +1472,11 @@ describe("renderProfileYaml", () => {
     assert.equal(parsed.ok, true);
     if (!parsed.ok) return;
     assert.deepEqual(parsed.profile, profile);
+  });
+
+  it("emits subagentPolicy.preset in the rendered YAML", () => {
+    const yaml = renderProfileYaml(SUBAGENT_POLICY_PROFILE);
+    assert.match(yaml, /subagentPolicy:\n\s+enabled: true\n\s+preset: quality-first/u);
   });
 });
 

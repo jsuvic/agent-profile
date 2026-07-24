@@ -1419,6 +1419,14 @@ function buildSubagentPolicyDoc(
 ): Record<string, unknown> {
   const doc: Record<string, unknown> = { enabled: policy.enabled };
 
+  // Phase 31.5 (fix-round): `preset` is a real top-level v3 opt-in field
+  // (schema field order: enabled -> preset -> roles -> ...). It must be
+  // emitted here or a profile's v3 preset selection is silently dropped on
+  // every renderProfileYaml call.
+  if (policy.preset !== undefined) {
+    doc["preset"] = policy.preset;
+  }
+
   if (policy.roles !== undefined) {
     const roles: Record<string, unknown> = {};
     // Phase 31.5 (I6d PR review round 3): iterate the FULL v3 role

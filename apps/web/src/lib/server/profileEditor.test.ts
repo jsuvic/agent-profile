@@ -120,6 +120,12 @@ test("profile editor candidate omits capabilities when the profile has none", ()
   assert.equal("capabilities" in candidate, false);
 });
 
+test("profile editor candidate never includes a subagentPolicy key (server-preserved-only)", () => {
+  const candidate = buildCandidateProfile(candidateDraft(), candidateSource());
+
+  assert.equal("subagentPolicy" in candidate, false);
+});
+
 test("profile editor workflow candidate emits newly enabled phase-10 flags", () => {
   const workflow = {
     sdd: true,
