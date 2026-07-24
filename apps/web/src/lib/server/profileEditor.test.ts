@@ -4,7 +4,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { AiProfileCapabilities } from "@agent-profile/core";
+import type {
+  AiProfileCapabilities,
+  AiProfileSubagentPolicy,
+} from "@agent-profile/core";
 
 import {
   buildCandidateProfile,
@@ -59,6 +62,7 @@ function candidateSource(
     rawPermissions: undefined,
     rawSafety: undefined,
     rawCapabilities: undefined,
+    rawSubagentPolicy: undefined,
     ...overrides,
   };
 }
@@ -118,6 +122,46 @@ test("profile editor candidate omits capabilities when the profile has none", ()
   const candidate = buildCandidateProfile(candidateDraft(), candidateSource());
 
   assert.equal("capabilities" in candidate, false);
+});
+
+test("profile editor candidate preserves the subagentPolicy block on edits", () => {
+  const subagentPolicy: AiProfileSubagentPolicy = {
+    enabled: true,
+    preset: "role-aware",
+    roles: {
+      implementer: {
+        capability: "balanced",
+        effort: "medium",
+        overrides: {
+          codex: { model: "gpt-5.1-codex" },
+        },
+      },
+    },
+    orchestration: {
+      maxConcurrentThreads: 2,
+      maxDepth: 1,
+      parallelWrites: false,
+    },
+    evidence: {
+      summary: "required",
+      localTrace: { enabled: true, retention: 30 },
+    },
+  };
+  const draft = candidateDraft();
+  draft.description = "Edited description.";
+
+  const candidate = buildCandidateProfile(
+    draft,
+    candidateSource({ rawSubagentPolicy: subagentPolicy }),
+  );
+
+  assert.deepEqual(candidate["subagentPolicy"], subagentPolicy);
+});
+
+test("profile editor candidate omits subagentPolicy when the profile has none", () => {
+  const candidate = buildCandidateProfile(candidateDraft(), candidateSource());
+
+  assert.equal("subagentPolicy" in candidate, false);
 });
 
 test("profile editor workflow candidate emits newly enabled phase-10 flags", () => {

@@ -132,6 +132,7 @@ export type ProfileCandidateSource = {
   rawPermissions: AiProfile["permissions"];
   rawSafety: AiProfile["safety"];
   rawCapabilities: AiProfile["capabilities"];
+  rawSubagentPolicy: AiProfile["subagentPolicy"];
 };
 
 export type ProfileCandidateDraft = PermissionDraft &
@@ -231,6 +232,13 @@ export function buildCandidateProfile(
   // so saves never drop selected skill or subagent packs.
   if (source?.rawCapabilities !== undefined) {
     candidate["capabilities"] = source.rawCapabilities;
+  }
+
+  // subagentPolicy is not editable in the form; pass the original block
+  // through so saves never drop the user's model preset, per-role exact
+  // overrides, or orchestration/evidence settings.
+  if (source?.rawSubagentPolicy !== undefined) {
+    candidate["subagentPolicy"] = source.rawSubagentPolicy;
   }
 
   if (hasExplicitPerms || hasPermissionChanges) {
