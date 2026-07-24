@@ -46,6 +46,35 @@ versioned client mapping. _Avoid:_ "model alias", "model tier".
 A metadata-only record of role resolution, context path, orchestration, and
 validation outcome. _Avoid:_ "telemetry", "prompt log".
 
+## Review Assurance
+
+**Change snapshot**
+The complete accumulated change presented for review: committed base-to-head
+diff plus any identified staged and unstaged patch. _Avoid:_ "changed-file
+list", "last fix".
+
+**Change-risk review**
+An independent adversarial pass that searches a complete change snapshot and
+its reachable consumers for correctness and contract gaps. _Avoid:_ "second
+spec review", "quality review".
+
+**Clean-room review**
+A fresh review pass that does not receive implementer conclusions, prior
+praise, or prior finding lists. _Avoid:_ "rerun", "closure check".
+
+**Finding fingerprint**
+A stable human-readable identifier for one defect class across review rounds,
+independent of wording changes. _Avoid:_ "comment id", "finding text hash".
+
+**Review-learning record**
+A versioned normalized Markdown record of review inputs, rounds, findings,
+dispositions, and terminal outcome. _Avoid:_ "raw transcript", "telemetry
+log".
+
+**Fix round**
+One bounded batch that addresses validated blocking findings before the
+complete updated change is reviewed again. _Avoid:_ "retry", "patch review".
+
 ## Model Selection
 
 **Model preset**
