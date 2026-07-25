@@ -431,7 +431,9 @@ export async function runCli(
       {
         doctor: () =>
           runDoctorCommand([], cwd, io, {
-            ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
+            ...(options.probeRunner
+              ? { probeRunner: options.probeRunner }
+              : {}),
           }),
         init: () =>
           runInit([], cwd, io, {
@@ -448,7 +450,9 @@ export async function runCli(
             ...(options.nonInteractive !== undefined
               ? { nonInteractive: options.nonInteractive }
               : {}),
-            ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
+            ...(options.probeRunner
+              ? { probeRunner: options.probeRunner }
+              : {}),
           }),
         configure: () =>
           runConfigure([], cwd, io, {
@@ -670,7 +674,10 @@ type RunUpgradeOptions = {
  */
 function hasV3ModelPreset(
   policy: AiProfileSubagentPolicy | undefined,
-): policy is AiProfileSubagentPolicy & { enabled: true; preset: ModelPolicyPreset } {
+): policy is AiProfileSubagentPolicy & {
+  enabled: true;
+  preset: ModelPolicyPreset;
+} {
   return policy?.enabled === true && policy.preset !== undefined;
 }
 
@@ -796,7 +803,8 @@ async function runConsentedUpgradeModelProbe(input: {
   io: CliIo;
   json: boolean;
 }): Promise<ConsentedUpgradeModelProbeOutcome> {
-  const { probeModels, block, enabledClients, rootDir, probeRunner, io, json } = input;
+  const { probeModels, block, enabledClients, rootDir, probeRunner, io, json } =
+    input;
   const none: ConsentedUpgradeModelProbeOutcome = Object.freeze({
     report: undefined,
     unconfirmedPrimaryCandidates: Object.freeze([]),
@@ -804,7 +812,10 @@ async function runConsentedUpgradeModelProbe(input: {
   if (!probeModels || block === undefined) {
     return none;
   }
-  const probeSelections = buildUpgradeModelProbeSelections(block, enabledClients);
+  const probeSelections = buildUpgradeModelProbeSelections(
+    block,
+    enabledClients,
+  );
   if (probeSelections.length === 0) {
     return none;
   }
@@ -844,7 +855,8 @@ async function runConsentedUpgradeModelProbe(input: {
   }[] = [];
   for (const selection of probeSelections) {
     const outcome = report.results.find(
-      (result) => result.client === selection.client && result.model === selection.model,
+      (result) =>
+        result.client === selection.client && result.model === selection.model,
     );
     if (outcome !== undefined && outcome.status !== "available") {
       unconfirmedPrimaryCandidates.push({
@@ -976,14 +988,16 @@ async function runUpgrade(
       : hasV3ModelPreset(subagentPolicy)
         ? subagentPolicy.preset
         : DEFAULT_MODEL_POLICY_PRESET;
-  const modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined =
-    hasV3ModelPreset(subagentPolicy)
-      ? compareModelPolicyUpgrade(
-          lockfileView?.modelPolicy,
-          modelPolicyComparisonPreset,
-          deriveModelPolicyRoleOverrides(subagentPolicy.roles),
-        ).filter((row) => row.changed)
-      : undefined;
+  const modelPolicyChanges:
+    readonly ModelPolicyUpgradeComparisonRow[] | undefined = hasV3ModelPreset(
+    subagentPolicy,
+  )
+    ? compareModelPolicyUpgrade(
+        lockfileView?.modelPolicy,
+        modelPolicyComparisonPreset,
+        deriveModelPolicyRoleOverrides(subagentPolicy.roles),
+      ).filter((row) => row.changed)
+    : undefined;
   // Phase 31.5 (I6d PR review Finding 3): Tabnine rows now participate in
   // the upgrade comparison table on the same terms as Codex/Claude (I6d's
   // own approved brief's Behavior Slice step 3). Visibility only -- this
@@ -1003,8 +1017,7 @@ async function runUpgrade(
   // comparison for both profile shapes, mirroring
   // `isEnabledMappingV2Policy`'s own scope just below.
   const modelPolicyTabnineChanges:
-    | readonly ModelPolicyTabnineUpgradeComparisonRow[]
-    | undefined =
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined =
     hasV3ModelPreset(subagentPolicy) || isEnabledMappingV2Policy(subagentPolicy)
       ? compareModelPolicyTabnineUpgrade(
           lockfileView?.modelPolicy,
@@ -1017,7 +1030,8 @@ async function runUpgrade(
   const legacyEffectivePolicy = isEnabledMappingV2Policy(subagentPolicy)
     ? resolveEffectiveSubagentPolicy(subagentPolicy)
     : undefined;
-  const modelPolicyLegacyChanges: readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined =
+  const modelPolicyLegacyChanges:
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined =
     legacyEffectivePolicy
       ? compareModelPolicyUpgradeFromLegacy(
           legacyEffectivePolicy.roles,
@@ -1207,7 +1221,10 @@ async function runUpgrade(
       // is always empty when the probe never ran.
       if (probeOutcome.unconfirmedPrimaryCandidates.length > 0) {
         const summary = probeOutcome.unconfirmedPrimaryCandidates
-          .map((candidate) => `${candidate.client}/${candidate.model} (${candidate.status})`)
+          .map(
+            (candidate) =>
+              `${candidate.client}/${candidate.model} (${candidate.status})`,
+          )
           .join(", ");
         io.stderr(
           `Refusing to write (${parsed.modelPolicyStrategy}): --probe-models could not confirm ` +
@@ -1578,7 +1595,9 @@ function modelPolicyBlocksEqual(
       row.capabilityStatus === other.capabilityStatus &&
       row.catalogVersion === other.catalogVersion &&
       row.alternatives.length === other.alternatives.length &&
-      row.alternatives.every((alt, altIndex) => alt === other.alternatives[altIndex])
+      row.alternatives.every(
+        (alt, altIndex) => alt === other.alternatives[altIndex],
+      )
     );
   });
 }
@@ -1757,7 +1776,10 @@ async function previewModelPolicyWrites(
     const oldText = onDiskBytes
       ? Buffer.from(onDiskBytes).toString("utf8")
       : "";
-    const diff = formatTextDiff(oldText, Buffer.from(newBytes).toString("utf8"));
+    const diff = formatTextDiff(
+      oldText,
+      Buffer.from(newBytes).toString("utf8"),
+    );
     if (diff.length > 0) {
       lines.push(diff);
     }
@@ -1806,8 +1828,7 @@ async function runModelPolicyWrite(input: {
    * resolutions were actually adopted/switched). */
   modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined;
   modelPolicyLegacyChanges:
-    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
-    | undefined;
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined;
   /** Phase 31.5 (I6d PR review round 2, "include Tabnine changes in JSON
    * write responses"): the SAME `modelPolicyTabnineChanges` `runUpgrade`
    * already computed and (for a non-JSON caller) already printed via
@@ -1818,8 +1839,7 @@ async function runModelPolicyWrite(input: {
    * responses included (PR review finding: automation could not rely on the
    * field being present on a successful write). */
   modelPolicyTabnineChanges:
-    | readonly ModelPolicyTabnineUpgradeComparisonRow[]
-    | undefined;
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined;
   /** Phase 31.5 (I6c): the optional, separately-consented probe result
    * (`undefined` when `--probe-models` was declined or built no
    * candidates). Advisory-only -- surfaced in the JSON envelope below, but
@@ -2000,7 +2020,9 @@ async function runModelPolicyWrite(input: {
     io.stderr(
       `Refusing to write (${strategyLabel}): the following generated target files are manual-owned and would actually change under this write, so writing would leave them on the old resolution while the lock claimed the fresh one:\n${manualOwnedModelBearing
         .map((output) => `- ${output.path}`)
-        .join("\n")}\nReconcile ownership first (see \`agent-profile doctor\`), or accept the model-policy change manually.\n`,
+        .join(
+          "\n",
+        )}\nReconcile ownership first (see \`agent-profile doctor\`), or accept the model-policy change manually.\n`,
     );
     return 1;
   }
@@ -2219,11 +2241,9 @@ function buildModelPolicyJsonFields(
   modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined,
   modelPolicyPlan: ModelPolicyUpgradePlan | undefined,
   modelPolicyLegacyChanges:
-    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
-    | undefined,
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined,
   modelPolicyTabnineChanges?:
-    | readonly ModelPolicyTabnineUpgradeComparisonRow[]
-    | undefined,
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined,
 ): Record<string, unknown> {
   return {
     ...(modelPolicyChanges === undefined
@@ -2352,8 +2372,7 @@ function formatModelPolicyWriteResultText(input: {
   if (wrote) {
     const targetActions = plan.actions.filter(
       (action) =>
-        action.action !== "unchanged" &&
-        !METADATA_WRITE_PATHS.has(action.path),
+        action.action !== "unchanged" && !METADATA_WRITE_PATHS.has(action.path),
     );
     const created = targetActions.filter(
       (action) => action.action === "create",
@@ -2361,7 +2380,8 @@ function formatModelPolicyWriteResultText(input: {
     const regenerated = targetActions.filter(
       (action) => action.action === "change",
     ).length;
-    const resolutionLabel = targetPreset === undefined ? "adopted" : targetPreset;
+    const resolutionLabel =
+      targetPreset === undefined ? "adopted" : targetPreset;
     if (targetActions.length === 0) {
       return `Updated ai-profile.lock for an unrelated metadata change; the ${resolutionLabel} model policy itself is unchanged.\n`;
     }
@@ -2437,12 +2457,10 @@ function buildModelPolicyReportLines(
   modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined,
   modelPolicyPlan: ModelPolicyUpgradePlan | undefined,
   modelPolicyLegacyChanges:
-    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
-    | undefined,
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined,
   modelProbeReport?: ModelProbeReport,
   modelPolicyTabnineChanges?:
-    | readonly ModelPolicyTabnineUpgradeComparisonRow[]
-    | undefined,
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined,
 ): string[] {
   const lines: string[] = [];
   if (modelPolicyChanges !== undefined && modelPolicyChanges.length > 0) {
@@ -2532,12 +2550,10 @@ function printModelPolicyTextReport(
   modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined,
   modelPolicyPlan: ModelPolicyUpgradePlan | undefined,
   modelPolicyLegacyChanges:
-    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
-    | undefined,
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined,
   modelProbeReport?: ModelProbeReport,
   modelPolicyTabnineChanges?:
-    | readonly ModelPolicyTabnineUpgradeComparisonRow[]
-    | undefined,
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined,
 ): void {
   const lines = buildModelPolicyReportLines(
     modelPolicyChanges,
@@ -3111,6 +3127,9 @@ async function runCompile(
   const tabnineModelSettings = await resolveTabnineModelSettings(
     rootDir,
     profileResult.profile,
+    undefined,
+    parsed.targets.length === 0 ||
+      parsed.targets.some((target) => target.startsWith("tabnine-")),
   );
 
   const { writes } = buildCompileWrites({
@@ -5482,7 +5501,9 @@ async function createOrApplyWritePlan(
       io.stderr(
         `Refusing write-plan: an atomic write failed partway through and could not fully roll back. The following paths may still hold NEW (not necessarily complete) bytes rather than their original content:\n${error.unrestoredPaths
           .map((path) => `- ${path}`)
-          .join("\n")}\nInspect and reconcile these files manually (e.g. via \`git diff\`/\`git checkout\`) before retrying.\n`,
+          .join(
+            "\n",
+          )}\nInspect and reconcile these files manually (e.g. via \`git diff\`/\`git checkout\`) before retrying.\n`,
       );
       return undefined;
     }

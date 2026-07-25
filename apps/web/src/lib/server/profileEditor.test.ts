@@ -62,7 +62,7 @@ function candidateSource(
     rawPermissions: undefined,
     rawSafety: undefined,
     rawCapabilities: undefined,
-    rawSubagentPolicy: undefined,
+    editableSubagentPolicy: undefined,
     ...overrides,
   };
 }
@@ -140,7 +140,7 @@ test("profile editor candidate includes the reviewed v3 policy, including exact 
   draft.subagentPolicy = policy;
   const candidate = buildCandidateProfile(
     draft,
-    candidateSource({ rawSubagentPolicy: policy }),
+    candidateSource({ editableSubagentPolicy: policy }),
   );
 
   assert.deepEqual(candidate["subagentPolicy"], policy);

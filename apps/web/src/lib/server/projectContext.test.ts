@@ -10,6 +10,7 @@ import os from "node:os";
 import {
   loadProjectContext,
   redactIfSecretLike,
+  redactSubagentPolicyForBrowser,
   resolveProjectRoot,
   truncatePreview,
 } from "./projectContext.js";
@@ -137,6 +138,27 @@ test("redactIfSecretLike masks values that look like secrets", () => {
 test("redactIfSecretLike leaves benign text alone", () => {
   const benign = "languages: [typescript]\nframeworks: [sveltekit]";
   assert.equal(redactIfSecretLike(benign), benign);
+});
+
+test("redactSubagentPolicyForBrowser never serializes a secret-like model override", () => {
+  const secretLike = `api_key: sk-${"x".repeat(48)}`;
+  const policy = {
+    enabled: true,
+    preset: "role-aware",
+    roles: {
+      implementer: {
+        capability: "balanced",
+        effort: "high",
+        overrides: { codex: { model: secretLike } },
+      },
+    },
+  } as const;
+  const browserPolicy = redactSubagentPolicyForBrowser(policy);
+  assert.equal(JSON.stringify(browserPolicy).includes(secretLike), false);
+  assert.equal(
+    browserPolicy?.roles?.implementer?.overrides?.codex?.model,
+    redactIfSecretLike(secretLike),
+  );
 });
 
 test("truncatePreview marks oversize content", () => {

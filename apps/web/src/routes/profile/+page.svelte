@@ -6,6 +6,7 @@
   import { invalidateAll } from "$app/navigation";
   import type { ProfilePageData, ProfileViewModel } from "./+page.server";
   import type {
+    ModelPolicyView,
     ModelPolicyViewCell,
     ModelPolicyViewClientId,
     ModelPolicyViewSurfaceId,
@@ -19,7 +20,7 @@
     ModelPolicyPreset,
     ModelPolicyRoleId,
   } from "@agent-profile/core";
-  import { MODEL_POLICY_PRESETS } from "@agent-profile/core";
+  import { MODEL_POLICY_PRESETS, MODEL_POLICY_PRESET_TABLE } from "@agent-profile/core";
   import {
     buildCandidateProfile,
     parseSlugList,
@@ -115,7 +116,7 @@
       shellRun: v.rawPermissions?.shell?.run ?? v.permissions.shell.run,
       dependenciesInstall: v.rawPermissions?.dependencies?.install ?? v.permissions.dependencies.install,
       networkExternal: v.rawPermissions?.network?.external ?? v.permissions.network.external,
-      subagentPolicy: structuredClone(v.rawSubagentPolicy),
+      subagentPolicy: structuredClone(v.editableSubagentPolicy),
     };
     validationErrors = {};
     saveError = "";
@@ -191,7 +192,7 @@
       workflowHasChanges(draft, effective.workflow) ||
       permissionsChangedFrom(draft, effective) ||
       JSON.stringify(draft.subagentPolicy) !==
-        JSON.stringify(effective.rawSubagentPolicy)
+        JSON.stringify(effective.editableSubagentPolicy)
     );
   });
 
@@ -243,6 +244,11 @@
     draft.subagentPolicy = { ...draft.subagentPolicy, preset: value as ModelPolicyPreset };
   }
 
+  function presetFallback(role: ModelPolicyRoleId, fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort }) {
+    const preset = draft.subagentPolicy?.preset;
+    return preset ? MODEL_POLICY_PRESET_TABLE[preset][role] : fallback;
+  }
+
   function roleIntent(role: ModelPolicyRoleId, fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort }) {
     return draft.subagentPolicy?.roles?.[role] ?? fallback;
   }
@@ -271,15 +277,26 @@
   function updateOverride(role: ModelPolicyRoleId, client: "codex" | "claude" | "tabnine", value: string) {
     if (!draft.subagentPolicy) return;
     const existing = draft.subagentPolicy.roles?.[role];
-    const fallback = modelPolicy?.rows.find((row) => row.role === role);
+    const row = modelPolicy?.rows.find((candidate) => candidate.role === role);
+    const fallback = row ? presetFallback(role, row) : undefined;
     if (!existing && !fallback) return;
     const base = existing ?? {
       capability: fallback!.capability,
       effort: fallback!.effort,
     };
     const overrides = { ...base.overrides };
-    if (value.trim()) overrides[client] = { model: value.trim() };
-    else delete overrides[client];
+    if (value.trim()) {
+      overrides[client] = { ...overrides[client], model: value.trim() };
+    } else {
+      const current = overrides[client];
+      if (!current) {
+        delete overrides[client];
+      } else {
+        const { model: _removedModel, ...remaining } = current;
+        if (Object.keys(remaining).length > 0) overrides[client] = remaining;
+        else delete overrides[client];
+      }
+    }
     draft.subagentPolicy = {
       ...draft.subagentPolicy,
       roles: {
@@ -321,6 +338,7 @@
         }
         return;
       }
+      reviewedModelPolicy = body.modelPolicy ?? null;
       diffText = body.diff?.text ?? "";
       diffAdded = body.diff?.counts?.added ?? 0;
       diffRemoved = body.diff?.counts?.removed ?? 0;
@@ -404,7 +422,8 @@
   // compiler's own resolvers. This component must never define its own model
   // catalog or restate a resolution rule.
   // ---------------------------------------------------------------------------
-  let modelPolicy = $derived(effective?.modelPolicy ?? null);
+  let reviewedModelPolicy = $state<ModelPolicyView | null>(null);
+  let modelPolicy = $derived(reviewedModelPolicy ?? effective?.modelPolicy ?? null);
   let modelPolicyPrimaryRow = $derived(
     modelPolicy?.rows.find((row) => row.primary) ?? null,
   );
@@ -783,12 +802,12 @@
                       {#if editing}
                         <div class="mp-editor">
                           <label>capability
-                            <select class="select-input" value={roleIntent(row.role, row).capability} onchange={(event) => updateRoleIntent(row.role, row, "capability", event.currentTarget.value)}>
+                            <select class="select-input" value={roleIntent(row.role, presetFallback(row.role, row)).capability} onchange={(event) => updateRoleIntent(row.role, presetFallback(row.role, row), "capability", event.currentTarget.value)}>
                               <option value="efficient">efficient</option><option value="balanced">balanced</option><option value="strongest">strongest</option>
                             </select>
                           </label>
                           <label>effort
-                            <select class="select-input" value={roleIntent(row.role, row).effort} onchange={(event) => updateRoleIntent(row.role, row, "effort", event.currentTarget.value)}>
+                            <select class="select-input" value={roleIntent(row.role, presetFallback(row.role, row)).effort} onchange={(event) => updateRoleIntent(row.role, presetFallback(row.role, row), "effort", event.currentTarget.value)}>
                               <option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="extra-high">extra-high</option>
                             </select>
                           </label>

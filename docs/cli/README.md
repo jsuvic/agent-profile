@@ -499,8 +499,12 @@ rather than a standalone table file).
 
 ### Read-only model policy in the local UI
 
-`agent-profile ui`'s profile page renders the same resolved model policy
-read-only, under a **Model policy** panel: the selected preset (badged when it
+`agent-profile ui`'s profile page renders the same resolved model policy under
+a **Model policy** panel. It supports guarded edits to the selected preset,
+role capability/effort, and exact client overrides; every edit is shown in the
+normal profile diff review before it can write. The review table is resolved
+from the submitted candidate rather than the page-load snapshot. The panel shows
+the selected preset (badged when it
 is the recommended default, otherwise naming the recommendation), the catalog
 version, the primary role's per-client row expanded, and every remaining role
 behind a disclosure. Cells show the same exact model, target effort, lifecycle,
@@ -512,8 +516,10 @@ candidates for that role's capability; an uncatalogued Tabnine identifier render
 with the compiler's own `organization/private - unrated` label.
 
 The UI never probes, starts no client or network process, and cannot display
-account, quota, or entitlement data. Model policy is not editable there: it is
-changed through `ai-profile.yaml` and the CLI.
+account, quota, or entitlement data. Secret-like override values are redacted
+before they reach the browser and remain unchanged unless explicitly replaced
+or cleared. The CLI remains the path for model-policy upgrade/adoption workflows
+and generated artifact writes.
 
 ## Init Clients
 

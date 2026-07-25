@@ -146,15 +146,21 @@ export async function resolveTabnineModelSettings(
   rootDir: string,
   profile: AiProfile,
   model: string | undefined = undefined,
+  includeTabnine: boolean = true,
 ): Promise<
   { model: string | undefined; ownership: TabnineSettingsOwnership } | undefined
 > {
-  if (!profile.clients.tabnine.enabled) {
+  if (!profile.clients.tabnine.enabled || !includeTabnine) {
     return undefined;
   }
+  // An explicit wizard choice is deliberately usable without model policy,
+  // but a persisted role override is only authoritative for an enabled v3
+  // policy. Mapping-v2/disabled policy data must not create a settings file.
   const persistedPrimaryModel =
-    profile.subagentPolicy?.roles?.[MODEL_POLICY_PRIMARY_ROLE]?.overrides
-      ?.tabnine?.model;
+    profile.subagentPolicy?.enabled === true && profile.subagentPolicy.preset
+      ? profile.subagentPolicy.roles?.[MODEL_POLICY_PRIMARY_ROLE]?.overrides
+          ?.tabnine?.model
+      : undefined;
   return {
     model: model ?? persistedPrimaryModel,
     ownership: await classifyTabnineSettingsOwnership(rootDir),

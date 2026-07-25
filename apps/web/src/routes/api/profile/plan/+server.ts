@@ -4,7 +4,13 @@
 import { json } from "@sveltejs/kit";
 import type { RequestHandler } from "@sveltejs/kit";
 
-import { loadProjectContext } from "$lib/server/projectContext";
+import {
+  loadProjectContext,
+  readLockModelPolicy,
+  readTabnineSettingsOwnership,
+  redactIfSecretLike,
+} from "$lib/server/projectContext";
+import { buildModelPolicyView } from "$lib/server/modelPolicyView";
 import {
   readDiskProfile,
   readJsonRequestBody,
@@ -75,9 +81,13 @@ export const POST: RequestHandler = async ({ request }) => {
   // controls. Preserve the trusted on-disk block for older clients that omit
   // it entirely, so a partial form submission can never silently strip v2/v3
   // policy; an explicitly supplied value follows the normal diff/write path.
-  const candidate = isRecord(body.candidate) && "subagentPolicy" in body.candidate
-    ? body.candidate
-    : { ...body.candidate, subagentPolicy: disk.profile.subagentPolicy };
+  const candidate =
+    isRecord(body.candidate) && "subagentPolicy" in body.candidate
+      ? restoreRedactedPolicyOverrides(
+          body.candidate,
+          disk.profile.subagentPolicy,
+        )
+      : { ...body.candidate, subagentPolicy: disk.profile.subagentPolicy };
   const candidateValidation = validateCandidate(candidate);
   if (!candidateValidation.ok) {
     if (candidateValidation.reason === "secret_like") {
@@ -121,9 +131,56 @@ export const POST: RequestHandler = async ({ request }) => {
     planToken,
     expiresAt,
     etag: disk.etag,
+    // This preview is generated after validation from the candidate being
+    // reviewed, rather than reusing the page-load table. It therefore shows
+    // the exact preset, role intent, and override resolution that a confirmed
+    // write would persist, without returning an editable raw policy block.
+    modelPolicy: buildModelPolicyView(
+      candidateValidation.profile,
+      await readLockModelPolicy(ctx.rootDir),
+      await readTabnineSettingsOwnership(ctx.rootDir),
+    ),
   });
 };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * The browser receives a redaction marker for secret-like override strings.
+ * When that marker comes back unchanged, put the trusted on-disk value back
+ * before schema/security validation. A changed or deleted value is left as-is
+ * and goes through the regular validation path.
+ */
+function restoreRedactedPolicyOverrides(
+  candidate: Record<string, unknown>,
+  diskPolicy: import("@agent-profile/core").AiProfile["subagentPolicy"],
+): Record<string, unknown> {
+  if (!diskPolicy?.roles || !isRecord(candidate.subagentPolicy)) {
+    return candidate;
+  }
+  const restored = structuredClone(candidate);
+  const policy = restored.subagentPolicy;
+  if (!isRecord(policy) || !isRecord(policy.roles)) return restored;
+
+  for (const [role, diskIntent] of Object.entries(diskPolicy.roles)) {
+    const submittedIntent = policy.roles[role];
+    if (!isRecord(submittedIntent) || !isRecord(submittedIntent.overrides)) {
+      continue;
+    }
+    for (const [client, diskOverride] of Object.entries(
+      diskIntent.overrides ?? {},
+    )) {
+      const submittedOverride = submittedIntent.overrides[client];
+      if (
+        diskOverride?.model &&
+        isRecord(submittedOverride) &&
+        submittedOverride.model === redactIfSecretLike(diskOverride.model)
+      ) {
+        submittedOverride.model = diskOverride.model;
+      }
+    }
+  }
+  return restored;
 }

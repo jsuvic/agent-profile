@@ -14,6 +14,7 @@ import {
 } from "@agent-profile/core";
 import {
   sha256Hex,
+  readRegionAwareFile,
   toLockfileV2View,
   validateLockfileText,
   type LockModelPolicyV2,
@@ -74,15 +75,14 @@ export async function readLockModelPolicy(
 export async function readTabnineSettingsOwnership(
   rootDir: string,
 ): Promise<TabnineSettingsOwnership> {
-  let bytes: Buffer;
-  try {
-    bytes = await readFile(path.join(rootDir, TABNINE_SETTINGS_PATH));
-  } catch {
-    return "absent";
-  }
+  const existing = await readRegionAwareFile(rootDir, TABNINE_SETTINGS_PATH);
+  if (existing.refused) return "unowned";
+  if (!existing.bytes) return "absent";
   let source: string;
   try {
-    source = (await readFile(path.join(rootDir, LOCK_FILENAME))).toString("utf8");
+    source = (await readFile(path.join(rootDir, LOCK_FILENAME))).toString(
+      "utf8",
+    );
   } catch {
     return "unowned";
   }
@@ -92,7 +92,9 @@ export async function readTabnineSettingsOwnership(
     (candidate) => candidate.path === TABNINE_SETTINGS_PATH,
   );
   if (output?.ownership !== "generated-owned") return "unowned";
-  return sha256Hex(bytes) === output.sha256 ? "generated-owned" : "unowned";
+  return sha256Hex(existing.bytes) === output.sha256
+    ? "generated-owned"
+    : "unowned";
 }
 
 /**
@@ -144,7 +146,9 @@ export async function loadProjectContext(): Promise<ProjectContext> {
   }
 
   const profileHash = sha256Hex(profileSource).slice(0, 8);
-  const result = parseProfileYaml(profileSource, { sourcePath: PROFILE_FILENAME });
+  const result = parseProfileYaml(profileSource, {
+    sourcePath: PROFILE_FILENAME,
+  });
 
   let safetyMode: SafetyMode = "guarded";
   if (result.ok) {
@@ -180,10 +184,52 @@ export function redactIfSecretLike(text: string): string {
 }
 
 /**
+ * Produce the policy shape the browser is allowed to edit. Exact override
+ * values are user-authored strings, so secret-like values are redacted before
+ * serialization. The plan endpoint restores an unchanged redaction marker
+ * from the trusted on-disk profile; it never needs to send the original back
+ * to the browser.
+ */
+export function redactSubagentPolicyForBrowser(
+  policy: AiProfile["subagentPolicy"],
+): AiProfile["subagentPolicy"] {
+  if (!policy?.roles) return policy;
+  return {
+    ...policy,
+    roles: Object.fromEntries(
+      Object.entries(policy.roles).map(([role, intent]) => [
+        role,
+        {
+          ...intent,
+          ...(intent.overrides
+            ? {
+                overrides: Object.fromEntries(
+                  Object.entries(intent.overrides).map(([client, override]) => [
+                    client,
+                    override?.model
+                      ? {
+                          ...override,
+                          model: redactIfSecretLike(override.model),
+                        }
+                      : override,
+                  ]),
+                ),
+              }
+            : {}),
+        },
+      ]),
+    ),
+  };
+}
+
+/**
  * Truncate preview content to a hard cap. Generated files larger than the
  * cap return only the first N bytes plus a marker line.
  */
-export function truncatePreview(text: string, capBytes: number = 256 * 1024): {
+export function truncatePreview(
+  text: string,
+  capBytes: number = 256 * 1024,
+): {
   text: string;
   truncated: boolean;
 } {

@@ -109,7 +109,7 @@ export async function readDiskProfile(rootDir: string): Promise<DiskProfile> {
 // ---------------------------------------------------------------------------
 
 export type CandidateValidation =
-  | { ok: true; yaml: string; etag: string }
+  | { ok: true; profile: AiProfile; yaml: string; etag: string }
   | { ok: false; reason: "secret_like"; paths: string[] }
   | { ok: false; reason: "invalid_encoding"; paths: string[] }
   | { ok: false; reason: "invalid"; issues: ProfileValidationIssue[] };
@@ -211,7 +211,12 @@ export function validateCandidate(
   }
 
   const yaml = renderProfileYaml(profile);
-  return { ok: true, yaml, etag: computeFileEtag(Buffer.from(yaml, "utf8")) };
+  return {
+    ok: true,
+    profile,
+    yaml,
+    etag: computeFileEtag(Buffer.from(yaml, "utf8")),
+  };
 }
 
 function findNulStringPaths(profile: AiProfile): string[] {

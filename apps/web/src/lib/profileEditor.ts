@@ -132,7 +132,7 @@ export type ProfileCandidateSource = {
   rawPermissions: AiProfile["permissions"];
   rawSafety: AiProfile["safety"];
   rawCapabilities: AiProfile["capabilities"];
-  rawSubagentPolicy: AiProfile["subagentPolicy"];
+  editableSubagentPolicy: AiProfile["subagentPolicy"];
 };
 
 export type ProfileCandidateDraft = PermissionDraft &
@@ -164,15 +164,24 @@ export function initialPermissionValue(
 ): string {
   switch (key) {
     case "filesystemRead":
-      return v.rawPermissions?.filesystem?.read ?? v.permissions.filesystem.read;
+      return (
+        v.rawPermissions?.filesystem?.read ?? v.permissions.filesystem.read
+      );
     case "filesystemWrite":
-      return v.rawPermissions?.filesystem?.write ?? v.permissions.filesystem.write;
+      return (
+        v.rawPermissions?.filesystem?.write ?? v.permissions.filesystem.write
+      );
     case "shellRun":
       return v.rawPermissions?.shell?.run ?? v.permissions.shell.run;
     case "dependenciesInstall":
-      return v.rawPermissions?.dependencies?.install ?? v.permissions.dependencies.install;
+      return (
+        v.rawPermissions?.dependencies?.install ??
+        v.permissions.dependencies.install
+      );
     case "networkExternal":
-      return v.rawPermissions?.network?.external ?? v.permissions.network.external;
+      return (
+        v.rawPermissions?.network?.external ?? v.permissions.network.external
+      );
   }
 }
 
@@ -240,7 +249,7 @@ export function buildCandidateProfile(
   // preserves legacy/v3 roles and exact target overrides that this UI does not
   // currently change, while the progressively disclosed controls edit only the
   // selected preset and explicit role values.
-  if (source?.rawSubagentPolicy !== undefined) {
+  if (source?.editableSubagentPolicy !== undefined) {
     candidate["subagentPolicy"] = draft.subagentPolicy;
   }
 
