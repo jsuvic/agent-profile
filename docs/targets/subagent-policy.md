@@ -371,10 +371,10 @@ client-file step.
 
 In practice this means:
 
-- `agent-profile compile --write` has no source of an exact Tabnine override
-  today (see "Known scope narrowing" below), so its Tabnine branch always
-  resolves `advisory` — an existing unowned settings file is preserved
-  byte-for-byte and a missing one is never created.
+- `agent-profile compile --write` reads the persisted exact Tabnine override
+  for the primary `implementer` role. It writes that one reviewed
+  project-local selection when the settings file is absent or generated-owned;
+  an existing unowned file is preserved byte-for-byte and remains advisory.
 - `agent-profile init`'s interactive wizard is the only path that can resolve
   an exact model for Tabnine, via the advanced-override entry point described
   in `docs/cli/README.md`'s "Model Selection" section. Selecting a client that

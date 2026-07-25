@@ -4,7 +4,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { AiProfileCapabilities } from "@agent-profile/core";
+import type {
+  AiProfileCapabilities,
+  AiProfileSubagentPolicy,
+} from "@agent-profile/core";
 
 import {
   buildCandidateProfile,
@@ -59,6 +62,7 @@ function candidateSource(
     rawPermissions: undefined,
     rawSafety: undefined,
     rawCapabilities: undefined,
+    rawSubagentPolicy: undefined,
     ...overrides,
   };
 }
@@ -120,10 +124,26 @@ test("profile editor candidate omits capabilities when the profile has none", ()
   assert.equal("capabilities" in candidate, false);
 });
 
-test("profile editor candidate never includes a subagentPolicy key (server-preserved-only)", () => {
-  const candidate = buildCandidateProfile(candidateDraft(), candidateSource());
+test("profile editor candidate includes the reviewed v3 policy, including exact overrides", () => {
+  const policy: AiProfileSubagentPolicy = {
+    enabled: true,
+    preset: "quality-first",
+    roles: {
+      implementer: {
+        capability: "strongest",
+        effort: "extra-high",
+        overrides: { tabnine: { model: "organization-private-model" } },
+      },
+    },
+  };
+  const draft = candidateDraft();
+  draft.subagentPolicy = policy;
+  const candidate = buildCandidateProfile(
+    draft,
+    candidateSource({ rawSubagentPolicy: policy }),
+  );
 
-  assert.equal("subagentPolicy" in candidate, false);
+  assert.deepEqual(candidate["subagentPolicy"], policy);
 });
 
 test("profile editor workflow candidate emits newly enabled phase-10 flags", () => {

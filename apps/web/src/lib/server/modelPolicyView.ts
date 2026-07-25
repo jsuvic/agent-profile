@@ -40,12 +40,14 @@ import {
   MODEL_POLICY_PRIMARY_ROLE,
   MODEL_POLICY_TARGET_CATALOG_VERSION,
   TABNINE_MODEL_POLICY_CATALOG,
+  planTabnineModelSettingsWrite,
   tabnineLifecycleLabel,
   type LockModelPolicyV2,
   type ModelPolicyTabnineRow,
   type ModelPolicyTargetClientResolution,
   type ModelPolicyTargetEffort,
   type ModelPolicyTargetRow,
+  type TabnineSettingsOwnership,
 } from "@agent-profile/compiler";
 
 import { redactIfSecretLike } from "$lib/server/projectContext";
@@ -204,8 +206,15 @@ function targetCell(
   });
 }
 
-function tabnineCell(row: ModelPolicyTabnineRow): ModelPolicyViewCell {
+function tabnineCell(
+  row: ModelPolicyTabnineRow,
+  ownership: TabnineSettingsOwnership | undefined,
+): ModelPolicyViewCell {
   const guided = row.tabnine.model === undefined;
+  const settingsPlan =
+    row.role === MODEL_POLICY_PRIMARY_ROLE && ownership !== undefined
+      ? planTabnineModelSettingsWrite(row.tabnine.model, ownership)
+      : undefined;
   return Object.freeze({
     client: "tabnine" as const,
     model: presentModel(row.tabnine.model),
@@ -217,7 +226,7 @@ function tabnineCell(row: ModelPolicyTabnineRow): ModelPolicyViewCell {
     statuses: Object.freeze([
       Object.freeze({
         surface: "model" as const,
-        status: row.tabnine.modelStatus,
+        status: settingsPlan?.modelStatus ?? row.tabnine.modelStatus,
       }),
       Object.freeze({
         surface: "effort" as const,
@@ -268,6 +277,7 @@ function enabledClients(
 export function buildModelPolicyView(
   profile: AiProfile,
   previousModelPolicy?: LockModelPolicyV2,
+  tabnineSettingsOwnership?: TabnineSettingsOwnership,
 ): ModelPolicyView | null {
   const policy = profile.subagentPolicy;
   if (policy?.enabled !== true || policy.preset === undefined) {
@@ -297,7 +307,7 @@ export function buildModelPolicyView(
       if (client === "tabnine") {
         const tabnineRow = tabnineByRole.get(row.role);
         if (tabnineRow !== undefined) {
-          cells.push(tabnineCell(tabnineRow));
+          cells.push(tabnineCell(tabnineRow, tabnineSettingsOwnership));
         }
         continue;
       }

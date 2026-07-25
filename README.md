@@ -135,22 +135,24 @@ Each row states honestly what Agent Profile actually does with that selection:
 
 What that means per tool today:
 
-- **Codex** — only the `implementer` role's Codex resolution is written, into
+- **Codex** — for catalogued preset resolutions, only the `implementer` role's
+  Codex resolution is written, into
   the project-local `.codex/config.toml` top-level `model` and
   `model_reasoning_effort`. That row is `configured`; every other role and
-  surface is `advisory`.
+  surface is `advisory`. An uncatalogued exact override is instead
+  `unverified` on every affected surface, including `implementer`.
 - **Claude** — Claude Code has no documented project-local file Agent Profile
   writes to pick a model or effort, so every Claude row is guidance only.
   Identities whose Claude Code effort behavior is still verification-required
   report `unverified` instead.
 - **Tabnine** — model availability is organization/admin-controlled, so Agent
   Profile never ranks or auto-picks one: the default is guided manual selection
-  (`/model` to select, `/about` to verify). If you supply an exact model id —
-  including an organization-private one Agent Profile does not recognize — it
-  can write `.tabnine/agent/settings.json` (`model.id` only) when that file is
-  absent or already Agent-Profile-owned; an existing file you own is preserved
-  byte-for-byte. Tabnine has no confirmed effort/reasoning control, so effort is
-  always reported `unsupported` and never invented.
+  (`/model` to select, `/about` to verify). A persisted exact override for the
+  primary `implementer` role writes `.tabnine/agent/settings.json` (`model.id`
+  only) during `compile --write` when that file is absent or already
+  Agent-Profile-owned; an existing file you own is preserved byte-for-byte.
+  Tabnine has no confirmed effort/reasoning control, so effort is always
+  reported `unsupported` and never invented.
 
 Nothing above contacts a provider. `agent-profile doctor --models` re-checks the
 whole picture offline (catalog lifecycle, stale lock provenance, uncatalogued

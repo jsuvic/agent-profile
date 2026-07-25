@@ -284,9 +284,9 @@ Immediately after the preset commits (and only when at least one selected
 client's primary role resolved an exact Codex/Claude model), the wizard asks:
 
 > Run a live model probe now? At most N client call(s) will run, may contact
-> the provider, and may consume account quota. No repository content,
-> credentials, or account data is read or sent. Declining keeps every
-> selection unverified.
+> the provider, and may consume account quota. Agent Profile reads no
+> repository content or credentials; the invoked client may use its own stored
+> login state to authenticate. Declining keeps every selection unverified.
 
 The consent default is **declined**. Declining never starts a process — the
 probe function is still called, but gates on consent before touching any

@@ -71,12 +71,14 @@ export const POST: RequestHandler = async ({ request }) => {
     );
   }
 
-  // Validate candidate. subagentPolicy is not editable in the web UI this
-  // cycle, so the server always preserves the on-disk value rather than
-  // trusting whatever (if anything) the submitted candidate contains.
-  const candidateValidation = validateCandidate(body.candidate, {
-    subagentPolicyOverride: disk.profile.subagentPolicy,
-  });
+  // The local editor submits a reviewed policy when it exposes the model
+  // controls. Preserve the trusted on-disk block for older clients that omit
+  // it entirely, so a partial form submission can never silently strip v2/v3
+  // policy; an explicitly supplied value follows the normal diff/write path.
+  const candidate = isRecord(body.candidate) && "subagentPolicy" in body.candidate
+    ? body.candidate
+    : { ...body.candidate, subagentPolicy: disk.profile.subagentPolicy };
+  const candidateValidation = validateCandidate(candidate);
   if (!candidateValidation.ok) {
     if (candidateValidation.reason === "secret_like") {
       return json(

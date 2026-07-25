@@ -120,14 +120,16 @@ status for every role and every preset before anything is written — never just
 file), `advisory` (guidance only), `unsupported` (no configurable surface), or
 `unverified` (representable, but client behavior not confirmed).
 
-Today that means: Codex's `implementer` row is written into
-`.codex/config.toml` (`model` / `model_reasoning_effort`) and is `configured`;
-all other Codex rows and all Claude rows are guidance only; Tabnine defaults to
-guided manual selection (`/model`, verified with `/about`) because model
-availability is organization-controlled, and it has no effort control at all. An
-exact Tabnine id you supply can be written to `.tabnine/agent/settings.json`
-(`model.id` only) when that file is absent or already Agent-Profile-owned; a
-file you own is preserved byte-for-byte.
+Today that means: for catalogued preset resolutions, Codex's `implementer` row
+is written into `.codex/config.toml` (`model` / `model_reasoning_effort`) and
+is `configured`; all other Codex rows and all Claude rows are guidance only.
+An uncatalogued exact Codex override is `unverified` on every affected surface.
+Tabnine defaults to guided manual selection (`/model`, verified with `/about`)
+because model availability is organization-controlled, and it has no effort
+control at all. A persisted exact override for the primary `implementer` role
+is written to `.tabnine/agent/settings.json` (`model.id` only) during
+`compile --write` when the file is absent or Agent-Profile-owned; a file you
+own is preserved byte-for-byte.
 
 The bundled model catalog ships with the release; resolving it is fully offline
 and deterministic. `agent-profile doctor --models` re-checks it offline. A live

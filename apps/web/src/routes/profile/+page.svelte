@@ -13,7 +13,13 @@
   import type {
     ModelCatalogLifecycleStatus,
     ModelPolicyCapabilityStatus,
+    AiProfile,
+    ModelPolicyCapability,
+    ModelPolicyEffort,
+    ModelPolicyPreset,
+    ModelPolicyRoleId,
   } from "@agent-profile/core";
+  import { MODEL_POLICY_PRESETS } from "@agent-profile/core";
   import {
     buildCandidateProfile,
     parseSlugList,
@@ -59,6 +65,7 @@
     claudeEnabled: boolean;
     safetyMode: string;
     requiresSandbox: boolean;
+    subagentPolicy: AiProfile["subagentPolicy"];
     filesystemRead: string;
     filesystemWrite: string;
     shellRun: string;
@@ -76,6 +83,7 @@
     memoryGuidance: false, loggingGuidance: false,
     filesystemRead: "allow", filesystemWrite: "ask",
     shellRun: "ask", dependenciesInstall: "ask", networkExternal: "ask",
+    subagentPolicy: undefined,
   });
 
   let validationErrors = $state<Record<string, string>>({});
@@ -107,6 +115,7 @@
       shellRun: v.rawPermissions?.shell?.run ?? v.permissions.shell.run,
       dependenciesInstall: v.rawPermissions?.dependencies?.install ?? v.permissions.dependencies.install,
       networkExternal: v.rawPermissions?.network?.external ?? v.permissions.network.external,
+      subagentPolicy: structuredClone(v.rawSubagentPolicy),
     };
     validationErrors = {};
     saveError = "";
@@ -180,7 +189,9 @@
       draft.safetyMode !== effective.safety.mode ||
       draft.requiresSandbox !== effective.safety.requiresSandbox ||
       workflowHasChanges(draft, effective.workflow) ||
-      permissionsChangedFrom(draft, effective)
+      permissionsChangedFrom(draft, effective) ||
+      JSON.stringify(draft.subagentPolicy) !==
+        JSON.stringify(effective.rawSubagentPolicy)
     );
   });
 
@@ -223,7 +234,59 @@
         ? key
         : null;
     }
+    if (path.startsWith("/subagentPolicy/")) return "subagentPolicy";
     return null;
+  }
+
+  function updatePreset(value: string) {
+    if (!draft.subagentPolicy || !MODEL_POLICY_PRESETS.includes(value as ModelPolicyPreset)) return;
+    draft.subagentPolicy = { ...draft.subagentPolicy, preset: value as ModelPolicyPreset };
+  }
+
+  function roleIntent(role: ModelPolicyRoleId, fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort }) {
+    return draft.subagentPolicy?.roles?.[role] ?? fallback;
+  }
+
+  function updateRoleIntent(
+    role: ModelPolicyRoleId,
+    fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort },
+    key: "capability" | "effort",
+    value: string,
+  ) {
+    if (!draft.subagentPolicy) return;
+    const current = roleIntent(role, fallback);
+    draft.subagentPolicy = {
+      ...draft.subagentPolicy,
+      roles: {
+        ...draft.subagentPolicy.roles,
+        [role]: { ...current, [key]: value },
+      },
+    };
+  }
+
+  function overrideValue(role: ModelPolicyRoleId, client: "codex" | "claude" | "tabnine"): string {
+    return draft.subagentPolicy?.roles?.[role]?.overrides?.[client]?.model ?? "";
+  }
+
+  function updateOverride(role: ModelPolicyRoleId, client: "codex" | "claude" | "tabnine", value: string) {
+    if (!draft.subagentPolicy) return;
+    const existing = draft.subagentPolicy.roles?.[role];
+    const fallback = modelPolicy?.rows.find((row) => row.role === role);
+    if (!existing && !fallback) return;
+    const base = existing ?? {
+      capability: fallback!.capability,
+      effort: fallback!.effort,
+    };
+    const overrides = { ...base.overrides };
+    if (value.trim()) overrides[client] = { model: value.trim() };
+    else delete overrides[client];
+    draft.subagentPolicy = {
+      ...draft.subagentPolicy,
+      roles: {
+        ...draft.subagentPolicy.roles,
+        [role]: Object.keys(overrides).length > 0 ? { ...base, overrides } : { ...base, overrides: undefined },
+      },
+    };
   }
 
   async function reviewDiff() {
@@ -636,9 +699,8 @@
           {/each}
         </FormSection>
 
-        <!-- Model policy (read-only; edited through the CLI) -->
-        {#if !editing}
-          <FormSection
+        <!-- Model policy: exact resolved output stays visible while editing. -->
+        <FormSection
             title="Model policy"
             aside={modelPolicy
               ? `preset ${modelPolicy.preset} - catalog v${modelPolicy.catalogVersion}`
@@ -659,7 +721,13 @@
               <div class="field">
                 <span class="lbl">preset</span>
                 <div class="val chip-row">
-                  <span class="chip">{modelPolicy.preset}</span>
+                  {#if editing}
+                    <select class="select-input" value={draft.subagentPolicy?.preset} onchange={(event) => updatePreset(event.currentTarget.value)}>
+                      {#each MODEL_POLICY_PRESETS as preset}<option value={preset}>{preset}</option>{/each}
+                    </select>
+                  {:else}
+                    <span class="chip">{modelPolicy.preset}</span>
+                  {/if}
                   {#if modelPolicy.presetIsRecommended}
                     <Badge tone="ok">recommended</Badge>
                   {:else}
@@ -712,6 +780,23 @@
                         <span class="chip">{row.capability}</span>
                         <span class="chip">{row.effort}</span>
                       </div>
+                      {#if editing}
+                        <div class="mp-editor">
+                          <label>capability
+                            <select class="select-input" value={roleIntent(row.role, row).capability} onchange={(event) => updateRoleIntent(row.role, row, "capability", event.currentTarget.value)}>
+                              <option value="efficient">efficient</option><option value="balanced">balanced</option><option value="strongest">strongest</option>
+                            </select>
+                          </label>
+                          <label>effort
+                            <select class="select-input" value={roleIntent(row.role, row).effort} onchange={(event) => updateRoleIntent(row.role, row, "effort", event.currentTarget.value)}>
+                              <option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="extra-high">extra-high</option>
+                            </select>
+                          </label>
+                          <label>Codex exact override<input class="text-input" value={overrideValue(row.role, "codex")} oninput={(event) => updateOverride(row.role, "codex", event.currentTarget.value)} /></label>
+                          <label>Claude exact override<input class="text-input" value={overrideValue(row.role, "claude")} oninput={(event) => updateOverride(row.role, "claude", event.currentTarget.value)} /></label>
+                          <label>Tabnine exact override<input class="text-input" value={overrideValue(row.role, "tabnine")} oninput={(event) => updateOverride(row.role, "tabnine", event.currentTarget.value)} /></label>
+                        </div>
+                      {/if}
                       {#each row.cells as cell (cell.client)}
                         <div class="mp-cell">
                           <div class="mp-line">
@@ -722,6 +807,7 @@
                             {/if}
                             {#if cell.effort}<span class="chip">effort {cell.effort}</span>{/if}
                             <span class="mp-meta">source {cell.source}</span>
+                            <span class="mp-meta">catalog v{cell.catalogVersion}</span>
                           </div>
                           <div class="mp-line mp-sub">
                             {#each cell.statuses as entry (entry.surface)}
@@ -752,17 +838,16 @@
                 </div>
               </details>
 
-              <div class="field">
+              {#if !editing}<div class="field">
                 <span class="lbl">editing</span>
                 <div class="val" style="color: var(--ink-4); font-size: 12px;">
-                  Read-only here. Change the preset or a role override with
-                  <span class="path">npx agent-profile upgrade</span>. This page never contacts a
-                  provider and never verifies a model against an account.
+                  Edit the preset and advanced role overrides through the guarded
+                  review-and-write flow. This page never contacts a provider or
+                  verifies a model against an account.
                 </div>
-              </div>
+              </div>{/if}
             {/if}
-          </FormSection>
-        {/if}
+        </FormSection>
 
         <!-- Permissions -->
         <FormSection title="Permissions" aside="effective values" open={false}>
@@ -980,6 +1065,15 @@
     flex-direction: column;
     gap: 4px;
   }
+  .mp-editor {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 8px;
+    padding: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .mp-editor label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-3); }
 
   /* Diff modal */
   .modal-overlay {

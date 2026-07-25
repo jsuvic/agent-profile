@@ -74,14 +74,15 @@ resolved model provenance exactly as the generated files carry it, but never
 writes it, and an absent, unreadable, or invalid lockfile degrades to "no
 retained resolution" rather than failing the page.
 
-`subagentPolicy` is preserved but never edited through the browser. The save
-flow reconstructs the candidate profile from form fields only, and the server —
-not the client — reinstates the block from the trusted on-disk profile, so the
-raw block never round-trips through the browser. The read-only model-policy
-table sends only already-resolved presentation values (exact model, lifecycle,
-per-surface status, alternatives), and each resolved identifier passes through
-the same secret-like redaction applied to the YAML preview, because a resolved
-identifier can originate in a user-authored override string.
+`subagentPolicy` participates in the same guarded browser edit flow as the
+other profile fields: the page exposes a selected preset and progressively
+disclosed role/target override inputs, then sends the complete candidate only
+to the local server for validation, exact diff review, and atomic write. Model
+override strings are scanned for NUL and secret-like values before a plan can
+be created. The resolved table separately sends presentation values (exact
+model, lifecycle, per-surface status, alternatives), and each resolved
+identifier passes through the same secret-like redaction applied to the YAML
+preview.
 
 ## Secret Handling
 
@@ -109,12 +110,16 @@ path under a network sentinel.
 
 The probe is source-free by construction: it runs in a fresh empty temporary
 directory outside the repository (removed before the run returns), under an
-environment allowlist, with time, output, process, and call-count bounds. It
-never sends repository content, credentials, or account data, and its report
-carries only closed-set statuses and evidence labels — never raw client output,
-client versions, paths, or timestamps. A client with no documented safe one-shot
-invocation has no contract row and is honestly reported `unsupported-client`
-rather than guessed at.
+environment allowlist, with time, output, process, and call-count bounds.
+Agent Profile never reads, supplies, persists, or reports credentials or
+account data. The invoked client may use its own stored login state from the
+allowlisted home/config locations and authenticate normally to its provider;
+that provider contact and any account/quota effect are why the probe is
+separately consented. The report carries only closed-set statuses and evidence
+labels — never raw client output, client versions, paths, credentials, or
+account data. A client with no documented safe one-shot invocation has no
+contract row and is honestly reported `unsupported-client` rather than guessed
+at.
 
 Model selection itself is not a network feature: catalog resolution is fully
 offline and deterministic against versioned catalog data shipped with the

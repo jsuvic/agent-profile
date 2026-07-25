@@ -4,6 +4,7 @@
 import {
   loadProjectContext,
   readLockModelPolicy,
+  readTabnineSettingsOwnership,
   redactIfSecretLike,
 } from "$lib/server/projectContext";
 import {
@@ -32,6 +33,7 @@ export type ProfileViewModel = {
   rawPermissions: AiProfile["permissions"];
   rawSafety: AiProfile["safety"];
   rawCapabilities: AiProfile["capabilities"];
+  rawSubagentPolicy: AiProfile["subagentPolicy"];
   /**
    * Phase 31.5 (I8): read-only, already-resolved model-policy presentation
    * rows, or `null` when the profile has not opted into the v3 model policy.
@@ -111,9 +113,11 @@ export async function load(): Promise<ProfilePageData> {
       rawPermissions: profile.permissions,
       rawSafety: profile.safety,
       rawCapabilities: profile.capabilities,
+      rawSubagentPolicy: profile.subagentPolicy,
       modelPolicy: buildModelPolicyView(
         profile,
         await readLockModelPolicy(ctx.rootDir),
+        await readTabnineSettingsOwnership(ctx.rootDir),
       ),
       hasSecretLikeContent: yamlRedacted !== ctx.profileSource,
       yaml: yamlRedacted,

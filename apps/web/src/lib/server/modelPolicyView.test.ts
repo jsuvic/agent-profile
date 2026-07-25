@@ -301,6 +301,57 @@ test("model policy view: an explicit Tabnine override surfaces as the resolved m
   assert.equal(statusFor(cell, "effort"), "unsupported");
 });
 
+test("model policy view: the primary Tabnine status reflects settings ownership", () => {
+  const profile = parseFixture(
+    fixtureYaml({
+      subagentPolicy: `subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    implementer:
+      capability: balanced
+      effort: high
+      overrides:
+        tabnine:
+          model: gpt-5.4
+`,
+    }),
+  );
+  assert.equal(
+    statusFor(
+      cellFor(
+        requireView(profile),
+        MODEL_POLICY_PRIMARY_ROLE,
+        "tabnine",
+      ),
+      "model",
+    ),
+    "advisory",
+  );
+  assert.equal(
+    statusFor(
+      cellFor(
+        buildModelPolicyView(profile, undefined, "absent")!,
+        MODEL_POLICY_PRIMARY_ROLE,
+        "tabnine",
+      ),
+      "model",
+    ),
+    "configured",
+  );
+  assert.equal(
+    statusFor(
+      cellFor(
+        buildModelPolicyView(profile, undefined, "unowned")!,
+        MODEL_POLICY_PRIMARY_ROLE,
+        "tabnine",
+      ),
+      "model",
+    ),
+    "advisory",
+  );
+});
+
 test("model policy view: an uncatalogued Tabnine override renders the organization/private label", () => {
   const profile = parseFixture(
     fixtureYaml({

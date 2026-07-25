@@ -294,11 +294,8 @@ test("end-to-end: an absent settings file is written deterministically and becom
 
 // ---------------------------------------------------------------------------
 // `agent-profile compile --write` end to end: the real CLI command, not just
-// the pure planner. Compile has no source of an exact Tabnine override today
-// (no `subagentPolicy.roles[id].overrides.tabnine` profile field exists yet),
-// so the Tabnine branch always resolves to advisory here -- but the ownership
-// classification and the "never touch an unowned file" contract must still
-// hold through the real `agent-profile compile --write` command.
+// the pure planner. The persisted primary role override is the exact model
+// source for Tabnine's one project-local settings surface.
 // ---------------------------------------------------------------------------
 
 const COMPILE_FIXTURE_PROFILE = `version: 1
@@ -326,6 +323,16 @@ workflow:
   sdd: true
   tdd: true
   finalReview: true
+subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    implementer:
+      capability: balanced
+      effort: high
+      overrides:
+        tabnine:
+          model: gpt-5.4
 permissions:
   filesystem:
     read: allow
@@ -378,7 +385,7 @@ test("agent-profile compile --write preserves an unowned .tabnine/agent/settings
   assert.equal(afterBytes, originalBytes);
 });
 
-test("agent-profile compile --write does not create .tabnine/agent/settings.json when absent (no override source exists in compile)", async () => {
+test("agent-profile compile --write creates .tabnine/agent/settings.json from a persisted primary override when absent", async () => {
   const rootDir = await makeTmpRoot();
   await writeFile(
     path.join(rootDir, "ai-profile.yaml"),
@@ -394,7 +401,9 @@ test("agent-profile compile --write does not create .tabnine/agent/settings.json
   assert.equal(code, 0, output.stderrText());
 
   const settingsPath = path.join(rootDir, ".tabnine", "agent", "settings.json");
-  await assert.rejects(readFile(settingsPath, "utf8"));
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+    model: { id: "gpt-5.4" },
+  });
 });
 
 // ---------------------------------------------------------------------------

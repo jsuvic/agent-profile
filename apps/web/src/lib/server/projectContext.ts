@@ -17,6 +17,7 @@ import {
   toLockfileV2View,
   validateLockfileText,
   type LockModelPolicyV2,
+  type TabnineSettingsOwnership,
 } from "@agent-profile/compiler";
 
 export type ProjectContext = {
@@ -35,6 +36,7 @@ export type ProjectContext = {
 
 const PROFILE_FILENAME = "ai-profile.yaml";
 const LOCK_FILENAME = "ai-profile.lock";
+const TABNINE_SETTINGS_PATH = ".tabnine/agent/settings.json";
 
 /**
  * Read the lockfile's `modelPolicy` block, or `undefined` when the file is
@@ -66,6 +68,31 @@ export async function readLockModelPolicy(
     return undefined;
   }
   return toLockfileV2View(result.lockfile).modelPolicy;
+}
+
+/** Read-only ownership classification for the UI's Tabnine status. */
+export async function readTabnineSettingsOwnership(
+  rootDir: string,
+): Promise<TabnineSettingsOwnership> {
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(path.join(rootDir, TABNINE_SETTINGS_PATH));
+  } catch {
+    return "absent";
+  }
+  let source: string;
+  try {
+    source = (await readFile(path.join(rootDir, LOCK_FILENAME))).toString("utf8");
+  } catch {
+    return "unowned";
+  }
+  const result = validateLockfileText(source);
+  if (!result.ok) return "unowned";
+  const output = toLockfileV2View(result.lockfile).outputs.find(
+    (candidate) => candidate.path === TABNINE_SETTINGS_PATH,
+  );
+  if (output?.ownership !== "generated-owned") return "unowned";
+  return sha256Hex(bytes) === output.sha256 ? "generated-owned" : "unowned";
 }
 
 /**

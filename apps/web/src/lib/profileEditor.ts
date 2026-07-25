@@ -132,6 +132,7 @@ export type ProfileCandidateSource = {
   rawPermissions: AiProfile["permissions"];
   rawSafety: AiProfile["safety"];
   rawCapabilities: AiProfile["capabilities"];
+  rawSubagentPolicy: AiProfile["subagentPolicy"];
 };
 
 export type ProfileCandidateDraft = PermissionDraft &
@@ -147,6 +148,7 @@ export type ProfileCandidateDraft = PermissionDraft &
     claudeEnabled: boolean;
     safetyMode: string;
     requiresSandbox: boolean;
+    subagentPolicy: AiProfile["subagentPolicy"];
   };
 
 export function parseSlugList(raw: string): string[] {
@@ -233,10 +235,14 @@ export function buildCandidateProfile(
     candidate["capabilities"] = source.rawCapabilities;
   }
 
-  // subagentPolicy is not editable in the form and is never sent to the
-  // browser (it is preserved server-side in the /api/profile/plan route from
-  // the trusted on-disk profile), so it is intentionally not reconstructed
-  // here.
+  // Model policy uses the same reviewed candidate/diff/write path as every
+  // other editable profile field. Keeping the complete structured value here
+  // preserves legacy/v3 roles and exact target overrides that this UI does not
+  // currently change, while the progressively disclosed controls edit only the
+  // selected preset and explicit role values.
+  if (source?.rawSubagentPolicy !== undefined) {
+    candidate["subagentPolicy"] = draft.subagentPolicy;
+  }
 
   if (hasExplicitPerms || hasPermissionChanges) {
     candidate["permissions"] = {

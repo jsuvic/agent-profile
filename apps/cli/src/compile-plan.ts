@@ -16,6 +16,7 @@ import {
   type GeneratedFile,
   type LockModelPolicyV2,
   type LockOutputV2,
+  MODEL_POLICY_PRIMARY_ROLE,
   type ModelPolicyTabnineSettingsPlan,
   type MixedOutputDescriptor,
   type PlannedWrite,
@@ -151,7 +152,13 @@ export async function resolveTabnineModelSettings(
   if (!profile.clients.tabnine.enabled) {
     return undefined;
   }
-  return { model, ownership: await classifyTabnineSettingsOwnership(rootDir) };
+  const persistedPrimaryModel =
+    profile.subagentPolicy?.roles?.[MODEL_POLICY_PRIMARY_ROLE]?.overrides
+      ?.tabnine?.model;
+  return {
+    model: model ?? persistedPrimaryModel,
+    ownership: await classifyTabnineSettingsOwnership(rootDir),
+  };
 }
 
 export async function planRegionAwareWrites(

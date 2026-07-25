@@ -234,6 +234,16 @@ function findNulStringPaths(profile: AiProfile): string[] {
     if (t.includes("\0")) paths.push(`/stack/testing/${i}`);
   }
 
+  for (const [role, entry] of Object.entries(
+    profile.subagentPolicy?.roles ?? {},
+  )) {
+    for (const [client, override] of Object.entries(entry.overrides ?? {})) {
+      if (override?.model?.includes("\0")) {
+        paths.push(`/subagentPolicy/roles/${role}/overrides/${client}/model`);
+      }
+    }
+  }
+
   return paths;
 }
 
@@ -247,6 +257,16 @@ function findSecretLikePaths(profile: AiProfile): string[] {
 
   for (const [i, lang] of profile.stack.languages.entries()) {
     if (containsSecretLikeLiteral(lang)) paths.push(`/stack/languages/${i}`);
+  }
+
+  for (const [role, entry] of Object.entries(
+    profile.subagentPolicy?.roles ?? {},
+  )) {
+    for (const [client, override] of Object.entries(entry.overrides ?? {})) {
+      if (override?.model && containsSecretLikeLiteral(override.model)) {
+        paths.push(`/subagentPolicy/roles/${role}/overrides/${client}/model`);
+      }
+    }
   }
   for (const [i, fw] of profile.stack.frameworks.entries()) {
     if (containsSecretLikeLiteral(fw)) paths.push(`/stack/frameworks/${i}`);
