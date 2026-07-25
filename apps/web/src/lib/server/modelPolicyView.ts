@@ -22,7 +22,6 @@
 
 import {
   DEFAULT_MODEL_POLICY_PRESET,
-  getOrdinaryModelCatalogCandidates,
   type AiProfile,
   type ModelCatalogLifecycleStatus,
   type ModelPolicyCapability,
@@ -101,13 +100,12 @@ export type ModelPolicyViewCell = Readonly<{
   /** Ordered alternatives, verbatim from the resolver (already retired-free). */
   alternatives: readonly string[];
   /**
-   * Documented, non-retired identifiers a user may pick manually for this
-   * role's capability. Populated only for a client whose resolution is guided
-   * manual selection (Tabnine without an explicit override). Always derived
-   * through `getOrdinaryModelCatalogCandidates`, so retired entries are never
-   * offered here (acceptance criterion 4) even though a retired entry that an
-   * existing profile explicitly references still renders in `model` with its
-   * `retired` lifecycle.
+   * Documented, non-retired identifiers a user may pick manually. Populated
+   * only for a client whose resolution is guided manual selection (Tabnine
+   * without an explicit override). Tabnine availability is organization-owned,
+   * so this list intentionally does not invent a per-role capability ranking.
+   * A retired entry that an existing profile explicitly references still
+   * renders in `model` with its `retired` lifecycle.
    */
   guidedCandidates: readonly string[];
   /**
@@ -236,9 +234,8 @@ function tabnineCell(
     alternatives: presentModelList(row.tabnine.alternatives),
     guidedCandidates: guided
       ? presentModelList(
-          getOrdinaryModelCatalogCandidates(
-            TABNINE_MODEL_POLICY_CATALOG,
-            row.capability,
+          TABNINE_MODEL_POLICY_CATALOG.filter(
+            (entry) => entry.status !== "retired",
           ).map((entry) => entry.id),
         )
       : Object.freeze([]),

@@ -7,7 +7,7 @@ import childProcess from "node:child_process";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -510,6 +510,20 @@ test("model policy view: guided candidate lists never offer retired catalog entr
     offeredCandidates > 0,
     "the view must offer at least one guided candidate to make AC4 meaningful",
   );
+
+  const offered = new Set(
+    view.rows.flatMap((row) =>
+      row.cells.flatMap((cell) => [...cell.guidedCandidates]),
+    ),
+  );
+  for (const entry of TABNINE_MODEL_POLICY_CATALOG) {
+    if (entry.status !== "retired") {
+      assert.ok(
+        offered.has(entry.id),
+        `${entry.id} must remain available for guided manual selection`,
+      );
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -744,6 +758,37 @@ test("model policy view: the page load reads a real ai-profile.lock and replays 
       retainedModel,
       "the page must render the lock's retained resolution, not a fresh re-resolve",
     );
+
+    const lockPath = path.join(dir, "ai-profile.lock");
+    const outsideLockPath = path.join(
+      os.tmpdir(),
+      `agent-profile-outside-lock-${path.basename(dir)}.json`,
+    );
+    await writeFile(outsideLockPath, `${JSON.stringify(lock, null, 2)}\n`);
+    try {
+      await rm(lockPath);
+      await symlink(outsideLockPath, lockPath);
+    } catch {
+      // Symlink creation can require elevated privileges on Windows.
+      await rm(outsideLockPath, { force: true });
+      return;
+    }
+    try {
+      const symlinkData = await load();
+      assert.ok(symlinkData.view.ok);
+      assert.ok(symlinkData.view.modelPolicy);
+      assert.notEqual(
+        cellFor(
+          symlinkData.view.modelPolicy,
+          MODEL_POLICY_PRIMARY_ROLE,
+          "codex",
+        ).model,
+        retainedModel,
+        "a symlinked lockfile must not be read outside the project root",
+      );
+    } finally {
+      await rm(outsideLockPath, { force: true });
+    }
   } finally {
     if (previous === undefined) {
       delete process.env.AGENT_PROFILE_ROOT;

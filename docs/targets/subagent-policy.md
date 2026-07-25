@@ -375,8 +375,8 @@ In practice this means:
   for the primary `implementer` role. It writes that one reviewed
   project-local selection when the settings file is absent or generated-owned;
   an existing unowned file is preserved byte-for-byte and remains advisory.
-- `agent-profile init`'s interactive wizard is the only path that can resolve
-  an exact model for Tabnine, via the advanced-override entry point described
+- `agent-profile init`'s interactive wizard is the interactive entry path for
+  an exact Tabnine model, via the advanced-override entry point described
   in `docs/cli/README.md`'s "Model Selection" section. Selecting a client that
   is `tabnine`-only or alongside Codex/Claude, and then opting into the
   advanced override with a typed model id, causes `writeCompiledClientFiles`

@@ -56,14 +56,8 @@ const TABNINE_SETTINGS_PATH = ".tabnine/agent/settings.json";
 export async function readLockModelPolicy(
   rootDir: string,
 ): Promise<LockModelPolicyV2 | undefined> {
-  let source: string;
-  try {
-    source = (await readFile(path.join(rootDir, LOCK_FILENAME))).toString(
-      "utf8",
-    );
-  } catch {
-    return undefined;
-  }
+  const source = await readSafeLockfileText(rootDir);
+  if (source === undefined) return undefined;
   const result = validateLockfileText(source);
   if (!result.ok) {
     return undefined;
@@ -78,14 +72,8 @@ export async function readTabnineSettingsOwnership(
   const existing = await readRegionAwareFile(rootDir, TABNINE_SETTINGS_PATH);
   if (existing.refused) return "unowned";
   if (!existing.bytes) return "absent";
-  let source: string;
-  try {
-    source = (await readFile(path.join(rootDir, LOCK_FILENAME))).toString(
-      "utf8",
-    );
-  } catch {
-    return "unowned";
-  }
+  const source = await readSafeLockfileText(rootDir);
+  if (source === undefined) return "unowned";
   const result = validateLockfileText(source);
   if (!result.ok) return "unowned";
   const output = toLockfileV2View(result.lockfile).outputs.find(
@@ -95,6 +83,13 @@ export async function readTabnineSettingsOwnership(
   return sha256Hex(existing.bytes) === output.sha256
     ? "generated-owned"
     : "unowned";
+}
+
+/** Reads the lock only when it is a repository-local regular file. */
+async function readSafeLockfileText(rootDir: string): Promise<string | undefined> {
+  const lock = await readRegionAwareFile(rootDir, LOCK_FILENAME);
+  if (lock.refused || !lock.bytes) return undefined;
+  return Buffer.from(lock.bytes).toString("utf8");
 }
 
 /**

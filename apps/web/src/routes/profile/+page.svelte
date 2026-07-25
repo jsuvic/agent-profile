@@ -125,12 +125,14 @@
 
   function startEdit() {
     if (!effective) return;
+    reviewedModelPolicy = null;
     initDraft(effective);
     editing = true;
   }
 
   function cancelEdit() {
     editing = false;
+    reviewedModelPolicy = null;
     diffModalOpen = false;
     saveError = "";
     validationErrors = {};

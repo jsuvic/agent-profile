@@ -3093,6 +3093,9 @@ async function runCompile(
           profile: profileResult.profile,
           profilePath: safeProfilePath.path,
           profileBytes,
+          includeTabnine:
+            parsed.targets.length === 0 ||
+            parsed.targets.some((target) => target.startsWith("tabnine-")),
         });
       }
     }
@@ -3335,6 +3338,7 @@ async function runDriftReconciliation(input: {
   otherDriftPaths: readonly string[];
   profilePath: string;
   profileBytes: Uint8Array;
+  includeTabnine: boolean;
 }): Promise<number> {
   const { io, prompts } = input;
   const fileByPath = new Map(
@@ -3521,6 +3525,8 @@ async function runDriftReconciliation(input: {
   const tabnineModelSettings = await resolveTabnineModelSettings(
     input.rootDir,
     input.profile,
+    undefined,
+    input.includeTabnine,
   );
 
   const { writes } = buildCompileWrites({
