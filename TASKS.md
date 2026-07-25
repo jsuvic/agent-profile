@@ -1482,7 +1482,75 @@ pre-existing `.claude/settings.json`/`.claude/settings.local.json`/
 `.mcp.json` drift unrelated to this file; no separate golden-test command
 exists (golden fixtures are ordinary `node:test` cases already inside
 `npm run test --workspace @agent-profile/compiler`, itself part of `npm
-test`). All three rounds' fixes were scoped to the one owned file; no
+test`). Round 4 (2 more P2 findings): (1) `satisfiesDeclaredVersionRange`'s
+caret-range branch treated any `^major.minor.patch` as "same major, and
+minor.patch >= declared" regardless of major version, which is wrong for a
+zero-major package under real npm/node-semver caret semantics (`^0.2.0`
+must reject `0.3.0`, not accept it, since pre-1.0 minor bumps are breaking)
+- fixed by branching on the declared major: nonzero-major keeps the
+original behavior, `^0.y.z` (y>0) locks major.minor and only allows patch
+to float upward, and `^0.0.z` locks to that exact version. No current
+manifest uses a zero-major external dependency, so this changed no
+existing pass/fail outcome, but closed a real gap; (2) the sentence above
+this Round 4 addendum ("proven against the real
+`fixtures/npm-pack/agent-profile-*.json` file-list fixtures") was accurate
+only as a one-time manual cross-check performed during cycle 1's
+implementation - the test itself never actually read those fixture files
+at runtime, so a future drift between the golden fixture and the
+hard-coded required-asset list would have gone unnoticed. Fixed for real
+(not just reworded): a new `readNpmPackFixture` helper now reads each
+fixture from disk at test time and asserts every required asset path is
+still listed there, in addition to the existing check against the freshly
+packed tarball - genuine three-way runtime coupling (hard-coded list <->
+golden fixture <-> fresh pack output) rather than static-only evidence.
+Round 5 (1 more P2 finding): `computeRuntimeDependencyGraph` unconditionally
+skips `@agent-profile/web` when walking the CLI's declared dependencies, so
+a stale/missing/unusable packed `web` release could not be caught the way
+every other internal dependency edge now is. Judged as a disclosed partial
+mitigation rather than a full fix: `apps/cli/bundle.mjs`'s own comment
+documents `@agent-profile/web` as a lazy, `require.resolve`-only dependency
+needed solely for the `ui` subcommand, which this journey's only scenario
+(`init`) never touches; the already-shipped, already-`done` sibling
+`scripts/release/phase31-published-journey.test.mjs` has this exact same
+exclusion and was never flagged for it; and fully building/packing a
+SvelteKit app purely to validate an unexercised dependency edge would be a
+disproportionate scope expansion for a review-fix round. Added a cheap,
+real check instead: a new `assertWebDependencyVersionMatches` compares
+`apps/cli/package.json`'s declared `@agent-profile/web` version against
+`apps/web/package.json`'s own version directly from the source tree (no
+build/pack required), catching the common stale-version-bump failure mode,
+with a code comment documenting the tradeoff and naming a future
+`ui`-subcommand cycle as the natural point to add real packed validation.
+Round 6 (4 more P2 findings, all in the same file): (1) the packed-compiler
+import (the role-aware table oracle) ran before `withRuntimeSentinels`
+installed its guards, so a side effect in a compiler-only module the CLI
+bundle tree-shakes away could execute unrecorded - moved into its own
+guarded closure, kept separate from the later `init`-scenario guard since
+they are two conceptually distinct actions; (2) `withFsWriteSentinel`
+patched `fs.promises` properties but never called
+`syncBuiltinESMExports()`, so a write reached through a named ESM import
+(e.g. `import { open } from "node:fs/promises"`, the pattern shipped
+modules like `personal-activation.ts`/`model-probe.ts` actually use) could
+bypass the patched bindings entirely and evade detection - fixed by adding
+the sync call after patching and again after restoring, mirroring
+`withRuntimeSentinels`'s existing pattern exactly; (3)
+`testOnlyFixturePathPattern` missed common test-only naming conventions
+(a plain `fixtures/` directory segment without a leading double
+underscore, a `.fixture.` infix, `.spec.` suffixes, and `.mjs` test files)
+- broadened accordingly, re-verified against the repo's real packed file
+lists for false positives; (4) `buildPackedWorkspaces` never cleaned prior
+build output before rebuilding, so `tsc -b`'s incremental build could leave
+a stale orphaned `dist/` asset (from a since-removed/renamed source file)
+in the packed tarball even though a genuine clean-checkout build would
+never produce it - fixed by removing each workspace's `dist/` before
+rebuilding, with one important correction found during verification and
+documented in the code comment: deleting `dist/` alone is insufficient,
+since `tsc -b` consults `tsconfig.tsbuildinfo` (which lives next to
+`tsconfig.json`, not inside `dist/`) to decide whether a rebuild is needed
+at all, so removing only `dist/` left it seeing unchanged source hashes and
+skipping emission entirely (worse than the original stale-file problem);
+the fix also removes each workspace's `tsconfig.tsbuildinfo`. All six
+rounds' fixes (19 findings total) were scoped to the one owned file; no
 product code, `TASKS.md` (until this entry), or the sibling precedent file
 were touched. State stays `ready`, not `done` - same open scope as the
 cycle-1 entry above.
