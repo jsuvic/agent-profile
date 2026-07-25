@@ -19,6 +19,7 @@ Implemented:
 - `agent-profile compile`
 - `agent-profile configure`
 - `agent-profile init`
+- `agent-profile upgrade`
 - `agent-profile ui`
 
 Deferred:
@@ -30,10 +31,11 @@ Deferred:
 ## Commands
 
 ```bash
-agent-profile doctor [--root <path>] [--json]
+agent-profile doctor [--root <path>] [--json] [--mcp-suggestions] [--models] [--probe]
 agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
 agent-profile configure [--root <path>] [--non-interactive]
 agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
+agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--check-for-updates] [--probe-models] [--non-interactive] [--json]
 agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 ```
 
@@ -249,7 +251,8 @@ selected clients, using the mapping-v3 model-policy domain
 (`docs/specs/phase-31.5/001-model-selection-lifecycle.md`). This section
 documents what actually shipped: the preset step (I5), the probe-consent step
 (I5), the Tabnine manual/advisory path plus its exact-override entry point
-(I5R), and the offline/non-interactive contract. See
+(I5R), the offline/non-interactive contract, `upgrade`'s model-policy flags
+(I6a–I6e), and the offline `doctor --models` category (I7). See
 `docs/targets/subagent-policy.md` for the underlying per-role capability/effort
 preset tables and the Tabnine adapter's catalog/lifecycle rules; this section
 does not duplicate those tables, only the CLI-facing flow around them.
@@ -362,6 +365,94 @@ before `init` resolves `--root`, reads any file, or dispatches the wizard —
 so it never starts a client/provider/package process and never touches the
 filesystem, regardless of any other flags supplied alongside it.
 
+### `upgrade` model-policy flags (Phase 31.5 I6a–I6e)
+
+`agent-profile upgrade` is report-only by default. Three model-policy flags are
+available, all off unless passed explicitly:
+
+```bash
+agent-profile upgrade [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--check-for-updates] [--probe-models] [--write]
+```
+
+#### `--model-policy-strategy <retain|adopt|quality-first|cost-conscious>`
+
+Previews how the profile's model policy would compare and resolve under that
+bulk strategy: old and new exact model, target effort, capability status,
+ordered alternatives, and catalog lifecycle, per role and client. The four
+accepted values are the only ones parsed; anything else exits `2` with
+`--model-policy-strategy requires one of: retain, adopt, quality-first,
+cost-conscious.` (A "custom exact" strategy was formally descoped during I6a and
+never shipped.)
+
+It requires a v3-opted profile (`subagentPolicy.preset` set) or an enabled
+mapping-v2 profile (`subagentPolicy.enabled: true`); otherwise it exits `1` with
+`--model-policy-strategy requires a v3-opted profile or an enabled mapping-v2
+profile (subagentPolicy.enabled).`
+
+Combined with `--write`:
+
+- `adopt` on a v3-opted profile regenerates `ai-profile.lock` and every affected
+  Codex/Claude target file together, so the lock and the generated files can
+  never disagree. `ai-profile.yaml` is not edited (the preset is already set).
+- `quality-first` / `cost-conscious` — and `adopt` on an enabled mapping-v2
+  profile, which has no current preset to keep — additionally edit
+  `ai-profile.yaml`'s own `subagentPolicy.preset` first, atomically with the
+  same lock/target-file regeneration.
+- `retain --write` is always a no-op: it keeps everything as-is, so there is
+  nothing to write.
+- `--adopt-recommended` and `--model-policy-strategy --write` cannot be
+  combined (exit `1`): each selects an independent write path, and running only
+  one would silently drop the other's explicit request. Run them as two separate
+  `agent-profile upgrade --write` invocations.
+
+The write path applies the same generated-file ownership and drift refusal
+`compile` uses, through the atomic all-or-nothing write plan: a manually-edited
+`.codex/config.toml` refuses the write before any file is touched, and a
+mid-write failure rolls the whole batch back.
+
+#### `--check-for-updates`
+
+Opts into exactly one read-only, unauthenticated metadata lookup against the
+public npm registry, reporting whether a newer `@agent-profile/cli` is available
+(`newer` / `current` / `older` / `unknown`) plus manual
+`npm install -g @agent-profile/cli@latest` guidance. It never downloads,
+installs, or writes anything, sends no credentials or telemetry, and is bounded
+by a 5-second abort timeout; a failed, malformed, or timed-out response degrades
+to `unknown` with exit code `0` rather than failing the command.
+
+Off by default: without the flag, `upgrade` performs zero network access.
+
+**`--check-for-updates` cannot be combined with `--json`.** The combination is
+rejected outright (exit `2`) because the update check's text-only report would
+break `--json`'s single-clean-JSON-line contract. Run them as two separate
+invocations.
+
+Model catalog updates ship only with an Agent Profile release, so this check is
+also how you learn that a newer bundled catalog exists.
+
+#### `--probe-models`
+
+Opts into re-running the same consented, source-free model probe the `init`
+wizard offers, against the exact primary-role model(s) an `adopt` /
+`quality-first` / `cost-conscious` `--write` is about to adopt, for whichever of
+Codex/Claude the profile actually has enabled. It is scoped to that write path
+only.
+
+This is a **separate** consent from `--check-for-updates`: accepting or
+declining one never affects the other, and both default to declined. Declining
+`--probe-models` starts zero probe processes.
+
+The probe result is never written to `ai-profile.lock`, `ai-profile.yaml`, or
+any other persisted file — it appears only in that run's printed report and, for
+`--json`, an advisory `modelProbe` field. Unlike `--check-for-updates`,
+`--probe-models` is **not** rejected with `--json`: the advisory field composes
+cleanly into the existing envelope.
+
+If a probe reports a candidate as not available, `upgrade` refuses the write
+entirely (leaving every file byte-unchanged) rather than adopting an unconfirmed
+model. A probe-*infrastructure* failure (not an availability result) instead
+degrades to proceeding with catalog-only information.
+
 ### `doctor --models` / `--probe` (Phase 31.5 I7)
 
 `agent-profile doctor --models` adds an opt-in, entirely offline model-policy
@@ -405,6 +496,24 @@ This CLI reference is the primary documentation surface for `--models`/
 document in this repository (`docs/specs/phase-04/*.md` document earlier
 `LINT-*` families the same way, as prose inside the owning spec/reference
 rather than a standalone table file).
+
+### Read-only model policy in the local UI
+
+`agent-profile ui`'s profile page renders the same resolved model policy
+read-only, under a **Model policy** panel: the selected preset (badged when it
+is the recommended default, otherwise naming the recommendation), the catalog
+version, the primary role's per-client row expanded, and every remaining role
+behind a disclosure. Cells show the same exact model, target effort, lifecycle,
+per-surface capability status, and ordered alternatives the CLI preview and the
+generated guidance tables use, because the view is a pure projection over the
+same compiler tables — it embeds no second catalog. A Tabnine cell without an
+exact model shows guided manual selection plus the documented, non-retired
+candidates for that role's capability; an uncatalogued Tabnine identifier renders
+with the compiler's own `organization/private - unrated` label.
+
+The UI never probes, starts no client or network process, and cannot display
+account, quota, or entitlement data. Model policy is not editable there: it is
+changed through `ai-profile.yaml` and the CLI.
 
 ## Init Clients
 

@@ -12,7 +12,12 @@ import {
   type ProfileValidationIssue,
   type SafetyMode,
 } from "@agent-profile/core";
-import { sha256Hex } from "@agent-profile/compiler";
+import {
+  sha256Hex,
+  toLockfileV2View,
+  validateLockfileText,
+  type LockModelPolicyV2,
+} from "@agent-profile/compiler";
 
 export type ProjectContext = {
   rootDir: string;
@@ -29,6 +34,39 @@ export type ProjectContext = {
 };
 
 const PROFILE_FILENAME = "ai-profile.yaml";
+const LOCK_FILENAME = "ai-profile.lock";
+
+/**
+ * Read the lockfile's `modelPolicy` block, or `undefined` when the file is
+ * absent, unreadable, or does not validate. Never throws.
+ *
+ * Deliberately NOT called from `loadProjectContext`: only the profile route
+ * needs this, and `loadProjectContext` runs on every navigation (including the
+ * write endpoints), so folding a full lockfile read + schema validation into it
+ * would make eleven other consumers pay for a field they ignore. Callers that
+ * want it call this directly.
+ *
+ * Degrading to `undefined` rather than surfacing an error is intentional: this
+ * is a presentation input, and `doctor` is the surface that reports a broken
+ * lockfile as an actual issue.
+ */
+export async function readLockModelPolicy(
+  rootDir: string,
+): Promise<LockModelPolicyV2 | undefined> {
+  let source: string;
+  try {
+    source = (await readFile(path.join(rootDir, LOCK_FILENAME))).toString(
+      "utf8",
+    );
+  } catch {
+    return undefined;
+  }
+  const result = validateLockfileText(source);
+  if (!result.ok) {
+    return undefined;
+  }
+  return toLockfileV2View(result.lockfile).modelPolicy;
+}
 
 /**
  * Resolve the project root for the running Phase 6 UI. Defaults to the

@@ -148,7 +148,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I6d | Tabnine model-resolution reconciliation | done | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
 | I6e | Upgrade write ownership refusal and rollback | done | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
 | I7 | Offline Doctor model policy and explicit recheck | done | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
-| I8 | Local UI model policy and user documentation | ready | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
+| I8 | Local UI model policy and user documentation | done | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
 | I9 | Published model-selection journey and final integration | ready | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
 
 I1R added 2026-07-17: I1 was marked done but never wired `preset`, the
@@ -1355,6 +1355,83 @@ unverified and Tabnine organization/private status rendering, retired-entry
 picker handling, and the entire documentation-impact deliverable (root/
 package README, schema, target, CLI, privacy, release docs). State stays
 `ready`, not `done`.
+
+I8 completed 2026-07-25 via two further `/implement-next` cycles (UI, then
+documentation), closing every remaining acceptance criterion.
+
+Cycle 2 (read-only model-policy UI, AC2 visibility/AC3/AC4/AC5): added
+`apps/web/src/lib/server/modelPolicyView.ts`, a pure projection that builds
+the profile page's model-policy table from the compiler's own resolvers
+(`buildModelPolicyTargetTable`, `buildModelPolicyTabnineTargetTable`,
+`deriveModelPolicyRoleOverrides`/`...TabnineRoleOverrides`) and contains zero
+model identifiers, lifecycle values, or status literals of its own - the
+brief's hard "do not embed a second model catalog in Svelte components or
+prose tests" rule, which the tests also honor by asserting against resolver
+output rather than hardcoded ids (even the retired fixture id is discovered
+from `TABNINE_MODEL_POLICY_CATALOG`). Rendered in `+page.svelte` as a
+read-only section: preset (with the standing recommendation), catalog
+version, the primary role hoisted out, and the full per-role table behind a
+`<details>` expander. Spec review found two real blockers, both fixed rather
+than disclosed: (1) AC3's required Tabnine `organization/private - unrated`
+label was missing (the UI rendered a bare `unrated`) - fixed by extracting
+`tabnineLifecycleLabel` in `packages/compiler/src/subagent-policy-guidance.ts`
+as the single owner of that wording, consumed by both `renderTabnineModelCell`
+and the web view so the page and the generated guidance tables cannot drift;
+(2) AC4's "profile/lock" half was unimplemented - the view resolved fresh and
+ignored a prior lock's retained rows, so the UI could disagree with the
+generated files - fixed by adding `readLockModelPolicy` (deliberately NOT
+called from `loadProjectContext`, which runs on every navigation including
+the write endpoints, so eleven other consumers don't pay for a field only
+this route reads) and threading `previousModelPolicy` into both table
+builders. Code-quality review then flagged two untested claims that were
+both backing already-shipped documentation - the secret-like redaction of
+resolved identifiers, and the lockfile read/validate/project chain itself
+(the AC4 test hand-built its lock object and bypassed the file read) - both
+closed with real regression tests, plus an invalid-lockfile-degrades test.
+Also applied from review: expose `recommendedPreset` unconditionally so a
+project on a non-default preset is still told what is recommended, suppress
+the lifecycle badge when no model resolved, redact `alternatives`/
+`guidedCandidates`, and type `statusTone`/`lifecycleTone` to the core unions
+- which immediately caught a latent out-of-union `"unknown"` fallback in
+`headlineStatus`. RED proof: with `modelPolicyView.ts` moved aside the new
+suite failed 0-pass/1-fail; the lock-replay and org/private tests failed
+against the pre-fix code for their own reasons. GREEN: 20 model-policy
+tests, `apps/web` 216/216, `packages/compiler` 331 pass/0 fail (no golden
+churn from the label extraction), root `npm run check` clean.
+
+Cycle 3 (AC6 documentation): rewrote root `README.md`'s "Recommended Model
+Settings" from generic prose predating the phase into the implemented
+lifecycle (preset table with `role-aware` as recommended default, the
+before-write exact-name guarantee, the four capability statuses and what
+each actually means, and honest per-tool reality - Codex writes only the
+primary role's row into `.codex/config.toml`, Claude is guidance-only,
+Tabnine is guided manual selection with an ownership-gated `model.id` write
+and permanently `unsupported` effort); mirrored it into the published
+`packages/agent-profile/README.md`; documented the previously-undocumented
+`upgrade --model-policy-strategy`, `--check-for-updates` (incl. its `--json`
+rejection) and `--probe-models` in `docs/cli/README.md`, closing the gap
+I6a/I6b had disclosed; accuracy pass on `docs/targets/subagent-policy.md`.
+`docs/security/trust-model.md`'s "Network Behavior" section was found
+actively contradicting the implementation - it still claimed commands "must
+run without network access" full stop, predating the two shipped opt-in
+paths - and was rewritten with a table of exactly what each path sends and
+persists, the probe's source-free isolation guarantees, and the UI's
+never-probes/no-account-data boundary; its "Local UI Server" section gained
+the lockfile read-only/degradation rule and the server-side `subagentPolicy`
+preservation + redaction rules.
+
+Carried forward as open scope, deliberately not claimed by I8: advanced
+per-role/exact-override *editing* UI in the browser (the brief's AC2 wording
+"progressively exposed" is satisfied for visibility; editing remains
+CLI-only by design, and the page says so). Also still open from the earlier
+fix-round: `findSecretLikePaths`/`findNulStringPaths` do not scan
+subagentPolicy fields - the block stays server-preserved-only and
+non-user-editable through the browser, so no new user-controlled input
+surface exists today, but this must be revisited if an editing UI ever
+ships. Display helpers in `+page.svelte` (`statusTone`/`lifecycleTone`/
+`modelLabel`/`headlineStatus`) remain in the component rather than extracted
+to a testable `$lib` module per this page's own `profileEditor.ts`
+precedent - a disclosed code-quality follow-up, not a behavior gap.
 
 I9 first RED-first `/implement-next` cycle completed 2026-07-24, a disclosed
 partial slice: added `scripts/release/phase31_5-published-journey.test.mjs`

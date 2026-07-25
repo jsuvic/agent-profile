@@ -3,8 +3,13 @@
 
 import {
   loadProjectContext,
+  readLockModelPolicy,
   redactIfSecretLike,
 } from "$lib/server/projectContext";
+import {
+  buildModelPolicyView,
+  type ModelPolicyView,
+} from "$lib/server/modelPolicyView";
 import { computeFileEtag } from "@agent-profile/compiler";
 import { issueCsrfToken } from "$lib/server/tokenStore";
 import {
@@ -27,6 +32,20 @@ export type ProfileViewModel = {
   rawPermissions: AiProfile["permissions"];
   rawSafety: AiProfile["safety"];
   rawCapabilities: AiProfile["capabilities"];
+  /**
+   * Phase 31.5 (I8): read-only, already-resolved model-policy presentation
+   * rows, or `null` when the profile has not opted into the v3 model policy.
+   *
+   * Only *derived* resolution output crosses to the browser here (exact model
+   * ids, lifecycle, per-surface capability statuses, alternatives, preset,
+   * catalog version) -- all of it catalog-derived or already-public resolver
+   * output. The raw `subagentPolicy` block is deliberately NOT exposed as a
+   * sibling field: a freeform user-authored override string must reach the
+   * browser only as the resolved `model` value it actually produced, and even
+   * then it passes through the same secret-like redaction the raw YAML
+   * preview uses (see `buildModelPolicyView`).
+   */
+  modelPolicy: ModelPolicyView | null;
   hasSecretLikeContent: boolean;
   yaml: string;
   etag: string;
@@ -92,6 +111,10 @@ export async function load(): Promise<ProfilePageData> {
       rawPermissions: profile.permissions,
       rawSafety: profile.safety,
       rawCapabilities: profile.capabilities,
+      modelPolicy: buildModelPolicyView(
+        profile,
+        await readLockModelPolicy(ctx.rootDir),
+      ),
       hasSecretLikeContent: yamlRedacted !== ctx.profileSource,
       yaml: yamlRedacted,
       etag: ctx.profileSource
