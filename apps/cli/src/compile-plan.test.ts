@@ -388,6 +388,10 @@ test("agent-profile compile --write preserves an unowned .tabnine/agent/settings
 
   const afterBytes = await readFile(settingsPath, "utf8");
   assert.equal(afterBytes, originalBytes);
+  assert.match(
+    output.stdoutText(),
+    /\.tabnine\/agent\/settings\.json left untouched:.*\/model.*\/about/u,
+  );
 });
 
 test("agent-profile compile --write creates .tabnine/agent/settings.json from a persisted primary override when absent", async () => {
@@ -427,6 +431,34 @@ test("agent-profile compile --target agents-md never creates Tabnine settings fr
       rootDir,
       "--target",
       "agents-md",
+      "--write",
+      "--force",
+    ],
+    { io: output.io },
+  );
+  assert.equal(code, 0, output.stderrText());
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
+});
+
+test("agent-profile compile --target tabnine-mcp-config never creates Tabnine settings from a persisted override", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    COMPILE_FIXTURE_PROFILE,
+    "utf8",
+  );
+
+  const output = compileOutput();
+  const code = await runCli(
+    [
+      "compile",
+      "--root",
+      rootDir,
+      "--target",
+      "tabnine-mcp-config",
       "--write",
       "--force",
     ],

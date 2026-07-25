@@ -3094,8 +3094,7 @@ async function runCompile(
           profilePath: safeProfilePath.path,
           profileBytes,
           includeTabnine:
-            parsed.targets.length === 0 ||
-            parsed.targets.some((target) => target.startsWith("tabnine-")),
+            parsed.targets.length === 0,
         });
       }
     }
@@ -3131,11 +3130,10 @@ async function runCompile(
     rootDir,
     profileResult.profile,
     undefined,
-    parsed.targets.length === 0 ||
-      parsed.targets.some((target) => target.startsWith("tabnine-")),
+    parsed.targets.length === 0,
   );
 
-  const { writes } = buildCompileWrites({
+  const { writes, tabnine } = buildCompileWrites({
     profilePath: safeProfilePath.path,
     profileBytes,
     templates: compileResult.templates,
@@ -3218,6 +3216,11 @@ async function runCompile(
         presenter.logInfo(note.message);
       }
     }
+    if (tabnine?.action === "advisory") {
+      presenter.logInfo(
+        `${TABNINE_SETTINGS_PATH} left untouched: ${tabnine.guidance}`,
+      );
+    }
     if (!parsed.write) {
       presenter.logInfo(
         "Nothing was written; run `agent-profile compile --write` to apply.",
@@ -3233,6 +3236,12 @@ async function runCompile(
       `\nNotes:\n${compileResult.notes
         .map((note) => `- ${note.message}`)
         .join("\n")}\n`,
+    );
+  }
+
+  if (tabnine?.action === "advisory") {
+    io.stdout(
+      `\nNotes:\n- ${TABNINE_SETTINGS_PATH} left untouched: ${tabnine.guidance}\n`,
     );
   }
 
@@ -3529,7 +3538,7 @@ async function runDriftReconciliation(input: {
     input.includeTabnine,
   );
 
-  const { writes } = buildCompileWrites({
+  const { writes, tabnine } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: input.compileResult.templates,
@@ -3591,6 +3600,11 @@ async function runDriftReconciliation(input: {
       manualOwnedPaths,
     ),
   );
+  if (tabnine?.action === "advisory") {
+    io.stdout(
+      `\nNotes:\n- ${TABNINE_SETTINGS_PATH} left untouched: ${tabnine.guidance}\n`,
+    );
+  }
   prompts.end(input.write);
   return 0;
 }

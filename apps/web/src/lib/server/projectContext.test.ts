@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
@@ -11,6 +11,8 @@ import {
   loadProjectContext,
   redactIfSecretLike,
   redactSubagentPolicyForBrowser,
+  readLockModelPolicy,
+  readTabnineSettingsOwnership,
   resolveProjectRoot,
   truncatePreview,
 } from "./projectContext.js";
@@ -122,6 +124,22 @@ test("loadProjectContext parses a valid profile and reports safety mode", async 
     assert.ok(ctx.profileHash !== null);
     assert.ok(ctx.profileResult?.ok);
     assert.equal(ctx.safetyMode, "balanced");
+  });
+});
+
+test("model-policy presentation degrades when ai-profile.lock cannot be read", async () => {
+  await withTempProject(async (rootDir) => {
+    await mkdir(path.join(rootDir, "ai-profile.lock"));
+    assert.equal(await readLockModelPolicy(rootDir), undefined);
+  });
+});
+
+test("Tabnine settings ownership treats a non-file settings path as unowned", async () => {
+  await withTempProject(async (rootDir) => {
+    await mkdir(path.join(rootDir, ".tabnine", "agent", "settings.json"), {
+      recursive: true,
+    });
+    assert.equal(await readTabnineSettingsOwnership(rootDir), "unowned");
   });
 });
 

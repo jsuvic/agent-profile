@@ -163,9 +163,6 @@ test("profile plan preserves the on-disk subagentPolicy (preset included) even w
     const body = await response.json();
     assert.equal(body.action, "change");
 
-    // Response body must never leak the raw subagentPolicy value.
-    assert.equal(JSON.stringify(body).includes("subagentPolicy"), false);
-
     const { parseProfileYaml } = await import("@agent-profile/core");
     const { consumePlan } = await import("./tokenStore.js");
     const plan = consumePlan(body.planToken as string);

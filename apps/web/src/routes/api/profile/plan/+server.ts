@@ -88,7 +88,9 @@ export const POST: RequestHandler = async ({ request }) => {
           disk.profile.subagentPolicy,
         )
       : { ...body.candidate, subagentPolicy: disk.profile.subagentPolicy };
-  const candidateValidation = validateCandidate(candidate);
+  const candidateValidation = validateCandidate(candidate, {
+    allowUnchangedSecretLikeOverridesFrom: disk.profile.subagentPolicy,
+  });
   if (!candidateValidation.ok) {
     if (candidateValidation.reason === "secret_like") {
       return json(

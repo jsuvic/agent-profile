@@ -511,8 +511,8 @@ behind a disclosure. Cells show the same exact model, target effort, lifecycle,
 per-surface capability status, and ordered alternatives the CLI preview and the
 generated guidance tables use, because the view is a pure projection over the
 same compiler tables — it embeds no second catalog. A Tabnine cell without an
-exact model shows guided manual selection plus the documented, non-retired
-candidates for that role's capability; an uncatalogued Tabnine identifier renders
+exact model shows guided manual selection plus documented, non-retired,
+capability-independent options; an uncatalogued Tabnine identifier renders
 with the compiler's own `organization/private - unrated` label.
 
 The UI never probes, starts no client or network process, and cannot display

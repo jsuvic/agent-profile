@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -69,9 +69,15 @@ export async function readLockModelPolicy(
 export async function readTabnineSettingsOwnership(
   rootDir: string,
 ): Promise<TabnineSettingsOwnership> {
-  const existing = await readRegionAwareFile(rootDir, TABNINE_SETTINGS_PATH);
-  if (existing.refused) return "unowned";
-  if (!existing.bytes) return "absent";
+  const settingsPath = path.join(rootDir, TABNINE_SETTINGS_PATH);
+  try {
+    const settings = await lstat(settingsPath);
+    if (!settings.isFile() || settings.isSymbolicLink()) return "unowned";
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT")) return "absent";
+    return "unowned";
+  }
+
   const source = await readSafeLockfileText(rootDir);
   if (source === undefined) return "unowned";
   const result = validateLockfileText(source);
@@ -80,6 +86,12 @@ export async function readTabnineSettingsOwnership(
     (candidate) => candidate.path === TABNINE_SETTINGS_PATH,
   );
   if (output?.ownership !== "generated-owned") return "unowned";
+
+  // The file is now proven to be a regular, generated-owned repository
+  // output. Only at this point is reading its bytes permitted for the drift
+  // hash check; unowned settings files may contain arbitrary user data.
+  const existing = await readRegionAwareFile(rootDir, TABNINE_SETTINGS_PATH);
+  if (existing.refused || !existing.bytes) return "unowned";
   return sha256Hex(existing.bytes) === output.sha256
     ? "generated-owned"
     : "unowned";
@@ -87,9 +99,20 @@ export async function readTabnineSettingsOwnership(
 
 /** Reads the lock only when it is a repository-local regular file. */
 async function readSafeLockfileText(rootDir: string): Promise<string | undefined> {
-  const lock = await readRegionAwareFile(rootDir, LOCK_FILENAME);
-  if (lock.refused || !lock.bytes) return undefined;
-  return Buffer.from(lock.bytes).toString("utf8");
+  try {
+    const lock = await readRegionAwareFile(rootDir, LOCK_FILENAME);
+    if (lock.refused || !lock.bytes) return undefined;
+    return Buffer.from(lock.bytes).toString("utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function isNodeErrorWithCode(
+  error: unknown,
+  code: string,
+): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && error.code === code;
 }
 
 /**

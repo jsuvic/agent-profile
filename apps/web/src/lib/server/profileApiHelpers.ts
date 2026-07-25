@@ -177,7 +177,10 @@ export async function readJsonRequestBody(
 
 export function validateCandidate(
   candidate: unknown,
-  options?: { subagentPolicyOverride?: AiProfile["subagentPolicy"] },
+  options?: {
+    subagentPolicyOverride?: AiProfile["subagentPolicy"];
+    allowUnchangedSecretLikeOverridesFrom?: AiProfile["subagentPolicy"];
+  },
 ): CandidateValidation {
   const result = validateProfileValue(candidate);
   if (!result.ok) {
@@ -185,8 +188,9 @@ export function validateCandidate(
   }
 
   // The web UI does not (this cycle) let a user edit subagentPolicy, so the
-  // server is the sole source of truth for it: when `options` is supplied,
-  // the caller-supplied value (the trusted on-disk profile) always wins,
+  // server is the sole source of truth for it: when the
+  // `subagentPolicyOverride` option is supplied, the caller-supplied value
+  // (the trusted on-disk profile) always wins,
   // regardless of what the submitted candidate did or didn't contain -
   // including overriding to `undefined` when disk has no subagentPolicy at
   // all. Do NOT simplify this to
@@ -194,8 +198,9 @@ export function validateCandidate(
   // that would silently turn "override to absent" into "leave alone" and
   // reopen the exact bug this option exists to prevent. Omitting `options`
   // entirely (not `{ subagentPolicyOverride: undefined }`) is the only way
-  // to mean "leave the candidate's own subagentPolicy untouched".
-  const profile: AiProfile = options
+  // to mean "leave the candidate's own subagentPolicy untouched". Other
+  // validation options must not imply an override.
+  const profile: AiProfile = options && "subagentPolicyOverride" in options
     ? { ...result.profile, subagentPolicy: options.subagentPolicyOverride }
     : result.profile;
 
@@ -205,7 +210,10 @@ export function validateCandidate(
   }
 
   // Check all string-valued fields for secret-like literals.
-  const secretPaths = findSecretLikePaths(profile);
+  const secretPaths = findSecretLikePaths(
+    profile,
+    options?.allowUnchangedSecretLikeOverridesFrom,
+  );
   if (secretPaths.length > 0) {
     return { ok: false, reason: "secret_like", paths: secretPaths };
   }
@@ -252,7 +260,10 @@ function findNulStringPaths(profile: AiProfile): string[] {
   return paths;
 }
 
-function findSecretLikePaths(profile: AiProfile): string[] {
+function findSecretLikePaths(
+  profile: AiProfile,
+  trustedExistingPolicy?: AiProfile["subagentPolicy"],
+): string[] {
   const paths: string[] = [];
 
   if (containsSecretLikeLiteral(profile.profile.name))
@@ -268,7 +279,13 @@ function findSecretLikePaths(profile: AiProfile): string[] {
     profile.subagentPolicy?.roles ?? {},
   )) {
     for (const [client, override] of Object.entries(entry.overrides ?? {})) {
-      if (override?.model && containsSecretLikeLiteral(override.model)) {
+      const trustedModel =
+        trustedExistingPolicy?.roles?.[role]?.overrides?.[client]?.model;
+      if (
+        override?.model &&
+        containsSecretLikeLiteral(override.model) &&
+        override.model !== trustedModel
+      ) {
         paths.push(`/subagentPolicy/roles/${role}/overrides/${client}/model`);
       }
     }
