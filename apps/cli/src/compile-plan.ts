@@ -25,7 +25,11 @@ import {
   type WritePlanResult,
   planWrites,
 } from "@agent-profile/compiler";
-import type { AiProfile, ModelCatalogEntry } from "@agent-profile/core";
+import {
+  containsSecretLikeLiteral,
+  type AiProfile,
+  type ModelCatalogEntry,
+} from "@agent-profile/core";
 
 export type RegionAwareRefusal = {
   path: string;
@@ -161,8 +165,15 @@ export async function resolveTabnineModelSettings(
       ? profile.subagentPolicy.roles?.[MODEL_POLICY_PRIMARY_ROLE]?.overrides
           ?.tabnine?.model
       : undefined;
+  const requestedModel = model ?? persistedPrimaryModel;
   return {
-    model: model ?? persistedPrimaryModel,
+    // A profile may predate the web editor's secret-like-value guard. Never
+    // duplicate a credential-shaped persisted identifier into a generated
+    // client config; retain the normal advisory/manual path instead.
+    model:
+      requestedModel && containsSecretLikeLiteral(requestedModel)
+        ? undefined
+        : requestedModel,
     ownership: await classifyTabnineSettingsOwnership(rootDir),
   };
 }

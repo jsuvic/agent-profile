@@ -352,6 +352,38 @@ test("model policy view: the primary Tabnine status reflects settings ownership"
   );
 });
 
+test("model policy view: a lock-retained Tabnine row stays advisory without a persisted settings override", () => {
+  const profile = parseFixture(fixtureYaml({ subagentPolicy: V3_ROLE_AWARE }));
+  const retained = TABNINE_MODEL_POLICY_CATALOG.find(
+    (candidate) => candidate.status !== "retired",
+  );
+  assert.ok(retained, "the catalog must provide an ordinary model to retain");
+  const lock: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TARGET_CATALOG_VERSION,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: MODEL_POLICY_PRIMARY_ROLE,
+        model: retained.id,
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "catalog",
+        capabilityStatus: "configured",
+        catalogVersion: MODEL_POLICY_TARGET_CATALOG_VERSION,
+      },
+    ],
+  };
+
+  const cell = cellFor(
+    buildModelPolicyView(profile, lock, "absent")!,
+    MODEL_POLICY_PRIMARY_ROLE,
+    "tabnine",
+  );
+  assert.equal(cell.model, retained.id);
+  assert.equal(statusFor(cell, "model"), "advisory");
+});
+
 test("model policy view: an uncatalogued Tabnine override renders the organization/private label", () => {
   const profile = parseFixture(
     fixtureYaml({

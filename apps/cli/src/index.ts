@@ -3177,7 +3177,9 @@ async function runCompile(
     }
   }
 
-  const plan = await createOrApplyWritePlan(rootDir, writes, parsed.write, io);
+  const plan = await createOrApplyWritePlan(rootDir, writes, parsed.write, io, {
+    atomic: tabnine?.action === "write",
+  });
 
   if (!plan) {
     return 1;
@@ -3585,6 +3587,7 @@ async function runDriftReconciliation(input: {
     writes,
     input.write,
     io,
+    { atomic: tabnine?.action === "write" },
   );
   if (!plan) {
     prompts.end(false);

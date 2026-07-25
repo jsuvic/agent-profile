@@ -22,6 +22,7 @@
 
 import {
   DEFAULT_MODEL_POLICY_PRESET,
+  containsSecretLikeLiteral,
   type AiProfile,
   type ModelCatalogLifecycleStatus,
   type ModelPolicyCapability,
@@ -207,11 +208,18 @@ function targetCell(
 function tabnineCell(
   row: ModelPolicyTabnineRow,
   ownership: TabnineSettingsOwnership | undefined,
+  persistedPrimaryModel: string | undefined,
 ): ModelPolicyViewCell {
   const guided = row.tabnine.model === undefined;
+  const settingsModel =
+    row.role === MODEL_POLICY_PRIMARY_ROLE &&
+    persistedPrimaryModel !== undefined &&
+    !containsSecretLikeLiteral(persistedPrimaryModel)
+      ? persistedPrimaryModel
+      : undefined;
   const settingsPlan =
     row.role === MODEL_POLICY_PRIMARY_ROLE && ownership !== undefined
-      ? planTabnineModelSettingsWrite(row.tabnine.model, ownership)
+      ? planTabnineModelSettingsWrite(settingsModel, ownership)
       : undefined;
   return Object.freeze({
     client: "tabnine" as const,
@@ -294,6 +302,8 @@ export function buildModelPolicyView(
     deriveModelPolicyTabnineRoleOverrides(roleOverrides),
     previousModelPolicy,
   );
+  const persistedPrimaryTabnineModel =
+    policy.roles?.[MODEL_POLICY_PRIMARY_ROLE]?.overrides?.tabnine?.model;
   const tabnineByRole = new Map<ModelPolicyRoleId, ModelPolicyTabnineRow>(
     tabnineTable.map((row) => [row.role, row]),
   );
@@ -304,7 +314,13 @@ export function buildModelPolicyView(
       if (client === "tabnine") {
         const tabnineRow = tabnineByRole.get(row.role);
         if (tabnineRow !== undefined) {
-          cells.push(tabnineCell(tabnineRow, tabnineSettingsOwnership));
+          cells.push(
+            tabnineCell(
+              tabnineRow,
+              tabnineSettingsOwnership,
+              persistedPrimaryTabnineModel,
+            ),
+          );
         }
         continue;
       }

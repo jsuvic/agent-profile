@@ -415,6 +415,52 @@ test("agent-profile compile --write creates .tabnine/agent/settings.json from a 
   });
 });
 
+test("agent-profile compile never writes a secret-like persisted Tabnine override", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    COMPILE_FIXTURE_PROFILE.replace(
+      "model: gpt-5.4",
+      "model: token=fixture-value-0123456789",
+    ),
+    "utf8",
+  );
+
+  const output = compileOutput();
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: output.io },
+  );
+  assert.equal(code, 0, output.stderrText());
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
+  assert.match(output.stdoutText(), /\/model.*\/about/u);
+});
+
+test("agent-profile compile rolls back the Tabnine settings write when lockfile staging fails", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    COMPILE_FIXTURE_PROFILE,
+    "utf8",
+  );
+  await mkdir(path.join(rootDir, "ai-profile.lock"));
+
+  const output = compileOutput();
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: output.io },
+  );
+  assert.equal(code, 1, output.stdoutText());
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
+  assert.match(output.stderrText(), /write-plan/u);
+});
+
 test("agent-profile compile --target agents-md never creates Tabnine settings from a persisted override", async () => {
   const rootDir = await makeTmpRoot();
   await writeFile(

@@ -129,8 +129,9 @@ provider contact. A probe can only annotate that result; it never changes a
 written selection, and probe output is never merged into `ai-profile.yaml` or
 `ai-profile.lock`.
 
-The local browser UI never probes and never contacts a provider. It renders the
-same resolved model-policy table read-only, so it cannot display live account,
+The local browser UI never probes and never contacts a provider. It lets users
+edit local model-policy settings through the guarded diff-and-write flow while
+rendering the same resolved table, but it cannot display live account,
 quota, or entitlement data — it has no code path that could obtain any.
 
 Any future hosted feature requires:

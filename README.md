@@ -161,7 +161,8 @@ opt-in per invocation: the `init` wizard asks (defaulting to decline),
 `upgrade --probe-models` and `doctor --models --probe` are explicit flags, and
 declining starts zero processes. Probe results are ephemeral and are never
 written to `ai-profile.yaml` or `ai-profile.lock`. The local browser UI
-(`agent-profile ui`) shows the same resolved table read-only and never probes.
+(`agent-profile ui`) lets users edit model policy through the guarded
+diff-and-write flow, never probes, and never shows provider account data.
 
 ## What It Does
 
