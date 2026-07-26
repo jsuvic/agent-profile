@@ -111,7 +111,13 @@ export const POST: RequestHandler = async ({ request }) => {
   }
 
   // Compute diff.
-  const diffResult = computeProfileDiff(disk.source, candidateValidation.yaml);
+  // The candidate may deliberately restore a trusted on-disk secret-like
+  // override so an unrelated edit can be reviewed and saved. Never feed that
+  // raw value (or its raw disk counterpart) into a browser-visible diff.
+  const diffResult = computeProfileDiff(
+    redactProfileDiffYaml(disk.source),
+    redactProfileDiffYaml(candidateValidation.yaml),
+  );
   const action = diffResult.changed ? "change" : "unchanged";
 
   // Store plan token even for unchanged responses; the client gates saving by action.
@@ -147,6 +153,23 @@ export const POST: RequestHandler = async ({ request }) => {
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/** Redact only affected YAML lines so an unrelated edit still has a useful
+ * preview without allowing a secret-like scalar into diff context. */
+function redactProfileDiffYaml(yaml: string): string {
+  return yaml
+    .split(/(?<=\n)/u)
+    .map((line) => {
+      if (redactIfSecretLike(line) === line) return line;
+      const newline = line.endsWith("\n") ? "\n" : "";
+      const content = newline ? line.slice(0, -1) : line;
+      const colon = content.indexOf(":");
+      return colon >= 0
+        ? `${content.slice(0, colon + 1)} <redacted>${newline}`
+        : `<redacted>${newline}`;
+    })
+    .join("");
 }
 
 /**

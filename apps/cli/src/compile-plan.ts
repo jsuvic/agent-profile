@@ -302,6 +302,14 @@ export function buildCompileWrites(input: {
     catalog?: readonly ModelCatalogEntry[];
   };
 }): CompileWritesResult {
+  if (input.profile && hasSecretLikeModelOverride(input.profile)) {
+    // The profile may be retained for an explicit user remediation path, but
+    // compilation must never copy a secret-like literal into a lockfile or a
+    // generated client guidance surface.
+    throw new Error(
+      "Refusing to compile a secret-like subagent model override; remove it from ai-profile.yaml first.",
+    );
+  }
   let lockfile = createLockfileFile({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
@@ -320,6 +328,7 @@ export function buildCompileWrites(input: {
 
   let tabninePlan: ModelPolicyTabnineSettingsPlan | undefined;
   let tabnineWrite: PlannedWrite | undefined;
+  let tabnineDelete: PlannedWrite | undefined;
   if (input.tabnineModelSettings) {
     tabninePlan = planTabnineModelSettingsWrite(
       input.tabnineModelSettings.model,
@@ -328,13 +337,22 @@ export function buildCompileWrites(input: {
     );
     if (tabninePlan.action === "write") {
       tabnineWrite = { path: TABNINE_SETTINGS_PATH, bytes: tabninePlan.bytes };
+    } else if (
+      input.tabnineModelSettings.model === undefined &&
+      input.tabnineModelSettings.ownership === "generated-owned"
+    ) {
+      // The old generated selection must not survive after its persisted
+      // override is removed. Include this in the same transaction as the
+      // lockfile update so ownership is never silently orphaned.
+      tabnineDelete = { path: TABNINE_SETTINGS_PATH, delete: true };
     }
   }
 
   if (
     input.regionPlan.manualOutputs.length > 0 ||
     input.existingUpgrade ||
-    tabnineWrite
+    tabnineWrite ||
+    tabnineDelete
   ) {
     const parsed = validateLockfileText(
       Buffer.from(lockfile.bytes).toString("utf8"),
@@ -349,7 +367,7 @@ export function buildCompileWrites(input: {
       ...view.outputs.filter((output) => !manualPaths.has(output.path)),
       ...input.regionPlan.manualOutputs,
     ];
-    if (tabnineWrite) {
+    if (tabnineWrite && !tabnineWrite.delete) {
       outputs = [
         ...outputs.filter((output) => output.path !== TABNINE_SETTINGS_PATH),
         {
@@ -364,6 +382,10 @@ export function buildCompileWrites(input: {
           ),
         },
       ];
+    } else if (tabnineDelete) {
+      outputs = outputs.filter(
+        (output) => output.path !== TABNINE_SETTINGS_PATH,
+      );
     }
     view.outputs = outputs.sort((left, right) =>
       left.path.localeCompare(right.path),
@@ -376,10 +398,20 @@ export function buildCompileWrites(input: {
     writes: [
       ...input.regionPlan.writes,
       ...(tabnineWrite ? [tabnineWrite] : []),
+      ...(tabnineDelete ? [tabnineDelete] : []),
       { path: lockfile.path, bytes: lockfile.bytes },
     ],
     ...(tabninePlan ? { tabnine: tabninePlan } : {}),
   };
+}
+
+function hasSecretLikeModelOverride(profile: AiProfile): boolean {
+  return Object.values(profile.subagentPolicy?.roles ?? {}).some((role) =>
+    Object.values(role.overrides ?? {}).some(
+      (override) =>
+        override.model !== undefined && containsSecretLikeLiteral(override.model),
+    ),
+  );
 }
 
 export function planCompileDryRun(

@@ -299,12 +299,18 @@
         else delete overrides[client];
       }
     }
+    const nextRole = Object.keys(overrides).length > 0 ? { ...base, overrides } : undefined;
+    const roles = { ...draft.subagentPolicy.roles };
+    if (nextRole) {
+      roles[role] = nextRole;
+    } else {
+      // A role synthesized only for a now-cleared override must not become a
+      // persisted intent: that would freeze the current preset fallback.
+      delete roles[role];
+    }
     draft.subagentPolicy = {
       ...draft.subagentPolicy,
-      roles: {
-        ...draft.subagentPolicy.roles,
-        [role]: Object.keys(overrides).length > 0 ? { ...base, overrides } : { ...base, overrides: undefined },
-      },
+      roles: Object.keys(roles).length > 0 ? roles : undefined,
     };
   }
 

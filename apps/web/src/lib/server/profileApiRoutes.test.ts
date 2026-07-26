@@ -9,6 +9,7 @@ import test from "node:test";
 
 import { POST as applyProfile } from "../../routes/api/profile/apply/+server.js";
 import { POST as planProfile } from "../../routes/api/profile/plan/+server.js";
+import { redactIfSecretLike } from "./projectContext.js";
 import { _clearStoresForTesting, issueCsrfToken } from "./tokenStore.js";
 
 const VALID_YAML = `version: 1
@@ -183,6 +184,58 @@ test("profile plan preserves the on-disk subagentPolicy (preset included) even w
     }
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("profile plan redacts a restored secret-like override from an unrelated edit diff", async () => {
+  const secret = "token=fixture-value-0123456789";
+  await withTempProject(async (rootDir) => {
+    await writeFile(
+      path.join(rootDir, "ai-profile.yaml"),
+      `${VALID_YAML}subagentPolicy:
+  enabled: true
+  preset: quality-first
+  roles:
+    implementer:
+      capability: balanced
+      effort: medium
+      overrides:
+        codex: { model: gpt-5.3 }
+        tabnine: { model: ${secret} }
+`,
+      "utf8",
+    );
+    const csrfToken = issueCsrfToken();
+    const response = await planProfile({
+      request: jsonRequest(
+        "/api/profile/plan",
+        {
+          candidate: {
+            ...CANDIDATE,
+            subagentPolicy: {
+              enabled: true,
+              preset: "quality-first",
+              roles: {
+                implementer: {
+                  capability: "balanced",
+                  effort: "medium",
+                  overrides: {
+                    codex: { model: "gpt-5.4" },
+                    tabnine: { model: redactIfSecretLike(secret) },
+                  },
+                },
+              },
+            },
+          },
+          baseEtag: await currentEtag(),
+        },
+        csrfToken,
+      ),
+    } as Parameters<typeof planProfile>[0]);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.match(body.diff.text, /<redacted>/u);
+    assert.doesNotMatch(JSON.stringify(body), new RegExp(secret, "u"));
+  });
 });
 
 test("profile apply writes a reviewed plan and consumes its plan token", async () => {

@@ -1768,14 +1768,19 @@ async function previewModelPolicyWrites(
     }
     const write = allWrites.find((candidate) => candidate.path === action.path);
     if (write === undefined) continue;
-    const newBytes =
-      typeof write.bytes === "string"
-        ? Buffer.from(write.bytes, "utf8")
-        : write.bytes;
     const onDiskBytes = await readOptionalBytes(rootDir, action.path);
     const oldText = onDiskBytes
       ? Buffer.from(onDiskBytes).toString("utf8")
       : "";
+    if (write.delete) {
+      const diff = formatTextDiff(oldText, "");
+      if (diff.length > 0) lines.push(diff);
+      continue;
+    }
+    const newBytes =
+      typeof write.bytes === "string"
+        ? Buffer.from(write.bytes, "utf8")
+        : write.bytes;
     const diff = formatTextDiff(
       oldText,
       Buffer.from(newBytes).toString("utf8"),
@@ -3498,6 +3503,7 @@ async function runDriftReconciliation(input: {
   // the atomic write.
   const writeByPath = new Map<string, Uint8Array>();
   for (const write of input.regionPlan.writes) {
+    if (write.delete) continue;
     writeByPath.set(
       write.path,
       typeof write.bytes === "string"

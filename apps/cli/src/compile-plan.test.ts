@@ -18,6 +18,7 @@ import test from "node:test";
 
 import {
   applyWritePlan,
+  applyWritePlanAtomic,
   serializeLockfile,
   sha256Hex,
   type AiProfileLockV2,
@@ -166,7 +167,7 @@ test("buildCompileWrites: absent ownership + a known model offers the determinis
   assert.ok(tabnine);
   assert.equal(tabnine.action, "write");
   const write = writes.find((entry) => entry.path === TABNINE_SETTINGS_PATH);
-  assert.ok(write);
+  assert.ok(write && !write.delete);
   const parsed = JSON.parse(String(write.bytes)) as { model: { id: string } };
   assert.deepEqual(parsed, { model: { id: "gpt-5.4" } });
 
@@ -176,7 +177,7 @@ test("buildCompileWrites: absent ownership + a known model offers the determinis
   const lockfileWrite = writes.find(
     (entry) => entry.path === "ai-profile.lock",
   );
-  assert.ok(lockfileWrite);
+  assert.ok(lockfileWrite && !lockfileWrite.delete);
   const lockfileView = JSON.parse(
     String(lockfileWrite.bytes),
   ) as AiProfileLockV2;
@@ -219,6 +220,44 @@ test("buildCompileWrites: no exact model resolved stays advisory even when owner
   assert.equal(tabnine.action, "advisory");
   assert.equal(
     writes.some((entry) => entry.path === TABNINE_SETTINGS_PATH),
+    false,
+  );
+});
+
+test("buildCompileWrites: clearing a generated-owned selection deletes it and removes its lock record atomically", async () => {
+  const rootDir = await makeTmpRoot();
+  const settingsBytes = '{\n  "model": {\n    "id": "gpt-5.4"\n  }\n}\n';
+  await mkdir(path.join(rootDir, ".tabnine", "agent"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, TABNINE_SETTINGS_PATH),
+    settingsBytes,
+    "utf8",
+  );
+  await writeFile(
+    path.join(rootDir, "ai-profile.lock"),
+    generatedOwnedLockfile(rootDir, sha256Hex(Buffer.from(settingsBytes))),
+    "utf8",
+  );
+
+  const { writes, tabnine } = buildCompileWrites({
+    ...baseCompileWritesInput(),
+    tabnineModelSettings: { model: undefined, ownership: "generated-owned" },
+  });
+  assert.equal(tabnine?.action, "advisory");
+  assert.deepEqual(
+    writes.find((entry) => entry.path === TABNINE_SETTINGS_PATH),
+    { path: TABNINE_SETTINGS_PATH, delete: true },
+  );
+
+  await applyWritePlanAtomic({ rootDir, writes });
+  await assert.rejects(readFile(path.join(rootDir, TABNINE_SETTINGS_PATH)), {
+    code: "ENOENT",
+  });
+  const lockfile = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  ) as AiProfileLockV2;
+  assert.equal(
+    lockfile.outputs.some((output) => output.path === TABNINE_SETTINGS_PATH),
     false,
   );
 });
@@ -415,7 +454,7 @@ test("agent-profile compile --write creates .tabnine/agent/settings.json from a 
   });
 });
 
-test("agent-profile compile never writes a secret-like persisted Tabnine override", async () => {
+test("agent-profile compile rejects a secret-like persisted model override before any artifact is written", async () => {
   const rootDir = await makeTmpRoot();
   await writeFile(
     path.join(rootDir, "ai-profile.yaml"),
@@ -427,16 +466,23 @@ test("agent-profile compile never writes a secret-like persisted Tabnine overrid
   );
 
   const output = compileOutput();
-  const code = await runCli(
-    ["compile", "--root", rootDir, "--write", "--force"],
-    { io: output.io },
+  await assert.rejects(
+    runCli(["compile", "--root", rootDir, "--write", "--force"], {
+      io: output.io,
+    }),
+    /secret-like subagent model override/u,
   );
-  assert.equal(code, 0, output.stderrText());
   await assert.rejects(
     readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
     { code: "ENOENT" },
   );
-  assert.match(output.stdoutText(), /\/model.*\/about/u);
+  await assert.rejects(readFile(path.join(rootDir, "ai-profile.lock"), "utf8"), {
+    code: "ENOENT",
+  });
+  assert.doesNotMatch(
+    `${output.stdoutText()}${output.stderrText()}`,
+    /token=fixture-value-0123456789/u,
+  );
 });
 
 test("agent-profile compile rolls back the Tabnine settings write when lockfile staging fails", async () => {
