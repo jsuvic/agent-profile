@@ -580,6 +580,70 @@ test("a filtered compile preserves verified Tabnine ownership in the lockfile", 
   );
 });
 
+test("filtered compile retains override-removal evidence for the next unfiltered reconciliation", async () => {
+  const rootDir = await makeTmpRoot();
+  const profilePath = path.join(rootDir, "ai-profile.yaml");
+  await writeFile(profilePath, COMPILE_FIXTURE_PROFILE, "utf8");
+  const firstOutput = compileOutput();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+      io: firstOutput.io,
+    }),
+    0,
+  );
+
+  await writeFile(
+    profilePath,
+    COMPILE_FIXTURE_PROFILE.replace(
+      /  roles:\n    implementer:\n      capability: balanced\n      effort: high\n      overrides:\n        tabnine:\n          model: gpt-5\.4\n/u,
+      "",
+    ),
+    "utf8",
+  );
+  const filteredOutput = compileOutput();
+  assert.equal(
+    await runCli(
+      [
+        "compile",
+        "--root",
+        rootDir,
+        "--target",
+        "agents-md",
+        "--write",
+        "--force",
+      ],
+      { io: filteredOutput.io },
+    ),
+    0,
+    filteredOutput.stderrText(),
+  );
+  const filteredLock = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  ) as AiProfileLockV2;
+  assert.equal(
+    filteredLock.modelPolicy?.resolutions.some(
+      (resolution) =>
+        resolution.client === "tabnine" &&
+        resolution.role === "implementer" &&
+        resolution.source === "explicit-override",
+    ),
+    true,
+  );
+
+  const finalOutput = compileOutput();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+      io: finalOutput.io,
+    }),
+    0,
+    finalOutput.stderrText(),
+  );
+  await assert.rejects(readFile(path.join(rootDir, TABNINE_SETTINGS_PATH)), {
+    code: "ENOENT",
+  });
+  assert.match(finalOutput.stdoutText(), /settings\.json removed/u);
+});
+
 test("agent-profile compile rejects a secret-like persisted model override before any artifact is written", async () => {
   const rootDir = await makeTmpRoot();
   await writeFile(

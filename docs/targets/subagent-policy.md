@@ -392,16 +392,13 @@ In practice this means:
 ### Known scope narrowing (I3 / I5R / I6d)
 
 - A persisted `subagentPolicy.roles[id].overrides.tabnine.model`
-  profile-schema field exists (Phase 31.5 I6d) and is the recommended way to
-  set an explicit Tabnine override going forward; `resolveModelPolicyLockfile`
-  merges it into `ai-profile.lock`'s `modelPolicy` block with the same
-  prior-lock reconciliation Codex/Claude rows already have. The interactive
-  init wizard's advanced-override entry point (Phase 31.5 I5R) predates this
-  field and still supplies an ephemeral, non-persisted override at write
-  time only — it is not recorded back into `ai-profile.yaml`, so a later
-  `agent-profile compile --write` without going back through the wizard does
-  not repeat it; writing the profile field directly is the persisted
-  alternative.
+  profile-schema field exists (Phase 31.5 I6d) and is the canonical explicit
+  Tabnine override. `resolveModelPolicyLockfile` merges it into
+  `ai-profile.lock`'s `modelPolicy` block with the same prior-lock
+  reconciliation Codex/Claude rows already have. The interactive init
+  wizard's advanced-override entry point writes its reviewed exact selection
+  into this field for the primary `implementer` role, so later ordinary
+  compiles repeat the same selection without reopening the wizard.
 - The advanced-override entry point (Phase 31.5 I5R) offers a single exact
   Tabnine model override, not full per-role Codex/Claude customization beyond
   the three named presets; per-role Codex/Claude overrides remain

@@ -1998,6 +1998,38 @@ test("an uncatalogued exact Tabnine override is accepted, written, and labelled 
   assert.deepEqual(written, { model: { id: "org-acme-private-finetune-7" } });
 });
 
+test("a secret-like Tabnine wizard override is rejected before profile persistence", async () => {
+  const rootDir = await createTsRoot("advanced-override-secret-like");
+  const secretLike = "token=fixture-value-0123456789";
+  const prompts = scriptedPrompts({
+    confirm: true,
+    clients: ["tabnine"],
+    includeAdvancedOverridesPrompt: true,
+    advancedOverrides: { tabnineModel: secretLike },
+  });
+  const output = createOutput();
+  const code = await runCli(["init", "--root", rootDir], {
+    io: output,
+    nonInteractive: false,
+    prompts,
+  });
+  assert.equal(code, 0, output.stderrText());
+  const profileText = await readFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    "utf8",
+  );
+  assert.doesNotMatch(profileText, new RegExp(secretLike, "u"));
+  assert.doesNotMatch(
+    `${output.stdoutText()}${output.stderrText()}`,
+    new RegExp(secretLike, "u"),
+  );
+  assert.match(output.stderrText(), /secret-like Tabnine model override/u);
+  assert.equal(
+    await fileExists(path.join(rootDir, ".tabnine", "agent", "settings.json")),
+    false,
+  );
+});
+
 test("an existing unowned .tabnine/agent/settings.json is preserved byte-for-byte even when an exact override is entered", async () => {
   const rootDir = await createTsRoot("advanced-override-unowned-preserved");
   await mkdir(path.join(rootDir, ".tabnine", "agent"), { recursive: true });

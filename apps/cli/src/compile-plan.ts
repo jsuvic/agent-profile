@@ -337,26 +337,29 @@ export function buildCompileWrites(input: {
       "Refusing to compile a secret-like subagent model override; remove it from ai-profile.yaml first.",
     );
   }
+  const preservedTabnineOutput = input.tabnineModelSettings?.preservedOutput;
+  const resolvedModelPolicy =
+    input.profile === undefined
+      ? undefined
+      : resolveModelPolicyLockfile(input.profile, input.previousModelPolicy);
+  const modelPolicy = preservedTabnineOutput
+    ? retainFilteredPrimaryTabnineResolution(
+        resolvedModelPolicy,
+        input.previousModelPolicy,
+      )
+    : resolvedModelPolicy;
   let lockfile = createLockfileFile({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: input.templates,
     files: input.files,
     mixedOutputs: input.regionPlan.mixedOutputs,
-    ...(input.profile === undefined
-      ? {}
-      : {
-          modelPolicy: resolveModelPolicyLockfile(
-            input.profile,
-            input.previousModelPolicy,
-          ),
-        }),
+    ...(modelPolicy ? { modelPolicy } : {}),
   });
 
   let tabninePlan: ModelPolicyTabnineSettingsPlan | undefined;
   let tabnineWrite: PlannedWrite | undefined;
   let tabnineDelete: PlannedWrite | undefined;
-  const preservedTabnineOutput = input.tabnineModelSettings?.preservedOutput;
   if (input.tabnineModelSettings && !preservedTabnineOutput) {
     tabninePlan = planTabnineModelSettingsWrite(
       input.tabnineModelSettings.model,
@@ -445,6 +448,36 @@ export function buildCompileWrites(input: {
       : tabnineDelete
         ? { tabnineMutation: "delete" as const }
         : {}),
+  };
+}
+
+function retainFilteredPrimaryTabnineResolution(
+  current: LockModelPolicyV2 | undefined,
+  previous: LockModelPolicyV2 | undefined,
+): LockModelPolicyV2 | undefined {
+  if (!current || !previous) return current;
+  const retained = previous.resolutions.filter(
+    (resolution) =>
+      resolution.client === "tabnine" &&
+      resolution.role === MODEL_POLICY_PRIMARY_ROLE,
+  );
+  if (retained.length === 0) return current;
+  return {
+    ...current,
+    resolutions: [
+      ...current.resolutions.filter(
+        (resolution) =>
+          !(
+            resolution.client === "tabnine" &&
+            resolution.role === MODEL_POLICY_PRIMARY_ROLE
+          ),
+      ),
+      ...retained,
+    ].sort(
+      (left, right) =>
+        left.client.localeCompare(right.client) ||
+        left.role.localeCompare(right.role),
+    ),
   };
 }
 
