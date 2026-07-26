@@ -49,11 +49,23 @@
 //      in argv, no seeded fixture-repository FILE CONTENT in argv or in any
 //      forwarded environment value, an allowlisted -- not ambient --
 //      environment forwarded byte-for-byte verbatim, and no raw runner
-//      stdout/stderr surfacing in the captured streams or on disk). Scope
-//      note: `probeClients` is `["codex"]`, so
-//      Codex is the only client whose invocation contract these scenarios
-//      exercise; EXPECTED_PROBE_ISOLATION_ARGV's Claude row is a pinned
-//      expectation that activates only when a later scenario selects `claude`.
+//      stdout/stderr surfacing in the captured streams or on disk). Two
+//      further review-round additions ride on the same consented path:
+//      a repository-READ sentinel bracketed to the probe window (see
+//      createRepositoryReadSentinel for the exact span it covers and the two
+//      spans it deliberately does not), and a differential PAIR that makes the
+//      normalized probe classification observable at this seam -- an
+//      `available` result stops at the preferred candidate while a
+//      non-available one reaches that candidate's ordered alternative, so the
+//      invocation count and the rendered result count differ by classification
+//      alone (see the "normalized probe classification is observable" subtest).
+//      Scope note: the first two probe scenarios select `["codex"]`. The
+//      differential subtest selects whichever client the PACKED tables
+//      actually give an ordered alternative to (today Claude, discovered at
+//      runtime -- never hard-coded), so which rows of
+//      EXPECTED_PROBE_ISOLATION_ARGV are live evidence follows the published
+//      catalog rather than a fixed list; a row for a client no scenario ever
+//      selects stays a pinned-but-unexercised expectation.
 //      See the oracle note above EXPECTED_MODEL_PROBE_FIXED_PROMPT for why
 //      several expected values are documented hard-coded copies rather than
 //      imports, and the `allowMutation` note on withFsWriteSentinel for the one
@@ -694,6 +706,226 @@ async function withFsWriteSentinel(action, options) {
   }
 }
 
+// Read surfaces instrumented by createRepositoryReadSentinel below. The list
+// is not guesswork: every non-test module under apps/cli/src and packages/*/src
+// that touches the filesystem imports `node:fs/promises` (either as the
+// `fsPromises` namespace or as named imports) -- checked, not assumed -- and
+// the only read calls those modules make today are `readFile`, `readdir`,
+// `open`, `stat`, `lstat`, and `realpath`. The extra entries below exist so a
+// REGRESSION that reached for a different or older API would still be seen:
+//   - the promise surface adds `opendir`, `readlink`, and `access`;
+//   - the whole `node:fs` callback/sync surface is instrumented too
+//     (`readFileSync`, `readdirSync`, `createReadStream`, ... ), even though no
+//     shipped module uses it today, precisely because a regression that
+//     introduced one is exactly what this sentinel exists to catch.
+// Deliberately NOT instrumented: the fd-level `fs.read`/`fs.readSync` and
+// `FileHandle.read`, which carry no path argument. They are unreachable
+// without one of the instrumented `open*` calls first, so a read through them
+// is still preceded by a recorded repository access.
+// Metadata-only calls (`stat`/`lstat`/`access`/`realpath`/`existsSync`) count
+// as repository access here on purpose: the claim being made is that the probe
+// window touches nothing in the repository at all, not the weaker "reads no
+// bytes".
+const SENTINEL_PROMISE_READ_METHODS = [
+  "readFile",
+  "readdir",
+  "open",
+  "opendir",
+  "readlink",
+  "realpath",
+  "stat",
+  "lstat",
+  "access",
+];
+const SENTINEL_FS_READ_METHODS = [
+  "readFile",
+  "readFileSync",
+  "readdir",
+  "readdirSync",
+  "open",
+  "openSync",
+  "opendir",
+  "opendirSync",
+  "createReadStream",
+  "readlink",
+  "readlinkSync",
+  "realpath",
+  "realpathSync",
+  "stat",
+  "statSync",
+  "lstat",
+  "lstatSync",
+  "access",
+  "accessSync",
+  "existsSync",
+];
+
+// A repository-READ sentinel, the falsifiable form of "the probe window
+// touches nothing in the repository". It complements -- and does NOT replace --
+// PROBE_FIXTURE_SOURCE_MARKER: the marker can only witness content from the two
+// files it is seeded into, so an unmarked source file's bytes, or a repository
+// listing/history read, would satisfy every marker assertion. This sentinel
+// records the read itself, whatever the file and whether or not its bytes ever
+// leave the process.
+//
+// SPAN, stated exactly (the honesty this whole helper turns on):
+//   - INSTALLED when `confirmModelProbe` is invoked. That prompt fires
+//     immediately before `runModelProbe` with nothing in between (checked
+//     against apps/cli/src/wizard.ts, not assumed), so installation is as tight
+//     a bracket on the start of probe execution as the prompt seam allows.
+//   - UNINSTALLED when `confirmWritePlan` is invoked, and unconditionally again
+//     in runPackedInitScenario's `finally` so a throw cannot leave the process
+//     instrumented.
+//   - NOT COVERED, and deliberately so: everything before the consent prompt.
+//     `init`'s stack detection legitimately reads this very fixture repository
+//     (package.json, tsconfig.json), so a sentinel spanning the whole run would
+//     fail by design and prove nothing.
+//   - ALSO NOT COVERED: anything after the write-plan confirmation.
+// Each read is recorded with a monotonic sequence number drawn from the SAME
+// counter as `recordProbeInvocation`, so a failure message can state whether an
+// offending read landed inside the probe-execution span (before the last
+// invocation) or after it. The primary assertion is nevertheless the stronger
+// "zero repository reads anywhere in the window": measured against today's
+// packed CLI, the window contains no legitimate repository read at all (the
+// write plan and its preview are built from the report computed BEFORE the
+// model steps and need no further read), so zero is the honest bound rather
+// than an ordering-based one. If a legitimate post-probe repository read is
+// ever introduced, this fails loudly and the sequence data in the message is
+// what a human needs to decide whether to relax it to the ordering claim.
+// The stronger bound is not merely tidier, it is measurably more sensitive:
+// verified by deliberately breaking this scenario so an unmarked repository
+// file (`tsconfig.json`, whose whole content is `{}`) was read at invocation
+// time, the ordering-only claim would NOT have flagged it -- that read is
+// sequenced after the sole probe invocation -- while the zero-reads claim
+// caught it.
+//
+// `withoutRecording` exists so the TEST harness's own reads (the invocation-time
+// `readdirSync` of the probe working directory) are never recorded -- without
+// it, the liveness assertion below could be satisfied by test code and would
+// prove nothing about the shipped read path.
+function createRepositoryReadSentinel(repository) {
+  let sequence = 0;
+  let installed = false;
+  let recording = true;
+  let originalPromises;
+  let originalFs;
+  const observedReads = [];
+  const repositoryReads = [];
+  const probeInvocationSequences = [];
+
+  const record = (api, target) => {
+    if (!recording) return;
+    const entry = { sequence: sequence++, api, target: String(target) };
+    observedReads.push(entry);
+    let inside = false;
+    try {
+      inside = isInsideDirectory(entry.target, repository);
+    } catch {
+      // A non-path first argument (an fd, a Buffer, a URL object) cannot
+      // denote a repository path for the purposes of this claim; it is still
+      // recorded in observedReads above.
+      inside = false;
+    }
+    if (inside) repositoryReads.push(entry);
+  };
+
+  // Own properties are copied onto each wrapper because some of these
+  // functions carry them and callers use them: `fs.realpath.native`,
+  // `fs.promises.realpath.native`, and the `__promisify__` symbols Node
+  // attaches to the callback-style APIs.
+  const wrap = (owner, name, real) =>
+    Object.assign(function instrumentedRead(...args) {
+      record(`${owner}.${name}`, args[0]);
+      return real.apply(this, args);
+    }, real);
+
+  return {
+    observedReads,
+    repositoryReads,
+    probeInvocationSequences,
+    recordProbeInvocation() {
+      probeInvocationSequences.push(sequence++);
+    },
+    withoutRecording(action) {
+      const previous = recording;
+      recording = false;
+      try {
+        return action();
+      } finally {
+        recording = previous;
+      }
+    },
+    install() {
+      if (installed) return;
+      originalPromises = Object.fromEntries(
+        SENTINEL_PROMISE_READ_METHODS.map((name) => [name, fs.promises[name]]),
+      );
+      originalFs = Object.fromEntries(
+        SENTINEL_FS_READ_METHODS.map((name) => [name, fs[name]]),
+      );
+      for (const name of SENTINEL_PROMISE_READ_METHODS) {
+        if (typeof originalPromises[name] !== "function") continue;
+        fs.promises[name] = wrap("fs/promises", name, originalPromises[name]);
+      }
+      for (const name of SENTINEL_FS_READ_METHODS) {
+        if (typeof originalFs[name] !== "function") continue;
+        fs[name] = wrap("fs", name, originalFs[name]);
+      }
+      // Same live-binding reason as withRuntimeSentinels and
+      // withFsWriteSentinel: shipped modules use the named-import form
+      // (`import { readFile } from "node:fs/promises"`), which is resolved from
+      // Node's synthetic ESM exports at link time and is NOT updated by
+      // patching properties alone.
+      syncBuiltinESMExports();
+      installed = true;
+    },
+    uninstall() {
+      if (!installed) return;
+      Object.assign(fs.promises, originalPromises);
+      Object.assign(fs, originalFs);
+      syncBuiltinESMExports();
+      installed = false;
+    },
+  };
+}
+
+// Both halves of the sentinel's claim, asserted together because either alone
+// would be misleading:
+//   1. LIVENESS. `repositoryReads` being empty is worthless if the instrumented
+//      functions were never on the path the shipped code actually takes. At
+//      least one read must have been observed through them during the window;
+//      harness reads are excluded via `withoutRecording`, so every recorded
+//      entry comes from the packed CLI. (Today's observed entries are
+//      `runModelProbe`'s own `readdir` of the empty probe working directory in
+//      assertSafeProbeDirectory, plus the `lstat` calls its `rm` cleanup makes
+//      -- all outside the repository, which is exactly the point.)
+//   2. THE CLAIM. No read inside the fixture repository at all, anywhere in the
+//      window.
+function assertProbeWindowTouchedNoRepositoryFile(sentinel, { label }) {
+  assert.ok(
+    sentinel.observedReads.length > 0,
+    `${label}: the repository-read sentinel recorded no read at all during ` +
+      "the probe window, so its zero-repository-reads result proves nothing " +
+      "-- the instrumented node:fs / node:fs/promises read surface is no " +
+      "longer on the packed CLI's actual read path (see " +
+      "SENTINEL_FS_READ_METHODS)",
+  );
+  const lastProbeSequence = sentinel.probeInvocationSequences.at(-1) ?? -1;
+  assert.deepEqual(
+    sentinel.repositoryReads.map(
+      ({ sequence, api, target }) =>
+        `${api}(${target}) [#${sequence}, ${
+          sequence < lastProbeSequence ? "during" : "after"
+        } probe execution]`,
+    ),
+    [],
+    `${label}: nothing in the fixture repository may be read between the ` +
+      "probe consent prompt and the write-plan confirmation, but the packed " +
+      "CLI read it (entries tagged `during probe execution` happened before " +
+      `the last probe invocation, #${lastProbeSequence})`,
+  );
+}
+
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -917,16 +1149,54 @@ const PROBE_ENV_SENTINEL_VALUE = "must-not-be-forwarded";
 // stdout/stderr, because "OK" is unremarkable in a wizard transcript; a unique
 // marker can.
 //
-// Both markers are chosen so the result still classifies as `available`
-// (verified against apps/cli/src/model-probe.ts, not assumed): the evidence
-// table is consulted FIRST against `${stdout}\n${stderr}` and neither marker
-// matches any of its four rows, and SUCCESS_PATTERN (`\bok\b`) still matches
-// the `OK` line of stdout with `exitCode === 0`. That is not left to comment
-// alone either -- if the classification changed, the probe would fall through
-// to the primary candidate's ordered alternatives and the "one process per
-// planned selection" assertion below would fail.
+// Both markers are chosen so the success result still classifies as
+// `available` (verified against apps/cli/src/model-probe.ts, not assumed): the
+// evidence table is consulted FIRST against `${stdout}\n${stderr}` and neither
+// marker matches any of its four rows, and SUCCESS_PATTERN (`\bok\b`) still
+// matches stdout with `exitCode === 0`. That is not left to comment alone
+// either -- the differential subtest below turns that classification into
+// observable behavior: if `PROBE_SUCCESS_PROCESS_RESULT` stopped classifying as
+// `available`, its run would fall through to the primary candidate's ordered
+// alternative and the one-invocation assertion would fail.
 const PROBE_RAW_STDOUT_MARKER = "zzmarker-probe-stdout-vulpine-31460-zz";
 const PROBE_RAW_STDERR_MARKER = "zzmarker-probe-stderr-vulpine-31461-zz";
+
+// The two probe-runner result shapes this file uses, shared by every consented
+// scenario so the redaction markers and the classification differential are
+// asserted against the SAME bytes.
+//
+// The success marker sits on the SAME LINE as the `OK` token on purpose. With
+// the marker on a following line (an earlier revision), a regression that
+// leaked only the first line of raw stdout -- e.g.
+// `raw.stdout.trim().split("\n")[0]` -- would have leaked the generic,
+// unremarkable string `OK` and every "the marker never appears" assertion would
+// still have passed. Sharing the line makes the classifier's own success line
+// uniquely identifiable, so ANY leak of it is caught. `\bok\b` still matches
+// (the space after `OK` is a word boundary), and the combined
+// `${stdout}\n${stderr}` text was checked against transcribed copies of all
+// four MODEL_PROBE_EVIDENCE_TABLE patterns -- run, not eyeballed -- and matches
+// none, so the row-first classifier still reaches the success branch.
+//
+// The non-available shape carries an entitlement-pattern stderr (`unknown
+// model`, row 2 of MODEL_PROBE_EVIDENCE_TABLE). `not-entitled` is NOT in
+// MODEL_PROBE_STOP_STATUSES, so it is the classification that lets the ordered
+// alternative run -- which is precisely what makes the classification
+// observable. Honest scope: what the differential proves is the
+// available/not-available branch (a stop status or `available` would both
+// yield a single invocation), not the exact `not-entitled` label, which the
+// wizard never renders and this seam therefore cannot see.
+const PROBE_SUCCESS_PROCESS_RESULT = Object.freeze({
+  exitCode: 0,
+  stdout: `OK ${PROBE_RAW_STDOUT_MARKER}`,
+  stderr: PROBE_RAW_STDERR_MARKER,
+  timedOut: false,
+});
+const PROBE_NOT_AVAILABLE_PROCESS_RESULT = Object.freeze({
+  exitCode: 1,
+  stdout: PROBE_RAW_STDOUT_MARKER,
+  stderr: `unknown model ${PROBE_RAW_STDERR_MARKER}`,
+  timedOut: false,
+});
 
 // The pinned per-client non-persistence/isolation argv the probe MUST use,
 // transcribed from the contract table in
@@ -1034,11 +1304,25 @@ function isProbeTempDirectoryTarget(target) {
 // wizard.ts's `if (input.prompts.selectAdvancedOverrides)` guard), whereas
 // providing a function that returns `undefined` genuinely runs the step and
 // declines it. A value-shaped option could not express both.
+//
+// `modelPreset` (optional) makes `selectModelPreset` return a preset OTHER than
+// the offered default. It exists for the differential subtest, which needs a
+// selection whose primary candidate actually HAS an ordered alternative, and
+// the value it passes is discovered at runtime from the packed tables -- never
+// hard-coded here. Omitting it keeps the previous behavior (accept the offered
+// default) exactly.
+//
+// `readSentinel` (optional) is installed at `confirmModelProbe` and uninstalled
+// at `confirmWritePlan`; those two prompts are the only seams this file has
+// that bracket probe execution. See createRepositoryReadSentinel for the span
+// that covers and the two spans it does not.
 function createProbeScenarioPrompts({
   clients,
   probeConsent,
   readStdout,
   respondToAdvancedOverrides,
+  modelPreset,
+  readSentinel,
 }) {
   const calls = [];
   const state = { stdoutAtConfirmation: undefined };
@@ -1069,12 +1353,14 @@ function createProbeScenarioPrompts({
       return def;
     },
     async confirmWritePlan() {
+      readSentinel?.uninstall();
       state.stdoutAtConfirmation = readStdout();
       return false;
     },
     async selectModelPreset({ default: def }) {
-      calls.push({ kind: "selectModelPreset", default: def });
-      return def;
+      const selected = modelPreset ?? def;
+      calls.push({ kind: "selectModelPreset", default: def, selected });
+      return selected;
     },
     async confirmModelProbe({ default: def, calls: plannedCalls }) {
       calls.push({
@@ -1082,6 +1368,11 @@ function createProbeScenarioPrompts({
         default: def,
         plannedCalls,
       });
+      // Installed here, not earlier: `init`'s stack detection legitimately
+      // reads the fixture repository before this point, so an earlier bracket
+      // would fail by design. This prompt fires immediately before
+      // `runModelProbe`.
+      readSentinel?.install();
       return probeConsent;
     },
   };
@@ -1133,11 +1424,13 @@ async function runPackedInitScenario({
   repository,
   clients,
   probeConsent = false,
-  probeResult = { exitCode: 0, stdout: "OK", stderr: "", timedOut: false },
+  probeResult = PROBE_SUCCESS_PROCESS_RESULT,
   recordInvocation = (invocation) => invocation,
   environmentOverrides,
   filesystemMutations,
   respondToAdvancedOverrides,
+  modelPreset,
+  readSentinel,
 }) {
   assert.ok(
     filesystemMutations === "strict" ||
@@ -1153,48 +1446,66 @@ async function runPackedInitScenario({
     probeConsent,
     readStdout: () => stdout,
     respondToAdvancedOverrides,
+    modelPreset,
+    readSentinel,
   });
   // Records every invocation (not just a count) so a failure message can show
   // what was started when nothing should have been.
   const invocations = [];
   const before = snapshot(repository);
-  const exitCode = await withRuntimeSentinels(() =>
-    withFsWriteSentinel(
-      async () => {
-        for (const [key, value] of Object.entries(environmentOverrides ?? {})) {
-          process.env[key] = value;
-        }
-        try {
-          const { runCli } = await import(packedCliUrl);
-          return await runCli(["init", "--root", repository], {
-            io: {
-              stdout(text) {
-                stdout += text;
-              },
-              stderr(text) {
-                stderr += text;
-              },
-            },
-            nonInteractive: false,
-            prompts,
-            probeRunner: {
-              async run(invocation) {
-                invocations.push(recordInvocation(invocation));
-                return probeResult;
-              },
-            },
-          });
-        } finally {
-          for (const key of Object.keys(environmentOverrides ?? {})) {
-            delete process.env[key];
+  // The read sentinel is normally uninstalled by `confirmWritePlan`; this
+  // `finally` is the unconditional backstop, so a throw anywhere in the guarded
+  // action cannot leave node:fs instrumented for the rest of the suite.
+  // `uninstall()` is idempotent, so the normal path is unaffected.
+  let exitCode;
+  try {
+    exitCode = await withRuntimeSentinels(() =>
+      withFsWriteSentinel(
+        async () => {
+          for (const [key, value] of Object.entries(
+            environmentOverrides ?? {},
+          )) {
+            process.env[key] = value;
           }
-        }
-      },
-      filesystemMutations === "strict"
-        ? undefined
-        : { allowMutation: filesystemMutations.allowMutation },
-    ),
-  );
+          try {
+            const { runCli } = await import(packedCliUrl);
+            return await runCli(["init", "--root", repository], {
+              io: {
+                stdout(text) {
+                  stdout += text;
+                },
+                stderr(text) {
+                  stderr += text;
+                },
+              },
+              nonInteractive: false,
+              prompts,
+              probeRunner: {
+                async run(invocation) {
+                  // Sequenced from the read sentinel's OWN counter, so the two
+                  // event streams (repository reads, probe invocations) are
+                  // directly comparable -- see
+                  // assertProbeWindowTouchedNoRepositoryFile.
+                  readSentinel?.recordProbeInvocation();
+                  invocations.push(recordInvocation(invocation));
+                  return probeResult;
+                },
+              },
+            });
+          } finally {
+            for (const key of Object.keys(environmentOverrides ?? {})) {
+              delete process.env[key];
+            }
+          }
+        },
+        filesystemMutations === "strict"
+          ? undefined
+          : { allowMutation: filesystemMutations.allowMutation },
+      ),
+    );
+  } finally {
+    readSentinel?.uninstall();
+  }
   return { exitCode, stdout, stderr, calls, state, invocations, before };
 }
 
@@ -1632,11 +1943,24 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   // merged into one closure. The immediately-following
   // buildModelPolicyTargetTable("role-aware") call is pure computation, but
   // stays inside the same guarded closure alongside the import it depends on.
+  //
+  // The packed @agent-profile/core tarball is imported in the same guarded
+  // closure for one value the compiler does not publish:
+  // `MODEL_POLICY_PRESETS`, the list of selectable presets. The differential
+  // subtest below uses it to DISCOVER, from the published tables themselves, a
+  // preset/client whose primary-role candidate actually has an ordered
+  // alternative -- rather than hard-coding one, which would silently rot the
+  // moment the catalog changed.
+  const packedCoreUrl = pathToFileURL(
+    path.join(nodeModules, "@agent-profile", "core", "dist", "index.js"),
+  ).href;
   const {
     MODEL_POLICY_PRIMARY_ROLE,
     MODEL_POLICY_TARGET_CATALOG_VERSION,
     TABNINE_MODEL_POLICY_CATALOG,
+    MODEL_POLICY_PRESETS,
     expectedTable,
+    modelPolicyTablesByPreset,
   } = await withRuntimeSentinels(async () => {
     const {
       buildModelPolicyTargetTable,
@@ -1652,11 +1976,28 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       // override scenarios below instead of a hard-coded copy.
       TABNINE_MODEL_POLICY_CATALOG,
     } = await import(packedCompilerUrl);
+    const { MODEL_POLICY_PRESETS } = await import(packedCoreUrl);
+    assert.ok(
+      Array.isArray(MODEL_POLICY_PRESETS) && MODEL_POLICY_PRESETS.length > 0,
+      "the packed @agent-profile/core tarball must export a non-empty " +
+        "MODEL_POLICY_PRESETS list",
+    );
     return {
       MODEL_POLICY_PRIMARY_ROLE,
       MODEL_POLICY_TARGET_CATALOG_VERSION,
       TABNINE_MODEL_POLICY_CATALOG,
+      MODEL_POLICY_PRESETS,
       expectedTable: buildModelPolicyTargetTable("role-aware"),
+      // Every selectable preset's table, resolved by the PACKED compiler --
+      // the same call the wizard itself makes for its preset menu (see
+      // apps/cli/src/wizard.ts), so the discovery below sees exactly what the
+      // shipped wizard would offer.
+      modelPolicyTablesByPreset: new Map(
+        MODEL_POLICY_PRESETS.map((preset) => [
+          preset,
+          buildModelPolicyTargetTable(preset),
+        ]),
+      ),
     };
   });
   const expectedPrimaryRow = expectedTable.find(
@@ -2004,6 +2345,14 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       // removal side is observable -- that asymmetry is why the assertion is
       // written against `rm` specifically.)
       const probeTempMutations = [];
+      // Repository-READ sentinel for this scenario's probe window (installed at
+      // `confirmModelProbe`, uninstalled at `confirmWritePlan`). It is ADDITIVE
+      // to the seeded-marker assertions, which stay: the marker proves no
+      // repository CONTENT reached an invocation but can only witness the two
+      // files it is seeded into, while this proves nothing in the repository
+      // was READ at all during the window, marked or not. See
+      // createRepositoryReadSentinel for the exact span and its disclosed gaps.
+      const readSentinel = createRepositoryReadSentinel(consentRepository);
 
       const {
         exitCode: consentExitCode,
@@ -2024,19 +2373,21 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         // marker (see PROBE_RAW_STDOUT_MARKER/PROBE_RAW_STDERR_MARKER above)
         // so the redaction assertions below can prove the wizard discards the
         // runner's raw output instead of echoing it; the markers are inert for
-        // classification.
-        probeResult: {
-          exitCode: 0,
-          stdout: `OK\n${PROBE_RAW_STDOUT_MARKER}`,
-          stderr: PROBE_RAW_STDERR_MARKER,
-          timedOut: false,
-        },
+        // classification, and the stdout marker shares the SUCCESS LINE so a
+        // first-line-only leak cannot hide behind the generic `OK`.
+        probeResult: PROBE_SUCCESS_PROCESS_RESULT,
+        readSentinel,
         recordInvocation: (invocation) => ({
           ...invocation,
           // Captured at invocation time, because the orchestrator removes this
           // directory in a `finally` block before the run returns -- it cannot
-          // be inspected afterwards.
-          cwdEntriesAtInvocation: fs.readdirSync(invocation.cwd),
+          // be inspected afterwards. Read through `withoutRecording` so this
+          // TEST read never counts as sentinel liveness evidence about the
+          // SHIPPED read path (it targets a probe temp directory, so it could
+          // never have counted as a repository read either way).
+          cwdEntriesAtInvocation: readSentinel.withoutRecording(() =>
+            fs.readdirSync(invocation.cwd),
+          ),
         }),
         // Set only for the duration of the guarded action, and always removed
         // again by the harness's `finally`, so this stays deterministic and
@@ -2069,6 +2420,15 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       });
 
       assert.equal(consentExitCode, 0, consentStderr);
+      // Nothing in the fixture repository was READ between the consent prompt
+      // and the write-plan confirmation -- the claim the seeded content marker
+      // structurally cannot make (it only witnesses the two files it is seeded
+      // into, so an unmarked source file or a directory listing would slip
+      // past it). Both halves are asserted, including sentinel liveness: see
+      // assertProbeWindowTouchedNoRepositoryFile.
+      assertProbeWindowTouchedNoRepositoryFile(readSentinel, {
+        label: "consented probe scenario",
+      });
       const consentProbeCall = consentCalls.find(
         (call) => call.kind === "confirmModelProbe",
       );
@@ -2282,6 +2642,267 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
           [],
           `raw probe output must never be persisted, but ${marker} was found ` +
             "in the fixture repository after the run",
+        );
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------
+  // Slice 4b (cycle 2, review round 3): make the NORMALIZED probe result
+  // observable at this seam.
+  //
+  // The consented scenario above asserts one invocation per planned selection
+  // and a result COUNT in the preview. Neither is sensitive to the classifier:
+  // the role-aware Codex primary has no ordered alternatives, so that
+  // invocation count is one whether the runner's output normalizes to
+  // `available`, `unknown`, `not-entitled`, or anything else -- a packed bundle
+  // whose classifier was broken during bundling would pass it unchanged, even
+  // though "one normalized probe path" is this cycle's headline claim.
+  //
+  // `runModelProbe`'s own documented contract is what makes the classification
+  // observable without exporting anything new: it breaks out of a call's
+  // candidate loop on `available`, and "an ordered alternative runs only after
+  // its preferred candidate proved unavailable". So a DIFFERENTIAL PAIR --
+  // identical packed artifacts, identical scenario, identical plan, differing
+  // only in the bytes the fake runner returns -- separates the two branches:
+  //   success shape       -> exactly ONE invocation (alternative never reached)
+  //   non-available shape -> TWO invocations (preferred, then its alternative)
+  // and the rendered `(N result(s))` line moves with it.
+  //
+  // That requires a selection whose primary candidate HAS an ordered
+  // alternative. It is DISCOVERED from the packed compiler's own tables for
+  // every preset the packed core says is selectable -- never hard-coded --
+  // because which client carries alternatives is a property of the published
+  // catalog and would silently rot otherwise. The wizard's preset comes from
+  // the scripted `selectModelPreset` prompt, so a scenario can select any of
+  // them.
+  const probeAlternativeSeam = (() => {
+    for (const preset of MODEL_POLICY_PRESETS) {
+      const table = modelPolicyTablesByPreset.get(preset);
+      const primaryRow = table?.find(
+        (row) => row.role === MODEL_POLICY_PRIMARY_ROLE,
+      );
+      if (!primaryRow) continue;
+      // Only codex/claude: `buildModelProbeSelections` in apps/cli/src/wizard.ts
+      // never probes Tabnine, so a Tabnine alternative could not drive this.
+      for (const client of ["codex", "claude"]) {
+        const resolution = primaryRow[client];
+        if (
+          resolution?.model !== undefined &&
+          resolution.alternatives.length > 0
+        ) {
+          return {
+            preset,
+            client,
+            model: resolution.model,
+            alternative: resolution.alternatives[0],
+          };
+        }
+      }
+    }
+    return undefined;
+  })();
+  // Asserted, not silently skipped. If the published catalog ever stops giving
+  // ANY primary-role candidate an ordered alternative, this differential
+  // becomes impossible to build honestly -- and the correct response is a human
+  // decision (find another observable seam, or state plainly that the
+  // normalized classification is unobservable from the published artifacts),
+  // not a faked alternative and not a quietly vanishing subtest.
+  assert.ok(
+    probeAlternativeSeam,
+    "no preset/client in the PACKED tables gives the primary role's exact " +
+      "model an ordered alternative, so the probe classification cannot be " +
+      "made observable at this seam by the available/not-available " +
+      "short-circuit. Do NOT fabricate an alternative to restore this test: " +
+      "re-derive what honest evidence of normalization is still reachable " +
+      "from the published artifacts and rewrite this subtest around it",
+  );
+
+  await t.test(
+    "packed init: the normalized probe classification is observable -- an available result stops at the preferred candidate, a non-available one reaches its ordered alternative",
+    async () => {
+      const runDifferential = async ({ directoryName, probeResult }) => {
+        const differentialRepository = createProbeFixtureRepository(
+          path.join(temporary, directoryName),
+        );
+        const readSentinel = createRepositoryReadSentinel(
+          differentialRepository,
+        );
+        const result = await runPackedInitScenario({
+          packedCliUrl,
+          repository: differentialRepository,
+          clients: [probeAlternativeSeam.client],
+          // The ONLY reason this scenario does not accept the offered default
+          // preset: `role-aware`'s primary candidates may carry no ordered
+          // alternative. The value comes from the runtime discovery above.
+          modelPreset: probeAlternativeSeam.preset,
+          probeConsent: true,
+          probeResult,
+          readSentinel,
+          recordInvocation: (invocation) => ({
+            ...invocation,
+            cwdEntriesAtInvocation: readSentinel.withoutRecording(() =>
+              fs.readdirSync(invocation.cwd),
+            ),
+          }),
+          // Same NARROWED claim, and for the same reason, as the consented
+          // scenario above: the probe creates and removes its own temporary
+          // working directories. Everything else still fails.
+          filesystemMutations: {
+            allowMutation: (_method, target) =>
+              isProbeTempDirectoryTarget(target),
+          },
+        });
+
+        assert.equal(result.exitCode, 0, result.stderr);
+        // The preset the wizard actually used is the discovered one, not the
+        // offered default -- without this, a regression that ignored the
+        // prompt's return value would silently probe a different (possibly
+        // alternative-free) selection and make the whole differential vacuous.
+        const presetCall = result.calls.find(
+          (call) => call.kind === "selectModelPreset",
+        );
+        assert.ok(presetCall, "selectModelPreset must be called");
+        assert.equal(
+          presetCall.selected,
+          probeAlternativeSeam.preset,
+          "the differential scenario must drive the discovered preset",
+        );
+        assertProbeWindowTouchedNoRepositoryFile(readSentinel, {
+          label: `${directoryName} probe window`,
+        });
+        const probeCall = result.calls.find(
+          (call) => call.kind === "confirmModelProbe",
+        );
+        assert.ok(
+          probeCall,
+          "confirmModelProbe must be called before any probe execution",
+        );
+        return {
+          ...result,
+          plannedCalls: probeCall.plannedCalls,
+          probedModels: result.invocations.map(
+            ({ args }) => args[args.indexOf("--model") + 1],
+          ),
+        };
+      };
+
+      const availableRun = await runDifferential({
+        directoryName: "probe-normalization-available-init",
+        probeResult: PROBE_SUCCESS_PROCESS_RESULT,
+      });
+      const notAvailableRun = await runDifferential({
+        directoryName: "probe-normalization-not-available-init",
+        probeResult: PROBE_NOT_AVAILABLE_PROCESS_RESULT,
+      });
+
+      // Control for the experiment: both runs built the SAME plan, so the
+      // behavioral difference below can only come from how the runner's output
+      // was normalized -- not from a differently shaped selection.
+      assert.equal(
+        availableRun.plannedCalls,
+        notAvailableRun.plannedCalls,
+        "both differential runs must build the same probe plan, otherwise the " +
+          "invocation-count difference is not attributable to classification",
+      );
+      assert.ok(
+        availableRun.plannedCalls >= 2,
+        "the discovered selection must disclose a call bound of at least 2 " +
+          "(preferred candidate plus its ordered alternative), got " +
+          `${availableRun.plannedCalls}`,
+      );
+
+      // `available`: the preferred candidate answers and the ordered
+      // alternative is never reached.
+      assert.deepEqual(
+        availableRun.probedModels,
+        [probeAlternativeSeam.model],
+        "an `available` result must stop at the preferred candidate and never " +
+          `probe its ordered alternative ${probeAlternativeSeam.alternative}`,
+      );
+      // Non-available: the SAME preferred candidate is probed first, and only
+      // then its ordered alternative. Order is contractual here (unlike across
+      // independent selections), so it is asserted as a sequence.
+      assert.deepEqual(
+        notAvailableRun.probedModels,
+        [probeAlternativeSeam.model, probeAlternativeSeam.alternative],
+        "a non-available result must fall through to the preferred " +
+          "candidate's first ordered alternative, in that order",
+      );
+      // Stated as the differential itself, so the failure message names the
+      // actual regression: a classifier that collapsed both shapes to one
+      // status (broken during bundling, say) produces equal counts here.
+      assert.notEqual(
+        availableRun.invocations.length,
+        notAvailableRun.invocations.length,
+        "the packed bundle's probe classifier must distinguish the success " +
+          "shape from the non-available shape -- both runs probed the same " +
+          "number of candidates, so the normalization is not happening",
+      );
+
+      // The rendered preview moves with the classification too, so the
+      // published wizard's own `(N result(s))` line is classifier-sensitive
+      // rather than a constant. Asserted in the stdout captured INSIDE
+      // `confirmWritePlan`, i.e. before any write could commit.
+      for (const [run, expectedResults] of [
+        [availableRun, 1],
+        [notAvailableRun, 2],
+      ]) {
+        const expectedLine = `Model probe: consented (${expectedResults} result(s))`;
+        assert.ok(
+          run.state.stdoutAtConfirmation?.includes(expectedLine),
+          `expected ${JSON.stringify(expectedLine)} in the stdout captured at ` +
+            `write confirmation, got:\n${run.state.stdoutAtConfirmation}`,
+        );
+        assert.ok(
+          run.stdout.includes(expectedLine),
+          `expected ${JSON.stringify(expectedLine)} in the final stdout, got:\n${run.stdout}`,
+        );
+      }
+
+      // The discovered client's pinned invocation contract is exercised for
+      // real here (the earlier scenarios select `["codex"]` only). Applied to
+      // the single-invocation run, where the invocation's expected model is
+      // unambiguous.
+      const [availableInvocation] = availableRun.invocations;
+      assertProbeInvocationIsSourceFree(
+        availableInvocation,
+        {
+          client: probeAlternativeSeam.client,
+          model: probeAlternativeSeam.model,
+        },
+        {
+          label: `${probeAlternativeSeam.client} differential probe invocation`,
+          forbiddenPathFragments: [
+            normalizePathForComparison(
+              path.join(temporary, "probe-normalization-available-init"),
+            ),
+            normalizePathForComparison(root),
+          ],
+          repository: path.join(
+            temporary,
+            "probe-normalization-available-init",
+          ),
+        },
+      );
+
+      // Redaction holds on the non-available path too, not just the success
+      // one: an entitlement-shaped stderr is exactly the kind of output a
+      // regression would be tempted to surface as a diagnostic.
+      for (const run of [availableRun, notAvailableRun]) {
+        for (const marker of [
+          PROBE_RAW_STDOUT_MARKER,
+          PROBE_RAW_STDERR_MARKER,
+        ]) {
+          assert.ok(
+            !run.stdout.includes(marker) && !run.stderr.includes(marker),
+            "the packed wizard must not expose raw probe output, but a " +
+              `captured stream contains ${marker}`,
+          );
+        }
+        assert.ok(
+          !run.stdout.includes("unknown model"),
+          "the packed wizard must not surface the runner's raw evidence text",
         );
       }
     },
