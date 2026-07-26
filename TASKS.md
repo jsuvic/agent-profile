@@ -1725,6 +1725,103 @@ offline Doctor, the full published-asset inventory beyond model-policy
 assets, the final spec-to-test matrix document, and release-notes/
 documentation-impact deliverables. State stays `ready`, not `done`.
 
+I9 third `/implement-next` cycle completed 2026-07-26, in the same owned file
+(no product code). Two parts. Part A paid the refactor debt cycle 2's
+code-quality review deferred on the explicit condition that it land BEFORE any
+new scenario was added: extracted `assertProbeInvocationIsSourceFree` and
+`assertProbeEnvironmentIsAllowlisted` from the ~200-line inline per-invocation
+loop, extracted `runPackedInitScenario` as the shared run harness both probe
+subtests now use (its `filesystemMutations` option has no default and must be
+either the literal `"strict"` - which passes no options object to
+`withFsWriteSentinel`, i.e. cycle-1 behavior byte-for-byte - or
+`{ allowMutation }`, so a scenario can no longer silently inherit the weaker
+claim), and replaced the index-coupled `expectedProbeSelections[index]` pairing
+with an `expectedByClient` lookup plus a sorted-multiset assertion and a loud
+failure for an unplanned client. Behavior preservation was checked by running
+the suite before and after (identical results), and spec review independently
+mapped every cycle-2 assertion to its new location. One coverage item was
+deliberately dropped and disclosed: execution ORDER of independent selections
+is no longer asserted (nothing in the probe contract makes it observable, and
+with one client the sorted compare is exact equality). Part B closed one more
+acceptance-criteria fragment - "Tabnine organization/private manual path",
+advisory path only - as three new subtests reusing the same single build/pack:
+the guided-manual advisory line for a Tabnine selection with no override; an
+uncatalogued private/organization id proven ACCEPTED (never rejected, per
+Tabnine's documented no-auto-selection contract - `validateModelPolicyOverride`
+rejects only empty/oversized/control-character ids, with no catalog check) and
+labelled `[unverified, uncatalogued]`; and a catalogued id labelled
+`[catalogued]`, so the two labels are distinguished differentially by real
+behavior rather than one asserted in isolation. The catalogued id is READ at
+runtime from the packed compiler tarball's own `TABNINE_MODEL_POLICY_CATALOG`
+(verified reachable: `packages/compiler/src/index.ts` re-exports it, so no
+hard-coded catalog copy was needed) and the private id is a fixed literal
+asserted ABSENT from that same packed catalog, so a catalog change can never
+leave these scenarios asserting the wrong label. Notable: the CLI bundle
+inlines its own copy of the catalog while the oracle comes from the separately
+packed compiler, so a divergence between the two published artifacts would
+surface here. All three run under `withRuntimeSentinels` with the packed
+`import()` inside the guard, use strict `withFsWriteSentinel` (Tabnine is never
+probed, so no temp-dir allowance is needed), decline the write plan, and assert
+the preview line against the stdout snapshot captured inside `confirmWritePlan`
+before re-checking final stdout. Spec review returned ISSUES_FOUND with no
+blockers and no real defects, confirming byte-exactness of both rendered
+`formatModelPolicySummary` branches, that the `respondToAdvancedOverrides`
+function-or-absent switch encodes two genuinely different wizard code paths
+(omitting `selectAdvancedOverrides` skips the step entirely; supplying one that
+returns `undefined` runs it and declines), and that nothing out of scope was
+started. Code-quality review returned ISSUES_FOUND with two Important items,
+both fixed this cycle: (1) the extraction banner claimed "nothing was weakened,
+dropped, or merged" while the moved `assert.equal(invocation.command,
+expected.client)` had become unfalsifiable under the new by-client lookup - the
+tautological assertion was deleted, its WHY comment moved to the multiset
+assertion that genuinely proves it, and the banner reworded to enumerate its
+exceptions honestly (the same overclaiming-comment class cycles 1 and 2 both
+rejected); (2) the Slice 5 banner claimed a Tabnine-only selection "skips the
+probe step entirely" while the only evidence was zero runner invocations, which
+a step that ran and was declined would produce identically - now asserted
+directly via the absence of any `confirmModelProbe` call. Five Minor items were
+folded in: dropped two redundant/never-emitted stdout assertions in the
+private-override scenario (both wizard rejection paths write to stderr, so
+`stderr === ""` plus the exact line is the whole proof), added an
+`expectedByClient.size` guard against silently collapsed duplicate-client
+selections, corrected the "both ids derived from the catalog" overclaim,
+renamed the harness option to `allowMutation` so the name no longer changes
+across the call boundary, and added a named `DECLINE_ADVANCED_OVERRIDES`
+constant so the absent-vs-declined contrast is visible at the call site.
+Tests: all six tests in the file pass (`npm run test:release`: 67 tests, 66
+pass, 1 fail - the untouched sibling
+`scripts/release/phase31-published-journey.test.mjs` hitting the same
+pre-existing MSYS/Git-for-Windows `tar` drive-letter bug documented in cycle
+1); `npm run check` clean; prettier clean. Disclosed, accepted: the two
+rendered Tabnine strings are hard-coded byte-exact copies, since
+`formatModelPolicySummary` is module-private in `apps/cli` and unexported from
+every packed artifact (re-verified); the catalogued-branch scenario has no
+independent RED of its own (its label is behavior-derived via the private
+scenario's own RED, which asserted `[catalogued]` against the private id and
+failed showing `[unverified, uncatalogued]`); and all three scenarios select
+`["tabnine"]` alone, so mixed Tabnine+Codex/Claude summaries stay uncovered.
+Code-quality follow-up scheduled BEFORE the Tabnine settings-file write
+scenario lands (both reviewers agree that scenario is what these will collide
+with): generalize `runPackedInitScenario` with `args`/`confirmWrite` (renaming
+to `runPackedCliScenario`, since the remaining scenarios are not all `init` and
+the write path needs a committed write); migrate the still-hand-rolled
+role-aware scenario onto the shared harness (needs `tables` recorded
+unconditionally in the prompts factory); extract the now-triplicated "rendered
+before confirmation / survived to final stdout / nothing written" assertion
+block; give `environmentOverrides` save-and-restore semantics instead of
+unconditional delete, and document the sequential-subtest invariant the two
+process-global sentinels depend on; rename the two assertion helpers (the
+"source-free" one also asserts isolation argv, cwd, and bounds) and collapse
+their duplicated `forbiddenPathFragments`/`repository` parameters; rename the
+probe-flavoured shared helpers and banners now that Tabnine scenarios use them;
+and add a fixture-directory collision guard. Still left open for later I9
+cycles: Tabnine's ownership-aware settings-file write path (absent and
+generated-owned reaching a real write; unowned staying preserved/advisory),
+normal compile lock reuse, upgrade retain/adopt, offline Doctor, the full
+published-asset inventory beyond model-policy assets, the final spec-to-test
+matrix document, and release-notes/documentation-impact deliverables. State
+stays `ready`, not `done`.
+
 ## phase-31.9: Upgrade "custom exact" model-policy strategy (`docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`)
 
 Descoped from Phase 31.5 I6a on 2026-07-21 (see I6a's own brief amendment):
