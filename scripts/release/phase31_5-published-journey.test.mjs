@@ -56,9 +56,11 @@
 //      spans it deliberately does not), and a differential PAIR that makes the
 //      normalized probe classification observable at this seam -- an
 //      `available` result stops at the preferred candidate while a
-//      non-available one reaches that candidate's ordered alternative, so the
-//      invocation count and the rendered result count differ by classification
-//      alone (see the "normalized probe classification is observable" subtest).
+//      non-available one walks every one of that candidate's ordered
+//      alternatives, so the invocation count and the rendered result count
+//      differ by classification alone (see the "normalized probe classification
+//      is observable" subtest; both expectations are derived from the
+//      discovered candidate list, never hard-wired to a count).
 //      Scope note: the first two probe scenarios select `["codex"]`. The
 //      differential subtest selects whichever client the PACKED tables
 //      actually give an ordered alternative to (today Claude, discovered at
@@ -104,7 +106,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(import.meta.dirname, "..", "..");
 
@@ -648,10 +650,19 @@ async function withFsWriteSentinel(action, options) {
   );
   const originalOpen = fs.promises.open;
   const calls = [];
+  // The target handed to `allowMutation` (and recorded in a failure message) is
+  // the CLASSIFIED path, not `String(args[0])`. The same reason as the read
+  // sentinel's: a `URL` or `Buffer` target coerced with `String(...)` resolves
+  // somewhere unrelated, so an allowance predicate such as
+  // isProbeTempDirectoryTarget would answer about the wrong path. A target this
+  // file cannot classify is passed through as its description and can therefore
+  // never match a path-shaped allowance -- it falls through to `calls` and
+  // fails the sentinel, which is the safe direction for a write claim.
+  const classifyTarget = (value) => classifyFsPathArgument(value).description;
   try {
     for (const name of mutatingMethods) {
       fs.promises[name] = (...args) => {
-        const target = String(args[0]);
+        const target = classifyTarget(args[0]);
         if (allowMutation?.(name, target) !== true) {
           calls.push(`${name}(${target})`);
         }
@@ -660,7 +671,7 @@ async function withFsWriteSentinel(action, options) {
     }
     fs.promises.open = async (...args) => {
       const handle = await originalOpen(...args);
-      const openPath = String(args[0]);
+      const openPath = classifyTarget(args[0]);
       return new Proxy(handle, {
         get(target, property) {
           const value = Reflect.get(target, property, target);
@@ -811,37 +822,77 @@ function createRepositoryReadSentinel(repository) {
   let originalFs;
   const observedReads = [];
   const repositoryReads = [];
+  const unclassifiedReads = [];
   const probeInvocationSequences = [];
 
   const record = (api, target) => {
     if (!recording) return;
-    const entry = { sequence: sequence++, api, target: String(target) };
+    const classified = classifyFsPathArgument(target);
+    const entry = { sequence: sequence++, api, target: classified.description };
     observedReads.push(entry);
-    let inside = false;
-    try {
-      inside = isInsideDirectory(entry.target, repository);
-    } catch {
-      // A non-path first argument (an fd, a Buffer, a URL object) cannot
-      // denote a repository path for the purposes of this claim; it is still
-      // recorded in observedReads above.
-      inside = false;
+    if (classified.kind === "descriptor") return;
+    if (classified.kind === "path") {
+      let inside = false;
+      try {
+        inside = isInsideDirectory(classified.path, repository);
+      } catch {
+        // A path string that `path.resolve` itself rejects (an embedded NUL,
+        // say) cannot be shown to be outside the repository, so it falls
+        // through to the unclassified bucket below rather than being credited
+        // as "not in the repository".
+        unclassifiedReads.push(entry);
+        return;
+      }
+      if (inside) repositoryReads.push(entry);
+      return;
     }
-    if (inside) repositoryReads.push(entry);
+    // "unclassifiable": deliberately NOT silently treated as outside the
+    // repository. An argument shape this file cannot resolve to a path must
+    // fail the claim (see assertProbeWindowTouchedNoRepositoryFile, which
+    // asserts this bucket is empty too), because "we could not tell" is not
+    // evidence that nothing in the repository was read.
+    unclassifiedReads.push(entry);
   };
 
-  // Own properties are copied onto each wrapper because some of these
-  // functions carry them and callers use them: `fs.realpath.native`,
-  // `fs.promises.realpath.native`, and the `__promisify__` symbols Node
-  // attaches to the callback-style APIs.
-  const wrap = (owner, name, real) =>
-    Object.assign(function instrumentedRead(...args) {
+  // Own properties of the real function are NOT copied verbatim onto the
+  // wrapper, because some of them are themselves read functions carrying their
+  // own path argument: `fs.realpath.native` and `fs.realpathSync.native` are
+  // the only callable own properties any function in the two lists above
+  // actually has on this Node (checked at runtime with
+  // `Reflect.ownKeys`/`getOwnPropertyDescriptor`, not assumed). An earlier
+  // revision's `Object.assign(wrapper, real)` copied those across unchanged,
+  // which left a fully UNINSTRUMENTED read path in place: packed code reading a
+  // repository file through `fs.realpath.native` would be missing from
+  // `repositoryReads` while unrelated probe-directory reads still satisfied the
+  // liveness assertion, so the no-source-read claim could pass while being
+  // false. Callable own properties are therefore instrumented recursively under
+  // a dotted api name (so a failure message says which one was used), and every
+  // other own property is copied unchanged. Only ENUMERABLE own properties are
+  // considered, exactly as `Object.assign` did -- `length`/`name`/`prototype`
+  // are non-enumerable and irrelevant to callers. The wrapper is a NEW function
+  // object and `real` is never mutated, so uninstall()'s `Object.assign` puts
+  // the originals back with their own properties intact.
+  const wrap = (owner, name, real) => {
+    const wrapper = function instrumentedRead(...args) {
       record(`${owner}.${name}`, args[0]);
       return real.apply(this, args);
-    }, real);
+    };
+    for (const key of Reflect.ownKeys(real)) {
+      const descriptor = Object.getOwnPropertyDescriptor(real, key);
+      if (descriptor === undefined || descriptor.enumerable !== true) continue;
+      if (typeof descriptor.value === "function") {
+        wrapper[key] = wrap(owner, `${name}.${String(key)}`, descriptor.value);
+        continue;
+      }
+      Object.defineProperty(wrapper, key, descriptor);
+    }
+    return wrapper;
+  };
 
   return {
     observedReads,
     repositoryReads,
+    unclassifiedReads,
     probeInvocationSequences,
     recordProbeInvocation() {
       probeInvocationSequences.push(sequence++);
@@ -901,6 +952,11 @@ function createRepositoryReadSentinel(repository) {
 //      -- all outside the repository, which is exactly the point.)
 //   2. THE CLAIM. No read inside the fixture repository at all, anywhere in the
 //      window.
+//   3. NO UNCLASSIFIABLE READ. A read whose path argument this file could not
+//      resolve to a filesystem path (see classifyFsPathArgument) is asserted
+//      absent as well, rather than being credited to claim 2 as "outside the
+//      repository" -- an argument shape the harness cannot classify is not
+//      evidence of anything, so it fails instead of passing.
 function assertProbeWindowTouchedNoRepositoryFile(sentinel, { label }) {
   assert.ok(
     sentinel.observedReads.length > 0,
@@ -923,6 +979,17 @@ function assertProbeWindowTouchedNoRepositoryFile(sentinel, { label }) {
       "probe consent prompt and the write-plan confirmation, but the packed " +
       "CLI read it (entries tagged `during probe execution` happened before " +
       `the last probe invocation, #${lastProbeSequence})`,
+  );
+  assert.deepEqual(
+    sentinel.unclassifiedReads.map(
+      ({ sequence, api, target }) => `${api}(${target}) [#${sequence}]`,
+    ),
+    [],
+    `${label}: a read was made with a path argument this file cannot resolve ` +
+      "to a filesystem path, so it cannot be shown to be outside the fixture " +
+      "repository -- teach classifyFsPathArgument the shape (and re-derive " +
+      "whether the read is legitimate) rather than letting an unclassifiable " +
+      "argument pass as evidence",
   );
 }
 
@@ -1260,6 +1327,87 @@ function isInsideDirectory(candidate, directory) {
   );
 }
 
+// Best-effort human-readable rendering of a filesystem-call argument, used ONLY
+// for failure messages and recorded evidence -- never for classification, which
+// is classifyFsPathArgument's job. Guarded because `String(value)` throws for a
+// null-prototype object or a `Symbol.toPrimitive` that rejects string coercion,
+// and a sentinel must not turn an offending call into an unrelated crash.
+function describeFsPathArgument(target) {
+  try {
+    return typeof target === "string" ? target : String(target);
+  } catch {
+    return Object.prototype.toString.call(target);
+  }
+}
+
+// node:fs accepts several shapes as a path argument, and both sentinels in this
+// file must classify one correctly BEFORE deciding whether it lies inside the
+// fixture repository (or inside a probe temporary directory). `String(target)`
+// -- what an earlier revision used for exactly that decision -- is wrong for two
+// of the supported shapes: a `URL` stringifies to `file:///C:/...`, which
+// `path.resolve` then treats as a RELATIVE path under the process cwd, and a
+// `Buffer` needs its own decoding rather than an incidental coercion. In both
+// cases the resolved path lands somewhere outside the repository, so the read
+// or write would quietly take the "not in the repository" branch and satisfy
+// the claim while violating it.
+//
+// A closed classification is returned instead of a bare string so callers are
+// forced to handle the shapes that CANNOT be turned into a path:
+//   - "path": a real filesystem path string, safe to hand to path.resolve.
+//   - "descriptor": a numeric/bigint file descriptor. It denotes no path at
+//     all, and it is unreachable without one of the instrumented `open*` calls
+//     whose OWN path argument was classified -- so a repository read reached
+//     through an fd is still preceded by a recorded repository access. (Same
+//     reasoning as the fd-level exclusions documented on
+//     SENTINEL_FS_READ_METHODS.)
+//   - "unclassifiable": anything else -- a non-`file:` URL, an arbitrary
+//     object, or a conversion that threw. Callers MUST treat this as a failure
+//     of their claim, never as "not in the repository"; see `record` below and
+//     withFsWriteSentinel's target handling, both of which do.
+function classifyFsPathArgument(target) {
+  if (typeof target === "string") {
+    return { kind: "path", path: target, description: target };
+  }
+  if (Buffer.isBuffer(target)) {
+    // Node decodes a Buffer path argument itself; `Buffer#toString()` is that
+    // same decoding, applied explicitly here rather than left to coercion.
+    const decoded = target.toString();
+    return { kind: "path", path: decoded, description: decoded };
+  }
+  // `instanceof URL` alone would miss a URL from another realm, so any object
+  // carrying a string `protocol` is treated as a URL-shaped argument -- which
+  // is also how node:fs itself decides (it looks for a `file:` protocol and
+  // rejects every other one).
+  if (
+    typeof target === "object" &&
+    target !== null &&
+    typeof target.protocol === "string"
+  ) {
+    if (target.protocol !== "file:") {
+      return {
+        kind: "unclassifiable",
+        description: describeFsPathArgument(target),
+      };
+    }
+    try {
+      const converted = fileURLToPath(target);
+      return { kind: "path", path: converted, description: converted };
+    } catch {
+      return {
+        kind: "unclassifiable",
+        description: describeFsPathArgument(target),
+      };
+    }
+  }
+  if (typeof target === "number" || typeof target === "bigint") {
+    return { kind: "descriptor", description: `fd:${target}` };
+  }
+  return {
+    kind: "unclassifiable",
+    description: describeFsPathArgument(target),
+  };
+}
+
 // True only for the probe orchestrator's OWN temporary working directory (or
 // something inside it): a path under the OS temp directory whose first segment
 // below that directory starts with `agent-profile-probe-`, the mkdtemp prefix
@@ -1270,11 +1418,23 @@ function isInsideDirectory(candidate, directory) {
 // filesystem allowance as narrow as its disclosure claims.
 const PROBE_TEMP_DIR_PREFIX = "agent-profile-probe-";
 
+// Defensive against the same argument shapes classifyFsPathArgument exists for:
+// withFsWriteSentinel already hands this predicate a classified path, but the
+// predicate is the thing standing between a stray mutation and an allowance, so
+// it re-classifies rather than trusting its caller, and answers `false`
+// (i.e. "not allowed") for anything it cannot resolve to a path.
 function isProbeTempDirectoryTarget(target) {
-  const relative = path.relative(
-    path.resolve(os.tmpdir()),
-    path.resolve(target),
-  );
+  const classified = classifyFsPathArgument(target);
+  if (classified.kind !== "path") return false;
+  let relative;
+  try {
+    relative = path.relative(
+      path.resolve(os.tmpdir()),
+      path.resolve(classified.path),
+    );
+  } catch {
+    return false;
+  }
   if (
     relative === "" ||
     relative.startsWith("..") ||
@@ -1750,6 +1910,93 @@ function assertProbeEnvironmentIsAllowlisted(invocation, { label }) {
     `${label} must not forward the non-allowlisted ambient sentinel ` +
       `key ${PROBE_ENV_SENTINEL_KEY}`,
   );
+}
+
+// The narrowed filesystem allowance every consented-probe scenario in this file
+// uses, bundled with the record that keeps it honest -- deliberately ONE helper
+// so a call site cannot take the allowance without also taking the audit.
+// withFsWriteSentinel DISCARDS every call its `allowMutation` predicate
+// approves, so an unrecorded allowance silently weakens the claim from "zero
+// unexpected filesystem mutations" to "zero outside the probe temp
+// directories", and says nothing at all about what happened inside them: a
+// regression that persisted failed probe output or history into the temporary
+// cwd, or that failed to remove a later candidate's directory, would pass
+// unnoticed. Feed `mutations` to assertProbeTempDirectoriesWereCleanedUp below,
+// which is what turns the record back into an assertion.
+function createProbeTempDirectoryAllowance() {
+  const mutations = [];
+  return {
+    mutations,
+    allowMutation: (method, target) => {
+      if (!isProbeTempDirectoryTarget(target)) return false;
+      mutations.push({ method, target });
+      return true;
+    },
+  };
+}
+
+// The audit half of createProbeTempDirectoryAllowance (extracted verbatim from
+// the consented-probe subtest, which was the only place stating it, and now
+// shared with the differential runs that had borrowed the allowance WITHOUT
+// this).
+//
+// Verified against the shipped code rather than assumed: runModelProbe's
+// per-candidate `finally` calls `tempDirs.remove(cwd)`
+// (apps/cli/src/model-probe.ts), and the default provider's `remove` is `rm`
+// from node:fs/promises -- which IS in withFsWriteSentinel's `mutatingMethods`
+// list -- so exactly one `rm(<probe temp dir>)` per probed candidate is
+// observable here. Asserting that (a) proves the `allowMutation` allowance is
+// genuinely needed rather than dead permissiveness, and (b) catches a cleanup
+// regression that leaked the temporary probe directory, or one that moved
+// cleanup after the sentinel was restored, both of which would otherwise be
+// invisible. (The matching `mkdtemp` create is NOT instrumented by the
+// sentinel, so only the removal side is observable -- that asymmetry is why the
+// assertion is written against `rm` specifically.)
+function assertProbeTempDirectoriesWereCleanedUp({
+  mutations,
+  invocations,
+  label,
+}) {
+  // Each probed candidate's temporary working directory was removed again
+  // before the run returned, and nothing else was mutated inside one: exactly
+  // one `rm` per invocation, targeting exactly the directories the invocations
+  // actually ran in (compared as sorted sets, since neither ordering is
+  // contractual).
+  const describeMutations = () =>
+    mutations.map(({ method, target }) => `${method}(${target})`).join(", ") ||
+    "(none)";
+  assert.deepEqual(
+    mutations.map(({ method }) => method),
+    invocations.map(() => "rm"),
+    `${label}: expected exactly one node:fs/promises rm() per probe ` +
+      "invocation for temporary-probe-directory cleanup and no other mutation " +
+      `inside one, observed: ${describeMutations()}`,
+  );
+  assert.deepEqual(
+    mutations.map(({ target }) => path.resolve(target)).sort(),
+    invocations.map(({ cwd }) => path.resolve(cwd)).sort(),
+    `${label}: the removed temporary probe directories must be exactly the ` +
+      "working directories the probe invocations ran in, observed: " +
+      describeMutations(),
+  );
+  // Final-state proof, not just attempted-call proof. The two assertions above
+  // are recorded at CALL time: withFsWriteSentinel's allowMutation hook records
+  // the method and target before delegating to the real `rm`, and runModelProbe
+  // swallows removal failures (`await tempDirs.remove(cwd).catch(() =>
+  // undefined)` in apps/cli/src/model-probe.ts), so a cleanup that was
+  // attempted but rejected -- or was otherwise ineffective -- would leave both
+  // of them green while the temporary directory survived on disk. Checking the
+  // directory is actually gone is what closes the bounded-lifetime claim.
+  for (const { cwd } of invocations) {
+    assert.equal(
+      fs.existsSync(cwd),
+      false,
+      `${label}: the probe's temporary working directory must no longer ` +
+        `exist after the run returned, but ${cwd} is still on disk -- ` +
+        "cleanup was attempted (see the rm assertions above) yet did not " +
+        "take effect",
+    );
+  }
 }
 
 test("published Phase 31.5 model-selection journey: packed model-policy assets and role-aware init table (I9 bounded slice)", async (t) => {
@@ -2330,21 +2577,11 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         path.join(temporary, "probe-consent-init"),
       );
       // Mutations observed against the probe's OWN temporary working
-      // directories, recorded and then ASSERTED below. Verified against the
-      // shipped code rather than assumed: runModelProbe's per-candidate
-      // `finally` calls `tempDirs.remove(cwd)`
-      // (apps/cli/src/model-probe.ts:712), and the default provider's `remove`
-      // is `rm` from node:fs/promises -- which is in withFsWriteSentinel's
-      // `mutatingMethods` list -- so exactly one `rm(<probe temp dir>)` per
-      // probed candidate is observable here. Asserting that (a) proves the
-      // `allowMutation` allowance is genuinely needed rather than dead
-      // permissiveness, and (b) catches a cleanup regression that leaked the
-      // temporary probe directory, or one that moved cleanup after the sentinel
-      // was restored, both of which would otherwise be invisible. (The matching
-      // `mkdtemp` create is NOT instrumented by the sentinel, so only the
-      // removal side is observable -- that asymmetry is why the assertion is
-      // written against `rm` specifically.)
-      const probeTempMutations = [];
+      // directories, recorded here and ASSERTED below via
+      // assertProbeTempDirectoriesWereCleanedUp. See
+      // createProbeTempDirectoryAllowance for why the allowance and its record
+      // are one helper.
+      const probeTempDirectories = createProbeTempDirectoryAllowance();
       // Repository-READ sentinel for this scenario's probe window (installed at
       // `confirmModelProbe`, uninstalled at `confirmWritePlan`). It is ADDITIVE
       // to the seeded-marker assertions, which stay: the marker proves no
@@ -2409,13 +2646,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         // the user's home directory; this is the narrow claim the comment
         // always intended.
         filesystemMutations: {
-          allowMutation: (method, target) => {
-            if (isProbeTempDirectoryTarget(target)) {
-              probeTempMutations.push({ method, target });
-              return true;
-            }
-            return false;
-          },
+          allowMutation: probeTempDirectories.allowMutation,
         },
       });
 
@@ -2532,47 +2763,11 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         assertProbeEnvironmentIsAllowlisted(invocation, { label });
       }
 
-      // Each probed candidate's temporary working directory was removed again
-      // before the run returned, and nothing else was removed: exactly one
-      // `rm` per invocation, targeting exactly the directories the invocations
-      // actually ran in (compared as sorted sets, since neither ordering is
-      // contractual). See the probeTempMutations declaration above for why this
-      // is the observable half of the create/remove pair.
-      const describeProbeTempMutations = () =>
-        probeTempMutations
-          .map(({ method, target }) => `${method}(${target})`)
-          .join(", ") || "(none)";
-      assert.deepEqual(
-        probeTempMutations.map(({ method }) => method),
-        invocations.map(() => "rm"),
-        "expected exactly one node:fs/promises rm() per probe invocation for " +
-          `temporary-probe-directory cleanup, observed: ${describeProbeTempMutations()}`,
-      );
-      assert.deepEqual(
-        probeTempMutations.map(({ target }) => path.resolve(target)).sort(),
-        invocations.map(({ cwd }) => path.resolve(cwd)).sort(),
-        "the removed temporary probe directories must be exactly the working " +
-          `directories the probe invocations ran in, observed: ${describeProbeTempMutations()}`,
-      );
-      // Final-state proof, not just attempted-call proof. The two assertions
-      // above are recorded at CALL time: withFsWriteSentinel's allowMutation
-      // hook records the method and target before delegating to the real
-      // `rm`, and runModelProbe swallows removal failures
-      // (`await tempDirs.remove(cwd).catch(() => undefined)` in
-      // apps/cli/src/model-probe.ts), so a cleanup that was attempted but
-      // rejected -- or was otherwise ineffective -- would leave both of them
-      // green while the temporary directory survived on disk. Checking the
-      // directory is actually gone is what closes the bounded-lifetime claim.
-      for (const { cwd } of invocations) {
-        assert.equal(
-          fs.existsSync(cwd),
-          false,
-          "the probe's temporary working directory must no longer exist " +
-            `after the run returned, but ${cwd} is still on disk -- cleanup ` +
-            "was attempted (see the rm assertions above) yet did not take " +
-            "effect",
-        );
-      }
+      assertProbeTempDirectoriesWereCleanedUp({
+        mutations: probeTempDirectories.mutations,
+        invocations,
+        label: "consented probe scenario",
+      });
 
       // One recorded result per planned selection (same `available`
       // short-circuit reasoning as the process count above), rendered in the
@@ -2666,8 +2861,20 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   // identical packed artifacts, identical scenario, identical plan, differing
   // only in the bytes the fake runner returns -- separates the two branches:
   //   success shape       -> exactly ONE invocation (alternative never reached)
-  //   non-available shape -> TWO invocations (preferred, then its alternative)
+  //   non-available shape -> one invocation per ORDERED CANDIDATE, i.e. the
+  //                          preferred model followed by EVERY alternative
   // and the rendered `(N result(s))` line moves with it.
+  //
+  // "every alternative", not "the first one": with a non-available,
+  // non-stop status (`not-entitled`, this file's non-available shape) the
+  // candidate loop in apps/cli/src/model-probe.ts neither breaks nor stops, so
+  // it walks `[call.model, ...call.alternatives]` to the end and records one
+  // result per candidate. An earlier revision of this subtest kept only
+  // `alternatives[0]` and hard-wired "two invocations"; that held by luck
+  // because today's discovered seam happens to carry exactly one alternative,
+  // and would have failed `test:release` on a perfectly valid catalog
+  // expansion. Both expectations are therefore DERIVED from the discovered
+  // candidate list below.
   //
   // That requires a selection whose primary candidate HAS an ordered
   // alternative. It is DISCOVERED from the packed compiler's own tables for
@@ -2687,17 +2894,30 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       // never probes Tabnine, so a Tabnine alternative could not drive this.
       for (const client of ["codex", "claude"]) {
         const resolution = primaryRow[client];
-        if (
-          resolution?.model !== undefined &&
-          resolution.alternatives.length > 0
-        ) {
-          return {
-            preset,
-            client,
-            model: resolution.model,
-            alternative: resolution.alternatives[0],
-          };
-        }
+        if (resolution?.model === undefined) continue;
+        // The COMPLETE ordered alternative list, normalized exactly as
+        // `buildModelProbePlan` normalizes it (apps/cli/src/model-probe.ts):
+        // an alternative equal to the preferred model is dropped, and a repeat
+        // is never probed twice (its second occurrence hits the plan's
+        // first-seen merge, or -- for a duplicate inside one selection's own
+        // array -- runModelProbe's `seen` map, which skips it without
+        // recording a result). Applying the same two rules here is what makes
+        // `candidates` the list the packed CLI will actually walk, rather than
+        // a hopeful copy of the catalog row.
+        const alternatives = resolution.alternatives.filter(
+          (alternative, index) =>
+            alternative !== resolution.model &&
+            resolution.alternatives.indexOf(alternative) === index,
+        );
+        if (alternatives.length === 0) continue;
+        return {
+          preset,
+          client,
+          model: resolution.model,
+          alternatives,
+          // The ordered candidate list a non-available run must walk in full.
+          candidates: [resolution.model, ...alternatives],
+        };
       }
     }
     return undefined;
@@ -2728,6 +2948,9 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         const readSentinel = createRepositoryReadSentinel(
           differentialRepository,
         );
+        // Fresh per run, so each run's cleanup audit sees only its own
+        // mutations and one run cannot cover for another.
+        const probeTempDirectories = createProbeTempDirectoryAllowance();
         const result = await runPackedInitScenario({
           packedCliUrl,
           repository: differentialRepository,
@@ -2747,14 +2970,24 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
           }),
           // Same NARROWED claim, and for the same reason, as the consented
           // scenario above: the probe creates and removes its own temporary
-          // working directories. Everything else still fails.
+          // working directories. Everything else still fails. The allowance is
+          // taken through the SAME recording helper the consented scenario
+          // uses, so the mutations it permits are audited here too rather than
+          // silently discarded -- an earlier revision of this subtest borrowed
+          // the allowance without the audit, which let a regression that
+          // persisted failed probe output (or skipped a later candidate's
+          // cleanup) inside the temporary cwd pass unnoticed.
           filesystemMutations: {
-            allowMutation: (_method, target) =>
-              isProbeTempDirectoryTarget(target),
+            allowMutation: probeTempDirectories.allowMutation,
           },
         });
 
         assert.equal(result.exitCode, 0, result.stderr);
+        assertProbeTempDirectoriesWereCleanedUp({
+          mutations: probeTempDirectories.mutations,
+          invocations: result.invocations,
+          label: `${directoryName} probe run`,
+        });
         // The preset the wizard actually used is the discovered one, not the
         // offered default -- without this, a regression that ignored the
         // prompt's return value would silently probe a different (possibly
@@ -2805,29 +3038,43 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         "both differential runs must build the same probe plan, otherwise the " +
           "invocation-count difference is not attributable to classification",
       );
-      assert.ok(
-        availableRun.plannedCalls >= 2,
-        "the discovered selection must disclose a call bound of at least 2 " +
-          "(preferred candidate plus its ordered alternative), got " +
+      // The disclosed bound must still ACCOMMODATE the full ordered candidate
+      // list, not merely be "at least 2": the non-available run below expects
+      // one process per candidate, and `buildModelProbePlan`'s own `maxCalls`
+      // is `min(distinct candidates, MODEL_PROBE_MAX_PROCESSES)`. Equality is
+      // asserted because this scenario selects exactly one client, so the plan
+      // holds exactly one call whose distinct-candidate count IS the discovered
+      // list. If the published catalog ever grows a candidate list longer than
+      // the process cap, this fails loudly -- which is correct: the run would
+      // then stop early with `skipped:call-bound` results and the derived
+      // expectations below would no longer describe the shipped behavior.
+      assert.equal(
+        availableRun.plannedCalls,
+        probeAlternativeSeam.candidates.length,
+        "the disclosed call bound must equal the discovered candidate list " +
+          `(${probeAlternativeSeam.candidates.join(", ")}), got ` +
           `${availableRun.plannedCalls}`,
       );
 
-      // `available`: the preferred candidate answers and the ordered
-      // alternative is never reached.
+      // `available`: the preferred candidate answers and no ordered
+      // alternative is ever reached.
       assert.deepEqual(
         availableRun.probedModels,
         [probeAlternativeSeam.model],
         "an `available` result must stop at the preferred candidate and never " +
-          `probe its ordered alternative ${probeAlternativeSeam.alternative}`,
+          `probe its ordered alternative(s) ${probeAlternativeSeam.alternatives.join(", ")}`,
       );
-      // Non-available: the SAME preferred candidate is probed first, and only
-      // then its ordered alternative. Order is contractual here (unlike across
-      // independent selections), so it is asserted as a sequence.
+      // Non-available: the SAME preferred candidate is probed first, then EVERY
+      // ordered alternative in turn (a `not-entitled` classification neither
+      // stops the run nor breaks the candidate loop, so the loop walks the list
+      // to the end). Order is contractual here (unlike across independent
+      // selections), so it is asserted as a sequence, and the expected sequence
+      // is the discovered candidate list itself -- never a fixed length.
       assert.deepEqual(
         notAvailableRun.probedModels,
-        [probeAlternativeSeam.model, probeAlternativeSeam.alternative],
-        "a non-available result must fall through to the preferred " +
-          "candidate's first ordered alternative, in that order",
+        probeAlternativeSeam.candidates,
+        "a non-available result must fall through to EVERY one of the " +
+          "preferred candidate's ordered alternatives, in catalog order",
       );
       // Stated as the differential itself, so the failure message names the
       // actual regression: a classifier that collapsed both shapes to one
@@ -2843,10 +3090,14 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       // The rendered preview moves with the classification too, so the
       // published wizard's own `(N result(s))` line is classifier-sensitive
       // rather than a constant. Asserted in the stdout captured INSIDE
-      // `confirmWritePlan`, i.e. before any write could commit.
+      // `confirmWritePlan`, i.e. before any write could commit. Both counts are
+      // DERIVED from the discovered candidate list, for the same reason the
+      // probed-model sequences above are: `runModelProbe` records one result
+      // per candidate it walks, so the non-available run's count follows the
+      // catalog's alternative count rather than a hard-wired 2.
       for (const [run, expectedResults] of [
         [availableRun, 1],
-        [notAvailableRun, 2],
+        [notAvailableRun, probeAlternativeSeam.candidates.length],
       ]) {
         const expectedLine = `Model probe: consented (${expectedResults} result(s))`;
         assert.ok(
