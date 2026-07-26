@@ -19,6 +19,8 @@ import {
   hasAllRegionMarkers,
   hasLegacyGeneratedMarker,
   isLoopSkillId,
+  MODEL_POLICY_PRIMARY_ROLE,
+  planTabnineModelSettingsWrite,
   REGION_PRECEDENCE_TEXT,
   VERIFIED_CLAUDE_HOOK_EVENTS,
   VERIFIED_CODEX_HOOK_EVENTS,
@@ -129,10 +131,9 @@ export async function runDoctor(
 
   checkUnknownLanguageFallback(profileResult.profile, issues);
 
-  const compileResult = compileProfile({ profile: profileResult.profile });
-
-  if (!compileResult.ok) {
-    for (const compileIssue of compileResult.issues) {
+  const appendCompileIssues = (result: ReturnType<typeof compileProfile>) => {
+    if (result.ok) return;
+    for (const compileIssue of result.issues) {
       issues.push(
         issue(
           "LINT-STRUCT-002",
@@ -145,29 +146,62 @@ export async function runDoctor(
         ),
       );
     }
+  };
 
+  // Preserve Doctor's established compiler-failure short circuit. A
+  // parse-valid profile that cannot compile has no meaningful generated-output
+  // or lockfile comparison yet, so lock diagnostics must not obscure the
+  // original compile diagnostics.
+  const baselineCompile = compileProfile({ profile: profileResult.profile });
+  if (!baselineCompile.ok) {
+    appendCompileIssues(baselineCompile);
     return toResult(issues);
   }
 
-  await checkGeneratedArtifactsExist(rootDir, compileResult.files, issues);
-  await checkGeneratedArtifactSecurity(rootDir, compileResult.files, issues);
-  await checkSkillFiles(rootDir, issues);
-  await checkSkillPackArtifacts(rootDir, compileResult.files, issues);
-  await checkLoopSkillStructure(rootDir, compileResult.files, issues);
-  await checkSemanticWarnings(rootDir, compileResult.files, issues);
-  await checkGitignoreSecretHygiene(rootDir, issues);
-
+  // Only after the baseline compile succeeds may a valid lock refine the
+  // exact resolution. This mirrors ordinary compile while keeping malformed
+  // or missing-lock reporting out of the compiler-failure path above.
   const lockfile = await readAndValidateLockfile(rootDir, issues);
   const lockfileV2 = lockfile ? toLockfileV2View(lockfile) : undefined;
+  const compileResult = lockfileV2?.modelPolicy
+    ? compileProfile({
+        profile: profileResult.profile,
+        previousModelPolicy: lockfileV2.modelPolicy,
+      })
+    : baselineCompile;
+  if (!compileResult.ok) {
+    appendCompileIssues(compileResult);
+    return toResult(issues);
+  }
 
-  await checkRegionFiles(rootDir, compileResult.files, lockfileV2, issues);
+  // Unlike the compiler's text outputs, this narrow project-local Tabnine
+  // settings artifact is planned by the CLI ownership layer. Add it to
+  // Doctor's expected generated set only when the *current* primary-role
+  // profile override requests it and the lock records it as generated-owned.
+  // Its bytes are still derived from the current profile value, so a changed
+  // override remains visible as lock/output drift rather than being accepted
+  // merely because an old lock entry happened to exist.
+  const generatedFiles = [
+    ...compileResult.files,
+    ...collectExpectedTabnineModelSettings(profileResult.profile, lockfileV2),
+  ];
+
+  await checkGeneratedArtifactsExist(rootDir, generatedFiles, issues);
+  await checkGeneratedArtifactSecurity(rootDir, generatedFiles, issues);
+  await checkSkillFiles(rootDir, issues);
+  await checkSkillPackArtifacts(rootDir, generatedFiles, issues);
+  await checkLoopSkillStructure(rootDir, generatedFiles, issues);
+  await checkSemanticWarnings(rootDir, generatedFiles, issues);
+  await checkGitignoreSecretHygiene(rootDir, issues);
+
+  await checkRegionFiles(rootDir, generatedFiles, lockfileV2, issues);
 
   if (lockfileV2) {
     await checkLockfileDrift({
       rootDir,
       profileBytes: profileBytes.bytes,
       templates: compileResult.templates,
-      files: compileResult.files,
+      files: generatedFiles,
       lockfile: lockfileV2,
       issues,
     });
@@ -220,6 +254,47 @@ export async function runDoctor(
   await checkRuntimeArtifactStructure(rootDir, issues);
 
   return toResult(issues);
+}
+
+/**
+ * The normal compiler does not own `.tabnine/agent/settings.json`: the CLI
+ * applies that one write only after ownership preflight. Doctor still needs
+ * to validate a settings file that a prior CLI run deliberately recorded as
+ * generated-owned. Reconstruct the same reviewed bytes from the current
+ * primary-role exact override, but never infer ownership from an unowned file
+ * or an old lock entry alone.
+ */
+function collectExpectedTabnineModelSettings(
+  profile: AiProfile,
+  lockfile: AiProfileLockV2 | undefined,
+): GeneratedFile[] {
+  const model =
+    profile.subagentPolicy?.roles?.[MODEL_POLICY_PRIMARY_ROLE]?.overrides
+      ?.tabnine?.model;
+  if (model === undefined || lockfile === undefined) return [];
+
+  const lockedOutput = lockfile.outputs.find(
+    (output) =>
+      output.path === ".tabnine/agent/settings.json" &&
+      output.ownership === "generated-owned",
+  );
+  if (lockedOutput === undefined) return [];
+
+  const plan = planTabnineModelSettingsWrite(model, "generated-owned");
+  if (plan.action !== "write") return [];
+  const bytes = Buffer.from(plan.bytes, "utf8");
+  return [
+    {
+      path: lockedOutput.path,
+      // Lock output targets are intentionally wider than CompilerTargetId for
+      // this CLI-owned Tabnine artifact; preserving its recorded target here
+      // lets the generic lock comparator validate the actual published record.
+      target: lockedOutput.target as GeneratedFile["target"],
+      templateId: lockedOutput.templateId,
+      bytes,
+      sha256: sha256Hex(bytes),
+    },
+  ];
 }
 
 // Phase 24 (I5, D1): informational-only structural notes for runtime workflow

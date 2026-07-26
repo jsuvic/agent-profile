@@ -3,12 +3,16 @@
 //
 // Phase 31.5 I9: published model-selection journey (bounded slices).
 //
-// This file proves four of I9's acceptance-criteria bullets from clean
-// packed workspace artifacts:
-//   1. Package contents: the packed @agent-profile/core, @agent-profile/compiler,
-//      and @agent-profile/doctor tarballs include their real model-policy
-//      runtime assets, and none of the three tarballs contain a test-only
-//      model-probe/catalog fixture path.
+// This file proves I9's published journey from clean packed workspace
+// artifacts:
+//   1. Package contents: every internal runtime dependency declared by the
+//      packed CLI (including @agent-profile/web) is rebuilt, packed,
+//      extracted, and resolved in isolation. The package assertions cover the
+//      CLI/wrapper README assets, schema, web server entry, model-policy
+//      runtime assets, and absence of test-only probe/catalog fixtures.
+//      Packed `--help` and scoped phase-document link checks cover the public
+//      CLI and documentation surfaces without claiming that all docs ship in
+//      npm tarballs.
 //   2. Role-aware default via packed `init`: the packed CLI's non-interactive
 //      (scripted-prompt) init wizard (a) resolves the exact per-role/per-client
 //      model/effort/status TABLE DATA for the recommended `role-aware` preset
@@ -87,21 +91,54 @@
 //      (preview before confirmation) and again in the final stdout, start
 //      zero processes, and use the STRICT withFsWriteSentinel form.
 //
-// Every other I9 acceptance-criteria bullet (Tabnine's ownership-aware
-// settings-file WRITE path -- absent and generated-owned reaching a real
-// write, unowned staying preserved/advisory -- compile lock reuse, upgrade
-// retain/adopt, offline Doctor, the full published-asset inventory, the final
-// spec-to-test matrix document, and release-notes/documentation updates) is
-// intentionally left for a later cycle -- see
-// docs/specs/phase-31.5/issues/009-published-model-journey.md and this
-// cycle's ledger entry.
+//   6. Tabnine ownership-aware settings-file WRITE path (cycle 4): three
+//      further subtests of the same build-and-pack run CONFIRM the write plan
+//      (`confirmWrite: true`), so the packed CLI genuinely commits to disk
+//      instead of declining, and cover all three ownership classifications
+//      `classifyTabnineSettingsOwnership` (apps/cli/src/compile-plan.ts) can
+//      produce:
+//        - `absent`   -> a real `.tabnine/agent/settings.json` is created,
+//                        byte-for-byte equal to the PACKED compiler's own
+//                        `planTabnineModelSettingsWrite(...).bytes`, carrying
+//                        only the write-safe property and never the
+//                        field-observed-but-unverified `model.name` shape, and
+//                        `ai-profile.lock` records it as a generated-owned
+//                        output whose recorded sha256 matches the bytes on
+//                        disk.
+//        - `generated-owned` -> starting from the artifacts the `absent` run
+//                        ACTUALLY produced (copied, not fabricated; see
+//                        createGeneratedOwnedFixtureFrom for exactly which
+//                        user state that models and what is asserted about the
+//                        precondition), a different requested model rewrites
+//                        the same file and updates the lock record with it.
+//        - `unowned`  -> a pre-existing settings file the lock does not record
+//                        is preserved BYTE-FOR-BYTE, no lock record ever
+//                        claims ownership of it, and the packed CLI renders
+//                        the advisory guidance instead (the guidance string is
+//                        read from the packed compiler's own
+//                        TABNINE_ADVISORY_GUIDANCE export, not hard-coded).
+//      All three run inside `withRuntimeSentinels` with the packed `import()`
+//      inside the guard, use a fresh fixture directory, assert the
+//      preview-before-confirmation line the same way the cycle-3 scenarios do
+//      (the write plan is printed BEFORE `confirmWritePlan` is called -- see
+//      runInitWizard in apps/cli/src/wizard.ts -- so that snapshot stays
+//      meaningful when the answer is `true`), and take a repository-scoped
+//      `filesystemMutations` allowance that is AUDITED rather than merely
+//      permitted (see assertRepositoryMutationsAreAccountedFor: every allowed
+//      mutation must be reconcilable with a real before/after difference on
+//      disk).
+//
+// The final continuation covers ordinary compile lock reuse, explicit
+// retain/adopt, and offline Doctor. The accompanying final matrix and release
+// note record the broader focused-test and static-only evidence boundaries.
 
 import assert from "node:assert/strict";
 import childProcess, { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
-import { syncBuiltinESMExports } from "node:module";
+import { createRequire, syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -110,13 +147,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(import.meta.dirname, "..", "..");
 
-// Same six packed workspaces as the Phase 31 published journey, plus
-// @agent-profile/scanner (a real runtime dependency of the packed CLI's own
-// manifest -- see computeRuntimeDependencyGraph below, which needs its
-// packed package.json to derive the runtime dependency graph instead of
-// hard-coding it). @agent-profile/web is intentionally never built, packed,
-// or extracted here -- see assertWebDependencyVersionMatches below for the
-// narrower, disclosed partial check this file does perform on it instead.
+// Every published workspace reachable from the CLI's own runtime dependency
+// graph, including the lazily resolved SvelteKit server package. The packed
+// graph below is derived from the CLI tarball's package.json rather than this
+// list, but every potential internal dependency must be built and packed so a
+// declared edge can be extracted into the isolated consumer fixture.
 const workspaces = [
   "agent-profile",
   "@agent-profile/cli",
@@ -125,27 +160,41 @@ const workspaces = [
   "@agent-profile/doctor",
   "@agent-profile/scanner",
   "@agent-profile/schemas",
+  "@agent-profile/web",
 ];
 const buildWorkspaces = [
   "@agent-profile/core",
   "@agent-profile/compiler",
   "@agent-profile/doctor",
   "@agent-profile/scanner",
+  "@agent-profile/web",
   "@agent-profile/cli",
 ];
 
-// Directory (relative to repo root) each buildWorkspaces entry's own build
-// script writes its `dist/` output into -- used below to clean stale
-// artifacts before rebuilding. Only covers the workspaces actually built by
-// this file: @agent-profile/schemas ships tracked source (no build step, no
-// `dist/`) and the `agent-profile` wrapper package has no build step either,
-// so neither belongs here.
-const buildWorkspaceDirectories = {
-  "@agent-profile/cli": path.join("apps", "cli"),
-  "@agent-profile/core": path.join("packages", "core"),
-  "@agent-profile/compiler": path.join("packages", "compiler"),
-  "@agent-profile/doctor": path.join("packages", "doctor"),
-  "@agent-profile/scanner": path.join("packages", "scanner"),
+// Build output is cleared before each pack. The TypeScript workspaces use
+// `dist` plus tsbuildinfo; SvelteKit emits the separate `build` directory.
+const buildWorkspaceOutputs = {
+  "@agent-profile/cli": { directory: path.join("apps", "cli"), output: "dist" },
+  "@agent-profile/core": {
+    directory: path.join("packages", "core"),
+    output: "dist",
+  },
+  "@agent-profile/compiler": {
+    directory: path.join("packages", "compiler"),
+    output: "dist",
+  },
+  "@agent-profile/doctor": {
+    directory: path.join("packages", "doctor"),
+    output: "dist",
+  },
+  "@agent-profile/scanner": {
+    directory: path.join("packages", "scanner"),
+    output: "dist",
+  },
+  "@agent-profile/web": {
+    directory: path.join("apps", "web"),
+    output: "build",
+  },
 };
 
 function runNpm(args) {
@@ -203,14 +252,14 @@ function runNpm(args) {
 // problem this fix exists to solve). The buildinfo file must be removed
 // alongside dist/ so `tsc -b` performs a genuine full rebuild.
 function cleanBuildOutput(workspace) {
-  const directory = buildWorkspaceDirectories[workspace];
+  const workspaceOutput = buildWorkspaceOutputs[workspace];
   assert.ok(
-    directory,
+    workspaceOutput,
     `no known build output directory for workspace ${workspace} -- add it ` +
-      "to buildWorkspaceDirectories above",
+      "to buildWorkspaceOutputs above",
   );
-  const workspacePath = path.join(root, directory);
-  fs.rmSync(path.join(workspacePath, "dist"), {
+  const workspacePath = path.join(root, workspaceOutput.directory);
+  fs.rmSync(path.join(workspacePath, workspaceOutput.output), {
     recursive: true,
     force: true,
   });
@@ -374,11 +423,8 @@ function satisfiesDeclaredVersionRange(declaredRange, actualVersion) {
 // PUBLISHED package.json, instead of hard-coding it: starting from
 // @agent-profile/cli, reads each packed tarball's own package.json
 // (readPackedPackageJson, not the source-tree package.json) and recurses
-// into every @agent-profile/* dependency it declares, except
-// @agent-profile/web (apps/cli/bundle.mjs deliberately keeps it external and
-// resolves it at runtime via require.resolve for command paths this file
-// does not exercise; it is never built or packed here). Every other
-// dependency name encountered is collected as a real npm runtime dependency
+// into every @agent-profile/* dependency it declares. Every dependency name
+// encountered is collected as a real npm runtime dependency
 // that must be linked into the node_modules graph below. This makes a future
 // manifest regression -- an omitted or misdeclared dependency in any packed
 // workspace reachable from the CLI -- surface as a genuine "Cannot find
@@ -419,7 +465,6 @@ function computeRuntimeDependencyGraph(packed) {
     for (const [dependencyName, declaredVersion] of Object.entries(
       manifest.dependencies ?? {},
     )) {
-      if (dependencyName === "@agent-profile/web") continue;
       if (dependencyName.startsWith("@agent-profile/")) {
         queue.push(dependencyName);
         internalDependencyEdges.push({
@@ -623,12 +668,12 @@ const fileHandleMutatingMethods = [
 // seam for injecting a fake `ModelProbeTempDirProvider`. Rather than dropping
 // the sentinel for that scenario, the predicate narrows the claim honestly
 // from "zero filesystem mutations anywhere" to "zero filesystem mutations
-// anywhere except inside the probe's own `agent-profile-probe-*` temporary
-// directories" (see isProbeTempDirectoryTarget) -- the fixture repository, this
-// checkout, the extracted node_modules graph, and the user's home/config
-// locations all still fail. Calls the predicate returns `true` for
-// are excluded from the failure list; every other call is still recorded and
-// still fails the assertion. Omitting `options` preserves the original strict
+// anywhere except removal of the exact per-invocation temporary cwd that the
+// scenario registered" (see createProbeTempDirectoryAllowance) -- the fixture
+// repository, this checkout, the extracted node_modules graph, every other
+// temporary directory, and the user's home/config locations all still fail.
+// Calls the predicate returns `true` for are excluded from the failure list;
+// every other call is still recorded and still fails the assertion. Omitting `options` preserves the original strict
 // behavior exactly, which is what the role-aware scenario above and the
 // probe-decline scenario below both use.
 async function withFsWriteSentinel(action, options) {
@@ -785,7 +830,7 @@ const SENTINEL_FS_READ_METHODS = [
 //     against apps/cli/src/wizard.ts, not assumed), so installation is as tight
 //     a bracket on the start of probe execution as the prompt seam allows.
 //   - UNINSTALLED when `confirmWritePlan` is invoked, and unconditionally again
-//     in runPackedInitScenario's `finally` so a throw cannot leave the process
+//     in runPackedCliScenario's `finally` so a throw cannot leave the process
 //     instrumented.
 //   - NOT COVERED, and deliberately so: everything before the consent prompt.
 //     `init`'s stack detection legitimately reads this very fixture repository
@@ -997,78 +1042,40 @@ function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Disclosed PARTIAL mitigation for "the packed graph never includes
-// @agent-profile/web" (this file's own workspaces/buildWorkspaces arrays
-// deliberately exclude it -- see the comment on `workspaces` above).
-//
-// A prior review round asked this file to build, pack, and extract
-// @agent-profile/web into the same runtime dependency graph as every other
-// declared @agent-profile/cli dependency, so a stale/missing/unusable
-// version of it would be caught the same way the other internal
-// dependencies are (via computeRuntimeDependencyGraph's exact-version
-// equality check). This file intentionally does NOT do that, for three
-// reasons:
-//   1. apps/cli/bundle.mjs's own comment documents that @agent-profile/web
-//      (the SvelteKit UI server) is kept external on purpose and is a
-//      separate build artifact, resolved at runtime via `require.resolve`
-//      ONLY for the `ui`/web-launch subcommand. Unlike core/compiler/doctor/
-//      scanner (which esbuild inlines via `alias`, so every code path
-//      through the bundled dist/index.js needs them unconditionally),
-//      @agent-profile/web is a lazy, conditional dependency.
-//   2. This file's only packed scenario is `init` (see the role-aware
-//      scenario below), which never touches the `ui` subcommand and
-//      therefore never exercises this dependency edge at all.
-//   3. The already-shipped sibling file
-//      scripts/release/phase31-published-journey.test.mjs has this exact
-//      same exclusion in its own `workspaces` array, and was never flagged
-//      for it.
-// Fully building/packing/extracting a SvelteKit app (a meaningfully heavier
-// build than any other workspace here) purely to validate a dependency edge
-// that nothing in this test's actual scenario exercises would be a
-// disproportionate scope expansion for a review-fix round.
-//
-// What this DOES check, cheaply, as a genuine (if narrower) sanity check: the
-// version of @agent-profile/web declared in apps/cli/package.json's
-// `dependencies` exactly matches @agent-profile/web's own `version` field, as
-// read directly from the SOURCE tree (no build or pack required for this
-// specific check -- it is a manifest-consistency check, not full
-// packed-artifact validation). This catches the cheap, common failure mode
-// (a stale version bump left behind in one manifest but not the other)
-// without paying for a full SvelteKit build. A future cycle that actually
-// tests the `ui` subcommand would need to build/pack/extract
-// @agent-profile/web for real, the way this file already does for every
-// other internal dependency.
-function assertWebDependencyVersionMatches() {
-  const cliManifest = JSON.parse(
-    fs.readFileSync(path.join(root, "apps", "cli", "package.json"), "utf8"),
-  );
-  const webManifest = JSON.parse(
-    fs.readFileSync(path.join(root, "apps", "web", "package.json"), "utf8"),
-  );
-  const declared = cliManifest.dependencies?.["@agent-profile/web"];
-  assert.ok(
-    declared,
-    "apps/cli/package.json must declare a @agent-profile/web dependency " +
-      "version for this cheap sanity check to validate",
-  );
-  assert.equal(
-    declared,
-    webManifest.version,
-    "apps/cli/package.json declares @agent-profile/web@" +
-      `${declared}, but apps/web/package.json's own version is ` +
-      `${webManifest.version} -- an actual consumer install of the packed ` +
-      "CLI would resolve a different @agent-profile/web release than the " +
-      "one actually built alongside it",
-  );
+// Documentation is source-tree material rather than a package runtime asset.
+// Validate the phase's own relative Markdown links explicitly, instead of
+// overstating what `verify:pack` proves about documentation links.
+function assertRelativeMarkdownLinksResolve(documentPaths) {
+  for (const documentPath of documentPaths) {
+    const document = fs.readFileSync(documentPath, "utf8");
+    for (const match of document.matchAll(/\[[^\]]*\]\(([^)]+)\)/gu)) {
+      const link = match[1] ?? "";
+      const target = link.split("#", 1)[0] ?? "";
+      if (target === "" || /^(?:https?:|mailto:|data:)/iu.test(target)) {
+        continue;
+      }
+      assert.ok(
+        fs.existsSync(path.resolve(path.dirname(documentPath), target)),
+        `${path.relative(root, documentPath)} links to missing local target ${target}`,
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Probe-scenario helpers (Phase 31.5 I9, cycle 2: probe decline and one
-// normalized consented probe path against the packed CLI).
+// Shared packed-scenario helpers. Introduced in cycle 2 for the two probe
+// scenarios, then reused unchanged by cycle 3's Tabnine manual scenarios and
+// cycle 4's Tabnine settings-file write scenarios -- which is why the
+// probe-flavoured names they were born with (`createScenarioFixtureRepository`,
+// `createScenarioPrompts`, and this banner) were renamed in cycle 4: they
+// describe every packed CLI scenario in this file, not just the probe ones.
+// The genuinely probe-specific helpers (createRepositoryReadSentinel,
+// createProbeTempDirectoryAllowance, the per-invocation assertions) keep their
+// probe names, because those really are probe-only.
 // ---------------------------------------------------------------------------
 
 // A unique, inert, secret-free string seeded into the CONTENTS of the probe
-// fixture repository's own files (see createProbeFixtureRepository below), so
+// fixture repository's own files (see createScenarioFixtureRepository below), so
 // the consented-probe scenario can assert that no probe invocation carries
 // repository CONTENT -- as opposed to a repository PATH, which is all
 // `forbiddenPathFragments` can catch. That distinction is the point: a
@@ -1096,12 +1103,19 @@ function assertWebDependencyVersionMatches() {
 // seeding it can never perturb probe classification if it ever did travel.
 const PROBE_FIXTURE_SOURCE_MARKER = "zzmarker-fixture-vulpine-31459-zz";
 
-// Minimal TypeScript-shaped fixture repository, matching the shape the
-// role-aware scenario below builds inline (a package.json with a typescript
-// devDependency plus a tsconfig.json), so the wizard detects a real language
-// and reaches the model/probe steps. Each probe scenario gets its OWN fresh
-// directory under the shared `temporary` root -- never the role-aware
-// scenario's, so no scenario can observe another's on-disk state.
+// Minimal TypeScript-shaped fixture repository (a package.json with a
+// typescript devDependency plus a tsconfig.json), so the wizard detects a real
+// language and reaches the model/probe steps. Every scenario in this file gets
+// its OWN fresh directory under the shared `temporary` root, so no scenario can
+// observe another's on-disk state.
+//
+// The directory must NOT already exist. `mkdirSync(..., {recursive: true})`
+// happily succeeds on an existing directory and the writes below would then
+// merely overwrite part of it, so two scenarios that accidentally shared a
+// `directoryName` would silently share one fixture -- and a write scenario
+// (cycle 4) would be inspecting another scenario's committed output while
+// believing it started clean. Failing loudly on collision is the only way that
+// mistake stays visible.
 //
 // PROBE_FIXTURE_SOURCE_MARKER is seeded into two different kinds of file
 // content -- an extra inert manifest field (a file the wizard demonstrably
@@ -1111,7 +1125,22 @@ const PROBE_FIXTURE_SOURCE_MARKER = "zzmarker-fixture-vulpine-31459-zz";
 // reading both files back off disk: without that check, a silently failed or
 // later-refactored seed would turn every downstream "the marker never
 // appears" assertion into a vacuous pass.
-function createProbeFixtureRepository(directory) {
+// Collision guard shared by every fixture-repository builder in this file. See
+// the doc comment on createScenarioFixtureRepository for why a silently shared
+// fixture directory is the failure mode worth failing loudly on.
+function assertFixtureDirectoryIsFresh(directory) {
+  assert.equal(
+    fs.existsSync(directory),
+    false,
+    `fixture directory ${directory} already exists -- two scenarios are ` +
+      "sharing one `directoryName`, so they would silently share a fixture " +
+      "(and a write scenario would start from another scenario's committed " +
+      "output). Give each scenario its own name",
+  );
+}
+
+function createScenarioFixtureRepository(directory) {
+  assertFixtureDirectoryIsFresh(directory);
   fs.mkdirSync(directory, { recursive: true });
   const manifestPath = path.join(directory, "package.json");
   const sourcePath = path.join(directory, "src", "probe-fixture-marker.ts");
@@ -1408,14 +1437,12 @@ function classifyFsPathArgument(target) {
   };
 }
 
-// True only for the probe orchestrator's OWN temporary working directory (or
-// something inside it): a path under the OS temp directory whose first segment
-// below that directory starts with `agent-profile-probe-`, the mkdtemp prefix
-// used by createNodeModelProbeTempDirProvider in apps/cli/src/model-probe.ts.
-// Source of truth for that prefix is that function; it is a hard-coded copy
-// here for the same reason as EXPECTED_MODEL_PROBE_FIXED_PROMPT above (nothing
-// in the packed graph exports it). Used to keep the consented scenario's
-// filesystem allowance as narrow as its disclosure claims.
+// Structural validation for the probe orchestrator's own temporary working
+// directory: a path under the OS temp directory whose first segment below that
+// directory starts with `agent-profile-probe-`, the mkdtemp prefix used by
+// createNodeModelProbeTempDirProvider in apps/cli/src/model-probe.ts. The
+// allowance below additionally requires an exact per-invocation cwd; this
+// helper alone is deliberately insufficient authority for a mutation.
 const PROBE_TEMP_DIR_PREFIX = "agent-profile-probe-";
 
 // Defensive against the same argument shapes classifyFsPathArgument exists for:
@@ -1446,15 +1473,23 @@ function isProbeTempDirectoryTarget(target) {
   return firstSegment.startsWith(PROBE_TEMP_DIR_PREFIX);
 }
 
-// Scripted prompts for this file's subtest scenarios, deliberately the same
-// headless `promptsOverride` seam and the same "decline the final write plan"
-// shape as the role-aware scenario above, differing only in the selected
-// clients, the `confirmModelProbe` answer, and whether the optional
-// progressive-disclosure advanced-override step is offered at all.
+// Scripted prompts for every scenario in this file, driving the headless
+// `promptsOverride` seam. Scenarios differ only in the selected clients, the
+// `confirmModelProbe` answer, the `confirmWritePlan` answer, and whether the
+// optional progressive-disclosure advanced-override step is offered at all.
 // `readStdout` is used to snapshot stdout at the exact moment the write-plan
 // confirmation is requested, so the summary assertions prove the line rendered
 // BEFORE confirmation (and thus before any write could have committed), not
 // merely somewhere in the final accumulated output.
+//
+// `confirmWrite` (cycle 4, default `false`) is the answer `confirmWritePlan`
+// returns. `state.stdoutAtConfirmation`'s "preview before confirmation"
+// meaning survives `confirmWrite: true` unchanged, and that is a property of
+// the SHIPPED wizard rather than of this harness: `runInitWizard`
+// (apps/cli/src/wizard.ts) renders the whole plan via `formatWizardPlan` and
+// only then awaits `prompts.confirmWritePlan`, and nothing is committed until
+// that promise resolves. So the snapshot taken inside this callback is still
+// strictly-before-any-write, whichever answer is about to be returned.
 //
 // `respondToAdvancedOverrides` (cycle 3) is how a scenario reaches
 // `ModelAdvancedOverridePrompt`. It is deliberately a FUNCTION-OR-ABSENT
@@ -1476,9 +1511,10 @@ function isProbeTempDirectoryTarget(target) {
 // at `confirmWritePlan`; those two prompts are the only seams this file has
 // that bracket probe execution. See createRepositoryReadSentinel for the span
 // that covers and the two spans it does not.
-function createProbeScenarioPrompts({
+function createScenarioPrompts({
   clients,
   probeConsent,
+  confirmWrite,
   readStdout,
   respondToAdvancedOverrides,
   modelPreset,
@@ -1515,11 +1551,17 @@ function createProbeScenarioPrompts({
     async confirmWritePlan() {
       readSentinel?.uninstall();
       state.stdoutAtConfirmation = readStdout();
-      return false;
+      return confirmWrite;
     },
-    async selectModelPreset({ default: def }) {
+    async selectModelPreset({ default: def, tables }) {
       const selected = modelPreset ?? def;
-      calls.push({ kind: "selectModelPreset", default: def, selected });
+      // `tables` is recorded UNCONDITIONALLY (cycle 4). The role-aware
+      // scenario's `assert.deepEqual` against the packed compiler's own
+      // `buildModelPolicyTargetTable` output is the only assertion in this file
+      // that covers every non-primary role, and it needs the tables object this
+      // factory previously dropped -- which was the sole reason that scenario
+      // still hand-rolled its own prompts.
+      calls.push({ kind: "selectModelPreset", default: def, selected, tables });
       return selected;
     },
     async confirmModelProbe({ default: def, calls: plannedCalls }) {
@@ -1548,14 +1590,29 @@ function createProbeScenarioPrompts({
 // Shared run scaffolding for every packed `init` scenario in this file's
 // subtests (extracted in cycle 3 from the two probe subtests, which had
 // copy-pasted the whole thing; cycle 2's ledger entry promised this extraction
-// BEFORE any further scenario was added here). Pure refactor: it performs
-// exactly the steps both subtests already performed, in the same order --
-// snapshot the fixture repository, build the scripted prompts, install the
-// runtime sentinels, install the filesystem-write sentinel, dynamically
-// `import()` the packed CLI entry point INSIDE both guards (so a
-// module-initialization side effect cannot bypass them), and call
-// `runCli(["init", "--root", repository], ...)` with an injected fake probe
-// runner that records every invocation.
+// BEFORE any further scenario was added here). It performs exactly the steps
+// those subtests already performed, in the same order -- snapshot the fixture
+// repository, build the scripted prompts, install the runtime sentinels,
+// install the filesystem-write sentinel, dynamically `import()` the packed CLI
+// entry point INSIDE both guards (so a module-initialization side effect cannot
+// bypass them), and call `runCli(args, ...)` with an injected fake probe runner
+// that records every invocation.
+//
+// SUBTESTS USING THIS HARNESS MUST STAY SEQUENTIAL (`await t.test(...)`, never
+// concurrent). Both sentinels it installs patch PROCESS-GLOBAL module state --
+// `globalThis.fetch`, the `node:child_process`/`node:net`/`node:http(s)`
+// function properties, and `node:fs`/`node:fs/promises` (plus
+// `syncBuiltinESMExports()`, which rebinds every already-linked ESM named
+// import in the process). Two overlapping runs would restore each other's
+// originals out of order, silently leaving the process either uninstrumented
+// (every claim in this file then passes vacuously) or permanently instrumented
+// for the rest of the suite. `environmentOverrides` has the same
+// process-global hazard.
+//
+// `args` (default `["init", "--root", repository]`) is the packed CLI argv.
+// It is an option because the remaining I9 scenarios (compile, upgrade,
+// doctor) are not `init` invocations; every scenario in this file today still
+// takes the default.
 //
 // `filesystemMutations` is REQUIRED and has no default, so each call site must
 // state, in one visible word, which of the two claims it is making:
@@ -1571,19 +1628,33 @@ function createProbeScenarioPrompts({
 // A missing/invalid value fails loudly rather than silently defaulting to the
 // weaker claim.
 //
+// `confirmWrite` (default `false`) is the answer `confirmWritePlan` returns.
+// Every scenario before cycle 4 declined, so `false` preserves their behavior
+// exactly; the cycle-4 settings-file write scenarios pass `true` so the packed
+// CLI genuinely commits. See createScenarioPrompts for why the
+// preview-before-confirmation snapshot stays meaningful either way.
+//
 // `recordInvocation` lets a scenario capture state that only exists AT
 // invocation time (the consented-probe scenario reads the probe's temporary
 // working directory listing, which the orchestrator removes again before the
 // run returns); it defaults to recording the invocation object unchanged.
+//
 // `environmentOverrides` sets ambient environment keys for the duration of the
-// guarded action only and always removes them in a `finally`, so a scenario
-// that needs to prove an ambient key is NOT forwarded cannot leak that key
-// into any other scenario.
-async function runPackedInitScenario({
+// guarded action only, with SAVE-AND-RESTORE semantics: a key that was already
+// present in the ambient environment gets its original value back, and a key
+// that was absent is deleted again. (Cycle 4 fix: the `finally` unconditionally
+// `delete`d every overridden key, so a scenario overriding a pre-existing
+// ambient key would have silently removed the real value for the remainder of
+// the process -- affecting every later test in the same run, not just this
+// file.) Either way a scenario that needs to prove an ambient key is NOT
+// forwarded cannot leak that key into any other scenario.
+async function runPackedCliScenario({
   packedCliUrl,
   repository,
+  args,
   clients,
   probeConsent = false,
+  confirmWrite = false,
   probeResult = PROBE_SUCCESS_PROCESS_RESULT,
   recordInvocation = (invocation) => invocation,
   environmentOverrides,
@@ -1595,15 +1666,17 @@ async function runPackedInitScenario({
   assert.ok(
     filesystemMutations === "strict" ||
       typeof filesystemMutations?.allowMutation === "function",
-    'runPackedInitScenario requires an explicit `filesystemMutations`: either "strict" ' +
+    'runPackedCliScenario requires an explicit `filesystemMutations`: either "strict" ' +
       "or { allowMutation: (method, target) => boolean } -- it is never " +
       "defaulted, so every scenario states which filesystem claim it is making",
   );
+  const cliArgs = args ?? ["init", "--root", repository];
   let stdout = "";
   let stderr = "";
-  const { prompts, calls, state } = createProbeScenarioPrompts({
+  const { prompts, calls, state } = createScenarioPrompts({
     clients,
     probeConsent,
+    confirmWrite,
     readStdout: () => stdout,
     respondToAdvancedOverrides,
     modelPreset,
@@ -1622,14 +1695,21 @@ async function runPackedInitScenario({
     exitCode = await withRuntimeSentinels(() =>
       withFsWriteSentinel(
         async () => {
+          const savedEnvironment = new Map();
           for (const [key, value] of Object.entries(
             environmentOverrides ?? {},
           )) {
+            savedEnvironment.set(
+              key,
+              Object.prototype.hasOwnProperty.call(process.env, key)
+                ? process.env[key]
+                : undefined,
+            );
             process.env[key] = value;
           }
           try {
             const { runCli } = await import(packedCliUrl);
-            return await runCli(["init", "--root", repository], {
+            return await runCli(cliArgs, {
               io: {
                 stdout(text) {
                   stdout += text;
@@ -1653,8 +1733,9 @@ async function runPackedInitScenario({
               },
             });
           } finally {
-            for (const key of Object.keys(environmentOverrides ?? {})) {
-              delete process.env[key];
+            for (const [key, saved] of savedEnvironment) {
+              if (saved === undefined) delete process.env[key];
+              else process.env[key] = saved;
             }
           }
         },
@@ -1691,7 +1772,7 @@ async function runPackedInitScenario({
 //
 // Cycle 2 review round 3 then made one further DELETION, recorded here rather
 // than buried in the helper: the per-value repository-path assertion inside
-// assertProbeEnvironmentIsAllowlisted (and with it the PATH/PATHEXT exemption
+// assertProbeEnvironmentIsAllowlistedAndVerbatim (and with it the PATH/PATHEXT exemption
 // that had tried to patch around the same problem too narrowly). It was not
 // evidence about the product and could fail spuriously on a legitimate
 // environment; the helper's own doc comment states exactly which pair of
@@ -1705,11 +1786,27 @@ function normalizePathForComparison(value) {
   return value.replaceAll("\\", "/").toLowerCase();
 }
 
-function assertProbeInvocationIsSourceFree(
+// Renamed in cycle 4 from `assertProbeInvocationIsIsolatedAndSourceFree`: "source-free"
+// undersold it, since it also asserts the pinned per-client non-persistence/
+// isolation argv, the isolated/empty/outside-the-repository working directory,
+// and the bounded timeout/output shape. No assertion changed.
+//
+// `forbiddenPathFragments` used to be a second parameter that BOTH call sites
+// computed identically as `[normalizePathForComparison(<that scenario's
+// repository>), normalizePathForComparison(root)]`. It is derived from
+// `repository` here instead, so the two inputs can no longer disagree (an
+// earlier call site could have passed a repository and a fragment list for
+// DIFFERENT directories and the path check would have silently covered the
+// wrong tree). Same values, one source.
+function assertProbeInvocationIsIsolatedAndSourceFree(
   invocation,
   expected,
-  { label, forbiddenPathFragments, repository },
+  { label, repository },
 ) {
+  const forbiddenPathFragments = [
+    normalizePathForComparison(repository),
+    normalizePathForComparison(root),
+  ];
   const argv = [...invocation.args];
 
   // The exact model under test is passed as `--model <exact>`, so the
@@ -1839,7 +1936,12 @@ function assertProbeInvocationIsSourceFree(
   );
 }
 
-function assertProbeEnvironmentIsAllowlisted(invocation, { label }) {
+// Renamed in cycle 4 from `assertProbeEnvironmentIsAllowlisted`: the allowlist
+// membership check is only half of what it asserts -- every forwarded value
+// must also be byte-identical to the ambient value for that key, which is the
+// half that proves the product never SYNTHESIZES an environment value. No
+// assertion changed.
+function assertProbeEnvironmentIsAllowlistedAndVerbatim(invocation, { label }) {
   // Environment restricted to the allowlist rather than the ambient
   // environment. The real, falsifiable contract is the PAIR asserted in the
   // loop below: every forwarded key is in the allowlist (case-insensitively,
@@ -1863,13 +1965,13 @@ function assertProbeEnvironmentIsAllowlisted(invocation, { label }) {
   // or `XDG_CONFIG_HOME` inside the checkout, all of which are allowlisted and
   // forwarded on purpose. The paths the probe ITSELF chooses are covered where
   // they are genuinely constructed by the product: argv and cwd, in
-  // assertProbeInvocationIsSourceFree above.
+  // assertProbeInvocationIsIsolatedAndSourceFree above.
   //
   // The loop also states the seeded-fixture-marker content claim for the
   // environment, but see the honesty note at that assertion: with today's
   // ordering it is subsumed by the verbatim-equality check and is not counted
   // as independent evidence. The falsifiable content evidence lives on the
-  // argv side, in assertProbeInvocationIsSourceFree.
+  // argv side, in assertProbeInvocationIsIsolatedAndSourceFree.
   //
   // See the oracle note above EXPECTED_MODEL_PROBE_ENV_ALLOWLIST for why that
   // list is a documented hard-coded copy here.
@@ -1917,22 +2019,59 @@ function assertProbeEnvironmentIsAllowlisted(invocation, { label }) {
 // so a call site cannot take the allowance without also taking the audit.
 // withFsWriteSentinel DISCARDS every call its `allowMutation` predicate
 // approves, so an unrecorded allowance silently weakens the claim from "zero
-// unexpected filesystem mutations" to "zero outside the probe temp
-// directories", and says nothing at all about what happened inside them: a
-// regression that persisted failed probe output or history into the temporary
-// cwd, or that failed to remove a later candidate's directory, would pass
-// unnoticed. Feed `mutations` to assertProbeTempDirectoriesWereCleanedUp below,
-// which is what turns the record back into an assertion.
+// unexpected filesystem mutations" to "zero outside registered probe cwds".
+// Registering each cwd before cleanup and auditing `mutations` below keeps that
+// exception limited to precisely one removal per candidate.
 function createProbeTempDirectoryAllowance() {
   const mutations = [];
+  const invocationCwds = new Set();
   return {
     mutations,
+    registerInvocation(invocation) {
+      const cwd = path.resolve(invocation.cwd);
+      assert.ok(
+        isProbeTempDirectoryTarget(cwd),
+        `probe invocation cwd must have the expected temporary-directory ` +
+          `shape before it can receive a cleanup allowance: ${cwd}`,
+      );
+      assert.equal(
+        invocationCwds.has(cwd),
+        false,
+        `a probe invocation reused temporary cwd ${cwd}; each invocation must ` +
+          "register its own fresh directory before cleanup is allowed",
+      );
+      invocationCwds.add(cwd);
+    },
     allowMutation: (method, target) => {
-      if (!isProbeTempDirectoryTarget(target)) return false;
-      mutations.push({ method, target });
+      const classified = classifyFsPathArgument(target);
+      if (classified.kind !== "path") return false;
+      const resolvedTarget = path.resolve(classified.path);
+      if (!invocationCwds.has(resolvedTarget)) return false;
+      mutations.push({ method, target: resolvedTarget });
       return true;
     },
   };
+}
+
+// Regression guard for the allowance boundary: another pre-existing directory
+// with the same public mkdtemp prefix is not this invocation's cwd and must
+// still be rejected. The sentinel therefore remains capable of catching a
+// product regression that writes probe output/history into an unrelated temp
+// directory.
+function assertProbeTempAllowanceRejectsForeignDirectory(allowance) {
+  const foreignDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), PROBE_TEMP_DIR_PREFIX),
+  );
+  try {
+    assert.equal(
+      allowance.allowMutation("rm", foreignDirectory),
+      false,
+      "the probe-temp mutation allowance must reject a different pre-existing " +
+        "directory that merely shares the mkdtemp prefix",
+    );
+  } finally {
+    fs.rmSync(foreignDirectory, { recursive: true, force: true });
+  }
 }
 
 // The audit half of createProbeTempDirectoryAllowance (extracted verbatim from
@@ -1999,6 +2138,320 @@ function assertProbeTempDirectoriesWereCleanedUp({
   }
 }
 
+// ---------------------------------------------------------------------------
+// The two assertion blocks every scenario in this file was repeating inline
+// (extracted in cycle 4; the role-aware, probe-decline and Tabnine-manual call
+// sites had three near-identical copies, and the consented-probe scenario a
+// fourth). Extraction only -- no assertion was added, removed, reordered, or
+// relaxed, and the failure messages are the originals with the scenario label
+// interpolated instead of hard-coded.
+// ---------------------------------------------------------------------------
+
+// "Rendered before confirmation, and survived to the final stdout."
+//
+// The first half is the load-bearing one: `state.stdoutAtConfirmation` is the
+// stdout captured INSIDE `prompts.confirmWritePlan`, i.e. strictly before the
+// packed CLI could commit anything (the shipped wizard prints the whole plan
+// and only then awaits that prompt). Asserting only against the final
+// accumulated stdout would not catch a regression that moved the preview to
+// AFTER the confirmation. The second half is the belt-and-braces check that the
+// same content also survives unmodified to the end.
+//
+// `expected` entries may be strings (substring match, the shape the probe and
+// Tabnine scenarios use) or RegExps (the shape the role-aware scenario's
+// derived model/effort/status patterns use). `forbidden` entries are asserted
+// ABSENT from the final stdout only, matching every existing call site.
+function assertRenderedBeforeAndAfterConfirmation({
+  state,
+  stdout,
+  expected,
+  forbidden = [],
+  label,
+}) {
+  assert.ok(
+    state.stdoutAtConfirmation !== undefined,
+    `prompts.confirmWritePlan must be invoked during the ${label} scenario`,
+  );
+  for (const [streamName, text] of [
+    ["stdout captured at write confirmation", state.stdoutAtConfirmation],
+    ["final stdout", stdout],
+  ]) {
+    for (const item of expected) {
+      if (item instanceof RegExp) {
+        assert.match(
+          text,
+          item,
+          `${label}: expected ${item} in the ${streamName}, got:\n${text}`,
+        );
+      } else {
+        assert.ok(
+          text.includes(item),
+          `${label}: expected ${JSON.stringify(item)} in the ${streamName}, ` +
+            `got:\n${text}`,
+        );
+      }
+    }
+  }
+  for (const item of forbidden) {
+    assert.ok(
+      !stdout.includes(item),
+      `${label}: the rendered summary must not also contain ` +
+        `${JSON.stringify(item)}, got:\n${stdout}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tabnine ownership-aware settings-file WRITE path helpers (cycle 4).
+// ---------------------------------------------------------------------------
+
+// Repository-relative paths this file inspects directly after a committed run.
+//
+// Both are documented hard-coded copies, for the same VERIFIED reason as
+// EXPECTED_MODEL_PROBE_FIXED_PROMPT above: `TABNINE_SETTINGS_PATH` is a
+// module-level const in apps/cli/src/compile-plan.ts that apps/cli/src/index.ts
+// does not re-export (the packed CLI's public surface is `runCli` plus
+// `CLI_VERSION`), and the lockfile filename is likewise not published as a
+// constant by any tarball in this file's dependency graph. What IS derived from
+// a published artifact is everything that matters about the file's CONTENT: the
+// exact bytes come from the packed compiler's own
+// `planTabnineModelSettingsWrite`, and the single write-safe property name from
+// its own `TABNINE_SETTINGS_WRITE_SAFE_PROPERTY` export.
+const TABNINE_SETTINGS_RELATIVE_PATH = ".tabnine/agent/settings.json";
+const LOCKFILE_RELATIVE_PATH = "ai-profile.lock";
+
+// Field-observed 2026-07-17 on a macOS Tabnine Enterprise CLI and recorded in
+// packages/compiler/src/model-policy-tabnine-adapter.ts as
+// TABNINE_SETTINGS_UNVERIFIED_ALTERNATE_PROPERTY: a documented-but-locally-
+// unverified alternate settings shape that the adapter states is NEVER
+// written. Unlike TABNINE_SETTINGS_WRITE_SAFE_PROPERTY, packages/compiler/src/
+// index.ts does not re-export it (checked, not assumed), so it is a hard-coded
+// copy here. Asserted absent from the real written bytes below, so "never
+// written" is a runtime fact at this seam rather than a source comment.
+const TABNINE_SETTINGS_UNVERIFIED_ALTERNATE_PROPERTY = "model.name";
+
+function sha256Hex(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+// The mutating node:fs/promises surfaces a committed `init` run is permitted to
+// use inside the fixture repository. `symlink` is deliberately ABSENT: nothing
+// in the shipped write path creates one, and a regression that did would be a
+// genuine path-safety concern, so it must fail this audit rather than be waved
+// through as "inside the repository".
+const ALLOWED_REPOSITORY_MUTATION_METHODS = new Set([
+  "writeFile",
+  "mkdir",
+  "rename",
+  "rm",
+  "unlink",
+  "copyFile",
+  "appendFile",
+  "chmod",
+  "chown",
+  "FileHandle.write",
+  "FileHandle.writev",
+  "FileHandle.writeFile",
+  "FileHandle.chmod",
+  "FileHandle.truncate",
+  "FileHandle.appendFile",
+  "FileHandle.datasync",
+]);
+
+// `writeTempBeside` (packages/compiler/src/write-plan.ts) and
+// `writeProfileAtomic` stage every atomic write as `<target>.tmp-<random hex>`
+// beside its target and rename it into place, so the raw sentinel record
+// contains temp paths that no longer exist by the time the audit runs. Mapping
+// a temp path back onto its target is what lets the audit reconcile mutations
+// against real before/after differences instead of giving up on them.
+function normalizeRepositoryMutationTarget(repository, target) {
+  return path
+    .relative(path.resolve(repository), path.resolve(target))
+    .replaceAll("\\", "/")
+    .replace(/\.tmp-[0-9a-f]+$/u, "");
+}
+
+// The committed-write counterpart of createProbeTempDirectoryAllowance, and
+// bundled with its record for the same reason: withFsWriteSentinel DISCARDS
+// every call its predicate approves, so an unrecorded allowance silently
+// weakens the claim from "zero unexpected filesystem mutations" to "zero
+// outside the fixture repository" and says nothing at all about what happened
+// INSIDE it -- which, for a scenario whose entire subject is what the packed
+// CLI writes into that repository, would be exactly the wrong thing to stop
+// looking at. Feed `mutations` to assertRepositoryMutationsAreAccountedFor
+// below, which is what turns the record back into an assertion.
+//
+// Anything outside the fixture repository -- this checkout, the extracted
+// node_modules graph, the OS temp directory, the user's home/config locations
+// -- still falls through to the sentinel's failure list, exactly as it does for
+// the declined-write scenarios.
+function createRepositoryWriteAllowance(repository) {
+  const mutations = [];
+  return {
+    mutations,
+    allowMutation: (method, target) => {
+      // Re-classified rather than trusting the caller, for the same reason
+      // isProbeTempDirectoryTarget re-classifies: a target shape this file
+      // cannot resolve to a path is answered `false` (not allowed), so it fails
+      // the sentinel instead of being credited to the repository.
+      const classified = classifyFsPathArgument(target);
+      if (classified.kind !== "path") return false;
+      let inside;
+      try {
+        inside = isInsideDirectory(classified.path, repository);
+      } catch {
+        return false;
+      }
+      if (!inside) return false;
+      mutations.push({ method, target: classified.path });
+      return true;
+    },
+  };
+}
+
+// The audit half of createRepositoryWriteAllowance. Three claims:
+//
+//   1. LIVENESS. At least one mutation was observed. An empty record would mean
+//      the allowance was dead permissiveness and the "the packed CLI really
+//      wrote" claim rests on nothing this sentinel saw.
+//   2. NO UNEXPECTED API. Every recorded method is one of the mutating
+//      node:fs/promises surfaces a committed write legitimately uses (see
+//      ALLOWED_REPOSITORY_MUTATION_METHODS -- `symlink` is not one of them).
+//   3. RECONCILED AGAINST DISK. Every mutated FILE target corresponds to a real
+//      before/after difference in the fixture repository, and every such
+//      difference corresponds to a recorded mutation. This is the assertion
+//      that makes the allowance an audit rather than a blanket permission: a
+//      regression that wrote an extra repository file, or that mutated a file
+//      whose final bytes it then restored, fails here.
+//
+// Honest scope bound on all three: `withFsWriteSentinel` instruments
+// `node:fs/promises` only (its mutating module-level functions plus the
+// `FileHandle` returned by `open`), so a write performed through a SYNC
+// `node:fs` API -- or through any other mutating surface -- is invisible to the
+// sentinel. Inside the fixture repository the before/after disk diff still
+// catches it (claim 3 would then report an unreconciled change), but a sync
+// write OUTSIDE the fixture repository is seen by neither the sentinel nor the
+// diff, and would go unnoticed here.
+//
+// Directory targets (`mkdir` of the repository root or of an output's parent)
+// are separated out rather than compared against file differences -- snapshot()
+// records files only, so a directory could never appear in the diff. They are
+// still held to claim 2, and each one is asserted to actually be a directory on
+// disk afterwards, so a FILE cannot hide in that bucket.
+function assertRepositoryMutationsAreAccountedFor({
+  mutations,
+  repository,
+  before,
+  after,
+  requiredPaths,
+  label,
+}) {
+  assert.ok(
+    mutations.length > 0,
+    `${label}: the repository write allowance recorded no mutation at all, so ` +
+      "it is dead permissiveness -- either the packed CLI never wrote " +
+      "anything, or the instrumented node:fs/promises mutating surface is no " +
+      "longer on its write path (see withFsWriteSentinel)",
+  );
+  const unexpectedMethods = [
+    ...new Set(mutations.map(({ method }) => method)),
+  ].filter((method) => !ALLOWED_REPOSITORY_MUTATION_METHODS.has(method));
+  assert.deepEqual(
+    unexpectedMethods,
+    [],
+    `${label}: the packed CLI used a filesystem-mutation API this audit does ` +
+      "not expect on a committed write path -- re-derive whether it is " +
+      "legitimate before adding it to ALLOWED_REPOSITORY_MUTATION_METHODS",
+  );
+
+  const directoryTargets = new Set();
+  const fileTargets = new Set();
+  for (const { target } of mutations) {
+    const relative = normalizeRepositoryMutationTarget(repository, target);
+    const absolute = path.resolve(repository, relative);
+    if (fs.existsSync(absolute) && fs.statSync(absolute).isDirectory()) {
+      directoryTargets.add(relative === "" ? "." : relative);
+    } else {
+      fileTargets.add(relative);
+    }
+  }
+  for (const relative of directoryTargets) {
+    const absolute = path.resolve(repository, relative);
+    assert.equal(
+      fs.statSync(absolute).isDirectory(),
+      true,
+      `${label}: ${relative} was classified as a directory mutation but is ` +
+        "not a directory",
+    );
+  }
+
+  const beforeByPath = new Map(before);
+  const afterByPath = new Map(after);
+  const changedPaths = new Set();
+  for (const [filePath, base64] of afterByPath) {
+    if (beforeByPath.get(filePath) !== base64) changedPaths.add(filePath);
+  }
+  for (const filePath of beforeByPath.keys()) {
+    if (!afterByPath.has(filePath)) changedPaths.add(filePath);
+  }
+
+  assert.deepEqual(
+    [...fileTargets].sort(),
+    [...changedPaths].sort(),
+    `${label}: every allowed filesystem mutation must be reconcilable with a ` +
+      "real before/after difference in the fixture repository, and vice " +
+      "versa. Left = normalized mutation targets (staged `.tmp-<hex>` paths " +
+      "mapped back onto the target they were renamed over), right = files " +
+      "whose bytes actually changed on disk",
+  );
+  for (const required of requiredPaths) {
+    assert.ok(
+      changedPaths.has(required),
+      `${label}: expected the packed CLI to write ${required}, but it is not ` +
+        `among the files that changed on disk: ${[...changedPaths].sort().join(", ")}`,
+    );
+  }
+}
+
+// Read back what the packed CLI actually committed, as raw text plus the
+// lockfile's own record for that path. Deliberately reads the FILES rather than
+// trusting the CLI's rendered summary: the summary is the claim under test.
+function readTabnineSettingsState(repository) {
+  const settingsPath = path.join(
+    repository,
+    ...TABNINE_SETTINGS_RELATIVE_PATH.split("/"),
+  );
+  const lockPath = path.join(repository, LOCKFILE_RELATIVE_PATH);
+  const settingsText = fs.existsSync(settingsPath)
+    ? fs.readFileSync(settingsPath, "utf8")
+    : undefined;
+  const lock = fs.existsSync(lockPath)
+    ? JSON.parse(fs.readFileSync(lockPath, "utf8"))
+    : undefined;
+  const records = (lock?.outputs ?? []).filter(
+    (output) => output.path === TABNINE_SETTINGS_RELATIVE_PATH,
+  );
+  return { settingsPath, lockPath, settingsText, lock, records };
+}
+
+// "Nothing was written." Both halves are kept, and neither is redundant: the
+// rendered `No files written.` line is the packed CLI's own CLAIM, while the
+// snapshot equality is the independent on-disk FACT. (The stronger proof -- zero
+// mutating node:fs/promises calls at all, which also catches a
+// write-then-restore or an empty-directory creation snapshot() cannot see --
+// is made separately by withFsWriteSentinel inside the harness.) Returns the
+// after-snapshot so a caller can go on to inspect it.
+function assertNothingWasWritten({ repository, before, stdout, label }) {
+  assert.match(stdout, /No files written\./u, `${label}: ${stdout}`);
+  const after = snapshot(repository);
+  assert.deepEqual(
+    after,
+    before,
+    `${label}: declining the write plan must not write anything`,
+  );
+  return after;
+}
+
 test("published Phase 31.5 model-selection journey: packed model-policy assets and role-aware init table (I9 bounded slice)", async (t) => {
   const temporary = fs.mkdtempSync(
     path.join(os.tmpdir(), "agent-profile-phase31_5-packed-"),
@@ -2006,12 +2459,6 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const packDestination = path.join(temporary, "tarballs");
   fs.mkdirSync(packDestination);
-
-  // See assertWebDependencyVersionMatches's own doc comment above for why
-  // this is a disclosed partial mitigation (a source-tree manifest-version
-  // check) rather than the full packed-artifact validation a prior review
-  // round asked for.
-  assertWebDependencyVersionMatches();
 
   buildPackedWorkspaces();
   const packed = new Map(
@@ -2058,6 +2505,27 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
     ],
     "@agent-profile/doctor": ["dist/model-policy-doctor.js"],
   };
+  const publishedPackageRequiredAssets = {
+    "agent-profile": ["README.md", "bin/agent-profile.js"],
+    "@agent-profile/cli": ["dist/index.js", "dist/index.d.ts"],
+    "@agent-profile/schemas": ["ai-profile.schema.json"],
+    // The CLI resolves this package lazily for the UI command, but it remains
+    // a published runtime dependency and must be complete in the isolated
+    // graph just like eagerly imported packages.
+    "@agent-profile/web": ["README.md", "build/index.js"],
+  };
+  for (const [workspace, requiredAssets] of Object.entries(
+    publishedPackageRequiredAssets,
+  )) {
+    const files = packed.get(workspace)?.files;
+    assert.ok(files, `missing packed workspace ${workspace}`);
+    for (const asset of requiredAssets) {
+      assert.ok(
+        files.includes(asset),
+        `${workspace} missing required published runtime/documentation asset ${asset}`,
+      );
+    }
+  }
   // Broadened beyond just `__fixtures__/` and the exact `.test.js`/`.test.ts`
   // extensions: also match a plain `fixtures/` path segment (no leading
   // double underscore, e.g. `dist/fixtures/model-policy.json`), a `.fixture.`
@@ -2169,6 +2637,74 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
     path.join(nodeModules, "@agent-profile", "cli", "dist", "index.js"),
   ).href;
 
+  assert.ok(
+    workspaceClosure.has("@agent-profile/web"),
+    "the isolated runtime graph must include every internal CLI dependency, " +
+      "including the lazily resolved @agent-profile/web package",
+  );
+  const packedCliRequire = createRequire(
+    path.join(nodeModules, "@agent-profile", "cli", "dist", "index.js"),
+  );
+  const packedWebServerEntry = packedCliRequire.resolve(
+    "@agent-profile/web/server",
+  );
+  assert.equal(
+    packedWebServerEntry,
+    path.join(nodeModules, "@agent-profile", "web", "build", "index.js"),
+    "the packed CLI consumer graph must resolve the packed web server export, " +
+      "not a source-tree workspace",
+  );
+
+  const packedSchema = JSON.parse(
+    fs.readFileSync(
+      path.join(
+        nodeModules,
+        "@agent-profile",
+        "schemas",
+        "ai-profile.schema.json",
+      ),
+      "utf8",
+    ),
+  );
+  assert.ok(
+    packedSchema.properties?.subagentPolicy,
+    "the packed schema must contain the model-policy profile surface",
+  );
+
+  assertRelativeMarkdownLinksResolve([
+    path.join(root, "docs", "specs", "phase-31.5", "README.md"),
+    path.join(
+      root,
+      "docs",
+      "specs",
+      "phase-31.5",
+      "002-final-spec-to-test-matrix.md",
+    ),
+    path.join(root, "docs", "release-notes", "phase-31.5.md"),
+  ]);
+
+  const packedHelp = await withRuntimeSentinels(async () => {
+    let stdout = "";
+    let stderr = "";
+    const { runCli } = await import(packedCliUrl);
+    const exitCode = await runCli(["--help"], {
+      io: {
+        stdout(text) {
+          stdout += text;
+        },
+        stderr(text) {
+          stderr += text;
+        },
+      },
+    });
+    return { exitCode, stdout, stderr };
+  });
+  assert.equal(packedHelp.exitCode, 0, packedHelp.stderr);
+  assert.equal(packedHelp.stderr, "", packedHelp.stderr);
+  assert.match(packedHelp.stdout, /doctor.*--models/isu);
+  assert.match(packedHelp.stdout, /upgrade/iu);
+  assert.match(packedHelp.stdout, /--probe/iu);
+
   // Compute the expected role-aware table from the packed
   // @agent-profile/compiler tarball itself (extracted into the graph above),
   // not the raw workspace packages/compiler/dist/index.js on disk. This
@@ -2205,6 +2741,9 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
     MODEL_POLICY_PRIMARY_ROLE,
     MODEL_POLICY_TARGET_CATALOG_VERSION,
     TABNINE_MODEL_POLICY_CATALOG,
+    TABNINE_ADVISORY_GUIDANCE,
+    TABNINE_SETTINGS_WRITE_SAFE_PROPERTY,
+    planTabnineModelSettingsWrite,
     MODEL_POLICY_PRESETS,
     expectedTable,
     modelPolicyTablesByPreset,
@@ -2213,6 +2752,18 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       buildModelPolicyTargetTable,
       MODEL_POLICY_PRIMARY_ROLE,
       MODEL_POLICY_TARGET_CATALOG_VERSION,
+      // Cycle 4 write-path oracles, all three genuinely PUBLISHED by the
+      // packed compiler (packages/compiler/src/index.ts re-exports them from
+      // ./model-policy-tabnine-adapter.js -- checked against the tarball's own
+      // dist/index.d.ts, not assumed). `planTabnineModelSettingsWrite` is the
+      // live oracle for the exact bytes the settings file must contain,
+      // `TABNINE_SETTINGS_WRITE_SAFE_PROPERTY` for the single property name
+      // that may appear in them, and `TABNINE_ADVISORY_GUIDANCE` for the
+      // preserved/advisory branch's rendered guidance -- so none of the three
+      // is a hard-coded copy that could drift from the shipped adapter.
+      TABNINE_ADVISORY_GUIDANCE,
+      TABNINE_SETTINGS_WRITE_SAFE_PROPERTY,
+      planTabnineModelSettingsWrite,
       // Reachability VERIFIED, not assumed: packages/compiler/src/index.ts
       // re-exports TABNINE_MODEL_POLICY_CATALOG from
       // ./model-policy-tabnine-adapter.js, and the packed compiler tarball's
@@ -2233,6 +2784,9 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       MODEL_POLICY_PRIMARY_ROLE,
       MODEL_POLICY_TARGET_CATALOG_VERSION,
       TABNINE_MODEL_POLICY_CATALOG,
+      TABNINE_ADVISORY_GUIDANCE,
+      TABNINE_SETTINGS_WRITE_SAFE_PROPERTY,
+      planTabnineModelSettingsWrite,
       MODEL_POLICY_PRESETS,
       expectedTable: buildModelPolicyTargetTable("role-aware"),
       // Every selectable preset's table, resolved by the PACKED compiler --
@@ -2270,100 +2824,59 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   );
   fs.writeFileSync(path.join(repository, "tsconfig.json"), "{}\n", "utf8");
 
-  // Scripted prompts mirroring apps/cli/src/wizard.test.ts's `scriptedPrompts`
-  // shape (see its "interactive wizard prompts for a model preset with the
-  // default recommendation and preview tables" and "...renders the write
-  // plan with exact per-client model/effort/status rows..." tests): declines
-  // the final write (`confirmWritePlan` -> false) so nothing ever commits,
-  // and leaves `selectModelPreset`'s returned value at its offered default
-  // (role-aware) rather than overriding it.
-  const promptCalls = [];
-  const prompts = {
-    async confirmManualLanguages({ default: def }) {
-      return def;
-    },
-    async enterManualLanguages() {
-      return "";
-    },
-    async selectStrategy({ default: def }) {
-      return def;
-    },
-    async selectClients() {
-      return ["codex", "claude"];
-    },
-    async selectSetupProfile({ default: def }) {
-      return def;
-    },
-    async selectCapabilities({ defaults }) {
-      return {
-        skillPacks: defaults,
-        reviewerSubagents: false,
-        advisoryHooks: false,
-      };
-    },
-    async confirmGitignore({ default: def }) {
-      return def;
-    },
-    async confirmWritePlan() {
-      // Snapshot stdout at the exact moment confirmation is requested (see
-      // stdoutAtConfirmation below), so the model-policy preview assertions
-      // prove the preview actually rendered *before* this callback fires --
-      // not merely that it appears somewhere in the final accumulated
-      // stdout, which would not catch a regression that emitted the preview
-      // after this callback instead of before it.
-      stdoutAtConfirmation = stdout;
-      return false;
-    },
-    async selectModelPreset({ default: def, tables }) {
-      promptCalls.push({ kind: "selectModelPreset", default: def, tables });
-      return def;
-    },
-    async confirmModelProbe({ default: def }) {
-      promptCalls.push({ kind: "confirmModelProbe", default: def });
-      return def;
-    },
-  };
-
-  const before = snapshot(repository);
-  let stdout = "";
-  let stderr = "";
-  // Set by prompts.confirmWritePlan above, the moment confirmation is
-  // requested -- see the preview-before-confirmation assertions below.
-  let stdoutAtConfirmation;
-  // Both the dynamic import of the packed CLI entry point AND the runCli()
-  // call itself must happen while the runtime sentinels are installed, so a
-  // network/child-process/net side effect during module initialization
-  // cannot bypass the guard. withFsWriteSentinel additionally instruments
-  // node:fs/promises's mutating surface for the declined-write scenario:
-  // the before/after snapshot() comparison below only proves the final
-  // on-disk bytes are unchanged, which a write-then-restore (or an
-  // empty-directory creation, which snapshot() silently ignores) would not
-  // catch. Asserting zero mutating fs/promises calls occurred is the
-  // primary, more rigorous proof; the snapshot comparison is kept as a
-  // belt-and-braces final-state check.
-  const exitCode = await withRuntimeSentinels(() =>
-    withFsWriteSentinel(async () => {
-      const { runCli } = await import(packedCliUrl);
-      return runCli(["init", "--root", repository], {
-        io: {
-          stdout(text) {
-            stdout += text;
-          },
-          stderr(text) {
-            stderr += text;
-          },
-        },
-        nonInteractive: false,
-        prompts,
-      });
-    }),
-  );
+  // Driven through the shared runPackedCliScenario harness (migrated in cycle
+  // 4; this scenario had hand-rolled the same prompts and the same
+  // sentinel/import/runCli scaffolding since cycle 1, and the only thing
+  // blocking the migration was that the shared prompts factory dropped the
+  // `tables` argument this scenario's whole-table deepEqual needs -- see
+  // createScenarioPrompts, which now records it unconditionally).
+  //
+  // Behaviour preserved exactly: the same scripted answers (accept every
+  // offered default, select codex+claude, leave `selectModelPreset` at its
+  // offered `role-aware` default, decline probe consent -- the harness's
+  // `probeConsent` default of `false` is the same value this scenario's own
+  // `confirmModelProbe` returned via `default: def`, which the shipped wizard
+  // offers as `false`, asserted below), the same declined write plan, the same
+  // STRICT zero-filesystem-mutation claim, and the same
+  // preview-before-confirmation stdout snapshot. One addition, not a
+  // subtraction: the harness injects a fake probe runner this scenario
+  // previously did not pass, which lets it additionally assert that zero
+  // processes were started.
+  const {
+    exitCode,
+    stdout,
+    stderr,
+    calls: promptCalls,
+    state,
+    invocations,
+    before,
+  } = await runPackedCliScenario({
+    packedCliUrl,
+    repository,
+    clients: ["codex", "claude"],
+    filesystemMutations: "strict",
+  });
 
   assert.equal(exitCode, 0, stderr);
   assert.deepEqual(
-    snapshot(repository),
-    before,
-    "declining the role-aware init preview must not write anything",
+    invocations,
+    [],
+    "the role-aware scenario declines probe consent, so it must start zero " +
+      `processes, but the injected probe runner was invoked ${invocations.length} time(s)`,
+  );
+  const roleAwareProbeCall = promptCalls.find(
+    (call) => call.kind === "confirmModelProbe",
+  );
+  assert.ok(
+    roleAwareProbeCall,
+    "confirmModelProbe must be called for a codex+claude selection",
+  );
+  assert.equal(
+    roleAwareProbeCall.default,
+    false,
+    "probe consent must be offered opt-in (default false) -- this scenario " +
+      "previously answered with the offered default, so this is the assertion " +
+      "that keeps `probeConsent: false` equivalent to that",
   );
 
   const presetCall = promptCalls.find(
@@ -2390,20 +2903,14 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       "compiler's buildModelPolicyTargetTable output for every role",
   );
 
-  // The four regexes below assert the required model-policy preview summary
-  // lines. Assert them first against stdoutAtConfirmation -- the stdout
-  // snapshot captured *inside* prompts.confirmWritePlan, before it returns
-  // -- so this proves the preview genuinely rendered before the confirmation
-  // prompt fired, not merely that it appears somewhere in the final
-  // accumulated stdout (which a regression that reordered the preview to
-  // print *after* confirmation would not be caught by). The same assertions
-  // are then repeated against the final stdout as a belt-and-braces check
-  // that the preview content also survives to the end unmodified.
-  assert.ok(
-    stdoutAtConfirmation !== undefined,
-    "prompts.confirmWritePlan must be invoked during the role-aware init " +
-      "scenario",
-  );
+  // The four patterns below are the required model-policy preview summary
+  // lines, asserted through the shared
+  // assertRenderedBeforeAndAfterConfirmation helper: first against the stdout
+  // snapshot captured *inside* prompts.confirmWritePlan (proving the preview
+  // genuinely rendered before the confirmation prompt fired, which a
+  // regression that reordered the preview to print *after* confirmation would
+  // not be caught by), then against the final stdout as a belt-and-braces
+  // check that the content survives to the end unmodified.
   const modelCatalogVersionPattern = new RegExp(
     `Model catalog version: ${MODEL_POLICY_TARGET_CATALOG_VERSION}\\b`,
   );
@@ -2418,20 +2925,23 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       `\\[${expectedPrimaryRow.claude.lifecycle}, ${expectedPrimaryRow.claude.primaryStatus}\\]`,
   );
 
-  assert.match(stdoutAtConfirmation, /Model preset: role-aware/u);
-  assert.match(stdoutAtConfirmation, modelCatalogVersionPattern);
-  assert.match(stdoutAtConfirmation, codexSummaryPattern, stdoutAtConfirmation);
-  assert.match(
-    stdoutAtConfirmation,
-    claudeSummaryPattern,
-    stdoutAtConfirmation,
-  );
-
-  assert.match(stdout, /Model preset: role-aware/u);
-  assert.match(stdout, modelCatalogVersionPattern);
-  assert.match(stdout, codexSummaryPattern, stdout);
-  assert.match(stdout, claudeSummaryPattern, stdout);
-  assert.match(stdout, /No files written\./u);
+  assertRenderedBeforeAndAfterConfirmation({
+    state,
+    stdout,
+    expected: [
+      /Model preset: role-aware/u,
+      modelCatalogVersionPattern,
+      codexSummaryPattern,
+      claudeSummaryPattern,
+    ],
+    label: "role-aware init",
+  });
+  assertNothingWasWritten({
+    repository,
+    before,
+    stdout,
+    label: "role-aware init",
+  });
 
   // -------------------------------------------------------------------
   // Slice 4 (cycle 2): probe decline, and one normalized consented probe
@@ -2479,11 +2989,11 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   await t.test(
     "packed init: declining probe consent starts zero processes",
     async () => {
-      const declineRepository = createProbeFixtureRepository(
+      const declineRepository = createScenarioFixtureRepository(
         path.join(temporary, "probe-decline-init"),
       );
       // Same guarding shape as the role-aware scenario above, now via the
-      // shared runPackedInitScenario harness: the dynamic import of the packed
+      // shared runPackedCliScenario harness: the dynamic import of the packed
       // CLI and the runCli() call both happen inside withRuntimeSentinels, so
       // no network/child-process/net surface can be reached (or
       // reached-and-swallowed) during this scenario. Note the packed entry
@@ -2499,7 +3009,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         state,
         invocations,
         before,
-      } = await runPackedInitScenario({
+      } = await runPackedCliScenario({
         packedCliUrl,
         repository: declineRepository,
         clients: probeClients,
@@ -2544,36 +3054,25 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       // Asserted against the stdout snapshot taken inside confirmWritePlan, so
       // the declined summary provably rendered in the preview *before* the
       // write confirmation, then repeated against the final stdout.
-      assert.ok(
-        state.stdoutAtConfirmation !== undefined,
-        "prompts.confirmWritePlan must be invoked during the probe-decline " +
-          "scenario",
-      );
-      assert.ok(
-        state.stdoutAtConfirmation.includes(declinedSummaryLine),
-        `expected the declined probe summary line ${JSON.stringify(declinedSummaryLine)} ` +
-          "in the stdout captured at write confirmation, got:\n" +
-          state.stdoutAtConfirmation,
-      );
-      assert.ok(
-        declineStdout.includes(declinedSummaryLine),
-        `expected the declined probe summary line ${JSON.stringify(declinedSummaryLine)} ` +
-          "in the final stdout, got:\n" +
-          declineStdout,
-      );
-      assert.match(declineStdout, /No files written\./u);
-      assert.deepEqual(
-        snapshot(declineRepository),
+      assertRenderedBeforeAndAfterConfirmation({
+        state,
+        stdout: declineStdout,
+        expected: [declinedSummaryLine],
+        label: "probe-decline",
+      });
+      assertNothingWasWritten({
+        repository: declineRepository,
         before,
-        "declining the probe and the write plan must not write anything",
-      );
+        stdout: declineStdout,
+        label: "probe-decline",
+      });
     },
   );
 
   await t.test(
     "packed init: one consented probe runs a source-free, non-persistent invocation per planned selection",
     async () => {
-      const consentRepository = createProbeFixtureRepository(
+      const consentRepository = createScenarioFixtureRepository(
         path.join(temporary, "probe-consent-init"),
       );
       // Mutations observed against the probe's OWN temporary working
@@ -2582,6 +3081,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       // createProbeTempDirectoryAllowance for why the allowance and its record
       // are one helper.
       const probeTempDirectories = createProbeTempDirectoryAllowance();
+      assertProbeTempAllowanceRejectsForeignDirectory(probeTempDirectories);
       // Repository-READ sentinel for this scenario's probe window (installed at
       // `confirmModelProbe`, uninstalled at `confirmWritePlan`). It is ADDITIVE
       // to the seeded-marker assertions, which stay: the marker proves no
@@ -2599,7 +3099,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         state,
         invocations,
         before,
-      } = await runPackedInitScenario({
+      } = await runPackedCliScenario({
         packedCliUrl,
         repository: consentRepository,
         clients: probeClients,
@@ -2614,18 +3114,25 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         // first-line-only leak cannot hide behind the generic `OK`.
         probeResult: PROBE_SUCCESS_PROCESS_RESULT,
         readSentinel,
-        recordInvocation: (invocation) => ({
-          ...invocation,
-          // Captured at invocation time, because the orchestrator removes this
-          // directory in a `finally` block before the run returns -- it cannot
-          // be inspected afterwards. Read through `withoutRecording` so this
-          // TEST read never counts as sentinel liveness evidence about the
-          // SHIPPED read path (it targets a probe temp directory, so it could
-          // never have counted as a repository read either way).
-          cwdEntriesAtInvocation: readSentinel.withoutRecording(() =>
-            fs.readdirSync(invocation.cwd),
-          ),
-        }),
+        recordInvocation: (invocation) => {
+          // Register before runModelProbe reaches its per-candidate finally:
+          // that is the only point at which cleanup of this exact cwd becomes
+          // allowed by the filesystem sentinel.
+          probeTempDirectories.registerInvocation(invocation);
+          return {
+            ...invocation,
+            // Captured at invocation time, because the orchestrator removes
+            // this directory in a `finally` block before the run returns -- it
+            // cannot be inspected afterwards. Read through
+            // `withoutRecording` so this TEST read never counts as sentinel
+            // liveness evidence about the SHIPPED read path (it targets a
+            // probe temp directory, so it could never have counted as a
+            // repository read either way).
+            cwdEntriesAtInvocation: readSentinel.withoutRecording(() =>
+              fs.readdirSync(invocation.cwd),
+            ),
+          };
+        },
         // Set only for the duration of the guarded action, and always removed
         // again by the harness's `finally`, so this stays deterministic and
         // cannot leak into other scenarios or tests.
@@ -2633,18 +3140,10 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
           [PROBE_ENV_SENTINEL_KEY]: PROBE_ENV_SENTINEL_VALUE,
         },
         // NARROWED filesystem claim (the only scenario in this file that uses
-        // one). Permit ONLY the probe's own temporary working directories:
-        // a target inside the OS temp directory whose first path segment
-        // below it begins with `agent-profile-probe-` (the mkdtemp prefix
-        // in apps/cli/src/model-probe.ts's
-        // createNodeModelProbeTempDirProvider). Everything else -- the
-        // fixture repository, this checkout, the extracted node_modules
-        // graph under `temporary`, the user's HOME/config locations, any
-        // other temp path -- falls through to the sentinel's failure list.
-        // An earlier revision allowed anything outside the repository,
-        // which would have silently tolerated a regression writing into
-        // the user's home directory; this is the narrow claim the comment
-        // always intended.
+        // one). Permit ONLY removal of an exact temporary cwd registered for
+        // this probe invocation. Everything else -- including a different
+        // `agent-profile-probe-*` directory -- falls through to the
+        // sentinel's failure list.
         filesystemMutations: {
           allowMutation: probeTempDirectories.allowMutation,
         },
@@ -2689,11 +3188,6 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         `probe ran ${invocations.length} process(es), exceeding the call ` +
           `bound of ${consentProbeCall.plannedCalls} disclosed to the user`,
       );
-
-      const forbiddenPathFragments = [
-        normalizePathForComparison(consentRepository),
-        normalizePathForComparison(root),
-      ];
 
       // Pair each observed invocation with its expectation BY CLIENT, never by
       // array index. The invocation object carries no client field (see
@@ -2755,12 +3249,11 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
               .join(", ")})`,
         );
         const label = `${expected.client} probe invocation`;
-        assertProbeInvocationIsSourceFree(invocation, expected, {
+        assertProbeInvocationIsIsolatedAndSourceFree(invocation, expected, {
           label,
-          forbiddenPathFragments,
           repository: consentRepository,
         });
-        assertProbeEnvironmentIsAllowlisted(invocation, { label });
+        assertProbeEnvironmentIsAllowlistedAndVerbatim(invocation, { label });
       }
 
       assertProbeTempDirectoriesWereCleanedUp({
@@ -2773,36 +3266,20 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       // short-circuit reasoning as the process count above), rendered in the
       // preview before the write confirmation and still present at the end.
       const consentedSummaryLine = `Model probe: consented (${expectedProbeSelections.length} result(s))`;
-      assert.ok(
-        state.stdoutAtConfirmation !== undefined,
-        "prompts.confirmWritePlan must be invoked during the consented-probe " +
-          "scenario",
-      );
-      assert.ok(
-        state.stdoutAtConfirmation.includes(consentedSummaryLine),
-        `expected the consented probe summary line ${JSON.stringify(consentedSummaryLine)} ` +
-          "in the stdout captured at write confirmation, got:\n" +
-          state.stdoutAtConfirmation,
-      );
-      assert.ok(
-        consentStdout.includes(consentedSummaryLine),
-        `expected the consented probe summary line ${JSON.stringify(consentedSummaryLine)} ` +
-          "in the final stdout, got:\n" +
-          consentStdout,
-      );
-      assert.ok(
-        !consentStdout.includes(declinedSummaryLine),
-        "a consented probe must not also render the declined summary line " +
-          `${JSON.stringify(declinedSummaryLine)}, got:\n${consentStdout}`,
-      );
-      assert.match(consentStdout, /No files written\./u);
-      const consentAfter = snapshot(consentRepository);
-      assert.deepEqual(
-        consentAfter,
+      assertRenderedBeforeAndAfterConfirmation({
+        state,
+        stdout: consentStdout,
+        expected: [consentedSummaryLine],
+        // A consented probe must not ALSO render the declined summary line.
+        forbidden: [declinedSummaryLine],
+        label: "consented probe",
+      });
+      const consentAfter = assertNothingWasWritten({
+        repository: consentRepository,
         before,
-        "consenting to the probe but declining the write plan must not write " +
-          "anything into the repository",
-      );
+        stdout: consentStdout,
+        label: "consented probe",
+      });
 
       // Redaction boundary, proven rather than implied. The probe classifies
       // the runner's output in memory and only the closed status/evidence
@@ -2942,7 +3419,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
     "packed init: the normalized probe classification is observable -- an available result stops at the preferred candidate, a non-available one reaches its ordered alternative",
     async () => {
       const runDifferential = async ({ directoryName, probeResult }) => {
-        const differentialRepository = createProbeFixtureRepository(
+        const differentialRepository = createScenarioFixtureRepository(
           path.join(temporary, directoryName),
         );
         const readSentinel = createRepositoryReadSentinel(
@@ -2951,7 +3428,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         // Fresh per run, so each run's cleanup audit sees only its own
         // mutations and one run cannot cover for another.
         const probeTempDirectories = createProbeTempDirectoryAllowance();
-        const result = await runPackedInitScenario({
+        const result = await runPackedCliScenario({
           packedCliUrl,
           repository: differentialRepository,
           clients: [probeAlternativeSeam.client],
@@ -2962,12 +3439,15 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
           probeConsent: true,
           probeResult,
           readSentinel,
-          recordInvocation: (invocation) => ({
-            ...invocation,
-            cwdEntriesAtInvocation: readSentinel.withoutRecording(() =>
-              fs.readdirSync(invocation.cwd),
-            ),
-          }),
+          recordInvocation: (invocation) => {
+            probeTempDirectories.registerInvocation(invocation);
+            return {
+              ...invocation,
+              cwdEntriesAtInvocation: readSentinel.withoutRecording(() =>
+                fs.readdirSync(invocation.cwd),
+              ),
+            };
+          },
           // Same NARROWED claim, and for the same reason, as the consented
           // scenario above: the probe creates and removes its own temporary
           // working directories. Everything else still fails. The allowance is
@@ -3013,6 +3493,16 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         );
         return {
           ...result,
+          // The ACTUAL fixture repository this run used, threaded back rather
+          // than recomputed at the call site: a hand-written
+          // `path.join(temporary, "<directoryName>")` literal there is a second
+          // input that can silently disagree with the first (the same "two
+          // inputs can disagree" hazard that motivated deriving
+          // `forbiddenPathFragments` inside
+          // assertProbeInvocationIsIsolatedAndSourceFree), and a disagreeing
+          // copy would make the path-leak assertions search for a directory no
+          // run ever used -- passing vacuously.
+          repository: differentialRepository,
           plannedCalls: probeCall.plannedCalls,
           probedModels: result.invocations.map(
             ({ args }) => args[args.indexOf("--model") + 1],
@@ -3116,7 +3606,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
       // the single-invocation run, where the invocation's expected model is
       // unambiguous.
       const [availableInvocation] = availableRun.invocations;
-      assertProbeInvocationIsSourceFree(
+      assertProbeInvocationIsIsolatedAndSourceFree(
         availableInvocation,
         {
           client: probeAlternativeSeam.client,
@@ -3124,16 +3614,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         },
         {
           label: `${probeAlternativeSeam.client} differential probe invocation`,
-          forbiddenPathFragments: [
-            normalizePathForComparison(
-              path.join(temporary, "probe-normalization-available-init"),
-            ),
-            normalizePathForComparison(root),
-          ],
-          repository: path.join(
-            temporary,
-            "probe-normalization-available-init",
-          ),
+          repository: availableRun.repository,
         },
       );
 
@@ -3241,7 +3722,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   // declines to customize. Named so the call site reads as the deliberate
   // opposite of omitting `respondToAdvancedOverrides` altogether, which would
   // mean the wizard never offers the step at all (see
-  // createProbeScenarioPrompts's function-or-absent switch) -- two states this
+  // createScenarioPrompts's function-or-absent switch) -- two states this
   // file must never confuse, since only the former proves anything about the
   // guided-manual path.
   const DECLINE_ADVANCED_OVERRIDES = () => undefined;
@@ -3261,10 +3742,10 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
     expectedLine,
     forbiddenLines,
   }) => {
-    const tabnineRepository = createProbeFixtureRepository(
+    const tabnineRepository = createScenarioFixtureRepository(
       path.join(temporary, directoryName),
     );
-    const result = await runPackedInitScenario({
+    const result = await runPackedCliScenario({
       packedCliUrl,
       repository: tabnineRepository,
       clients: ["tabnine"],
@@ -3310,37 +3791,19 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         "confirmModelProbe was reached: " +
         JSON.stringify(result.calls.map(({ kind }) => kind)),
     );
-    assert.ok(
-      result.state.stdoutAtConfirmation !== undefined,
-      "prompts.confirmWritePlan must be invoked during the " +
-        `${directoryName} scenario`,
-    );
-    assert.ok(
-      result.state.stdoutAtConfirmation.includes(expectedLine),
-      `expected the Tabnine model-policy line ${JSON.stringify(expectedLine)} ` +
-        "in the stdout captured at write confirmation, got:\n" +
-        result.state.stdoutAtConfirmation,
-    );
-    assert.ok(
-      result.stdout.includes(expectedLine),
-      `expected the Tabnine model-policy line ${JSON.stringify(expectedLine)} ` +
-        "in the final stdout, got:\n" +
-        result.stdout,
-    );
-    for (const forbidden of forbiddenLines) {
-      assert.ok(
-        !result.stdout.includes(forbidden),
-        "the rendered Tabnine model-policy summary must not also contain " +
-          `${JSON.stringify(forbidden)}, got:\n${result.stdout}`,
-      );
-    }
-    assert.match(result.stdout, /No files written\./u);
-    assert.deepEqual(
-      snapshot(tabnineRepository),
-      result.before,
-      "declining the write plan on the Tabnine manual path must not write " +
-        "anything",
-    );
+    assertRenderedBeforeAndAfterConfirmation({
+      state: result.state,
+      stdout: result.stdout,
+      expected: [expectedLine],
+      forbidden: forbiddenLines,
+      label: directoryName,
+    });
+    assertNothingWasWritten({
+      repository: tabnineRepository,
+      before: result.before,
+      stdout: result.stdout,
+      label: directoryName,
+    });
     return result;
   };
 
@@ -3412,6 +3875,693 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         "",
         "a catalogued Tabnine model id must be accepted, but the packed CLI " +
           `wrote to stderr:\n${result.stderr}`,
+      );
+    },
+  );
+
+  // -------------------------------------------------------------------
+  // Slice 6 (cycle 4): Tabnine's ownership-aware settings-file WRITE path,
+  // the requirement added by the 2026-07-17 amendment to
+  // docs/specs/phase-31.5/issues/009-published-model-journey.md. Cycle 3
+  // covered only the manual/advisory branch; these three scenarios reach the
+  // real `.tabnine/agent/settings.json` write by CONFIRMING the write plan
+  // (`confirmWrite: true`), so the packed CLI genuinely commits to disk.
+  //
+  // Confirming is what makes the write reachable at all through `init`:
+  // `dispatchInitWizard` sets `args.write = true` on confirmation and reports
+  // `createClientFiles` (apps/cli/src/index.ts), which is what runs
+  // `writeCompiledClientFiles` -> `resolveTabnineModelSettings` ->
+  // `classifyTabnineSettingsOwnership` -> `planTabnineModelSettingsWrite`.
+  //
+  // Post-write rendering oracles. `formatInitSummaryLines`
+  // (apps/cli/src/index.ts) prints exactly one of these two lines after a
+  // committed init, keyed off the ownership-aware plan's own `action` -- so
+  // asserting them is how each scenario proves WHICH branch the packed CLI
+  // actually took, rather than inferring it from the resulting file state
+  // alone. Hard-coded for the same verified reason as
+  // TABNINE_ADVISORY_LINE above (module-private renderer, unpublished);
+  // the advisory line's variable half, the guidance text, is NOT hard-coded --
+  // it is the packed compiler's own TABNINE_ADVISORY_GUIDANCE export.
+  const tabnineWroteLine = `- wrote ${TABNINE_SETTINGS_RELATIVE_PATH}`;
+  const tabnineLeftUntouchedLine =
+    `- ${TABNINE_SETTINGS_RELATIVE_PATH} left untouched: ` +
+    TABNINE_ADVISORY_GUIDANCE;
+
+  // Shared driver for the three ownership scenarios. Everything common to all
+  // three lives here so a per-scenario block states only what actually differs
+  // (the fixture's starting ownership state and the branch it must take):
+  // run one packed `init` through runPackedCliScenario with the write plan
+  // CONFIRMED, under a repository-scoped filesystem allowance that is audited
+  // rather than merely permitted, then assert the shared invariants --
+  // exit code, empty stderr, the vacuity guards, and preview-before-
+  // confirmation.
+  //
+  // VACUITY GUARDS, the trap this slice is most exposed to. If the advanced
+  // override never reached the wizard, or Tabnine were not an enabled client,
+  // the write branch would simply never be entered and a scenario asserting
+  // "the file has the right content" against a file that was never touched
+  // could still pass on the `unowned`/`absent`-with-no-model paths. Three
+  // assertions close that, in the same spirit as
+  // `expectedProbeSelections.length > 0` guards the probe scenarios:
+  //   1. `selectAdvancedOverrides` was reached AND was told Tabnine is a
+  //      candidate client;
+  //   2. the requested model appears verbatim in the rendered
+  //      preview-before-confirmation override line, so the wizard demonstrably
+  //      accepted it rather than dropping or normalizing it;
+  //   3. the packed CLI rendered exactly one of the two post-write branch
+  //      lines, and it is the one this scenario expects (asserted per
+  //      scenario, together with the other branch's line being absent).
+  //
+  // These scenarios also select `["tabnine"]` alone, exactly as the cycle-3
+  // manual scenarios do, so they carry the same two probe guards
+  // runTabnineManualScenario states (and for the same reasons): zero processes
+  // started, and `confirmModelProbe` never reached -- because zero invocations
+  // alone would also be produced by a regression that OFFERED consent for a
+  // Tabnine-only selection and had it declined, which is not the same claim as
+  // `buildModelProbeSelections` returning an empty list and the step being
+  // skipped outright. Confirming the write plan does not change that: a probe
+  // would still run before the plan is confirmed.
+  const runTabnineWriteScenario = async ({
+    repository,
+    requestedModel,
+    label,
+  }) => {
+    const allowance = createRepositoryWriteAllowance(repository);
+    const result = await runPackedCliScenario({
+      packedCliUrl,
+      repository,
+      clients: ["tabnine"],
+      confirmWrite: true,
+      respondToAdvancedOverrides: () => ({ tabnineModel: requestedModel }),
+      // NARROWED to the fixture repository, and AUDITED below. Everything
+      // outside it -- this checkout, the extracted node_modules graph, the OS
+      // temp directory, the user's home/config locations -- still fails the
+      // sentinel. See createRepositoryWriteAllowance /
+      // assertRepositoryMutationsAreAccountedFor.
+      filesystemMutations: { allowMutation: allowance.allowMutation },
+    });
+
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(
+      result.stderr,
+      "",
+      `${label}: the packed CLI must accept the requested Tabnine model and ` +
+        `commit cleanly, but wrote to stderr:\n${result.stderr}`,
+    );
+    const advancedCall = result.calls.find(
+      (call) => call.kind === "selectAdvancedOverrides",
+    );
+    assert.ok(
+      advancedCall,
+      `${label}: selectAdvancedOverrides must be reached -- it is optional on ` +
+        "CliPrompts, so a scenario that never reaches it would prove nothing " +
+        "about the exact-model write path",
+    );
+    assert.equal(
+      advancedCall.tabnineSelected,
+      true,
+      `${label}: the advanced-override step must be told Tabnine is a ` +
+        "candidate client, otherwise the write branch is unreachable and this " +
+        "scenario would pass by writing nothing",
+    );
+    // Same pair of guards runTabnineManualScenario states, for the same
+    // reasons: Tabnine is never probed, so the correct claim is not merely
+    // "zero processes" but "the probe step was skipped entirely".
+    assert.deepEqual(
+      result.invocations,
+      [],
+      `${label}: a Tabnine-only write must start zero processes, but the ` +
+        `injected probe runner was invoked ${result.invocations.length} time(s)`,
+    );
+    assert.ok(
+      result.calls.every((call) => call.kind !== "confirmModelProbe"),
+      `${label}: a Tabnine-only selection must skip the probe step entirely, ` +
+        "but confirmModelProbe was reached: " +
+        JSON.stringify(result.calls.map(({ kind }) => kind)),
+    );
+    assertRenderedBeforeAndAfterConfirmation({
+      state: result.state,
+      stdout: result.stdout,
+      expected: [
+        formatExpectedTabnineOverrideLine(
+          requestedModel,
+          TABNINE_MODEL_POLICY_CATALOG.some(
+            (entry) => entry.id === requestedModel,
+          ),
+        ),
+      ],
+      label,
+    });
+    const after = snapshot(repository);
+    assertRepositoryMutationsAreAccountedFor({
+      mutations: allowance.mutations,
+      repository,
+      before: result.before,
+      after,
+      // The settings file is REQUIRED to be among the files that changed on
+      // disk, which makes the mutation audit itself demand the write --
+      // independently of assertSettingsFileMatchesPackedPlan's content oracle.
+      // Without it, a regression that left a pre-existing correct file
+      // untouched (or that never entered the write branch on a fixture that
+      // already had the right bytes) would still satisfy the content check.
+      // Deliberately NOT added to the `unowned` scenario's audit below, where
+      // the same file must NOT change.
+      requiredPaths: [
+        LOCKFILE_RELATIVE_PATH,
+        "ai-profile.yaml",
+        TABNINE_SETTINGS_RELATIVE_PATH,
+      ],
+      label,
+    });
+    return { ...result, after };
+  };
+
+  // Assert the committed settings file is EXACTLY the one reviewed shape, with
+  // the packed compiler's own plan as the byte-level oracle, and that the
+  // lockfile claims ownership of precisely those bytes.
+  const assertSettingsFileMatchesPackedPlan = ({
+    repository,
+    model,
+    label,
+  }) => {
+    const { settingsPath, settingsText, records } =
+      readTabnineSettingsState(repository);
+    assert.ok(
+      settingsText !== undefined,
+      `${label}: expected the packed CLI to create ${settingsPath}, but it ` +
+        "does not exist on disk",
+    );
+    // Byte-level oracle from the PUBLISHED compiler, not a copy: whatever
+    // `planTabnineModelSettingsWrite` says the generated-owned baseline is, the
+    // file on disk must be exactly that.
+    const plan = planTabnineModelSettingsWrite(model, "generated-owned");
+    assert.equal(
+      plan.action,
+      "write",
+      `${label}: the packed compiler must plan a write for a ` +
+        "generated-owned/absent ownership with an exact model -- if it does " +
+        "not, this scenario cannot be asserting the write branch",
+    );
+    assert.equal(
+      settingsText,
+      plan.bytes,
+      `${label}: the committed ${TABNINE_SETTINGS_RELATIVE_PATH} must be ` +
+        "byte-for-byte the packed compiler's own generated-owned baseline",
+    );
+
+    // Nothing invented beyond the one reviewed write-safe property. The
+    // property NAME comes from the packed compiler's own export, so this
+    // cannot drift from the shipped adapter; the shape is checked
+    // exhaustively (exact key lists at both levels), which is what makes
+    // "nothing else invented" a real claim rather than a spot check.
+    const parsed = JSON.parse(settingsText);
+    const safeSegments = TABNINE_SETTINGS_WRITE_SAFE_PROPERTY.split(".");
+    assert.equal(
+      safeSegments.length,
+      2,
+      `${label}: this assertion understands a two-segment write-safe property ` +
+        `(container.leaf); the packed compiler now publishes ` +
+        `${TABNINE_SETTINGS_WRITE_SAFE_PROPERTY}`,
+    );
+    const [container, leaf] = safeSegments;
+    assert.deepEqual(Object.keys(parsed), [container], label);
+    assert.deepEqual(Object.keys(parsed[container]), [leaf], label);
+    assert.equal(parsed[container][leaf], model, label);
+    assert.deepEqual(parsed, { [container]: { [leaf]: model } }, label);
+
+    // The field-observed-but-unverified alternate shape is never written --
+    // asserted as a runtime fact here rather than left to the adapter's source
+    // comment. Both the parsed leaf and the raw text are checked, so a
+    // regression that emitted it under a different nesting still fails.
+    //
+    // Honesty note (same standard as the environment-marker note above): with
+    // today's ordering BOTH assertions are SUBSUMED. The byte-equality against
+    // the packed plan and the exhaustive key-list/deepEqual assertions above
+    // already admit exactly `{ [container]: { [leaf]: model } }`, so any
+    // document carrying the alternate shape -- under this nesting or any other
+    // -- fails there first, and the raw-text check cannot fire either (a JSON
+    // string value can only contain the quoted leaf name escaped, which does
+    // not match). They are kept because the claim ("the unverified alternate
+    // settings shape is never written") is worth stating where a reader looks
+    // for it, and they become load-bearing the moment the exhaustive shape
+    // assertions are relaxed. They are NOT counted as independent evidence;
+    // the exhaustive shape assertions above are.
+    const [alternateContainer, alternateLeaf] =
+      TABNINE_SETTINGS_UNVERIFIED_ALTERNATE_PROPERTY.split(".");
+    assert.equal(
+      parsed[alternateContainer]?.[alternateLeaf],
+      undefined,
+      `${label}: ${TABNINE_SETTINGS_UNVERIFIED_ALTERNATE_PROPERTY} is a ` +
+        "documented-but-locally-unverified alternate settings shape and must " +
+        "never be written",
+    );
+    assert.equal(
+      settingsText.includes(`"${alternateLeaf}"`),
+      false,
+      `${label}: the committed settings bytes must not mention the ` +
+        `unverified ${TABNINE_SETTINGS_UNVERIFIED_ALTERNATE_PROPERTY} shape ` +
+        `at all, got:\n${settingsText}`,
+    );
+
+    // The lockfile records the file as a generated-owned output whose recorded
+    // hash matches the bytes actually on disk -- which is exactly the state
+    // `classifyTabnineSettingsOwnership` will later read back as
+    // `generated-owned`. A recorded hash that did NOT match would silently
+    // degrade the file to `unowned` on the next run.
+    assert.equal(
+      records.length,
+      1,
+      `${label}: ai-profile.lock must record exactly one output for ` +
+        `${TABNINE_SETTINGS_RELATIVE_PATH}, got ${records.length}`,
+    );
+    assert.equal(records[0].ownership, "generated-owned", label);
+    assert.equal(
+      records[0].sha256,
+      sha256Hex(Buffer.from(settingsText, "utf8")),
+      `${label}: the lockfile's recorded sha256 for ` +
+        `${TABNINE_SETTINGS_RELATIVE_PATH} must match the bytes on disk`,
+    );
+    return { settingsText, record: records[0] };
+  };
+
+  // The `absent` scenario's committed output, captured so the `generated-owned`
+  // scenario can start from the state this run ACTUALLY produced rather than a
+  // fabricated one.
+  let absentRunRepository;
+  let absentRunSettingsText;
+
+  await t.test(
+    "packed init: an absent .tabnine/agent/settings.json is really written, with only the write-safe property, and recorded as a generated-owned lock output",
+    async () => {
+      const repository = createScenarioFixtureRepository(
+        path.join(temporary, "tabnine-write-absent-init"),
+      );
+      // Precondition, asserted rather than assumed: the ownership classifier
+      // must see `absent`. If the fixture already had a settings file this
+      // scenario would silently be testing a different branch.
+      assert.equal(
+        fs.existsSync(
+          path.join(repository, ...TABNINE_SETTINGS_RELATIVE_PATH.split("/")),
+        ),
+        false,
+        "the absent-ownership fixture must not already contain a Tabnine " +
+          "settings file",
+      );
+      assert.equal(
+        fs.existsSync(path.join(repository, LOCKFILE_RELATIVE_PATH)),
+        false,
+        "the absent-ownership fixture must not already contain a lockfile",
+      );
+
+      const label = "absent -> write";
+      const result = await runTabnineWriteScenario({
+        repository,
+        requestedModel: cataloguedTabnineModel,
+        label,
+      });
+
+      // Which branch the packed CLI took, from its own rendered summary.
+      assert.ok(
+        result.stdout.includes(tabnineWroteLine),
+        `${label}: expected ${JSON.stringify(tabnineWroteLine)} in the final ` +
+          `stdout, got:\n${result.stdout}`,
+      );
+      assert.ok(
+        !result.stdout.includes(tabnineLeftUntouchedLine),
+        `${label}: the write branch must not also render the advisory ` +
+          "left-untouched line",
+      );
+
+      const { settingsText } = assertSettingsFileMatchesPackedPlan({
+        repository,
+        model: cataloguedTabnineModel,
+        label,
+      });
+      absentRunRepository = repository;
+      absentRunSettingsText = settingsText;
+    },
+  );
+
+  await t.test(
+    "packed init: a generated-owned .tabnine/agent/settings.json is rewritten for a changed model, and the lock record follows the new bytes",
+    async () => {
+      assert.ok(
+        absentRunRepository !== undefined,
+        "the generated-owned scenario starts from the artifacts the " +
+          "absent-ownership scenario actually produced, so that scenario must " +
+          "have run first (subtests here are sequential by design -- see " +
+          "runPackedCliScenario's doc comment)",
+      );
+      const repository = path.join(
+        temporary,
+        "tabnine-write-generated-owned-init",
+      );
+      assertFixtureDirectoryIsFresh(repository);
+      // Constructed HONESTLY: every byte of the starting state -- the settings
+      // file and the `ai-profile.lock` record that makes it generated-owned --
+      // is real output the previous scenario's packed `init` committed, copied
+      // verbatim. Only `ai-profile.yaml` is removed, which is what makes the
+      // wizard treat this as a fresh init (`createClientFiles` is
+      // `existingProfileBytes === undefined && ...` in apps/cli/src/index.ts)
+      // and therefore re-run the client-file write against an already-owned
+      // settings file. That models a real, reachable user state (a profile
+      // deleted from an otherwise intact generated workspace), and it is the
+      // only route to a second ownership-aware write through `init` itself; a
+      // `compile --write` run would reach it too, but compile has no write-plan
+      // confirmation prompt and so cannot carry this slice's
+      // preview-before-confirmation assertion.
+      fs.cpSync(absentRunRepository, repository, { recursive: true });
+      fs.rmSync(path.join(repository, "ai-profile.yaml"));
+
+      // Precondition, asserted rather than assumed: the classifier must see
+      // `generated-owned`, i.e. the file exists AND the lock records it as
+      // generated-owned AND the recorded hash still matches the bytes on disk
+      // (apps/cli/src/compile-plan.ts's classifyTabnineSettingsOwnership).
+      // Without this the scenario could silently be re-testing `absent` or
+      // `unowned`.
+      const startingState = readTabnineSettingsState(repository);
+      assert.equal(
+        startingState.settingsText,
+        absentRunSettingsText,
+        "the generated-owned fixture must start from the previous scenario's " +
+          "committed settings bytes",
+      );
+      assert.equal(
+        startingState.records.length,
+        1,
+        "the copied ai-profile.lock must record exactly one output for " +
+          `${TABNINE_SETTINGS_RELATIVE_PATH}, otherwise the classifier cannot ` +
+          `see \`generated-owned\`, got ${startingState.records.length}`,
+      );
+      assert.equal(
+        startingState.records[0].ownership,
+        "generated-owned",
+        "the copied lock record must claim generated-owned ownership, " +
+          "otherwise this scenario would be testing the `unowned` branch",
+      );
+      assert.equal(
+        startingState.records[0].sha256,
+        sha256Hex(Buffer.from(startingState.settingsText, "utf8")),
+        "the copied lock record's hash must still match the copied settings " +
+          "bytes, otherwise the classifier degrades this fixture to `unowned` " +
+          "and the scenario would be testing the wrong branch",
+      );
+
+      // A DIFFERENT model, so "rewritten" is observable. Asserted different
+      // rather than assumed, since both ids are derived values.
+      const changedModel = privateTabnineModel;
+      assert.notEqual(
+        changedModel,
+        cataloguedTabnineModel,
+        "the generated-owned scenario must request a different model than the " +
+          "one already on disk, otherwise a no-op would pass as a rewrite",
+      );
+
+      const label = "generated-owned -> rewrite";
+      const result = await runTabnineWriteScenario({
+        repository,
+        requestedModel: changedModel,
+        label,
+      });
+
+      assert.ok(
+        result.stdout.includes(tabnineWroteLine),
+        `${label}: expected ${JSON.stringify(tabnineWroteLine)} in the final ` +
+          `stdout, got:\n${result.stdout}`,
+      );
+      assert.ok(
+        !result.stdout.includes(tabnineLeftUntouchedLine),
+        `${label}: the write branch must not also render the advisory ` +
+          "left-untouched line",
+      );
+
+      const { settingsText } = assertSettingsFileMatchesPackedPlan({
+        repository,
+        model: changedModel,
+        label,
+      });
+      // The file really changed, and the old model is gone from it -- the
+      // shared assertion above would also pass for a file that happened to
+      // already contain the new bytes, which is not what "rewritten" means.
+      assert.notEqual(
+        settingsText,
+        startingState.settingsText,
+        `${label}: the generated-owned settings file must actually be ` +
+          "rewritten for a changed model",
+      );
+      assert.equal(
+        settingsText.includes(cataloguedTabnineModel),
+        false,
+        `${label}: the superseded model id must not survive in the rewritten ` +
+          `settings file, got:\n${settingsText}`,
+      );
+      // ...and the lock record moved with it, rather than still claiming the
+      // superseded bytes (which would degrade the file to `unowned` next run).
+      const finalState = readTabnineSettingsState(repository);
+      assert.notEqual(
+        finalState.records[0].sha256,
+        startingState.records[0].sha256,
+        `${label}: the lockfile's recorded hash must follow the rewritten ` +
+          "bytes",
+      );
+    },
+  );
+
+  await t.test(
+    "packed init: an unowned .tabnine/agent/settings.json is preserved byte-for-byte and only advised about",
+    async () => {
+      const repository = createScenarioFixtureRepository(
+        path.join(temporary, "tabnine-write-unowned-init"),
+      );
+      // A pre-existing settings file no lockfile records. Deliberately NOT the
+      // shape Agent Profile would generate: hand-written, differently ordered,
+      // with an extra user property, so "preserved byte-for-byte" is a claim a
+      // regression that rewrote-but-happened-to-match could not satisfy. Inert
+      // and secret-free by construction.
+      const unownedSettingsBytes =
+        '{"model":{"id":"acme-user-chosen-model"},"userOnlyKey":"kept"}\n';
+      const settingsPath = path.join(
+        repository,
+        ...TABNINE_SETTINGS_RELATIVE_PATH.split("/"),
+      );
+      fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+      fs.writeFileSync(settingsPath, unownedSettingsBytes, "utf8");
+      // Precondition: no lockfile at all, so the classifier's "exists with no
+      // matching generated-owned record" branch is the one under test.
+      assert.equal(
+        fs.existsSync(path.join(repository, LOCKFILE_RELATIVE_PATH)),
+        false,
+        "the unowned fixture must not contain a lockfile, otherwise the " +
+          "classifier could reach a different branch",
+      );
+
+      const label = "unowned -> preserved/advisory";
+      const allowance = createRepositoryWriteAllowance(repository);
+      const result = await runPackedCliScenario({
+        packedCliUrl,
+        repository,
+        clients: ["tabnine"],
+        confirmWrite: true,
+        respondToAdvancedOverrides: () => ({
+          tabnineModel: cataloguedTabnineModel,
+        }),
+        filesystemMutations: { allowMutation: allowance.allowMutation },
+      });
+
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(result.stderr, "", `${label}: ${result.stderr}`);
+      const advancedCall = result.calls.find(
+        (call) => call.kind === "selectAdvancedOverrides",
+      );
+      assert.ok(
+        advancedCall,
+        `${label}: selectAdvancedOverrides must be reached, otherwise no exact ` +
+          "model is requested and this scenario would pass vacuously (the " +
+          "advisory branch is also what a no-model run produces)",
+      );
+      assert.equal(advancedCall.tabnineSelected, true, label);
+      // The exact model WAS requested and accepted -- this is what separates
+      // "preserved because the file is unowned" from "advisory because no exact
+      // model resolved", the other input `planTabnineModelSettingsWrite` treats
+      // identically.
+      assertRenderedBeforeAndAfterConfirmation({
+        state: result.state,
+        stdout: result.stdout,
+        expected: [
+          formatExpectedTabnineOverrideLine(cataloguedTabnineModel, true),
+        ],
+        label,
+      });
+
+      // The branch the packed CLI actually took, from its own summary. The
+      // guidance half of this line is the packed compiler's own
+      // TABNINE_ADVISORY_GUIDANCE export, not a hard-coded copy.
+      assert.ok(
+        result.stdout.includes(tabnineLeftUntouchedLine),
+        `${label}: expected ${JSON.stringify(tabnineLeftUntouchedLine)} in the ` +
+          `final stdout, got:\n${result.stdout}`,
+      );
+      assert.ok(
+        !result.stdout.includes(tabnineWroteLine),
+        `${label}: an unowned settings file must never render the ` +
+          `${JSON.stringify(tabnineWroteLine)} line`,
+      );
+
+      // Preserved EXACTLY. Read back off disk rather than inferred from the
+      // rendered line, which is the claim under test.
+      const finalState = readTabnineSettingsState(repository);
+      assert.equal(
+        finalState.settingsText,
+        unownedSettingsBytes,
+        `${label}: the pre-existing unowned settings file must be preserved ` +
+          "byte-for-byte",
+      );
+      // No lock record claims ownership of it -- neither generated-owned nor
+      // any other ownership. A record of ANY kind would be the product
+      // asserting a claim over a file it did not write.
+      assert.deepEqual(
+        finalState.records,
+        [],
+        `${label}: ai-profile.lock must not record ` +
+          `${TABNINE_SETTINGS_RELATIVE_PATH} at all, got ` +
+          JSON.stringify(finalState.records),
+      );
+
+      // The audit also proves it positively: the settings file is not among the
+      // files that changed on disk, and every mutation that DID happen is
+      // reconcilable with a real difference.
+      const after = snapshot(repository);
+      assertRepositoryMutationsAreAccountedFor({
+        mutations: allowance.mutations,
+        repository,
+        before: result.before,
+        after,
+        requiredPaths: [LOCKFILE_RELATIVE_PATH, "ai-profile.yaml"],
+        label,
+      });
+      assert.equal(
+        allowance.mutations.some(({ target }) =>
+          normalizeRepositoryMutationTarget(repository, target).endsWith(
+            TABNINE_SETTINGS_RELATIVE_PATH,
+          ),
+        ),
+        false,
+        `${label}: no filesystem mutation may target the unowned settings ` +
+          "file at all -- not even a write-then-restore, which the " +
+          "byte-comparison above alone could not detect",
+      );
+    },
+  );
+
+  await t.test(
+    "packed lifecycle: ordinary compile, retain/adopt upgrade, and doctor --models remain offline and preserve the locked resolution",
+    async () => {
+      assert.ok(
+        absentRunRepository !== undefined,
+        "the lifecycle continuation needs the real v3 profile and lockfile the " +
+          "absent-settings init committed, so the absent write scenario must " +
+          "run first",
+      );
+      const repository = path.join(temporary, "packed-lifecycle-continuation");
+      assertFixtureDirectoryIsFresh(repository);
+      fs.cpSync(absentRunRepository, repository, { recursive: true });
+
+      // The init fixture holds an actual v3 modelPolicy lock. Capture it before
+      // every command, rather than manufacturing a lock-shaped object: the
+      // outcome below is about the published CLI consuming the same persisted
+      // provenance that its own preceding packed init wrote.
+      const lockPath = path.join(repository, LOCKFILE_RELATIVE_PATH);
+      const initialLockText = fs.readFileSync(lockPath, "utf8");
+      const initialLock = JSON.parse(initialLockText);
+      assert.ok(
+        initialLock.modelPolicy,
+        "packed init must have persisted v3 modelPolicy provenance before the " +
+          "ordinary compile/upgrade/Doctor continuation can prove its lifecycle",
+      );
+
+      const compile = await runPackedCliScenario({
+        packedCliUrl,
+        repository,
+        args: ["compile", "--root", repository],
+        clients: [],
+        filesystemMutations: "strict",
+      });
+      assert.equal(compile.exitCode, 0, compile.stderr);
+      assert.equal(compile.stderr, "", compile.stderr);
+      assert.match(
+        compile.stdout,
+        /Nothing was written; run `agent-profile compile --write` to apply\./u,
+        "ordinary compile is a review-only operation here",
+      );
+      assert.deepEqual(
+        snapshot(repository),
+        compile.before,
+        "ordinary compile must neither silently remap a locked model resolution " +
+          "nor mutate the isolated repository",
+      );
+      assert.equal(
+        fs.readFileSync(lockPath, "utf8"),
+        initialLockText,
+        "ordinary compile must reuse, not rewrite, the exact locked model provenance",
+      );
+
+      // These are separate explicit choices, even when the fresh v3 lock means
+      // neither needs to change a byte. The packed command must accept both
+      // paths without a provider/package call or implicit probe. Supplying the
+      // CLI's own non-interactive strategy makes the consent boundary explicit.
+      for (const strategy of ["retain", "adopt"]) {
+        const upgrade = await runPackedCliScenario({
+          packedCliUrl,
+          repository,
+          args: [
+            "upgrade",
+            "--root",
+            repository,
+            "--non-interactive",
+            "--model-policy-strategy",
+            strategy,
+            "--write",
+          ],
+          clients: [],
+          filesystemMutations: "strict",
+        });
+        assert.equal(upgrade.exitCode, 0, `${strategy}: ${upgrade.stderr}`);
+        assert.equal(upgrade.stderr, "", `${strategy}: ${upgrade.stderr}`);
+        assert.equal(
+          fs.readFileSync(lockPath, "utf8"),
+          initialLockText,
+          `${strategy}: an explicit no-op upgrade must preserve the persisted ` +
+            "exact lock bytes rather than silently remapping them",
+        );
+      }
+
+      const doctor = await runPackedCliScenario({
+        packedCliUrl,
+        repository,
+        args: ["doctor", "--root", repository, "--models"],
+        clients: [],
+        filesystemMutations: "strict",
+      });
+      assert.equal(
+        doctor.exitCode,
+        0,
+        `offline doctor failed:\n${doctor.stderr}${doctor.stdout}`,
+      );
+      assert.equal(doctor.stderr, "", doctor.stderr);
+      assert.match(
+        doctor.stdout,
+        /LINT-MODEL-001 \/modelPolicy\/implementer\/tabnine/u,
+        "offline Doctor must report the persisted locked Tabnine model row",
+      );
+      assert.deepEqual(
+        snapshot(repository),
+        doctor.before,
+        "doctor --models is read-only and must not persist a probe/account result",
+      );
+      assert.equal(
+        fs.readFileSync(lockPath, "utf8"),
+        initialLockText,
+        "offline Doctor must not rewrite model provenance",
       );
     },
   );

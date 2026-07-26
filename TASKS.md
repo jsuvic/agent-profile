@@ -149,7 +149,7 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I6e | Upgrade write ownership refusal and rollback | done | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
 | I7 | Offline Doctor model policy and explicit recheck | done | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
 | I8 | Local UI model policy and user documentation | done | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
-| I9 | Published model-selection journey and final integration | ready | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
+| I9 | Published model-selection journey and final integration | done | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
 
 I1R added 2026-07-17: I1 was marked done but never wired `preset`, the
 `routine-implementer` role, or open exact-override acceptance into the public
@@ -1821,6 +1821,27 @@ normal compile lock reuse, upgrade retain/adopt, offline Doctor, the full
 published-asset inventory beyond model-policy assets, the final spec-to-test
 matrix document, and release-notes/documentation-impact deliverables. State
 stays `ready`, not `done`.
+
+I9 completed 2026-07-26. The packed-only journey now builds, packs, extracts,
+and installs the complete CLI dependency graph (including `@agent-profile/web`)
+in an isolated fixture; proves the role-aware, probe, Tabnine manual and
+ownership-aware write, lock-reuse, retain/adopt, and offline-Doctor outcomes;
+and checks the published help, schema, runtime assets, fixture exclusion, and
+Phase 31.5 documentation links. The final matrix and release notes record the
+remaining static-only documentation evidence. A packed-journey RED exposed a
+Doctor false positive (`LINT-LOCK-005`) for a generated-owned Tabnine file;
+Doctor now preserves its baseline compiler-error short circuit before loading
+the lock and recompiles with retained model policy only after baseline success.
+Focused Doctor and packed tests protect valid retained ownership, changed or
+removed overrides, invalid-compile lock suppression, and exact probe-temp
+cleanup. Final review result: spec compliant and code quality acceptable.
+Validated: `npm test --workspace @agent-profile/doctor` (109/109),
+`node --test scripts/release/phase31_5-published-journey.test.mjs` (11/11),
+`npm run check`, `npm run verify:pack`, Prettier, and `git diff --check`.
+`npm test` remains inconclusive after a no-output 124-second timeout; root
+`npm run doctor` reports only pre-existing user-owned `.claude/settings.local.json`
+and `.mcp.json` drift, which remains outside I9 scope. Phase 32 I1 may now
+proceed according to its own ledger prerequisites.
 
 ## phase-31.9: Upgrade "custom exact" model-policy strategy (`docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`)
 
