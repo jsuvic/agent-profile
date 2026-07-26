@@ -280,6 +280,52 @@ test("validateCandidate leaves the candidate's own subagentPolicy untouched when
   assert.match(result.yaml, /preset: cost-conscious/u);
 });
 
+test("validateCandidate preserves only an unchanged trusted secret-like override", () => {
+  const secretLikeModel = "token=fixture-value-0123456789";
+  const policy = {
+    enabled: true,
+    preset: "role-aware",
+    roles: {
+      implementer: {
+        capability: "balanced",
+        effort: "high",
+        overrides: { codex: { model: secretLikeModel } },
+      },
+    },
+  } as const;
+  const candidate = { ...VALID_PROFILE_VALUE, subagentPolicy: policy };
+
+  const untrusted = validateCandidate(candidate);
+  assert.equal(untrusted.ok, false);
+  if (!untrusted.ok) assert.equal(untrusted.reason, "secret_like");
+
+  const trusted = validateCandidate(candidate, {
+    allowUnchangedSecretLikeOverridesFrom: policy,
+  });
+  assert.equal(trusted.ok, true);
+
+  const changed = validateCandidate(
+    {
+      ...candidate,
+      subagentPolicy: {
+        ...policy,
+        roles: {
+          ...policy.roles,
+          implementer: {
+            ...policy.roles.implementer,
+            overrides: {
+              codex: { model: "token = replacement-value-0123456789" },
+            },
+          },
+        },
+      },
+    },
+    { allowUnchangedSecretLikeOverridesFrom: policy },
+  );
+  assert.equal(changed.ok, false);
+  if (!changed.ok) assert.equal(changed.reason, "secret_like");
+});
+
 test("readJsonRequestBody rejects raw NUL bytes", async () => {
   const request = new Request("http://127.0.0.1/api/profile/plan", {
     method: "POST",

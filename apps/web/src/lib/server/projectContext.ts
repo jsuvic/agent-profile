@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import { readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -12,7 +12,14 @@ import {
   type ProfileValidationIssue,
   type SafetyMode,
 } from "@agent-profile/core";
-import { sha256Hex } from "@agent-profile/compiler";
+import {
+  sha256Hex,
+  readRegionAwareFile,
+  toLockfileV2View,
+  validateLockfileText,
+  type LockModelPolicyV2,
+  type TabnineSettingsOwnership,
+} from "@agent-profile/compiler";
 
 export type ProjectContext = {
   rootDir: string;
@@ -29,6 +36,91 @@ export type ProjectContext = {
 };
 
 const PROFILE_FILENAME = "ai-profile.yaml";
+const LOCK_FILENAME = "ai-profile.lock";
+const TABNINE_SETTINGS_PATH = ".tabnine/agent/settings.json";
+
+/**
+ * Read the lockfile's `modelPolicy` block, or `undefined` when the file is
+ * absent, unreadable, or does not validate. Never throws.
+ *
+ * Deliberately NOT called from `loadProjectContext`: only the profile route
+ * needs this, and `loadProjectContext` runs on every navigation (including the
+ * write endpoints), so folding a full lockfile read + schema validation into it
+ * would make eleven other consumers pay for a field they ignore. Callers that
+ * want it call this directly.
+ *
+ * Degrading to `undefined` rather than surfacing an error is intentional: this
+ * is a presentation input, and `doctor` is the surface that reports a broken
+ * lockfile as an actual issue.
+ */
+export async function readLockModelPolicy(
+  rootDir: string,
+): Promise<LockModelPolicyV2 | undefined> {
+  const source = await readSafeLockfileText(rootDir);
+  if (source === undefined) return undefined;
+  const result = validateLockfileText(source);
+  if (!result.ok) {
+    return undefined;
+  }
+  return toLockfileV2View(result.lockfile).modelPolicy;
+}
+
+/** Read-only ownership classification for the UI's Tabnine status. */
+export async function readTabnineSettingsOwnership(
+  rootDir: string,
+): Promise<TabnineSettingsOwnership> {
+  const settingsPath = path.join(rootDir, TABNINE_SETTINGS_PATH);
+  try {
+    const settings = await lstat(settingsPath);
+    if (!settings.isFile() || settings.isSymbolicLink()) return "unowned";
+  } catch (error) {
+    if (isNodeErrorWithCode(error, "ENOENT")) return "absent";
+    return "unowned";
+  }
+
+  const source = await readSafeLockfileText(rootDir);
+  if (source === undefined) return "unowned";
+  const result = validateLockfileText(source);
+  if (!result.ok) return "unowned";
+  const output = toLockfileV2View(result.lockfile).outputs.find(
+    (candidate) => candidate.path === TABNINE_SETTINGS_PATH,
+  );
+  if (output?.ownership !== "generated-owned") return "unowned";
+
+  // The file is now proven to be a regular, generated-owned repository
+  // output. Only at this point is reading its bytes permitted for the drift
+  // hash check; unowned settings files may contain arbitrary user data.
+  let existing: Awaited<ReturnType<typeof readRegionAwareFile>>;
+  try {
+    existing = await readRegionAwareFile(rootDir, TABNINE_SETTINGS_PATH);
+  } catch {
+    return "unowned";
+  }
+  if (existing.refused || !existing.bytes) return "unowned";
+  return sha256Hex(existing.bytes) === output.sha256
+    ? "generated-owned"
+    : "unowned";
+}
+
+/** Reads the lock only when it is a repository-local regular file. */
+async function readSafeLockfileText(
+  rootDir: string,
+): Promise<string | undefined> {
+  try {
+    const lock = await readRegionAwareFile(rootDir, LOCK_FILENAME);
+    if (lock.refused || !lock.bytes) return undefined;
+    return Buffer.from(lock.bytes).toString("utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function isNodeErrorWithCode(
+  error: unknown,
+  code: string,
+): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && error.code === code;
+}
 
 /**
  * Resolve the project root for the running Phase 6 UI. Defaults to the
@@ -79,7 +171,9 @@ export async function loadProjectContext(): Promise<ProjectContext> {
   }
 
   const profileHash = sha256Hex(profileSource).slice(0, 8);
-  const result = parseProfileYaml(profileSource, { sourcePath: PROFILE_FILENAME });
+  const result = parseProfileYaml(profileSource, {
+    sourcePath: PROFILE_FILENAME,
+  });
 
   let safetyMode: SafetyMode = "guarded";
   if (result.ok) {
@@ -115,10 +209,52 @@ export function redactIfSecretLike(text: string): string {
 }
 
 /**
+ * Produce the policy shape the browser is allowed to edit. Exact override
+ * values are user-authored strings, so secret-like values are redacted before
+ * serialization. The plan endpoint restores an unchanged redaction marker
+ * from the trusted on-disk profile; it never needs to send the original back
+ * to the browser.
+ */
+export function redactSubagentPolicyForBrowser(
+  policy: AiProfile["subagentPolicy"],
+): AiProfile["subagentPolicy"] {
+  if (!policy?.roles) return policy;
+  return {
+    ...policy,
+    roles: Object.fromEntries(
+      Object.entries(policy.roles).map(([role, intent]) => [
+        role,
+        {
+          ...intent,
+          ...(intent.overrides
+            ? {
+                overrides: Object.fromEntries(
+                  Object.entries(intent.overrides).map(([client, override]) => [
+                    client,
+                    override?.model
+                      ? {
+                          ...override,
+                          model: redactIfSecretLike(override.model),
+                        }
+                      : override,
+                  ]),
+                ),
+              }
+            : {}),
+        },
+      ]),
+    ),
+  };
+}
+
+/**
  * Truncate preview content to a hard cap. Generated files larger than the
  * cap return only the first N bytes plus a marker line.
  */
-export function truncatePreview(text: string, capBytes: number = 256 * 1024): {
+export function truncatePreview(
+  text: string,
+  capBytes: number = 256 * 1024,
+): {
   text: string;
   truncated: boolean;
 } {

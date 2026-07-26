@@ -252,21 +252,32 @@ ${rows}
 `;
 }
 
+/**
+ * Single owner of Tabnine's rendered lifecycle wording.
+ *
+ * An uncatalogued exact identifier is an organization/private model: the
+ * parent spec's catalog lifecycle contract requires the literal phrase
+ * "organization/private - unrated" in the rendered row itself, not only in
+ * surrounding prose (Decision Rule 5 / catalog lifecycle contract).
+ *
+ * Exported (Phase 31.5 I8) so the local web UI's read-only model-policy view
+ * renders the identical label instead of restating the rule -- two copies of
+ * this mapping is exactly how the UI would start disagreeing with the
+ * generated guidance tables about the same resolved model.
+ */
+export function tabnineLifecycleLabel(
+  lifecycle: ModelPolicyTabnineResolution["lifecycle"],
+): string {
+  return lifecycle === "unrated" ? "organization/private - unrated" : lifecycle;
+}
+
 export function renderTabnineModelCell(
   resolution: ModelPolicyTabnineResolution,
 ): string {
   if (resolution.model === undefined) {
     return "advisory (no exact model resolved; select via `/model`, verify via `/about`)";
   }
-  // An uncatalogued exact identifier is an organization/private model: the
-  // parent spec's catalog lifecycle contract requires the literal phrase
-  // "organization/private - unrated" in the rendered row itself, not only in
-  // surrounding prose (Decision Rule 5 / catalog lifecycle contract).
-  const lifecycleLabel =
-    resolution.lifecycle === "unrated"
-      ? "organization/private - unrated"
-      : resolution.lifecycle;
-  return `${resolution.model} / ${lifecycleLabel} (${resolution.modelStatus})`;
+  return `${resolution.model} / ${tabnineLifecycleLabel(resolution.lifecycle)} (${resolution.modelStatus})`;
 }
 
 /** Stable representative source for template provenance. */

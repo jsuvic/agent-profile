@@ -69,7 +69,20 @@ endpoints.
 
 Browser profile saves do not use generated-file first-write protection because
 they write the source profile, not generated artifacts. Generated artifacts and
-lockfiles remain CLI-owned.
+lockfiles remain CLI-owned: the UI reads `<root>/ai-profile.lock` to render
+resolved model provenance exactly as the generated files carry it, but never
+writes it, and an absent, unreadable, or invalid lockfile degrades to "no
+retained resolution" rather than failing the page.
+
+`subagentPolicy` participates in the same guarded browser edit flow as the
+other profile fields: the page exposes a selected preset and progressively
+disclosed role/target override inputs, then sends the complete candidate only
+to the local server for validation, exact diff review, and atomic write. Model
+override strings are scanned for NUL and secret-like values before a plan can
+be created. The resolved table separately sends presentation values (exact
+model, lifecycle, per-surface status, alternatives), and each resolved
+identifier passes through the same secret-like redaction applied to the YAML
+preview.
 
 ## Secret Handling
 
@@ -79,9 +92,47 @@ as violations.
 
 ## Network Behavior
 
-MVP commands must run without network access. Dependency installation is a
-developer setup action, not something init, compile, or doctor performs
-automatically.
+Every command runs to completion without network access by default. Dependency
+installation is a developer setup action, not something init, compile, or
+doctor performs automatically.
+
+Two opt-in network paths exist. Both are off unless explicitly requested in
+that invocation, both are refusable, and neither is required for any command to
+succeed:
+
+| Path                | How it is requested                                                                     | What it sends                                                              | What it persists |
+| ------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ---------------- |
+| Model availability probe | `init` wizard prompt (defaults to decline), `upgrade --probe-models`, `doctor --models --probe` | A minimal one-shot invocation of the locally installed client CLI, to check whether a resolved model id is usable | Nothing. Results are ephemeral and advisory for that run only. |
+| Package update check | `agent-profile upgrade --check-for-updates`                                               | One read-only HTTPS GET for this package's own registry metadata. No credentials, auth headers, or telemetry. | Nothing. It never installs or downloads. |
+
+Declining performs zero network access, proven by tests that run the declined
+path under a network sentinel.
+
+The probe is source-free by construction: it runs in a fresh empty temporary
+directory outside the repository (removed before the run returns), under an
+environment allowlist, with time, output, process, and call-count bounds.
+Agent Profile never reads, supplies, persists, or reports credentials or
+account data. The invoked client may use its own stored login state from the
+allowlisted home/config locations and authenticate normally to its provider;
+that provider contact and any account/quota effect are why the probe is
+separately consented. The report carries only closed-set statuses and evidence
+labels — never raw client output, client versions, paths, credentials, or
+account data. A client with no documented safe one-shot invocation has no
+contract row and is honestly reported `unsupported-client` rather than guessed
+at.
+
+Model selection itself is not a network feature: catalog resolution is fully
+offline and deterministic against versioned catalog data shipped with the
+release, so `init`, `compile`, `upgrade`, and `doctor --models` resolve exact
+model identifiers, lifecycle, and per-surface capability status with no
+provider contact. A probe can only annotate that result; it never changes a
+written selection, and probe output is never merged into `ai-profile.yaml` or
+`ai-profile.lock`.
+
+The local browser UI never probes and never contacts a provider. It lets users
+edit local model-policy settings through the guarded diff-and-write flow while
+rendering the same resolved table, but it cannot display live account,
+quota, or entitlement data — it has no code path that could obtain any.
 
 Any future hosted feature requires:
 

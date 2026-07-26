@@ -247,6 +247,37 @@ async function assertUntouched(
   }
 }
 
+test("configure returns a redacted refusal for a secret-like model override", async () => {
+  const secretLike = "token=fixture-value-0123456789";
+  const rootDir = await createRoot(
+    `${GUARDED_PROFILE}subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    implementer:
+      capability: balanced
+      effort: high
+      overrides:
+        tabnine:
+          model: ${secretLike}
+`,
+  );
+  const before = await snapshot(rootDir);
+  const { prompts, recorded } = scriptPrompts({
+    posture: "balanced",
+    confirm: true,
+  });
+
+  const report = await runConfigurePermissionFlow({ rootDir }, prompts);
+
+  assert.equal(report.outcome, "refused");
+  assert.equal(report.refusal?.reason, "profile-invalid");
+  assert.doesNotMatch(JSON.stringify(report), new RegExp(secretLike, "u"));
+  assert.equal(recorded.events.includes("begin"), false);
+  await assertUntouched(rootDir, before);
+  await rm(rootDir, { recursive: true, force: true });
+});
+
 // ---------------------------------------------------------------------------
 // Scripted prompts
 // ---------------------------------------------------------------------------

@@ -167,6 +167,56 @@ test("AC1 accidental restores AGENTS.md canonical bytes and generated-owned hash
   assert.equal(ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"), "generated-owned");
 });
 
+test("targeted drift reconciliation does not create Tabnine settings", async () => {
+  const rootDir = await createRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    FIXTURE_PROFILE.replace(
+      "tabnine:\n    enabled: false",
+      "tabnine:\n    enabled: true",
+    ).replace(
+      "permissions:",
+      `subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    implementer:
+      capability: balanced
+      effort: high
+      overrides:
+        tabnine:
+          model: gpt-5.4
+permissions:`,
+    ),
+  );
+
+  const initial = createOutput();
+  assert.equal(
+    await runCli(
+      ["compile", "--root", rootDir, "--write", "--force", "--target", "agents-md"],
+      { io: initial.io },
+    ),
+    0,
+    initial.stderrText(),
+  );
+  await driftFile(rootDir, "AGENTS.md", "My extra line.\n");
+
+  const { prompts } = scriptPrompts({ "AGENTS.md": "accidental" });
+  const output = createOutput();
+  assert.equal(
+    await runCli(
+      ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+      { ...output, reconcilePrompts: prompts },
+    ),
+    0,
+    output.stderrText(),
+  );
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
+});
+
 test("AC1 shared relocation lands user lines byte-identically in the AGENTS.md manual region", async () => {
   const rootDir = await createRoot();
   await materialize(rootDir);

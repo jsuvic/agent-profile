@@ -18,9 +18,11 @@ import test from "node:test";
 
 import {
   applyWritePlan,
+  applyWritePlanAtomic,
   serializeLockfile,
   sha256Hex,
   type AiProfileLockV2,
+  type LockModelPolicyV2,
 } from "@agent-profile/compiler";
 
 import {
@@ -77,6 +79,25 @@ function generatedOwnedLockfile(rootDir: string, sha256: string): string {
   return serializeLockfile(lockfile);
 }
 
+function previousExplicitTabninePolicy(): LockModelPolicyV2 {
+  return {
+    catalogVersion: 3,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "implementer",
+        model: "gpt-5.4",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "configured",
+        catalogVersion: 3,
+      },
+    ],
+  };
+}
+
 test("classifyTabnineSettingsOwnership: absent when the file does not exist", async () => {
   const rootDir = await makeTmpRoot();
   const ownership = await classifyTabnineSettingsOwnership(rootDir);
@@ -127,7 +148,8 @@ test("classifyTabnineSettingsOwnership: a lockfile-recorded generated-owned file
     "utf8",
   );
   // ...but the on-disk file has since been hand-edited to a different model.
-  const editedBytes = '{\n  "model": {\n    "id": "user-picked-model"\n  }\n}\n';
+  const editedBytes =
+    '{\n  "model": {\n    "id": "user-picked-model"\n  }\n}\n';
   await writeFile(
     path.join(rootDir, ".tabnine", "agent", "settings.json"),
     editedBytes,
@@ -165,16 +187,20 @@ test("buildCompileWrites: absent ownership + a known model offers the determinis
   assert.ok(tabnine);
   assert.equal(tabnine.action, "write");
   const write = writes.find((entry) => entry.path === TABNINE_SETTINGS_PATH);
-  assert.ok(write);
+  assert.ok(write && !write.delete);
   const parsed = JSON.parse(String(write.bytes)) as { model: { id: string } };
   assert.deepEqual(parsed, { model: { id: "gpt-5.4" } });
 
   // The lockfile output records this as a generated-owned write, so a
   // subsequent run classifies the same file as `generated-owned` rather than
   // `unowned` (never merge/guess -- this is how ownership transfers).
-  const lockfileWrite = writes.find((entry) => entry.path === "ai-profile.lock");
-  assert.ok(lockfileWrite);
-  const lockfileView = JSON.parse(String(lockfileWrite.bytes)) as AiProfileLockV2;
+  const lockfileWrite = writes.find(
+    (entry) => entry.path === "ai-profile.lock",
+  );
+  assert.ok(lockfileWrite && !lockfileWrite.delete);
+  const lockfileView = JSON.parse(
+    String(lockfileWrite.bytes),
+  ) as AiProfileLockV2;
   const tabnineOutput = lockfileView.outputs.find(
     (output) => output.path === TABNINE_SETTINGS_PATH,
   );
@@ -212,6 +238,75 @@ test("buildCompileWrites: no exact model resolved stays advisory even when owner
   });
   assert.ok(tabnine);
   assert.equal(tabnine.action, "advisory");
+  assert.equal(
+    writes.some((entry) => entry.path === TABNINE_SETTINGS_PATH),
+    false,
+  );
+});
+
+test("buildCompileWrites: clearing a generated-owned selection deletes it and removes its lock record atomically", async () => {
+  const rootDir = await makeTmpRoot();
+  const settingsBytes = '{\n  "model": {\n    "id": "gpt-5.4"\n  }\n}\n';
+  await mkdir(path.join(rootDir, ".tabnine", "agent"), { recursive: true });
+  await writeFile(
+    path.join(rootDir, TABNINE_SETTINGS_PATH),
+    settingsBytes,
+    "utf8",
+  );
+  await writeFile(
+    path.join(rootDir, "ai-profile.lock"),
+    generatedOwnedLockfile(rootDir, sha256Hex(Buffer.from(settingsBytes))),
+    "utf8",
+  );
+
+  const { writes, tabnine, tabnineMutation } = buildCompileWrites({
+    ...baseCompileWritesInput(),
+    profile: {
+      version: 1,
+      profile: { name: "cleared", description: "Cleared override." },
+      stack: {
+        languages: [],
+        frameworks: [],
+        packageManagers: [],
+        testing: [],
+      },
+      clients: {
+        tabnine: { enabled: true },
+        codex: { enabled: false },
+        claude: { enabled: false },
+      },
+      workflow: { sdd: true, tdd: true, finalReview: true },
+      subagentPolicy: { enabled: true, preset: "role-aware" },
+    },
+    previousModelPolicy: previousExplicitTabninePolicy(),
+    tabnineModelSettings: { model: undefined, ownership: "generated-owned" },
+  });
+  assert.equal(tabnine?.action, "advisory");
+  assert.equal(tabnineMutation, "delete");
+  assert.deepEqual(
+    writes.find((entry) => entry.path === TABNINE_SETTINGS_PATH),
+    { path: TABNINE_SETTINGS_PATH, delete: true },
+  );
+
+  await applyWritePlanAtomic({ rootDir, writes });
+  await assert.rejects(readFile(path.join(rootDir, TABNINE_SETTINGS_PATH)), {
+    code: "ENOENT",
+  });
+  const lockfile = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  ) as AiProfileLockV2;
+  assert.equal(
+    lockfile.outputs.some((output) => output.path === TABNINE_SETTINGS_PATH),
+    false,
+  );
+});
+
+test("buildCompileWrites: a wizard-owned setting without prior persisted override evidence is preserved", () => {
+  const { writes, tabnineMutation } = buildCompileWrites({
+    ...baseCompileWritesInput(),
+    tabnineModelSettings: { model: undefined, ownership: "generated-owned" },
+  });
+  assert.equal(tabnineMutation, undefined);
   assert.equal(
     writes.some((entry) => entry.path === TABNINE_SETTINGS_PATH),
     false,
@@ -294,11 +389,8 @@ test("end-to-end: an absent settings file is written deterministically and becom
 
 // ---------------------------------------------------------------------------
 // `agent-profile compile --write` end to end: the real CLI command, not just
-// the pure planner. Compile has no source of an exact Tabnine override today
-// (no `subagentPolicy.roles[id].overrides.tabnine` profile field exists yet),
-// so the Tabnine branch always resolves to advisory here -- but the ownership
-// classification and the "never touch an unowned file" contract must still
-// hold through the real `agent-profile compile --write` command.
+// the pure planner. The persisted primary role override is the exact model
+// source for Tabnine's one project-local settings surface.
 // ---------------------------------------------------------------------------
 
 const COMPILE_FIXTURE_PROFILE = `version: 1
@@ -326,6 +418,16 @@ workflow:
   sdd: true
   tdd: true
   finalReview: true
+subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    implementer:
+      capability: balanced
+      effort: high
+      overrides:
+        tabnine:
+          model: gpt-5.4
 permissions:
   filesystem:
     read: allow
@@ -376,9 +478,13 @@ test("agent-profile compile --write preserves an unowned .tabnine/agent/settings
 
   const afterBytes = await readFile(settingsPath, "utf8");
   assert.equal(afterBytes, originalBytes);
+  assert.match(
+    output.stdoutText(),
+    /\.tabnine\/agent\/settings\.json left untouched:.*\/model.*\/about/u,
+  );
 });
 
-test("agent-profile compile --write does not create .tabnine/agent/settings.json when absent (no override source exists in compile)", async () => {
+test("agent-profile compile --write creates .tabnine/agent/settings.json from a persisted primary override when absent", async () => {
   const rootDir = await makeTmpRoot();
   await writeFile(
     path.join(rootDir, "ai-profile.yaml"),
@@ -394,7 +500,353 @@ test("agent-profile compile --write does not create .tabnine/agent/settings.json
   assert.equal(code, 0, output.stderrText());
 
   const settingsPath = path.join(rootDir, ".tabnine", "agent", "settings.json");
-  await assert.rejects(readFile(settingsPath, "utf8"));
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+    model: { id: "gpt-5.4" },
+  });
+});
+
+test("agent-profile compile reports and applies a generated-owned Tabnine deletion", async () => {
+  const rootDir = await makeTmpRoot();
+  const profilePath = path.join(rootDir, "ai-profile.yaml");
+  await writeFile(profilePath, COMPILE_FIXTURE_PROFILE, "utf8");
+  const firstOutput = compileOutput();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+      io: firstOutput.io,
+    }),
+    0,
+  );
+
+  const clearedProfile = COMPILE_FIXTURE_PROFILE.replace(
+    /  roles:\n    implementer:\n      capability: balanced\n      effort: high\n      overrides:\n        tabnine:\n          model: gpt-5\.4\n/u,
+    "",
+  );
+  await writeFile(profilePath, clearedProfile, "utf8");
+  const output = compileOutput();
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: output.io },
+  );
+  assert.equal(code, 0, output.stderrText());
+  await assert.rejects(readFile(path.join(rootDir, TABNINE_SETTINGS_PATH)), {
+    code: "ENOENT",
+  });
+  assert.match(output.stdoutText(), /settings\.json removed/u);
+  assert.doesNotMatch(output.stdoutText(), /settings\.json left untouched/u);
+});
+
+test("a filtered compile preserves verified Tabnine ownership in the lockfile", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    COMPILE_FIXTURE_PROFILE,
+    "utf8",
+  );
+  const firstOutput = compileOutput();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+      io: firstOutput.io,
+    }),
+    0,
+  );
+
+  const filteredOutput = compileOutput();
+  assert.equal(
+    await runCli(
+      [
+        "compile",
+        "--root",
+        rootDir,
+        "--target",
+        "agents-md",
+        "--write",
+        "--force",
+      ],
+      { io: filteredOutput.io },
+    ),
+    0,
+    filteredOutput.stderrText(),
+  );
+  const lockfile = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  ) as AiProfileLockV2;
+  assert.equal(
+    lockfile.outputs.some((output) => output.path === TABNINE_SETTINGS_PATH),
+    true,
+  );
+  assert.equal(
+    await classifyTabnineSettingsOwnership(rootDir),
+    "generated-owned",
+  );
+});
+
+test("filtered compile retains override-removal evidence for the next unfiltered reconciliation", async () => {
+  const rootDir = await makeTmpRoot();
+  const profilePath = path.join(rootDir, "ai-profile.yaml");
+  await writeFile(profilePath, COMPILE_FIXTURE_PROFILE, "utf8");
+  const firstOutput = compileOutput();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+      io: firstOutput.io,
+    }),
+    0,
+  );
+
+  await writeFile(
+    profilePath,
+    COMPILE_FIXTURE_PROFILE.replace(
+      /  roles:\n    implementer:\n      capability: balanced\n      effort: high\n      overrides:\n        tabnine:\n          model: gpt-5\.4\n/u,
+      "",
+    ),
+    "utf8",
+  );
+  const filteredOutput = compileOutput();
+  assert.equal(
+    await runCli(
+      [
+        "compile",
+        "--root",
+        rootDir,
+        "--target",
+        "agents-md",
+        "--write",
+        "--force",
+      ],
+      { io: filteredOutput.io },
+    ),
+    0,
+    filteredOutput.stderrText(),
+  );
+  const filteredLock = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  ) as AiProfileLockV2;
+  assert.equal(
+    filteredLock.modelPolicy?.resolutions.some(
+      (resolution) =>
+        resolution.client === "tabnine" &&
+        resolution.role === "implementer" &&
+        resolution.source === "explicit-override",
+    ),
+    true,
+  );
+
+  const finalOutput = compileOutput();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+      io: finalOutput.io,
+    }),
+    0,
+    finalOutput.stderrText(),
+  );
+  await assert.rejects(readFile(path.join(rootDir, TABNINE_SETTINGS_PATH)), {
+    code: "ENOENT",
+  });
+  assert.match(finalOutput.stdoutText(), /settings\.json removed/u);
+});
+
+for (const transition of [
+  {
+    name: "disabled policy",
+    profile: COMPILE_FIXTURE_PROFILE.replace(
+      "subagentPolicy:\n  enabled: true\n",
+      "subagentPolicy:\n  enabled: false\n",
+    ),
+  },
+  {
+    name: "mapping-v2 policy without a preset",
+    profile: COMPILE_FIXTURE_PROFILE.replace("  preset: role-aware\n", ""),
+  },
+] as const) {
+  test(`filtered compile retains removal evidence across a ${transition.name} transition`, async () => {
+    const rootDir = await makeTmpRoot();
+    const profilePath = path.join(rootDir, "ai-profile.yaml");
+    await writeFile(profilePath, COMPILE_FIXTURE_PROFILE, "utf8");
+    assert.equal(
+      await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+        io: compileOutput().io,
+      }),
+      0,
+    );
+
+    await writeFile(profilePath, transition.profile, "utf8");
+    const filteredOutput = compileOutput();
+    assert.equal(
+      await runCli(
+        [
+          "compile",
+          "--root",
+          rootDir,
+          "--target",
+          "agents-md",
+          "--write",
+          "--force",
+        ],
+        { io: filteredOutput.io },
+      ),
+      0,
+      filteredOutput.stderrText(),
+    );
+    const filteredLock = JSON.parse(
+      await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+    ) as AiProfileLockV2;
+    assert.equal(
+      filteredLock.modelPolicy?.resolutions.some(
+        (resolution) =>
+          resolution.client === "tabnine" &&
+          resolution.role === "implementer" &&
+          resolution.source === "explicit-override",
+      ),
+      true,
+    );
+
+    const finalOutput = compileOutput();
+    assert.equal(
+      await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+        io: finalOutput.io,
+      }),
+      0,
+      finalOutput.stderrText(),
+    );
+    await assert.rejects(readFile(path.join(rootDir, TABNINE_SETTINGS_PATH)), {
+      code: "ENOENT",
+    });
+    assert.match(finalOutput.stdoutText(), /settings\.json removed/u);
+  });
+}
+
+test("agent-profile compile rejects a secret-like persisted model override before any artifact is written", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    COMPILE_FIXTURE_PROFILE.replace(
+      "model: gpt-5.4",
+      "model: token=fixture-value-0123456789",
+    ),
+    "utf8",
+  );
+
+  const output = compileOutput();
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: output.io },
+  );
+  assert.equal(code, 1);
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
+  await assert.rejects(
+    readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+    {
+      code: "ENOENT",
+    },
+  );
+  assert.doesNotMatch(
+    `${output.stdoutText()}${output.stderrText()}`,
+    /token=fixture-value-0123456789/u,
+  );
+  assert.match(output.stderrText(), /secret-like value/u);
+});
+
+test("agent-profile compile rolls back the Tabnine settings write when lockfile staging fails", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    COMPILE_FIXTURE_PROFILE,
+    "utf8",
+  );
+  await mkdir(path.join(rootDir, "ai-profile.lock"));
+
+  const output = compileOutput();
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: output.io },
+  );
+  assert.equal(code, 1, output.stdoutText());
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
+  assert.match(output.stderrText(), /write-plan/u);
+});
+
+test("agent-profile compile --target agents-md never creates Tabnine settings from a persisted override", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    COMPILE_FIXTURE_PROFILE,
+    "utf8",
+  );
+
+  const output = compileOutput();
+  const code = await runCli(
+    [
+      "compile",
+      "--root",
+      rootDir,
+      "--target",
+      "agents-md",
+      "--write",
+      "--force",
+    ],
+    { io: output.io },
+  );
+  assert.equal(code, 0, output.stderrText());
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
+});
+
+test("agent-profile compile --target tabnine-mcp-config never creates Tabnine settings from a persisted override", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    COMPILE_FIXTURE_PROFILE,
+    "utf8",
+  );
+
+  const output = compileOutput();
+  const code = await runCli(
+    [
+      "compile",
+      "--root",
+      rootDir,
+      "--target",
+      "tabnine-mcp-config",
+      "--write",
+      "--force",
+    ],
+    { io: output.io },
+  );
+  assert.equal(code, 0, output.stderrText());
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
+});
+
+test("agent-profile compile ignores a persisted Tabnine override when subagent policy is disabled", async () => {
+  const rootDir = await makeTmpRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    COMPILE_FIXTURE_PROFILE.replace(
+      "subagentPolicy:\n  enabled: true",
+      "subagentPolicy:\n  enabled: false",
+    ),
+    "utf8",
+  );
+
+  const output = compileOutput();
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: output.io },
+  );
+  assert.equal(code, 0, output.stderrText());
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
 });
 
 // ---------------------------------------------------------------------------
