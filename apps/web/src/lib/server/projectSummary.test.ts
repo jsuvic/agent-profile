@@ -105,4 +105,8 @@ test("profile write confirmation renders every reviewed model-policy row", async
     /\{#each reviewedModelPolicy\.rows as row \(row\.role\)\}/u,
   );
   assert.match(modal, /\{#each row\.cells as cell \(cell\.client\)\}/u);
+  assert.match(
+    source,
+    /validationErrors\["subagentPolicy"\].*field-err/su,
+  );
 });

@@ -644,6 +644,76 @@ test("filtered compile retains override-removal evidence for the next unfiltered
   assert.match(finalOutput.stdoutText(), /settings\.json removed/u);
 });
 
+for (const transition of [
+  {
+    name: "disabled policy",
+    profile: COMPILE_FIXTURE_PROFILE.replace(
+      "subagentPolicy:\n  enabled: true\n",
+      "subagentPolicy:\n  enabled: false\n",
+    ),
+  },
+  {
+    name: "mapping-v2 policy without a preset",
+    profile: COMPILE_FIXTURE_PROFILE.replace("  preset: role-aware\n", ""),
+  },
+] as const) {
+  test(`filtered compile retains removal evidence across a ${transition.name} transition`, async () => {
+    const rootDir = await makeTmpRoot();
+    const profilePath = path.join(rootDir, "ai-profile.yaml");
+    await writeFile(profilePath, COMPILE_FIXTURE_PROFILE, "utf8");
+    assert.equal(
+      await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+        io: compileOutput().io,
+      }),
+      0,
+    );
+
+    await writeFile(profilePath, transition.profile, "utf8");
+    const filteredOutput = compileOutput();
+    assert.equal(
+      await runCli(
+        [
+          "compile",
+          "--root",
+          rootDir,
+          "--target",
+          "agents-md",
+          "--write",
+          "--force",
+        ],
+        { io: filteredOutput.io },
+      ),
+      0,
+      filteredOutput.stderrText(),
+    );
+    const filteredLock = JSON.parse(
+      await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+    ) as AiProfileLockV2;
+    assert.equal(
+      filteredLock.modelPolicy?.resolutions.some(
+        (resolution) =>
+          resolution.client === "tabnine" &&
+          resolution.role === "implementer" &&
+          resolution.source === "explicit-override",
+      ),
+      true,
+    );
+
+    const finalOutput = compileOutput();
+    assert.equal(
+      await runCli(["compile", "--root", rootDir, "--write", "--force"], {
+        io: finalOutput.io,
+      }),
+      0,
+      finalOutput.stderrText(),
+    );
+    await assert.rejects(readFile(path.join(rootDir, TABNINE_SETTINGS_PATH)), {
+      code: "ENOENT",
+    });
+    assert.match(finalOutput.stdoutText(), /settings\.json removed/u);
+  });
+}
+
 test("agent-profile compile rejects a secret-like persisted model override before any artifact is written", async () => {
   const rootDir = await makeTmpRoot();
   await writeFile(

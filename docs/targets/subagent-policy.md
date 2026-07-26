@@ -399,10 +399,11 @@ In practice this means:
   wizard's advanced-override entry point writes its reviewed exact selection
   into this field for the primary `implementer` role, so later ordinary
   compiles repeat the same selection without reopening the wizard.
-- The advanced-override entry point (Phase 31.5 I5R) offers a single exact
-  Tabnine model override, not full per-role Codex/Claude customization beyond
-  the three named presets; per-role Codex/Claude overrides remain
-  adapter/test-level only, matching the point above.
+- The init wizard's advanced-override entry point (Phase 31.5 I5R) offers a
+  single exact Tabnine model override, not full per-role customization beyond
+  the three named presets. The local browser Profile editor does expose
+  guarded per-role capability, effort, and exact Codex, Claude, and Tabnine
+  override controls through its plan/apply workflow.
 - No Doctor or drift-detection integration exists yet for
   `.tabnine/agent/settings.json`; Doctor does not currently flag a
   Agent-Profile-owned settings file that has drifted from its recorded hash,

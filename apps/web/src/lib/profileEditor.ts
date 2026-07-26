@@ -1,17 +1,37 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import type {
-  AiProfile,
-  AiProfileEffectivePermissions,
-  ModelPolicyCapability,
-  ModelPolicyEffort,
-  ModelPolicyRoleId,
+import {
+  MODEL_POLICY_PRESET_TABLE,
+  type ModelPolicyPreset,
+  type ModelPolicyRoleId,
+  type AiProfile,
+  type AiProfileEffectivePermissions,
+  type ModelPolicyCapability,
+  type ModelPolicyEffort,
 } from "@agent-profile/core";
 
 type ModelPolicyRoles = NonNullable<
   NonNullable<AiProfile["subagentPolicy"]>["roles"]
 >;
+
+export function rebaseTransientModelPolicyRoles(input: {
+  roles: ModelPolicyRoles | undefined;
+  transientRoles: ReadonlySet<ModelPolicyRoleId>;
+  preset: ModelPolicyPreset;
+}): ModelPolicyRoles | undefined {
+  if (!input.roles) return undefined;
+  const roles = { ...input.roles };
+  for (const role of input.transientRoles) {
+    const existing = roles[role];
+    if (!existing) continue;
+    roles[role] = {
+      ...existing,
+      ...MODEL_POLICY_PRESET_TABLE[input.preset][role],
+    };
+  }
+  return roles;
+}
 
 export function updateModelPolicyOverride(input: {
   roles: ModelPolicyRoles | undefined;

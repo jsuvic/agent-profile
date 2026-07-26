@@ -455,7 +455,8 @@ function retainFilteredPrimaryTabnineResolution(
   current: LockModelPolicyV2 | undefined,
   previous: LockModelPolicyV2 | undefined,
 ): LockModelPolicyV2 | undefined {
-  if (!current || !previous) return current;
+  if (!previous) return current;
+  if (!current) return previous;
   const retained = previous.resolutions.filter(
     (resolution) =>
       resolution.client === "tabnine" &&

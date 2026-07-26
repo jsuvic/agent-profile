@@ -232,7 +232,10 @@ function tabnineCell(
     statuses: Object.freeze([
       Object.freeze({
         surface: "model" as const,
-        status: settingsPlan?.modelStatus ?? row.tabnine.modelStatus,
+        status:
+          row.tabnine.modelStatus === "unverified"
+            ? "unverified"
+            : (settingsPlan?.modelStatus ?? row.tabnine.modelStatus),
       }),
       Object.freeze({
         surface: "effort" as const,

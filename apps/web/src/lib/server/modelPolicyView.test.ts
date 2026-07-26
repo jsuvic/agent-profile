@@ -416,6 +416,31 @@ test("model policy view: an uncatalogued Tabnine override renders the organizati
   assert.match(cell.lifecycleLabel, /organization\/private/u);
 });
 
+test("model policy view: an unowned uncatalogued Tabnine override stays unverified", () => {
+  const profile = parseFixture(
+    fixtureYaml({
+      subagentPolicy: `subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    implementer:
+      capability: balanced
+      effort: medium
+      overrides:
+        tabnine:
+          model: ${UNCATALOGUED_TABNINE_MODEL}
+`,
+    }),
+  );
+  const cell = cellFor(
+    buildModelPolicyView(profile, undefined, "unowned")!,
+    MODEL_POLICY_PRIMARY_ROLE,
+    "tabnine",
+  );
+
+  assert.equal(statusFor(cell, "model"), "unverified");
+});
+
 test("model policy view: Codex and Claude lifecycle labels are the raw lifecycle value", () => {
   const view = requireView(
     parseFixture(fixtureYaml({ subagentPolicy: V3_ROLE_AWARE })),

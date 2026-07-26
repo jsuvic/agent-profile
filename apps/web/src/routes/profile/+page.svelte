@@ -25,6 +25,7 @@
     buildCandidateProfile,
     parseSlugList,
     permissionsChangedFrom,
+    rebaseTransientModelPolicyRoles,
     updateModelPolicyOverride,
     workflowDraftFromProfile,
     workflowFlagEnabled,
@@ -246,7 +247,16 @@
 
   function updatePreset(value: string) {
     if (!draft.subagentPolicy || !MODEL_POLICY_PRESETS.includes(value as ModelPolicyPreset)) return;
-    draft.subagentPolicy = { ...draft.subagentPolicy, preset: value as ModelPolicyPreset };
+    const preset = value as ModelPolicyPreset;
+    draft.subagentPolicy = {
+      ...draft.subagentPolicy,
+      preset,
+      roles: rebaseTransientModelPolicyRoles({
+        roles: draft.subagentPolicy.roles,
+        transientRoles: transientOverrideRoles,
+        preset,
+      }),
+    };
   }
 
   function presetFallback(role: ModelPolicyRoleId, fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort }) {
@@ -720,6 +730,14 @@
               ? `preset ${modelPolicy.preset} - catalog v${modelPolicy.catalogVersion}`
               : "not enabled"}
           >
+            {#if editing && validationErrors["subagentPolicy"]}
+              <div class="field">
+                <span class="lbl">validation</span>
+                <div class="val">
+                  <span class="field-err">{validationErrors["subagentPolicy"]}</span>
+                </div>
+              </div>
+            {/if}
             {#if !modelPolicy}
               <div class="field">
                 <span class="lbl">status</span>

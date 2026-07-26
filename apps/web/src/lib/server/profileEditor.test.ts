@@ -12,11 +12,51 @@ import type {
 import {
   buildCandidateProfile,
   buildWorkflowCandidate,
+  rebaseTransientModelPolicyRoles,
   updateModelPolicyOverride,
   workflowDraftFromProfile,
   type ProfileCandidateDraft,
   type ProfileCandidateSource,
 } from "../profileEditor.js";
+
+test("preset change rebases transient role intent while preserving exact overrides", () => {
+  const roles = rebaseTransientModelPolicyRoles({
+    roles: {
+      implementer: {
+        capability: "balanced",
+        effort: "high",
+        overrides: { codex: { model: "gpt-5.4" } },
+      },
+    },
+    transientRoles: new Set(["implementer"]),
+    preset: "cost-conscious",
+  });
+
+  assert.deepEqual(roles?.implementer, {
+    capability: "efficient",
+    effort: "medium",
+    overrides: { codex: { model: "gpt-5.4" } },
+  });
+});
+
+test("preset change leaves explicit role intent unchanged", () => {
+  const roles = {
+    implementer: {
+      capability: "strongest" as const,
+      effort: "extra-high" as const,
+      overrides: { codex: { model: "gpt-5.4" } },
+    },
+  };
+
+  assert.deepEqual(
+    rebaseTransientModelPolicyRoles({
+      roles,
+      transientRoles: new Set(),
+      preset: "cost-conscious",
+    }),
+    roles,
+  );
+});
 
 test("model override clear removes only a transient fallback role", () => {
   const added = updateModelPolicyOverride({
