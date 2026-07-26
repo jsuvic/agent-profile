@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 //
-// Phase 31.5 I9: published model-selection journey (bounded first slice).
+// Phase 31.5 I9: published model-selection journey (bounded slices).
 //
-// This file proves three of I9's acceptance-criteria bullets from clean
+// This file proves four of I9's acceptance-criteria bullets from clean
 // packed workspace artifacts:
 //   1. Package contents: the packed @agent-profile/core, @agent-profile/compiler,
 //      and @agent-profile/doctor tarballs include their real model-policy
@@ -31,17 +31,36 @@
 //      supplied), and `CliOptions` has no stream-injection seam that would
 //      let a test drive it for real. Accepted for a future cycle to
 //      reconsider if `CliOptions` ever grows a clack-stream-injection option.
-//   3. Zero-network proof: the whole init scenario above runs inside
+//   3. Zero-network proof: every scenario in this file runs inside
 //      `withRuntimeSentinels`, so a real fetch/child-process/net call during
 //      that exact call would fail the test, including one that is caught
 //      and normalized internally (the sentinel records denied surfaces and
 //      asserts none were reached, even when swallowed).
+//   4. Optional probe consent (cycle 2): two subtests of the same
+//      build-and-pack run cover probe DECLINE (the injected fake probe runner
+//      is provably invoked zero times, `confirmModelProbe` was really reached,
+//      and the exact declined summary line renders before the write
+//      confirmation) and ONE normalized consented probe path (one process per
+//      planned selection, within the call bound disclosed to the user, with
+//      the fixed content-free prompt verbatim, Codex's pinned
+//      non-persistence/isolation flags, a fresh empty temporary working
+//      directory outside the repository that is removed again before the run
+//      returns, no repository path in argv or in any forwarded environment
+//      value other than the executable search path, and an allowlisted -- not
+//      ambient -- environment). Scope note: `probeClients` is `["codex"]`, so
+//      Codex is the only client whose invocation contract these scenarios
+//      exercise; EXPECTED_PROBE_ISOLATION_ARGV's Claude row is a pinned
+//      expectation that activates only when a later scenario selects `claude`.
+//      See the oracle note above EXPECTED_MODEL_PROBE_FIXED_PROMPT for why
+//      several expected values are documented hard-coded copies rather than
+//      imports, and the `allowMutation` note on withFsWriteSentinel for the one
+//      narrowed filesystem claim on the consented path.
 //
-// Every other I9 acceptance-criteria bullet (probe consent, Tabnine
-// organization/private manual and write-path scenarios, compile lock reuse,
-// upgrade retain/adopt, offline Doctor, the final spec-to-test matrix
-// document, and release-notes/documentation updates) is intentionally left
-// for a later cycle -- see docs/specs/phase-31.5/issues/009-published-model-journey.md
+// Every other I9 acceptance-criteria bullet (Tabnine organization/private
+// manual and write-path scenarios, compile lock reuse, upgrade retain/adopt,
+// offline Doctor, the final spec-to-test matrix document, and
+// release-notes/documentation updates) is intentionally left for a later
+// cycle -- see docs/specs/phase-31.5/issues/009-published-model-journey.md
 // and this cycle's ledger entry.
 
 import assert from "node:assert/strict";
@@ -545,7 +564,27 @@ const fileHandleMutatingMethods = [
   "datasync",
 ];
 
-async function withFsWriteSentinel(action) {
+// `options.allowMutation(method, target)` (optional) is an escape hatch for a
+// scenario whose code under test legitimately mutates the filesystem OUTSIDE
+// the fixture repository, and only there. The consented-probe scenario below
+// needs exactly this: `runModelProbe` creates a fresh temporary probe working
+// directory and removes it again in a `finally` block
+// (apps/cli/src/model-probe.ts's createNodeModelProbeTempDirProvider ->
+// `rm(...)` from node:fs/promises, which IS instrumented here), so a strict
+// zero-mutation assertion cannot hold on that path, and `runCli` exposes no
+// seam for injecting a fake `ModelProbeTempDirProvider`. Rather than dropping
+// the sentinel for that scenario, the predicate narrows the claim honestly
+// from "zero filesystem mutations anywhere" to "zero filesystem mutations
+// anywhere except inside the probe's own `agent-profile-probe-*` temporary
+// directories" (see isProbeTempDirectoryTarget) -- the fixture repository, this
+// checkout, the extracted node_modules graph, and the user's home/config
+// locations all still fail. Calls the predicate returns `true` for
+// are excluded from the failure list; every other call is still recorded and
+// still fails the assertion. Omitting `options` preserves the original strict
+// behavior exactly, which is what the role-aware scenario above and the
+// probe-decline scenario below both use.
+async function withFsWriteSentinel(action, options) {
+  const allowMutation = options?.allowMutation;
   const mutatingMethods = [
     "writeFile",
     "mkdir",
@@ -566,7 +605,10 @@ async function withFsWriteSentinel(action) {
   try {
     for (const name of mutatingMethods) {
       fs.promises[name] = (...args) => {
-        calls.push(`${name}(${String(args[0])})`);
+        const target = String(args[0]);
+        if (allowMutation?.(name, target) !== true) {
+          calls.push(`${name}(${target})`);
+        }
         return original[name](...args);
       };
     }
@@ -582,7 +624,11 @@ async function withFsWriteSentinel(action) {
             fileHandleMutatingMethods.includes(property)
           ) {
             return (...callArgs) => {
-              calls.push(`FileHandle.${property}(${openPath})`);
+              if (
+                allowMutation?.(`FileHandle.${property}`, openPath) !== true
+              ) {
+                calls.push(`FileHandle.${property}(${openPath})`);
+              }
               return value.apply(target, callArgs);
             };
           }
@@ -681,6 +727,239 @@ function assertWebDependencyVersionMatches() {
       "CLI would resolve a different @agent-profile/web release than the " +
       "one actually built alongside it",
   );
+}
+
+// ---------------------------------------------------------------------------
+// Probe-scenario helpers (Phase 31.5 I9, cycle 2: probe decline and one
+// normalized consented probe path against the packed CLI).
+// ---------------------------------------------------------------------------
+
+// Minimal TypeScript-shaped fixture repository, matching the shape the
+// role-aware scenario below builds inline (a package.json with a typescript
+// devDependency plus a tsconfig.json), so the wizard detects a real language
+// and reaches the model/probe steps. Each probe scenario gets its OWN fresh
+// directory under the shared `temporary` root -- never the role-aware
+// scenario's, so no scenario can observe another's on-disk state.
+function createProbeFixtureRepository(directory) {
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify(
+      {
+        devDependencies: { typescript: "latest" },
+        packageManager: "npm@11.0.0",
+      },
+      null,
+      2,
+    ),
+  );
+  fs.writeFileSync(path.join(directory, "tsconfig.json"), "{}\n", "utf8");
+  return directory;
+}
+
+// Oracle note (deliberate, verified choice -- do NOT silently "fix" this into
+// an import). The two constants below are hard-coded copies whose single
+// source of truth is apps/cli/src/model-probe.ts
+// (`MODEL_PROBE_FIXED_PROMPT`, `MODEL_PROBE_ENV_ALLOWLIST`), pinned in
+// docs/research/013-model-probe-invocation-evidence.md. They are NOT imported
+// from the packed artifacts because they are not published anywhere:
+// apps/cli/src/index.ts imports only `buildModelProbePlan`,
+// `createNodeModelProbeProcessRunner`, `runModelProbe` and types from
+// ./model-probe.js and re-exports none of them (the packed CLI's public
+// surface is `runCli` plus `CLI_VERSION`), and model-probe.ts lives in
+// apps/cli -- not in @agent-profile/core, /compiler, or /doctor -- so no
+// packed tarball in this file's dependency graph exports it either (checked,
+// not assumed). Every other assertion in these scenarios is derived from real
+// runtime evidence instead: the packed compiler's `buildModelPolicyTargetTable`
+// output (`expectedPrimaryRow`), the plan's own `maxCalls` as passed to
+// `confirmModelProbe`, and the invocation object the injected fake runner
+// actually receives.
+//
+// Consequence to accept when editing model-probe.ts: adding an allowlist key
+// makes the env-subset assertion below fail only if that key also happens to
+// be present in the ambient environment, and changing the fixed prompt fails
+// the argv assertion immediately. Both failures are the intended coupling --
+// the failure messages point back here.
+const EXPECTED_MODEL_PROBE_FIXED_PROMPT = "Reply with exactly: OK";
+const EXPECTED_MODEL_PROBE_ENV_ALLOWLIST = [
+  "PATH",
+  "PATHEXT",
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "APPDATA",
+  "LOCALAPPDATA",
+  "PROGRAMDATA",
+  "SYSTEMROOT",
+  "SYSTEMDRIVE",
+  "COMSPEC",
+  "WINDIR",
+  "TEMP",
+  "TMP",
+  "TMPDIR",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_CACHE_HOME",
+  "LANG",
+  "LC_ALL",
+  "TERM",
+  "SHELL",
+];
+
+// Env key injected into the ambient process environment for the consented
+// scenario only, then removed. Proves the allowlist is a real filter rather
+// than a pass-through: `filterEnv` reads `process.env` by default (see
+// runModelProbe's `deps.baseEnv ?? process.env`), so a regression that
+// forwarded the whole ambient environment would carry this key through to the
+// invocation. The name/value are inert and secret-free by construction -- this
+// file never reads or fabricates real credentials.
+const PROBE_ENV_SENTINEL_KEY = "AGENT_PROFILE_PROBE_ENV_SENTINEL";
+const PROBE_ENV_SENTINEL_VALUE = "must-not-be-forwarded";
+
+// The pinned per-client non-persistence/isolation argv the probe MUST use,
+// transcribed from the contract table in
+// docs/research/013-model-probe-invocation-evidence.md (rows "Codex" and
+// "Claude", both `confirmed-official` for the isolation flags) and from
+// MODEL_PROBE_INVOCATION_CONTRACTS in apps/cli/src/model-probe.ts, which is the
+// single source of truth. Hard-coded here for the same verified reason as
+// EXPECTED_MODEL_PROBE_FIXED_PROMPT above: nothing in the packed dependency
+// graph exports these contracts.
+//
+// Every field below is ENFORCED by the invocation loop, so this comment
+// describes only what is actually asserted -- it is not a full transcription of
+// the contract table:
+//   - `sequences`: argv fragments that must appear as ADJACENT elements in that
+//     order, so a flag cannot be credited by an unrelated value that happens to
+//     match its argument.
+//   - `flags`: standalone arguments that must be present.
+//   - `argumentPatterns`: a flag whose immediately following argument must match
+//     a pattern. Used for Codex's `-c model_reasoning_effort=<effort>`: the
+//     effort VALUE mapping (canonical `extra-high` -> Codex `xhigh`) is
+//     deliberately not re-derived here (that would mean hard-coding a second
+//     unexported table; it is already unit-tested in
+//     apps/cli/src/model-probe.test.ts), but the flag and its
+//     `model_reasoning_effort=` shape being forwarded at all IS checked.
+// Per-client notes: `--ephemeral`/`--ignore-user-config`/`--ignore-rules` are
+// Codex's non-persistence flags; Claude's are `--no-session-persistence` and
+// `--bare`, and Claude documents no non-interactive effort control, so it has no
+// `-c` entry at all.
+const EXPECTED_PROBE_ISOLATION_ARGV = {
+  codex: {
+    sequences: [["exec", "--sandbox", "read-only"]],
+    flags: [
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--ignore-user-config",
+      "--ignore-rules",
+    ],
+    argumentPatterns: [["-c", /^model_reasoning_effort=.+$/u]],
+  },
+  claude: {
+    sequences: [["-p", EXPECTED_MODEL_PROBE_FIXED_PROMPT]],
+    flags: ["--no-session-persistence", "--bare"],
+    argumentPatterns: [],
+  },
+};
+
+function containsArgvSequence(argv, sequence) {
+  return argv.some((_value, index) =>
+    sequence.every((element, offset) => argv[index + offset] === element),
+  );
+}
+
+function isInsideDirectory(candidate, directory) {
+  const relative = path.relative(
+    path.resolve(directory),
+    path.resolve(candidate),
+  );
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+// True only for the probe orchestrator's OWN temporary working directory (or
+// something inside it): a path under the OS temp directory whose first segment
+// below that directory starts with `agent-profile-probe-`, the mkdtemp prefix
+// used by createNodeModelProbeTempDirProvider in apps/cli/src/model-probe.ts.
+// Source of truth for that prefix is that function; it is a hard-coded copy
+// here for the same reason as EXPECTED_MODEL_PROBE_FIXED_PROMPT above (nothing
+// in the packed graph exports it). Used to keep the consented scenario's
+// filesystem allowance as narrow as its disclosure claims.
+const PROBE_TEMP_DIR_PREFIX = "agent-profile-probe-";
+
+function isProbeTempDirectoryTarget(target) {
+  const relative = path.relative(
+    path.resolve(os.tmpdir()),
+    path.resolve(target),
+  );
+  if (
+    relative === "" ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative)
+  ) {
+    return false;
+  }
+  const [firstSegment] = relative.split(/[\\/]/);
+  return firstSegment.startsWith(PROBE_TEMP_DIR_PREFIX);
+}
+
+// Scripted prompts for the probe scenarios, deliberately the same headless
+// `promptsOverride` seam and the same "decline the final write plan" shape as
+// the role-aware scenario above, differing only in the selected clients and
+// the `confirmModelProbe` answer. `readStdout` is used to snapshot stdout at
+// the exact moment the write-plan confirmation is requested, so the probe
+// summary assertions prove the line rendered BEFORE confirmation (and thus
+// before any write could have committed), not merely somewhere in the final
+// accumulated output.
+function createProbeScenarioPrompts({ clients, probeConsent, readStdout }) {
+  const calls = [];
+  const state = { stdoutAtConfirmation: undefined };
+  const prompts = {
+    async confirmManualLanguages({ default: def }) {
+      return def;
+    },
+    async enterManualLanguages() {
+      return "";
+    },
+    async selectStrategy({ default: def }) {
+      return def;
+    },
+    async selectClients() {
+      return clients;
+    },
+    async selectSetupProfile({ default: def }) {
+      return def;
+    },
+    async selectCapabilities({ defaults }) {
+      return {
+        skillPacks: defaults,
+        reviewerSubagents: false,
+        advisoryHooks: false,
+      };
+    },
+    async confirmGitignore({ default: def }) {
+      return def;
+    },
+    async confirmWritePlan() {
+      state.stdoutAtConfirmation = readStdout();
+      return false;
+    },
+    async selectModelPreset({ default: def }) {
+      calls.push({ kind: "selectModelPreset", default: def });
+      return def;
+    },
+    async confirmModelProbe({ default: def, calls: plannedCalls }) {
+      calls.push({
+        kind: "confirmModelProbe",
+        default: def,
+        plannedCalls,
+      });
+      return probeConsent;
+    },
+  };
+  return { prompts, calls, state };
 }
 
 test("published Phase 31.5 model-selection journey: packed model-policy assets and role-aware init table (I9 bounded slice)", async (t) => {
@@ -1075,4 +1354,563 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   assert.match(stdout, codexSummaryPattern, stdout);
   assert.match(stdout, claudeSummaryPattern, stdout);
   assert.match(stdout, /No files written\./u);
+
+  // -------------------------------------------------------------------
+  // Slice 4 (cycle 2): probe decline, and one normalized consented probe
+  // path, both against the SAME packed artifacts built/packed once above.
+  // These are subtests of this test rather than separate top-level `test()`
+  // blocks on purpose: building and packing the workspaces is by far the
+  // dominant cost of this file (a full clean `tsc -b` of five workspaces plus
+  // seven `npm pack` runs), and a second top-level test would pay it again
+  // for no additional coverage. The role-aware scenario's assertions above
+  // are left exactly as they were.
+  //
+  // Both scenarios mirror the already-shipped in-workspace unit tests
+  // ("interactive wizard asks probe consent immediately before execution and
+  // declining runs zero processes" / "...runs the consented probe and
+  // reflects a result in the write plan" in apps/cli/src/wizard.test.ts)
+  // against the PUBLISHED artifact instead of the source tree, so a packed
+  // bundle whose probe wiring (consent gate, `probeRunner` port pass-through,
+  // summary rendering) broke during bundling would fail here even though the
+  // in-workspace tests stayed green.
+  // -------------------------------------------------------------------
+  const probeClients = ["codex"];
+  // Mirrors apps/cli/src/wizard.ts's `buildModelProbeSelections` for this
+  // client set -- one selection per selected codex/claude client whose
+  // primary-role exact model the resolver actually produced -- but derived
+  // from the packed compiler's own table (expectedPrimaryRow, computed above)
+  // rather than hard-coded. `["codex"]` is chosen for the same reason
+  // wizard.test.ts's own probe tests choose it: its primary role resolves to
+  // an exact model, so `buildModelProbeSelections` returns a non-empty list
+  // and the wizard genuinely reaches the `confirmModelProbe` step (with an
+  // empty selection list the probe step is skipped entirely and neither
+  // scenario would prove anything).
+  const expectedProbeSelections = probeClients
+    .filter((client) => expectedPrimaryRow[client].model !== undefined)
+    .map((client) => ({ client, model: expectedPrimaryRow[client].model }));
+  assert.ok(
+    expectedProbeSelections.length > 0,
+    "the packed compiler's role-aware primary row must resolve an exact " +
+      `model for at least one of ${probeClients.join(", ")}, otherwise the ` +
+      "probe step is skipped and these scenarios prove nothing",
+  );
+  const declinedSummaryLine =
+    "Model probe: declined - exact models remain unverified against a live " +
+    "provider";
+
+  await t.test(
+    "packed init: declining probe consent starts zero processes",
+    async () => {
+      const declineRepository = createProbeFixtureRepository(
+        path.join(temporary, "probe-decline-init"),
+      );
+      let declineStdout = "";
+      let declineStderr = "";
+      const {
+        prompts: declinePrompts,
+        calls: declineCalls,
+        state,
+      } = createProbeScenarioPrompts({
+        clients: probeClients,
+        probeConsent: false,
+        readStdout: () => declineStdout,
+      });
+      // Records every invocation (not just a count) so the failure message can
+      // show what was started when nothing should have been.
+      const invocations = [];
+      const before = snapshot(declineRepository);
+
+      // Same guarding shape as the role-aware scenario above: the dynamic
+      // import of the packed CLI and the runCli() call both happen inside
+      // withRuntimeSentinels, so no network/child-process/net surface can be
+      // reached (or reached-and-swallowed) during this scenario. Note the
+      // packed entry point is already in Node's module cache by now, so the
+      // module-initialization half of that proof was established by the first
+      // scenario; keeping the import inside the guard preserves the shape and
+      // stays correct regardless of scenario ordering. withFsWriteSentinel is
+      // used in its STRICT form here (no allowMutation predicate): a declined
+      // probe starts no process and creates no temporary probe directory, so
+      // zero filesystem mutations of any kind is the correct expectation.
+      const declineExitCode = await withRuntimeSentinels(() =>
+        withFsWriteSentinel(async () => {
+          const { runCli } = await import(packedCliUrl);
+          return runCli(["init", "--root", declineRepository], {
+            io: {
+              stdout(text) {
+                declineStdout += text;
+              },
+              stderr(text) {
+                declineStderr += text;
+              },
+            },
+            nonInteractive: false,
+            prompts: declinePrompts,
+            probeRunner: {
+              async run(invocation) {
+                invocations.push(invocation);
+                return {
+                  exitCode: 0,
+                  stdout: "OK",
+                  stderr: "",
+                  timedOut: false,
+                };
+              },
+            },
+          });
+        }),
+      );
+
+      assert.equal(declineExitCode, 0, declineStderr);
+      // The primary claim: `runModelProbe`'s consent gate returns before ever
+      // touching the runner seam, so declining cannot start a process even
+      // though a working runner was injected and a plan was built.
+      assert.deepEqual(
+        invocations,
+        [],
+        "declining probe consent must start zero processes, but the injected " +
+          `probe runner was invoked ${invocations.length} time(s)`,
+      );
+      // Without this, "zero invocations" would also pass for a regression that
+      // silently skipped the probe step altogether.
+      const declineProbeCall = declineCalls.find(
+        (call) => call.kind === "confirmModelProbe",
+      );
+      assert.ok(
+        declineProbeCall,
+        "confirmModelProbe must be called before any probe execution",
+      );
+      assert.equal(
+        declineProbeCall.default,
+        false,
+        "probe consent must be offered opt-in (default false)",
+      );
+      assert.ok(
+        declineProbeCall.plannedCalls >= expectedProbeSelections.length,
+        "the consent prompt must disclose a call bound at least as large as " +
+          `the ${expectedProbeSelections.length} planned selection(s), got ` +
+          `${declineProbeCall.plannedCalls}`,
+      );
+      // Asserted against the stdout snapshot taken inside confirmWritePlan, so
+      // the declined summary provably rendered in the preview *before* the
+      // write confirmation, then repeated against the final stdout.
+      assert.ok(
+        state.stdoutAtConfirmation !== undefined,
+        "prompts.confirmWritePlan must be invoked during the probe-decline " +
+          "scenario",
+      );
+      assert.ok(
+        state.stdoutAtConfirmation.includes(declinedSummaryLine),
+        `expected the declined probe summary line ${JSON.stringify(declinedSummaryLine)} ` +
+          "in the stdout captured at write confirmation, got:\n" +
+          state.stdoutAtConfirmation,
+      );
+      assert.ok(
+        declineStdout.includes(declinedSummaryLine),
+        `expected the declined probe summary line ${JSON.stringify(declinedSummaryLine)} ` +
+          "in the final stdout, got:\n" +
+          declineStdout,
+      );
+      assert.match(declineStdout, /No files written\./u);
+      assert.deepEqual(
+        snapshot(declineRepository),
+        before,
+        "declining the probe and the write plan must not write anything",
+      );
+    },
+  );
+
+  await t.test(
+    "packed init: one consented probe runs a source-free, non-persistent invocation per planned selection",
+    async () => {
+      const consentRepository = createProbeFixtureRepository(
+        path.join(temporary, "probe-consent-init"),
+      );
+      let consentStdout = "";
+      let consentStderr = "";
+      const {
+        prompts: consentPrompts,
+        calls: consentCalls,
+        state,
+      } = createProbeScenarioPrompts({
+        clients: probeClients,
+        probeConsent: true,
+        readStdout: () => consentStdout,
+      });
+      const invocations = [];
+      const before = snapshot(consentRepository);
+      // Mutations observed against the probe's OWN temporary working
+      // directories, recorded and then ASSERTED below. Verified against the
+      // shipped code rather than assumed: runModelProbe's per-candidate
+      // `finally` calls `tempDirs.remove(cwd)`
+      // (apps/cli/src/model-probe.ts:712), and the default provider's `remove`
+      // is `rm` from node:fs/promises -- which is in withFsWriteSentinel's
+      // `mutatingMethods` list -- so exactly one `rm(<probe temp dir>)` per
+      // probed candidate is observable here. Asserting that (a) proves the
+      // `allowMutation` allowance is genuinely needed rather than dead
+      // permissiveness, and (b) catches a cleanup regression that leaked the
+      // temporary probe directory, or one that moved cleanup after the sentinel
+      // was restored, both of which would otherwise be invisible. (The matching
+      // `mkdtemp` create is NOT instrumented by the sentinel, so only the
+      // removal side is observable -- that asymmetry is why the assertion is
+      // written against `rm` specifically.)
+      const probeTempMutations = [];
+
+      const consentExitCode = await withRuntimeSentinels(() =>
+        withFsWriteSentinel(
+          async () => {
+            // Set only for the duration of the guarded action, and always
+            // removed in the finally below, so this stays deterministic and
+            // cannot leak into other scenarios or tests.
+            process.env[PROBE_ENV_SENTINEL_KEY] = PROBE_ENV_SENTINEL_VALUE;
+            try {
+              const { runCli } = await import(packedCliUrl);
+              return await runCli(["init", "--root", consentRepository], {
+                io: {
+                  stdout(text) {
+                    consentStdout += text;
+                  },
+                  stderr(text) {
+                    consentStderr += text;
+                  },
+                },
+                nonInteractive: false,
+                prompts: consentPrompts,
+                probeRunner: {
+                  async run(invocation) {
+                    invocations.push({
+                      ...invocation,
+                      // Captured at invocation time, because the orchestrator
+                      // removes this directory in a `finally` block before the
+                      // run returns -- it cannot be inspected afterwards.
+                      cwdEntriesAtInvocation: fs.readdirSync(invocation.cwd),
+                    });
+                    // The one normalized success shape this cycle covers:
+                    // clean exit plus the fixed prompt's expected reply, which
+                    // the real classifier maps to `available`/`success`.
+                    return {
+                      exitCode: 0,
+                      stdout: "OK",
+                      stderr: "",
+                      timedOut: false,
+                    };
+                  },
+                },
+              });
+            } finally {
+              delete process.env[PROBE_ENV_SENTINEL_KEY];
+            }
+          },
+          {
+            // Permit ONLY the probe's own temporary working directories:
+            // a target inside the OS temp directory whose first path segment
+            // below it begins with `agent-profile-probe-` (the mkdtemp prefix
+            // in apps/cli/src/model-probe.ts's
+            // createNodeModelProbeTempDirProvider). Everything else -- the
+            // fixture repository, this checkout, the extracted node_modules
+            // graph under `temporary`, the user's HOME/config locations, any
+            // other temp path -- falls through to the sentinel's failure list.
+            // An earlier revision allowed anything outside the repository,
+            // which would have silently tolerated a regression writing into
+            // the user's home directory; this is the narrow claim the comment
+            // always intended.
+            allowMutation: (method, target) => {
+              if (isProbeTempDirectoryTarget(target)) {
+                probeTempMutations.push({ method, target });
+                return true;
+              }
+              return false;
+            },
+          },
+        ),
+      );
+
+      assert.equal(consentExitCode, 0, consentStderr);
+      const consentProbeCall = consentCalls.find(
+        (call) => call.kind === "confirmModelProbe",
+      );
+      assert.ok(
+        consentProbeCall,
+        "confirmModelProbe must be called before any probe execution",
+      );
+
+      // Expected process count, derived from the plan the wizard actually
+      // produced rather than a magic number: exactly one call per planned
+      // selection. It is NOT one call per probe *candidate*, because this
+      // scenario's normalized result classifies as `available`, and
+      // runModelProbe breaks out of a call's candidate loop on `available`
+      // without probing that call's ordered alternatives (see its
+      // "an ordered alternative runs only after its preferred candidate
+      // proved unavailable" contract). The plan's own disclosed `maxCalls`
+      // bound -- which does count alternatives -- is asserted as an upper
+      // bound instead.
+      assert.equal(
+        invocations.length,
+        expectedProbeSelections.length,
+        `expected one probe process per planned selection (${expectedProbeSelections.length}), ` +
+          `got ${invocations.length}`,
+      );
+      assert.ok(
+        invocations.length <= consentProbeCall.plannedCalls,
+        `probe ran ${invocations.length} process(es), exceeding the call ` +
+          `bound of ${consentProbeCall.plannedCalls} disclosed to the user`,
+      );
+
+      const normalize = (value) => value.replaceAll("\\", "/").toLowerCase();
+      const forbiddenPathFragments = [
+        normalize(consentRepository),
+        normalize(root),
+      ];
+      for (const [index, invocation] of invocations.entries()) {
+        const expected = expectedProbeSelections[index];
+        const argv = [...invocation.args];
+        const label = `${expected.client} probe invocation`;
+
+        // Both pinned invocation contracts (Codex and Claude) invoke the bare
+        // client-name executable resolved from PATH -- see the contract table
+        // in docs/research/013-model-probe-invocation-evidence.md and
+        // MODEL_PROBE_INVOCATION_CONTRACTS in apps/cli/src/model-probe.ts.
+        assert.equal(invocation.command, expected.client, label);
+        // The exact model under test is passed as `--model <exact>`, so the
+        // probe validates the model the packed compiler actually resolved.
+        const modelFlagIndex = argv.indexOf("--model");
+        assert.ok(modelFlagIndex >= 0, `${label} must pass --model: ${argv}`);
+        assert.equal(argv[modelFlagIndex + 1], expected.model, label);
+
+        // Source-free by construction: the ONLY prompt is the pinned
+        // content-free constant, present verbatim and exactly once, and no
+        // argument carries a repository or checkout path.
+        assert.equal(
+          argv.filter((arg) => arg === EXPECTED_MODEL_PROBE_FIXED_PROMPT)
+            .length,
+          1,
+          `${label} must send the fixed content-free prompt verbatim exactly ` +
+            `once: ${JSON.stringify(argv)}`,
+        );
+        for (const arg of argv) {
+          for (const fragment of forbiddenPathFragments) {
+            assert.ok(
+              !normalize(arg).includes(fragment),
+              `${label} argv must not contain a repository path, found ` +
+                `${arg}`,
+            );
+          }
+        }
+
+        // Non-persistent by contract: the pinned isolation argv for the client
+        // actually invoked must be present. Without this, the subtest's name
+        // ("... non-persistent invocation ...") would outrun what it proves --
+        // a regression that dropped `--ephemeral`/`--ignore-user-config`/
+        // `--ignore-rules` would still have passed every other assertion here
+        // while leaving real state behind on a user's machine.
+        //
+        // Scope, stated honestly: this cycle's `probeClients` is `["codex"]`,
+        // so CODEX is the only client exercised and the only row proven
+        // correct. EXPECTED_PROBE_ISOLATION_ARGV.claude is a pinned expectation
+        // that activates only when a later scenario selects `claude`; until
+        // then a wrong Claude row would not be caught here. The
+        // `assert.ok(expectedIsolation, ...)` guard below keeps that honest by
+        // failing loudly rather than silently skipping if a client without a
+        // row is ever invoked. See EXPECTED_PROBE_ISOLATION_ARGV above for the
+        // enforced fields and their source of truth.
+        const expectedIsolation =
+          EXPECTED_PROBE_ISOLATION_ARGV[expected.client];
+        assert.ok(
+          expectedIsolation,
+          `${label} has no pinned isolation-argv expectation in this file -- ` +
+            "if MODEL_PROBE_INVOCATION_CONTRACTS in " +
+            "apps/cli/src/model-probe.ts gained a client, add its row to " +
+            "EXPECTED_PROBE_ISOLATION_ARGV (and refresh " +
+            "docs/research/013-model-probe-invocation-evidence.md first)",
+        );
+        for (const sequence of expectedIsolation.sequences) {
+          assert.ok(
+            containsArgvSequence(argv, sequence),
+            `${label} must pass ${sequence.join(" ")} as adjacent arguments: ` +
+              JSON.stringify(argv),
+          );
+        }
+        for (const flag of expectedIsolation.flags) {
+          assert.ok(
+            argv.includes(flag),
+            `${label} must pass the pinned non-persistence/isolation flag ` +
+              `${flag}: ${JSON.stringify(argv)}`,
+          );
+        }
+        for (const [flag, pattern] of expectedIsolation.argumentPatterns) {
+          const flagIndex = argv.indexOf(flag);
+          assert.ok(
+            flagIndex >= 0,
+            `${label} must pass ${flag}: ${JSON.stringify(argv)}`,
+          );
+          assert.match(
+            String(argv[flagIndex + 1]),
+            pattern,
+            `${label} ${flag}`,
+          );
+        }
+
+        // Non-persistent, isolated working directory: a fresh EMPTY temporary
+        // directory outside both the fixture repository and this checkout
+        // (runModelProbe's assertSafeProbeDirectory contract). Emptiness is
+        // checked from the snapshot captured at invocation time, since the
+        // directory is removed before the run returns.
+        assert.ok(
+          !isInsideDirectory(invocation.cwd, consentRepository),
+          `${label} cwd must be outside the repository, got ${invocation.cwd}`,
+        );
+        assert.ok(
+          !isInsideDirectory(invocation.cwd, root),
+          `${label} cwd must be outside this checkout, got ${invocation.cwd}`,
+        );
+        // Honesty note: this next assertion is close to tautological -- it
+        // restates the default temp-dir provider's own `mkdtemp(tmpdir(), ...)`
+        // behavior -- and would only catch a future provider that moved the
+        // probe working directory somewhere outside the OS temp directory. Kept
+        // as a cheap invariant, not counted as strong evidence.
+        assert.ok(
+          isInsideDirectory(invocation.cwd, os.tmpdir()),
+          `${label} cwd must be an OS temporary directory, got ${invocation.cwd}`,
+        );
+        assert.deepEqual(
+          invocation.cwdEntriesAtInvocation,
+          [],
+          `${label} cwd must be empty at invocation time`,
+        );
+
+        // Environment restricted to the allowlist rather than the ambient
+        // environment: every forwarded key is allowlisted (case-insensitively,
+        // as Windows environment keys are), every forwarded value is the real
+        // ambient value (nothing fabricated), the injected non-allowlisted
+        // sentinel key was dropped, and no forwarded value other than the
+        // executable search path leaks a repository path (see the PATH/PATHEXT
+        // exemption comment inside the loop). See the oracle note above
+        // EXPECTED_MODEL_PROBE_ENV_ALLOWLIST for why that list is a documented
+        // hard-coded copy here.
+        const allowedUpper = new Set(
+          EXPECTED_MODEL_PROBE_ENV_ALLOWLIST.map((key) => key.toUpperCase()),
+        );
+        for (const [key, value] of Object.entries(invocation.env)) {
+          assert.ok(
+            allowedUpper.has(key.toUpperCase()),
+            `${label} forwarded non-allowlisted environment key ${key} -- if ` +
+              "MODEL_PROBE_ENV_ALLOWLIST in apps/cli/src/model-probe.ts " +
+              "legitimately grew this key, sync " +
+              "EXPECTED_MODEL_PROBE_ENV_ALLOWLIST in this file",
+          );
+          assert.equal(
+            value,
+            process.env[key],
+            `${label} forwarded a fabricated value for ${key}`,
+          );
+          // The repository-path-leak check deliberately EXEMPTS the executable
+          // search path. `PATH`/`PATHEXT` are allowlisted on purpose (see
+          // MODEL_PROBE_ENV_ALLOWLIST's own doc comment in
+          // apps/cli/src/model-probe.ts: the client needs PATH to be launchable
+          // at all) and are forwarded verbatim from the ambient environment, so
+          // their value legitimately contains whatever the invoking shell put
+          // there -- npm itself prepends `<repo root>/node_modules/.bin` to
+          // PATH for every `npm run` script, which is exactly how this suite
+          // runs in the repo and in CI (`npm run test:release`). Asserting no
+          // checkout path appears in PATH would therefore fail for a reason
+          // that has nothing to do with the product leaking source: the value
+          // is the caller's, not something the probe constructed. What still
+          // guards these two keys is the `value === process.env[key]` assertion
+          // immediately above (verbatim ambient forwarding, nothing fabricated
+          // or augmented) plus the allowlist-subset assertion; the argv and cwd
+          // assertions above cover the paths the probe itself chooses. Every
+          // other forwarded key keeps the full leak check.
+          const isExecutableSearchPathKey =
+            key.toUpperCase() === "PATH" || key.toUpperCase() === "PATHEXT";
+          if (!isExecutableSearchPathKey) {
+            for (const fragment of forbiddenPathFragments) {
+              assert.ok(
+                !normalize(value).includes(fragment),
+                `${label} forwarded environment key ${key} containing a ` +
+                  "repository path",
+              );
+            }
+          }
+        }
+        assert.equal(
+          invocation.env[PROBE_ENV_SENTINEL_KEY],
+          undefined,
+          `${label} must not forward the non-allowlisted ambient sentinel ` +
+            `key ${PROBE_ENV_SENTINEL_KEY}`,
+        );
+
+        // Bounded by construction. Only the structural bound shape is checked
+        // here: the exact pinned maxima (MODEL_PROBE_TIMEOUT_MS /
+        // MODEL_PROBE_MAX_OUTPUT_BYTES) are unexported from every packed
+        // artifact and already covered by apps/cli/src/model-probe.test.ts, so
+        // re-asserting hard-coded copies of them at this seam would add
+        // coupling without adding published-artifact evidence.
+        assert.ok(
+          Number.isInteger(invocation.timeoutMs) && invocation.timeoutMs > 0,
+          `${label} must carry a positive integer timeout`,
+        );
+        assert.ok(
+          Number.isInteger(invocation.maxOutputBytes) &&
+            invocation.maxOutputBytes > 0,
+          `${label} must carry a positive integer output bound`,
+        );
+      }
+
+      // Each probed candidate's temporary working directory was removed again
+      // before the run returned, and nothing else was removed: exactly one
+      // `rm` per invocation, targeting exactly the directories the invocations
+      // actually ran in (compared as sorted sets, since neither ordering is
+      // contractual). See the probeTempMutations declaration above for why this
+      // is the observable half of the create/remove pair.
+      const describeProbeTempMutations = () =>
+        probeTempMutations
+          .map(({ method, target }) => `${method}(${target})`)
+          .join(", ") || "(none)";
+      assert.deepEqual(
+        probeTempMutations.map(({ method }) => method),
+        invocations.map(() => "rm"),
+        "expected exactly one node:fs/promises rm() per probe invocation for " +
+          `temporary-probe-directory cleanup, observed: ${describeProbeTempMutations()}`,
+      );
+      assert.deepEqual(
+        probeTempMutations.map(({ target }) => path.resolve(target)).sort(),
+        invocations.map(({ cwd }) => path.resolve(cwd)).sort(),
+        "the removed temporary probe directories must be exactly the working " +
+          `directories the probe invocations ran in, observed: ${describeProbeTempMutations()}`,
+      );
+
+      // One recorded result per planned selection (same `available`
+      // short-circuit reasoning as the process count above), rendered in the
+      // preview before the write confirmation and still present at the end.
+      const consentedSummaryLine = `Model probe: consented (${expectedProbeSelections.length} result(s))`;
+      assert.ok(
+        state.stdoutAtConfirmation !== undefined,
+        "prompts.confirmWritePlan must be invoked during the consented-probe " +
+          "scenario",
+      );
+      assert.ok(
+        state.stdoutAtConfirmation.includes(consentedSummaryLine),
+        `expected the consented probe summary line ${JSON.stringify(consentedSummaryLine)} ` +
+          "in the stdout captured at write confirmation, got:\n" +
+          state.stdoutAtConfirmation,
+      );
+      assert.ok(
+        consentStdout.includes(consentedSummaryLine),
+        `expected the consented probe summary line ${JSON.stringify(consentedSummaryLine)} ` +
+          "in the final stdout, got:\n" +
+          consentStdout,
+      );
+      assert.ok(
+        !consentStdout.includes(declinedSummaryLine),
+        "a consented probe must not also render the declined summary line " +
+          `${JSON.stringify(declinedSummaryLine)}, got:\n${consentStdout}`,
+      );
+      assert.match(consentStdout, /No files written\./u);
+      assert.deepEqual(
+        snapshot(consentRepository),
+        before,
+        "consenting to the probe but declining the write plan must not write " +
+          "anything into the repository",
+      );
+    },
+  );
 });

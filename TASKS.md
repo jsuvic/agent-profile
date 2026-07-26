@@ -1632,6 +1632,99 @@ product code, `TASKS.md` (until this entry), or the sibling precedent file
 were touched. State stays `ready`, not `done` - same open scope as the
 cycle-1 entry above.
 
+I9 second RED-first `/implement-next` cycle completed 2026-07-26, another
+disclosed partial slice in the same owned file
+(`scripts/release/phase31_5-published-journey.test.mjs`, no product code
+touched). Closes exactly one more acceptance-criteria fragment - "probe
+decline and one normalized probe path" - as two `await t.test(...)` subtests
+inside the existing top-level test body, deliberately reusing the one
+expensive `buildPackedWorkspaces()` + seven `npm pack` runs rather than
+paying them again in a second top-level `test()`; cycle 1's assertions are
+untouched. Scenario A (decline): scripted headless prompts with
+`confirmModelProbe -> false` plus an injected fake `probeRunner` prove the
+injected runner is invoked zero times (recorded invocations, not just a
+count - `runModelProbe`'s consent gate returns before touching the runner
+seam), that `confirmModelProbe` was genuinely reached with `default: false`
+and disclosed a call bound at least as large as the planned selections (so
+"zero invocations" cannot pass by skipping the step), that the exact declined
+summary line rendered in a stdout snapshot captured *inside*
+`confirmWritePlan` (proving preview-before-confirmation, not merely
+present-somewhere), and that nothing was written (strict `withFsWriteSentinel`
+plus `snapshot()` equality). Scenario B (one normalized consented path, fake
+runner returning `{exitCode:0, stdout:"OK"}` which the real classifier maps to
+`available`): exactly one process per planned selection - correct by contract,
+not coincidence, since `available` breaks out of the candidate loop before any
+ordered alternative runs - and within the `maxCalls` bound disclosed to the
+user; per invocation, the pinned source-free/non-persistent contract from
+`docs/research/013-model-probe-invocation-evidence.md` is asserted against the
+invocation object the fake runner actually receives: correct executable,
+`--model <exact model resolved by the packed compiler>`, the fixed
+content-free prompt verbatim exactly once, Codex's isolation/non-persistence
+argv (`exec --sandbox read-only`, `--skip-git-repo-check`, `--ephemeral`,
+`--ignore-user-config`, `--ignore-rules`) with adjacency enforced, a
+`-c model_reasoning_effort=` argument, no repository/checkout path anywhere in
+argv, a fresh empty cwd outside both the fixture repo and this checkout,
+an environment restricted to `MODEL_PROBE_ENV_ALLOWLIST` with every forwarded
+value equal to the real ambient value and a deliberately injected
+non-allowlisted ambient sentinel key proven dropped. `withFsWriteSentinel`
+gained an optional `allowMutation(method, target)` predicate (omitting it
+preserves cycle 1's strict behavior byte-for-byte, and scenario A uses the
+strict form); scenario B needs it because `runModelProbe` legitimately `rm`s
+its own temporary probe directory, and the predicate is narrowed to
+`os.tmpdir()` paths prefixed `agent-profile-probe-` only, with the resulting
+`rm` calls asserted 1:1 against the invocation cwds rather than merely
+collected - so the allowance is proven necessary instead of leaving an
+unexercised hole. Both scenarios run the packed `import()` and `runCli` inside
+`withRuntimeSentinels`. Spec review returned ISSUES_FOUND with one genuine
+HIGH defect the implementer's own bare `node --test` run could not see: the
+"no repository path in any forwarded env value" assertion also applied to
+`PATH`, which the product intentionally allowlists and forwards verbatim, and
+`npm run` prepends `<repo root>/node_modules/.bin` to it - so the assertion
+failed under the repo's own `npm run test:release`/CI invocation. Fixed by
+exempting `PATH`/`PATHEXT` from the leak check only (the value-equals-ambient
+and allowlist-subset assertions still guard those keys), and the RED was
+re-captured through `npm run test:release` to prove it. Spec review's two
+other findings were fixed the same round (the `allowMutation` predicate had
+been wider than its own disclosure, permitting any mutation outside the repo
+including HOME/config and the extracted `node_modules` graph; and the subtest
+named "non-persistent invocation" asserted none of the pinned isolation
+flags). Code-quality review returned ISSUES_FOUND with no blockers; landed
+this cycle: four `assert.ok(..., rawStdout)` calls whose messages replaced the
+diff with a wall of stdout without naming the expected line, the write-only
+`probeTempMutations` list described above, the effort-forwarding check, two
+overclaiming comments (the header and in-loop comments implied both clients'
+isolation rows were exercised, but `probeClients = ["codex"]`, so the Claude
+row is a dormant pinned expectation - now stated as such), and prettier
+formatting (this file is covered by the root `prettier --write .` but not by
+`npm run check`, since `scripts/` is outside every workspace). Verified:
+`npm run test:release` passes all three tests in this file (64 tests, 63 pass,
+1 fail - the untouched sibling `scripts/release/phase31-published-journey.test.mjs`
+hitting the same pre-existing MSYS/Git-for-Windows `tar` drive-letter bug
+already documented in cycle 1, unrelated to this change); `npm run check`
+clean. Disclosed, accepted tradeoffs: four hard-coded oracle copies (fixed
+prompt, env allowlist, isolation argv, temp-dir prefix) because
+`apps/cli/src/model-probe.ts` is re-exported by no packed artifact (the packed
+CLI's only real exports are `runCli` and `CLI_VERSION`) - re-verified, not
+assumed, each with an in-file source-of-truth pointer and a failure message
+naming the file to sync; the allowlist coupling is subset-only, so a *shrunk*
+allowlist still passes; probe bounds are checked structurally only (the pinned
+maxima are unexported and already unit-tested in
+`apps/cli/src/model-probe.test.ts`); the effort *value* mapping is not
+re-derived; the cwd-inside-`os.tmpdir()` assertion is near-tautological and
+labelled as such; Claude's isolation row activates only when a later scenario
+selects `claude`. Code-quality follow-up deferred by explicit agreement, to be
+done BEFORE the next scenario is added to this file rather than after:
+extract the ~200-line per-invocation assertion loop into named helpers,
+extract a shared `runPackedProbeInit` harness (the two scenarios currently
+copy the whole run scaffolding), and de-index-couple the
+`expectedProbeSelections[index]` pairing (harmless with one client, will
+silently mispair once a scenario selects both). Still left open for later I9
+cycles: Tabnine organization/private manual path and the ownership-aware
+settings-file write path, normal compile lock reuse, upgrade retain/adopt,
+offline Doctor, the full published-asset inventory beyond model-policy
+assets, the final spec-to-test matrix document, and release-notes/
+documentation-impact deliverables. State stays `ready`, not `done`.
+
 ## phase-31.9: Upgrade "custom exact" model-policy strategy (`docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`)
 
 Descoped from Phase 31.5 I6a on 2026-07-21 (see I6a's own brief amendment):
