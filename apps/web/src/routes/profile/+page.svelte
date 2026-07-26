@@ -963,6 +963,63 @@
         <pre class="diff-pre">{diffText}</pre>
       {/if}
 
+      {#if reviewedModelPolicy}
+        <section class="reviewed-policy" aria-label="Reviewed model policy">
+          <div class="mp-role-head">
+            <span class="upper">Candidate resolved model policy</span>
+            <span class="chip">{reviewedModelPolicy.preset}</span>
+            <span class="mp-meta">catalog v{reviewedModelPolicy.catalogVersion}</span>
+          </div>
+          <div class="mp-roles">
+            {#each reviewedModelPolicy.rows as row (row.role)}
+              <div class="mp-role">
+                <div class="mp-role-head">
+                  <span class="mp-role-name">{row.role}</span>
+                  {#if row.primary}<Badge tone="accent">primary</Badge>{/if}
+                  <span class="chip">{row.capability}</span>
+                  <span class="chip">{row.effort}</span>
+                </div>
+                {#each row.cells as cell (cell.client)}
+                  <div class="mp-cell">
+                    <div class="mp-line">
+                      <span class="mp-client">{CLIENT_LABELS[cell.client]}</span>
+                      <span class="chip" class:del={cell.model === undefined}>{modelLabel(cell)}</span>
+                      {#if cell.model !== undefined}
+                        <Badge tone={lifecycleTone(cell.lifecycle)}>{cell.lifecycleLabel}</Badge>
+                      {/if}
+                      {#if cell.effort}<span class="chip">effort {cell.effort}</span>{/if}
+                      <span class="mp-meta">source {cell.source}</span>
+                    </div>
+                    <div class="mp-line mp-sub">
+                      {#each cell.statuses as entry (entry.surface)}
+                        <span class="mp-meta">{SURFACE_LABELS[entry.surface]}</span>
+                        <Badge tone={statusTone(entry.status)}>{entry.status}</Badge>
+                      {/each}
+                    </div>
+                    {#if cell.alternatives.length > 0}
+                      <div class="mp-line mp-sub">
+                        <span class="mp-meta">alternatives</span>
+                        {#each cell.alternatives as alternative (alternative)}
+                          <span class="chip">{alternative}</span>
+                        {/each}
+                      </div>
+                    {/if}
+                    {#if cell.guidedManualSelection && cell.guidedCandidates.length > 0}
+                      <div class="mp-line mp-sub">
+                        <span class="mp-meta">documented options</span>
+                        {#each cell.guidedCandidates as candidate (candidate)}
+                          <span class="chip">{candidate}</span>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/each}
+          </div>
+        </section>
+      {/if}
+
       {#if saveError}
         <div class="warn-callout" style="margin-top: 8px;">
           <span class="icon">!</span>{saveError}
@@ -1088,6 +1145,14 @@
     font-size: 11px;
   }
   .mp-editor label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-3); }
+  .reviewed-policy {
+    margin: 12px 16px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: auto;
+    max-height: 38vh;
+  }
 
   /* Diff modal */
   .modal-overlay {

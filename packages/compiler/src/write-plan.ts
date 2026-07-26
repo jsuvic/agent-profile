@@ -524,7 +524,12 @@ async function rollbackAtomicTargets(
   for (const relativePath of unrestored) {
     const target = targets.find((item) => item.path === relativePath);
     if (!target) continue;
-    if (await pathExists(target.absolutePath)) stillPresent.push(relativePath);
+    if (
+      target.backup !== undefined ||
+      (await pathExists(target.absolutePath))
+    ) {
+      stillPresent.push(relativePath);
+    }
   }
 
   return stillPresent;

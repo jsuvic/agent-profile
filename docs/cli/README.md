@@ -321,9 +321,10 @@ recognize:
 - The step only appears when Tabnine is a selected client, and only asks
   "Customize further?" — declining (the default) leaves the guided-manual
   path above unchanged.
-- Opting in and typing a model id is validated only for shape (length,
-  control characters); an uncatalogued/unrecognized id is **never rejected**,
-  it is accepted and labelled `unverified, uncatalogued` in the preview, e.g.:
+- Opting in and typing a model id is validated for shape (length and control
+  characters) and rejected when it is secret-like. Any other
+  uncatalogued/unrecognized organization or private id is accepted and labelled
+  `unverified, uncatalogued` in the preview, e.g.:
 
   ```text
   Tabnine: exact override org-acme-private-finetune-7 [unverified, uncatalogued]

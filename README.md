@@ -119,10 +119,11 @@ unchanged — there is no partial migration.
 for every preset, one row per role with the exact Codex and Claude model
 identifier, the target effort, the catalog lifecycle (`current`,
 `supported-legacy`, `deprecated`, `retired`, or `unrated`), and a capability
-status — before the preset choice commits, and again in the final write plan.
-Selection is never presented as only a `strongest`/`balanced` label. The model
-catalog ships with the release as versioned package data (catalog version `3`);
-resolving it is fully offline and deterministic.
+status — before the preset choice commits. The final write plan repeats the
+primary workflow role's exact Codex/Claude mapping. Selection is never presented
+as only a `strongest`/`balanced` label. The model catalog ships with the release
+as versioned package data (catalog version `3`); resolving it is fully offline
+and deterministic.
 
 Each row states honestly what Agent Profile actually does with that selection:
 

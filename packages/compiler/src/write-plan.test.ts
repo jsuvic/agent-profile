@@ -938,6 +938,61 @@ test("applyWritePlanAtomic reports paths it could not restore instead of claimin
   });
 });
 
+test("applyWritePlanAtomic reports a deleted target whose restoration fails", async () => {
+  await withTempRoot(async (root) => {
+    const deletedTarget = path.join(root, "a-delete.txt");
+    await writeFile(deletedTarget, "original\n", "utf8");
+
+    const realRename = fsPromises.rename;
+    let restoreAttempted = false;
+    (fsPromises as unknown as { rename: unknown }).rename = async (
+      source: unknown,
+      destination: unknown,
+    ): Promise<void> => {
+      if (
+        destination === deletedTarget &&
+        typeof source === "string" &&
+        source.startsWith(deletedTarget)
+      ) {
+        restoreAttempted = true;
+        throw Object.assign(new Error("restore blocked"), { code: "EPERM" });
+      }
+      return (realRename as (...args: unknown[]) => Promise<void>)(
+        source,
+        destination,
+      );
+    };
+
+    try {
+      await assert.rejects(
+        () =>
+          applyWritePlanAtomic({
+            rootDir: root,
+            writes: [
+              { path: "a-delete.txt", delete: true },
+              { path: "zdir", bytes: "file-at-dir-path\n" },
+              { path: "zdir/x.txt", bytes: "inner\n" },
+            ],
+          }),
+        (error: unknown) => {
+          assert.ok(error instanceof AtomicWritePlanError);
+          assert.equal(error.stage, "rollback-incomplete");
+          assert.deepEqual(error.unrestoredPaths, ["a-delete.txt"]);
+          return true;
+        },
+      );
+    } finally {
+      (fsPromises as unknown as { rename: unknown }).rename = realRename;
+    }
+
+    assert.ok(restoreAttempted, "the deleted target restore was attempted");
+    await assert.rejects(
+      () => readFile(deletedTarget),
+      "the failed restore leaves the pre-existing target absent",
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Finding 1 (PR review, third round): a chown failure during ROLLBACK RESTORE
 // (not forward staging) must not silently proceed with a rename that leaves
