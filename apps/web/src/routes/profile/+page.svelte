@@ -25,6 +25,7 @@
     buildCandidateProfile,
     parseSlugList,
     permissionsChangedFrom,
+    updateModelPolicyOverride,
     workflowDraftFromProfile,
     workflowFlagEnabled,
     workflowHasChanges,
@@ -88,6 +89,7 @@
   });
 
   let validationErrors = $state<Record<string, string>>({});
+  let transientOverrideRoles = new Set<ModelPolicyRoleId>();
 
   let effective = $derived(view.ok ? view : null);
 
@@ -98,6 +100,7 @@
   });
 
   function initDraft(v: ProfileViewModel) {
+    transientOverrideRoles = new Set<ModelPolicyRoleId>();
     draft = {
       name: v.name,
       description: v.description,
@@ -262,6 +265,7 @@
     value: string,
   ) {
     if (!draft.subagentPolicy) return;
+    transientOverrideRoles.delete(role);
     const current = roleIntent(role, fallback);
     draft.subagentPolicy = {
       ...draft.subagentPolicy,
@@ -278,39 +282,22 @@
 
   function updateOverride(role: ModelPolicyRoleId, client: "codex" | "claude" | "tabnine", value: string) {
     if (!draft.subagentPolicy) return;
-    const existing = draft.subagentPolicy.roles?.[role];
     const row = modelPolicy?.rows.find((candidate) => candidate.role === role);
     const fallback = row ? presetFallback(role, row) : undefined;
-    if (!existing && !fallback) return;
-    const base = existing ?? {
-      capability: fallback!.capability,
-      effort: fallback!.effort,
-    };
-    const overrides = { ...base.overrides };
-    if (value.trim()) {
-      overrides[client] = { ...overrides[client], model: value.trim() };
-    } else {
-      const current = overrides[client];
-      if (!current) {
-        delete overrides[client];
-      } else {
-        const { model: _removedModel, ...remaining } = current;
-        if (Object.keys(remaining).length > 0) overrides[client] = remaining;
-        else delete overrides[client];
-      }
-    }
-    const nextRole = Object.keys(overrides).length > 0 ? { ...base, overrides } : undefined;
-    const roles = { ...draft.subagentPolicy.roles };
-    if (nextRole) {
-      roles[role] = nextRole;
-    } else {
-      // A role synthesized only for a now-cleared override must not become a
-      // persisted intent: that would freeze the current preset fallback.
-      delete roles[role];
-    }
+    if (!fallback) return;
+    const updated = updateModelPolicyOverride({
+      roles: draft.subagentPolicy.roles,
+      role,
+      fallback,
+      client,
+      value,
+      transient: transientOverrideRoles.has(role),
+    });
+    if (updated.transient) transientOverrideRoles.add(role);
+    else transientOverrideRoles.delete(role);
     draft.subagentPolicy = {
       ...draft.subagentPolicy,
-      roles: Object.keys(roles).length > 0 ? roles : undefined,
+      roles: updated.roles,
     };
   }
 

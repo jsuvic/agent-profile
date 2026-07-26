@@ -152,10 +152,32 @@ export async function resolveTabnineModelSettings(
   model: string | undefined = undefined,
   includeTabnine: boolean = true,
 ): Promise<
-  { model: string | undefined; ownership: TabnineSettingsOwnership } | undefined
+  | {
+      model: string | undefined;
+      ownership: TabnineSettingsOwnership;
+      preservedOutput?: LockOutputV2;
+    }
+  | undefined
 > {
-  if (!profile.clients.tabnine.enabled || !includeTabnine) {
+  if (!profile.clients.tabnine.enabled) {
     return undefined;
+  }
+  const ownership = await classifyTabnineSettingsOwnership(rootDir);
+  if (!includeTabnine) {
+    const lockfile =
+      ownership === "generated-owned"
+        ? await readLockfileForRegions(rootDir)
+        : undefined;
+    const preservedOutput = lockfile?.outputs.find(
+      (output) =>
+        output.path === TABNINE_SETTINGS_PATH &&
+        output.ownership === "generated-owned",
+    );
+    return {
+      model: undefined,
+      ownership,
+      ...(preservedOutput ? { preservedOutput } : {}),
+    };
   }
   // An explicit wizard choice is deliberately usable without model policy,
   // but a persisted role override is only authoritative for an enabled v3
@@ -174,7 +196,7 @@ export async function resolveTabnineModelSettings(
       requestedModel && containsSecretLikeLiteral(requestedModel)
         ? undefined
         : requestedModel,
-    ownership: await classifyTabnineSettingsOwnership(rootDir),
+    ownership,
   };
 }
 
@@ -266,6 +288,10 @@ export async function planRegionAwareWrites(
 
 export type CompileWritesResult = {
   writes: PlannedWrite[];
+  /** Actual settings-file mutation, independent from the guidance-level
+   * Tabnine plan. A generated-owned deletion remains advisory at the target
+   * adapter level but still requires atomic application and accurate output. */
+  tabnineMutation?: "write" | "delete";
   /** Present only when `input.tabnineModelSettings` was supplied: the
    * ownership-aware decision (`write` or `advisory`) for
    * `.tabnine/agent/settings.json`, so callers can render the same
@@ -300,6 +326,7 @@ export function buildCompileWrites(input: {
     model: string | undefined;
     ownership: TabnineSettingsOwnership;
     catalog?: readonly ModelCatalogEntry[];
+    preservedOutput?: LockOutputV2;
   };
 }): CompileWritesResult {
   if (input.profile && hasSecretLikeModelOverride(input.profile)) {
@@ -329,7 +356,8 @@ export function buildCompileWrites(input: {
   let tabninePlan: ModelPolicyTabnineSettingsPlan | undefined;
   let tabnineWrite: PlannedWrite | undefined;
   let tabnineDelete: PlannedWrite | undefined;
-  if (input.tabnineModelSettings) {
+  const preservedTabnineOutput = input.tabnineModelSettings?.preservedOutput;
+  if (input.tabnineModelSettings && !preservedTabnineOutput) {
     tabninePlan = planTabnineModelSettingsWrite(
       input.tabnineModelSettings.model,
       input.tabnineModelSettings.ownership,
@@ -339,7 +367,11 @@ export function buildCompileWrites(input: {
       tabnineWrite = { path: TABNINE_SETTINGS_PATH, bytes: tabninePlan.bytes };
     } else if (
       input.tabnineModelSettings.model === undefined &&
-      input.tabnineModelSettings.ownership === "generated-owned"
+      input.tabnineModelSettings.ownership === "generated-owned" &&
+      persistedTabnineOverrideWasRemoved(
+        input.profile,
+        input.previousModelPolicy,
+      )
     ) {
       // The old generated selection must not survive after its persisted
       // override is removed. Include this in the same transaction as the
@@ -352,7 +384,8 @@ export function buildCompileWrites(input: {
     input.regionPlan.manualOutputs.length > 0 ||
     input.existingUpgrade ||
     tabnineWrite ||
-    tabnineDelete
+    tabnineDelete ||
+    preservedTabnineOutput
   ) {
     const parsed = validateLockfileText(
       Buffer.from(lockfile.bytes).toString("utf8"),
@@ -386,6 +419,11 @@ export function buildCompileWrites(input: {
       outputs = outputs.filter(
         (output) => output.path !== TABNINE_SETTINGS_PATH,
       );
+    } else if (preservedTabnineOutput) {
+      outputs = [
+        ...outputs.filter((output) => output.path !== TABNINE_SETTINGS_PATH),
+        preservedTabnineOutput,
+      ];
     }
     view.outputs = outputs.sort((left, right) =>
       left.path.localeCompare(right.path),
@@ -402,14 +440,41 @@ export function buildCompileWrites(input: {
       { path: lockfile.path, bytes: lockfile.bytes },
     ],
     ...(tabninePlan ? { tabnine: tabninePlan } : {}),
+    ...(tabnineWrite
+      ? { tabnineMutation: "write" as const }
+      : tabnineDelete
+        ? { tabnineMutation: "delete" as const }
+        : {}),
   };
 }
 
-function hasSecretLikeModelOverride(profile: AiProfile): boolean {
+function persistedTabnineOverrideWasRemoved(
+  profile: AiProfile | undefined,
+  previousModelPolicy: LockModelPolicyV2 | undefined,
+): boolean {
+  if (!profile || !previousModelPolicy) return false;
+  const currentModel =
+    profile.subagentPolicy?.enabled === true && profile.subagentPolicy.preset
+      ? profile.subagentPolicy.roles?.[MODEL_POLICY_PRIMARY_ROLE]?.overrides
+          ?.tabnine?.model
+      : undefined;
+  return (
+    currentModel === undefined &&
+    previousModelPolicy.resolutions.some(
+      (resolution) =>
+        resolution.client === "tabnine" &&
+        resolution.role === MODEL_POLICY_PRIMARY_ROLE &&
+        resolution.source === "explicit-override",
+    )
+  );
+}
+
+export function hasSecretLikeModelOverride(profile: AiProfile): boolean {
   return Object.values(profile.subagentPolicy?.roles ?? {}).some((role) =>
     Object.values(role.overrides ?? {}).some(
       (override) =>
-        override.model !== undefined && containsSecretLikeLiteral(override.model),
+        override.model !== undefined &&
+        containsSecretLikeLiteral(override.model),
     ),
   );
 }

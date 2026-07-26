@@ -74,6 +74,7 @@ import {
   computeOfferedCapabilities,
   DEFAULT_MODEL_POLICY_PRESET,
   deriveEffectivePermissions,
+  MODEL_POLICY_PRESET_TABLE,
   parseProfileYaml,
   resolveEffectiveSubagentPolicy,
   verifyPresetToken,
@@ -102,6 +103,7 @@ import type { LogoCommand } from "./branding.js";
 import {
   buildCompileWrites,
   findLockfileOwnedDrift,
+  hasSecretLikeModelOverride,
   planCompileDryRun,
   planRegionAwareWrites,
   resolveTabnineModelSettings,
@@ -954,6 +956,18 @@ async function runUpgrade(
   });
   if (!profileResult.ok) {
     io.stderr(formatValidationIssues(profileResult.issues));
+    return 1;
+  }
+
+  if (hasSecretLikeModelOverride(profileResult.profile)) {
+    io.stderr(
+      formatSimpleError(
+        "subagentPolicy model overrides",
+        "non-secret model identifiers",
+        "secret-like value",
+        "Remove the blocked model override from ai-profile.yaml before compiling.",
+      ),
+    );
     return 1;
   }
   let lockfileView: AiProfileLockV2 | undefined;
@@ -2996,6 +3010,18 @@ async function runCompile(
     return 1;
   }
 
+  if (hasSecretLikeModelOverride(profileResult.profile)) {
+    io.stderr(
+      formatSimpleError(
+        "subagentPolicy model overrides",
+        "non-secret model identifiers",
+        "secret-like value",
+        "Remove the blocked model override from ai-profile.yaml before compiling.",
+      ),
+    );
+    return 1;
+  }
+
   // Read the prior lock's `modelPolicy` block EARLY, before compiling, so the
   // rendered generated files (AGENTS.md/.codex/config.toml) and the lockfile
   // this run eventually writes reconcile against the exact same previous
@@ -3098,8 +3124,7 @@ async function runCompile(
           profile: profileResult.profile,
           profilePath: safeProfilePath.path,
           profileBytes,
-          includeTabnine:
-            parsed.targets.length === 0,
+          includeTabnine: parsed.targets.length === 0,
         });
       }
     }
@@ -3138,7 +3163,7 @@ async function runCompile(
     parsed.targets.length === 0,
   );
 
-  const { writes, tabnine } = buildCompileWrites({
+  const { writes, tabnine, tabnineMutation } = buildCompileWrites({
     profilePath: safeProfilePath.path,
     profileBytes,
     templates: compileResult.templates,
@@ -3183,7 +3208,7 @@ async function runCompile(
   }
 
   const plan = await createOrApplyWritePlan(rootDir, writes, parsed.write, io, {
-    atomic: tabnine?.action === "write",
+    atomic: tabnineMutation !== undefined,
   });
 
   if (!plan) {
@@ -3223,7 +3248,13 @@ async function runCompile(
         presenter.logInfo(note.message);
       }
     }
-    if (tabnine?.action === "advisory") {
+    if (tabnineMutation === "delete") {
+      presenter.logInfo(
+        parsed.write
+          ? `${TABNINE_SETTINGS_PATH} removed after its persisted override was cleared.`
+          : `${TABNINE_SETTINGS_PATH} would be removed because its persisted override was cleared.`,
+      );
+    } else if (tabnine?.action === "advisory") {
       presenter.logInfo(
         `${TABNINE_SETTINGS_PATH} left untouched: ${tabnine.guidance}`,
       );
@@ -3246,7 +3277,11 @@ async function runCompile(
     );
   }
 
-  if (tabnine?.action === "advisory") {
+  if (tabnineMutation === "delete") {
+    io.stdout(
+      `\nNotes:\n- ${TABNINE_SETTINGS_PATH} ${parsed.write ? "removed" : "would be removed"} because its persisted override was cleared.\n`,
+    );
+  } else if (tabnine?.action === "advisory") {
     io.stdout(
       `\nNotes:\n- ${TABNINE_SETTINGS_PATH} left untouched: ${tabnine.guidance}\n`,
     );
@@ -3546,7 +3581,7 @@ async function runDriftReconciliation(input: {
     input.includeTabnine,
   );
 
-  const { writes, tabnine } = buildCompileWrites({
+  const { writes, tabnine, tabnineMutation } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: input.compileResult.templates,
@@ -3593,7 +3628,7 @@ async function runDriftReconciliation(input: {
     writes,
     input.write,
     io,
-    { atomic: tabnine?.action === "write" },
+    { atomic: tabnineMutation !== undefined },
   );
   if (!plan) {
     prompts.end(false);
@@ -3609,7 +3644,11 @@ async function runDriftReconciliation(input: {
       manualOwnedPaths,
     ),
   );
-  if (tabnine?.action === "advisory") {
+  if (tabnineMutation === "delete") {
+    io.stdout(
+      `\nNotes:\n- ${TABNINE_SETTINGS_PATH} ${input.write ? "removed" : "would be removed"} because its persisted override was cleared.\n`,
+    );
+  } else if (tabnine?.action === "advisory") {
     io.stdout(
       `\nNotes:\n- ${TABNINE_SETTINGS_PATH} left untouched: ${tabnine.guidance}\n`,
     );
@@ -3896,6 +3935,9 @@ async function runInit(
     ...(wizardModelPreset === undefined
       ? {}
       : { modelPreset: wizardModelPreset }),
+    ...(wizardTabnineModelOverride === undefined
+      ? {}
+      : { tabnineModelOverride: wizardTabnineModelOverride }),
   });
   const validation = parseProfileYaml(profileText, {
     sourcePath: safeProfilePath.path,
@@ -4956,6 +4998,9 @@ function renderInitialProfile(input: {
    * output and lock provenance reflect what the write-plan preview showed,
    * instead of silently falling back to legacy mapping-v2 resolution. */
   modelPreset?: ModelPolicyPreset;
+  /** Exact Tabnine selection accepted by the advanced wizard. Persisting it
+   * makes the profile, generated settings, and next ordinary compile agree. */
+  tabnineModelOverride?: string;
 }): string {
   const safety = input.preferences?.safety ?? {
     mode: input.wizardCapabilities?.safetyMode ?? "guarded",
@@ -4972,10 +5017,18 @@ function renderInitialProfile(input: {
   const capabilities = input.wizardCapabilities
     ? renderInitialCapabilities(input.wizardCapabilities)
     : "";
+  const presetIntent =
+    input.modelPreset === undefined
+      ? undefined
+      : MODEL_POLICY_PRESET_TABLE[input.modelPreset][MODEL_POLICY_PRIMARY_ROLE];
   const subagentPolicy =
     input.modelPreset === undefined
       ? ""
-      : `subagentPolicy:\n  enabled: true\n  preset: ${input.modelPreset}\n`;
+      : `subagentPolicy:\n  enabled: true\n  preset: ${input.modelPreset}\n${
+          input.tabnineModelOverride === undefined || presetIntent === undefined
+            ? ""
+            : `  roles:\n    ${MODEL_POLICY_PRIMARY_ROLE}:\n      capability: ${presetIntent.capability}\n      effort: ${presetIntent.effort}\n      overrides:\n        tabnine:\n          model: ${JSON.stringify(input.tabnineModelOverride)}\n`
+        }`;
 
   return `version: 1
 profile:
@@ -5668,7 +5721,7 @@ async function writeCompiledClientFiles(input: {
     input.tabnineModelOverride,
   );
 
-  const { writes, tabnine } = buildCompileWrites({
+  const { writes, tabnine, tabnineMutation } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: compileResult.templates,
@@ -5685,7 +5738,9 @@ async function writeCompiledClientFiles(input: {
   try {
     return {
       ok: true,
-      plan: await applyWritePlan({ rootDir: input.rootDir, writes }),
+      plan: await (tabnineMutation
+        ? applyWritePlanAtomic({ rootDir: input.rootDir, writes })
+        : applyWritePlan({ rootDir: input.rootDir, writes })),
       ...(tabnine ? { tabnine } : {}),
     };
   } catch {

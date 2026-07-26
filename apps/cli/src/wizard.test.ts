@@ -245,9 +245,7 @@ async function materializeGeneratedWizardRoot(label: string): Promise<string> {
   return rootDir;
 }
 
-async function readWizardV2Lockfile(
-  rootDir: string,
-): Promise<AiProfileLockV2> {
+async function readWizardV2Lockfile(rootDir: string): Promise<AiProfileLockV2> {
   const result = validateLockfileText(
     await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
   );
@@ -407,14 +405,11 @@ test("phase-22 capability selection parses the automation loop skills checkbox",
     reviewerSubagents: false,
     advisoryHooks: false,
   });
-  assert.deepEqual(
-    parseWizardCapabilitySelection("base,automation", false),
-    {
-      skillPacks: ["base", "automation"],
-      reviewerSubagents: false,
-      advisoryHooks: false,
-    },
-  );
+  assert.deepEqual(parseWizardCapabilitySelection("base,automation", false), {
+    skillPacks: ["base", "automation"],
+    reviewerSubagents: false,
+    advisoryHooks: false,
+  });
   assert.match(
     formatWizardCapabilityQuestion({
       defaults: ["base", "review"],
@@ -1537,9 +1532,7 @@ test("regions wizard plan preserves markerless lockfile-owned root without inser
 });
 
 test("wizard lists the damaged mixed-markers path and exact repair note", async () => {
-  const rootDir = await materializeGeneratedWizardRoot(
-    "damaged-mixed-listing",
-  );
+  const rootDir = await materializeGeneratedWizardRoot("damaged-mixed-listing");
   const generatedBody = Buffer.from("generated body\n", "utf8");
   await writeFile(
     path.join(rootDir, "AGENTS.md"),
@@ -1719,7 +1712,10 @@ test("interactive wizard renders the write plan with exact per-client model/effo
   assert.match(text, /Model catalog version: \d+/u);
   // quality-first resolves the implementer role to the strongest Codex/Claude
   // exact identifiers; exact names must appear, never only capability labels.
-  assert.match(text, /Codex \(implementer\): gpt-5\.6-sol \[current, configured\]/u);
+  assert.match(
+    text,
+    /Codex \(implementer\): gpt-5\.6-sol \[current, configured\]/u,
+  );
   assert.match(
     text,
     /Claude \(implementer\): claude-fable-5 \[current, unverified\]/u,
@@ -1742,7 +1738,10 @@ test("a confirmed non-default model preset is persisted into ai-profile.yaml and
   assert.equal(code, 0, output.stderrText());
 
   const profile = await readFile(path.join(rootDir, "ai-profile.yaml"), "utf8");
-  assert.match(profile, /subagentPolicy:\n {2}enabled: true\n {2}preset: quality-first/u);
+  assert.match(
+    profile,
+    /subagentPolicy:\n {2}enabled: true\n {2}preset: quality-first/u,
+  );
 
   const lockfile = await readWizardV2Lockfile(rootDir);
   assert.equal(lockfile.modelPolicy?.preset, "quality-first");
@@ -1951,16 +1950,26 @@ test("a catalogued exact Tabnine override is written to .tabnine/agent/settings.
     output.stdoutText(),
     /Tabnine: exact override gpt-5\.4 \[catalogued\]/u,
   );
-  const settingsPath = path.join(
-    rootDir,
-    ".tabnine",
-    "agent",
-    "settings.json",
-  );
+  const settingsPath = path.join(rootDir, ".tabnine", "agent", "settings.json");
   const written = JSON.parse(await readFile(settingsPath, "utf8")) as {
     model: { id: string };
   };
   assert.deepEqual(written, { model: { id: "gpt-5.4" } });
+  const profileText = await readFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    "utf8",
+  );
+  assert.match(profileText, /tabnine:\n\s+model: "gpt-5\.4"/u);
+
+  const compileOutput = createOutput();
+  const compileCode = await runCli(
+    ["compile", "--root", rootDir, "--write", "--force"],
+    { io: compileOutput },
+  );
+  assert.equal(compileCode, 0, compileOutput.stderrText());
+  assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), {
+    model: { id: "gpt-5.4" },
+  });
 });
 
 test("an uncatalogued exact Tabnine override is accepted, written, and labelled unverified/uncatalogued in the preview", async () => {
@@ -1982,12 +1991,7 @@ test("an uncatalogued exact Tabnine override is accepted, written, and labelled 
     output.stdoutText(),
     /Tabnine: exact override org-acme-private-finetune-7 \[unverified, uncatalogued\]/u,
   );
-  const settingsPath = path.join(
-    rootDir,
-    ".tabnine",
-    "agent",
-    "settings.json",
-  );
+  const settingsPath = path.join(rootDir, ".tabnine", "agent", "settings.json");
   const written = JSON.parse(await readFile(settingsPath, "utf8")) as {
     model: { id: string };
   };
@@ -1998,12 +2002,7 @@ test("an existing unowned .tabnine/agent/settings.json is preserved byte-for-byt
   const rootDir = await createTsRoot("advanced-override-unowned-preserved");
   await mkdir(path.join(rootDir, ".tabnine", "agent"), { recursive: true });
   const originalBytes = '{"userWroteThis": true}\n';
-  const settingsPath = path.join(
-    rootDir,
-    ".tabnine",
-    "agent",
-    "settings.json",
-  );
+  const settingsPath = path.join(rootDir, ".tabnine", "agent", "settings.json");
   await writeFile(settingsPath, originalBytes, "utf8");
 
   const prompts = scriptedPrompts({

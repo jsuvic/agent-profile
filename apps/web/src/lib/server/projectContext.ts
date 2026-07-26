@@ -90,7 +90,12 @@ export async function readTabnineSettingsOwnership(
   // The file is now proven to be a regular, generated-owned repository
   // output. Only at this point is reading its bytes permitted for the drift
   // hash check; unowned settings files may contain arbitrary user data.
-  const existing = await readRegionAwareFile(rootDir, TABNINE_SETTINGS_PATH);
+  let existing: Awaited<ReturnType<typeof readRegionAwareFile>>;
+  try {
+    existing = await readRegionAwareFile(rootDir, TABNINE_SETTINGS_PATH);
+  } catch {
+    return "unowned";
+  }
   if (existing.refused || !existing.bytes) return "unowned";
   return sha256Hex(existing.bytes) === output.sha256
     ? "generated-owned"
@@ -98,7 +103,9 @@ export async function readTabnineSettingsOwnership(
 }
 
 /** Reads the lock only when it is a repository-local regular file. */
-async function readSafeLockfileText(rootDir: string): Promise<string | undefined> {
+async function readSafeLockfileText(
+  rootDir: string,
+): Promise<string | undefined> {
   try {
     const lock = await readRegionAwareFile(rootDir, LOCK_FILENAME);
     if (lock.refused || !lock.bytes) return undefined;

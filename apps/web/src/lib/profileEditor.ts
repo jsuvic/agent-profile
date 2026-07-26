@@ -4,7 +4,66 @@
 import type {
   AiProfile,
   AiProfileEffectivePermissions,
+  ModelPolicyCapability,
+  ModelPolicyEffort,
+  ModelPolicyRoleId,
 } from "@agent-profile/core";
+
+type ModelPolicyRoles = NonNullable<
+  NonNullable<AiProfile["subagentPolicy"]>["roles"]
+>;
+
+export function updateModelPolicyOverride(input: {
+  roles: ModelPolicyRoles | undefined;
+  role: ModelPolicyRoleId;
+  fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort };
+  client: "codex" | "claude" | "tabnine";
+  value: string;
+  transient: boolean;
+}): { roles: ModelPolicyRoles | undefined; transient: boolean } {
+  const existing = input.roles?.[input.role];
+  const trimmed = input.value.trim();
+  if (!existing && !trimmed) {
+    return { roles: input.roles, transient: false };
+  }
+
+  const base = existing ?? input.fallback;
+  const overrides = { ...base.overrides };
+  if (trimmed) {
+    overrides[input.client] = {
+      ...overrides[input.client],
+      model: trimmed,
+    };
+  } else {
+    const current = overrides[input.client];
+    if (current) {
+      const { model: _removedModel, ...remaining } = current;
+      if (Object.keys(remaining).length > 0)
+        overrides[input.client] = remaining;
+      else delete overrides[input.client];
+    }
+  }
+
+  const roles = { ...input.roles };
+  const transient = input.transient || (!existing && Boolean(trimmed));
+  if (Object.keys(overrides).length > 0) {
+    roles[input.role] = { ...base, overrides };
+    return { roles, transient };
+  }
+  if (transient) {
+    delete roles[input.role];
+    return {
+      roles: Object.keys(roles).length > 0 ? roles : undefined,
+      transient: false,
+    };
+  }
+
+  // The role predated this override edit (or was explicitly edited through
+  // capability/effort controls), so clearing its final model must preserve
+  // that intent instead of silently reverting to the preset.
+  roles[input.role] = { ...base, overrides: undefined };
+  return { roles, transient: false };
+}
 
 export const WORKFLOW_CONTROLS = [
   { key: "sdd", label: "sdd" },

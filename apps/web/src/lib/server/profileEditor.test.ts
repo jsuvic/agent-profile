@@ -12,10 +12,60 @@ import type {
 import {
   buildCandidateProfile,
   buildWorkflowCandidate,
+  updateModelPolicyOverride,
   workflowDraftFromProfile,
   type ProfileCandidateDraft,
   type ProfileCandidateSource,
 } from "../profileEditor.js";
+
+test("model override clear removes only a transient fallback role", () => {
+  const added = updateModelPolicyOverride({
+    roles: undefined,
+    role: "implementer",
+    fallback: { capability: "balanced", effort: "high" },
+    client: "codex",
+    value: "gpt-5.4",
+    transient: false,
+  });
+  assert.equal(added.transient, true);
+
+  const cleared = updateModelPolicyOverride({
+    roles: added.roles,
+    role: "implementer",
+    fallback: { capability: "balanced", effort: "high" },
+    client: "codex",
+    value: "",
+    transient: added.transient,
+  });
+  assert.deepEqual(cleared, { roles: undefined, transient: false });
+});
+
+test("model override clear preserves pre-existing explicit role intent", () => {
+  const cleared = updateModelPolicyOverride({
+    roles: {
+      implementer: {
+        capability: "strongest",
+        effort: "high",
+        overrides: { codex: { model: "gpt-5.4" } },
+      },
+    },
+    role: "implementer",
+    fallback: { capability: "balanced", effort: "medium" },
+    client: "codex",
+    value: "",
+    transient: false,
+  });
+  assert.deepEqual(cleared, {
+    roles: {
+      implementer: {
+        capability: "strongest",
+        effort: "high",
+        overrides: undefined,
+      },
+    },
+    transient: false,
+  });
+});
 
 function candidateDraft(): ProfileCandidateDraft {
   return {
