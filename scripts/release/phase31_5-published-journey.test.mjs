@@ -45,9 +45,12 @@
 //      the fixed content-free prompt verbatim, Codex's pinned
 //      non-persistence/isolation flags, a fresh empty temporary working
 //      directory outside the repository that is removed again before the run
-//      returns, no repository path in argv or in any forwarded environment
-//      value other than the executable search path, and an allowlisted -- not
-//      ambient -- environment). Scope note: `probeClients` is `["codex"]`, so
+//      returns AND is provably gone from disk afterwards, no repository path
+//      in argv, no seeded fixture-repository FILE CONTENT in argv or in any
+//      forwarded environment value, an allowlisted -- not ambient --
+//      environment forwarded byte-for-byte verbatim, and no raw runner
+//      stdout/stderr surfacing in the captured streams or on disk). Scope
+//      note: `probeClients` is `["codex"]`, so
 //      Codex is the only client whose invocation contract these scenarios
 //      exercise; EXPECTED_PROBE_ISOLATION_ARGV's Claude row is a pinned
 //      expectation that activates only when a later scenario selects `claude`.
@@ -479,6 +482,21 @@ function snapshot(directory) {
   return rows;
 }
 
+// Relative paths of the files in a snapshot() result whose own bytes contain
+// `needle`. Used by the consented-probe scenario to state its
+// "nothing was written to disk" claim about raw probe output completely
+// rather than by implication: that scenario declines the write plan, so the
+// before/after snapshot equality already covers it, but a reader should not
+// have to derive "therefore no raw runner output landed on disk" from an
+// unrelated equality assertion.
+function snapshotFilesContaining(rows, needle) {
+  return rows
+    .filter(([, base64]) =>
+      Buffer.from(base64, "base64").toString("utf8").includes(needle),
+    )
+    .map(([filePath]) => filePath);
+}
+
 async function withRuntimeSentinels(action) {
   const originalFetch = globalThis.fetch;
   const originalChild = Object.fromEntries(
@@ -750,26 +768,81 @@ function assertWebDependencyVersionMatches() {
 // normalized consented probe path against the packed CLI).
 // ---------------------------------------------------------------------------
 
+// A unique, inert, secret-free string seeded into the CONTENTS of the probe
+// fixture repository's own files (see createProbeFixtureRepository below), so
+// the consented-probe scenario can assert that no probe invocation carries
+// repository CONTENT -- as opposed to a repository PATH, which is all
+// `forbiddenPathFragments` can catch. That distinction is the point: a
+// regression in which probe orchestration read `package.json`, repository
+// history, or another source file and appended its bytes as an extra
+// non-path argument (or into a forwarded environment value) would satisfy
+// every path-shaped assertion in this file while shipping source content to a
+// client process.
+//
+// Deliberately NOT a blanket filesystem-read sentinel over the whole `runCli`
+// call: `init` legitimately reads this very fixture repository (stack
+// detection reads package.json and tsconfig.json), so a read sentinel would
+// fail by design and prove nothing. Seeding a content marker and proving it
+// never reaches an invocation is the falsifiable form of the actual claim.
+//
+// Honest scope: this proves no seeded file's CONTENT reached the probe's argv
+// or forwarded environment. It does NOT prove the orchestrator never read
+// those files -- a read whose bytes never leave the process is invisible here
+// -- and it can only witness content from the files this helper seeds.
+//
+// Marker shape, chosen against apps/cli/src/model-probe.ts (checked, not
+// assumed): it matches no row of MODEL_PROBE_EVIDENCE_TABLE (no auth,
+// entitlement/forbidden, rate-limit/capacity, or provider/offline vocabulary,
+// and no bare 401/403/429/5xx token) and not SUCCESS_PATTERN's `\bok\b`, so
+// seeding it can never perturb probe classification if it ever did travel.
+const PROBE_FIXTURE_SOURCE_MARKER = "zzmarker-fixture-vulpine-31459-zz";
+
 // Minimal TypeScript-shaped fixture repository, matching the shape the
 // role-aware scenario below builds inline (a package.json with a typescript
 // devDependency plus a tsconfig.json), so the wizard detects a real language
 // and reaches the model/probe steps. Each probe scenario gets its OWN fresh
 // directory under the shared `temporary` root -- never the role-aware
 // scenario's, so no scenario can observe another's on-disk state.
+//
+// PROBE_FIXTURE_SOURCE_MARKER is seeded into two different kinds of file
+// content -- an extra inert manifest field (a file the wizard demonstrably
+// reads) and a real TypeScript source file -- and the repository shape stays
+// valid (typescript devDependency + tsconfig.json) so stack detection still
+// resolves TypeScript exactly as before. The seeding is then VERIFIED by
+// reading both files back off disk: without that check, a silently failed or
+// later-refactored seed would turn every downstream "the marker never
+// appears" assertion into a vacuous pass.
 function createProbeFixtureRepository(directory) {
   fs.mkdirSync(directory, { recursive: true });
+  const manifestPath = path.join(directory, "package.json");
+  const sourcePath = path.join(directory, "src", "probe-fixture-marker.ts");
   fs.writeFileSync(
-    path.join(directory, "package.json"),
+    manifestPath,
     JSON.stringify(
       {
         devDependencies: { typescript: "latest" },
         packageManager: "npm@11.0.0",
+        agentProfileFixtureMarker: PROBE_FIXTURE_SOURCE_MARKER,
       },
       null,
       2,
     ),
   );
   fs.writeFileSync(path.join(directory, "tsconfig.json"), "{}\n", "utf8");
+  fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+  fs.writeFileSync(
+    sourcePath,
+    `export const probeFixtureMarker = "${PROBE_FIXTURE_SOURCE_MARKER}";\n`,
+    "utf8",
+  );
+  for (const seeded of [manifestPath, sourcePath]) {
+    assert.ok(
+      fs.readFileSync(seeded, "utf8").includes(PROBE_FIXTURE_SOURCE_MARKER),
+      `${seeded} must contain the seeded fixture content marker on disk -- ` +
+        "otherwise every downstream assertion that the marker never reaches " +
+        "a probe invocation would pass vacuously",
+    );
+  }
   return directory;
 }
 
@@ -832,6 +905,28 @@ const EXPECTED_MODEL_PROBE_ENV_ALLOWLIST = [
 // file never reads or fabricates real credentials.
 const PROBE_ENV_SENTINEL_KEY = "AGENT_PROFILE_PROBE_ENV_SENTINEL";
 const PROBE_ENV_SENTINEL_VALUE = "must-not-be-forwarded";
+
+// Raw-output markers returned by the injected fake probe runner in the
+// consented scenario, one per stream. They exist to make the documented
+// REDACTION boundary falsifiable at this seam: apps/cli/src/model-probe.ts
+// truncates each stream to the output bound, classifies it in memory, and lets
+// the raw text go out of scope, so only the closed status/evidence label
+// survives -- and docs/research/013-model-probe-invocation-evidence.md states
+// the raw output is never persisted or printed. A runner result of the generic
+// string "OK" alone cannot detect a regression that echoed the runner's raw
+// stdout/stderr, because "OK" is unremarkable in a wizard transcript; a unique
+// marker can.
+//
+// Both markers are chosen so the result still classifies as `available`
+// (verified against apps/cli/src/model-probe.ts, not assumed): the evidence
+// table is consulted FIRST against `${stdout}\n${stderr}` and neither marker
+// matches any of its four rows, and SUCCESS_PATTERN (`\bok\b`) still matches
+// the `OK` line of stdout with `exitCode === 0`. That is not left to comment
+// alone either -- if the classification changed, the probe would fall through
+// to the primary candidate's ordered alternatives and the "one process per
+// planned selection" assertion below would fail.
+const PROBE_RAW_STDOUT_MARKER = "zzmarker-probe-stdout-vulpine-31460-zz";
+const PROBE_RAW_STDERR_MARKER = "zzmarker-probe-stderr-vulpine-31461-zz";
 
 // The pinned per-client non-persistence/isolation argv the probe MUST use,
 // transcribed from the contract table in
@@ -1118,11 +1213,21 @@ async function runPackedInitScenario({
 //      resolved from PATH, not a full path) is now carried by the multiset
 //      assertion at the lookup site, where it is genuinely falsifiable: a
 //      full-path or renamed `command` fails that compare.
-//   2. Signature shape: both helpers take one options object (`{ label,
-//      forbiddenPathFragments, repository }`) instead of positional
-//      arguments, so the two call shapes stay consistent; `root` and
-//      `os.tmpdir()` are module-level/global and are read directly.
+//   2. Signature shape: both helpers take one options object instead of
+//      positional arguments, so the two call shapes stay consistent; `root`
+//      and `os.tmpdir()` are module-level/global and are read directly.
 // Nothing else was weakened, dropped, or merged.
+//
+// Cycle 2 review round 3 then made one further DELETION, recorded here rather
+// than buried in the helper: the per-value repository-path assertion inside
+// assertProbeEnvironmentIsAllowlisted (and with it the PATH/PATHEXT exemption
+// that had tried to patch around the same problem too narrowly). It was not
+// evidence about the product and could fail spuriously on a legitimate
+// environment; the helper's own doc comment states exactly which pair of
+// assertions carries the real contract in its place. Both helpers gained a
+// falsifiable CONTENT claim in the same round (PROBE_FIXTURE_SOURCE_MARKER),
+// which is strictly stronger than the deleted path check on the axis that
+// actually matters here.
 // ---------------------------------------------------------------------------
 
 function normalizePathForComparison(value) {
@@ -1158,6 +1263,16 @@ function assertProbeInvocationIsSourceFree(
         `${label} argv must not contain a repository path, found ` + `${arg}`,
       );
     }
+    // Source-free by CONTENT, not just by path: the fixture repository's own
+    // seeded file contents (see PROBE_FIXTURE_SOURCE_MARKER) must not appear
+    // in any argument. The path checks above cannot catch a regression that
+    // read a repository file and forwarded its bytes as an extra argument.
+    assert.ok(
+      !arg.includes(PROBE_FIXTURE_SOURCE_MARKER),
+      `${label} argv must not carry repository file CONTENT, but an ` +
+        "argument contains the seeded fixture marker " +
+        `${PROBE_FIXTURE_SOURCE_MARKER}: ${JSON.stringify(arg)}`,
+    );
   }
 
   // Non-persistent by contract: the pinned isolation argv for the client
@@ -1253,19 +1368,40 @@ function assertProbeInvocationIsSourceFree(
   );
 }
 
-function assertProbeEnvironmentIsAllowlisted(
-  invocation,
-  { label, forbiddenPathFragments },
-) {
+function assertProbeEnvironmentIsAllowlisted(invocation, { label }) {
   // Environment restricted to the allowlist rather than the ambient
-  // environment: every forwarded key is allowlisted (case-insensitively,
-  // as Windows environment keys are), every forwarded value is the real
-  // ambient value (nothing fabricated), the injected non-allowlisted
-  // sentinel key was dropped, and no forwarded value other than the
-  // executable search path leaks a repository path (see the PATH/PATHEXT
-  // exemption comment inside the loop). See the oracle note above
-  // EXPECTED_MODEL_PROBE_ENV_ALLOWLIST for why that list is a documented
-  // hard-coded copy here.
+  // environment. The real, falsifiable contract is the PAIR asserted in the
+  // loop below: every forwarded key is in the allowlist (case-insensitively,
+  // as Windows environment keys are), and every forwarded value is
+  // byte-identical to the ambient value for that key. Together those prove
+  // the product neither ADDS keys nor SYNTHESIZES values -- it only ever
+  // forwards ambient entries verbatim (filterEnv in
+  // apps/cli/src/model-probe.ts). The injected non-allowlisted sentinel key
+  // being dropped is asserted separately below and is what proves the
+  // allowlist is a real filter rather than a pass-through.
+  //
+  // There is deliberately NO per-value repository-path assertion here (an
+  // earlier cycle had one, exempting only PATH/PATHEXT). Because every value
+  // is forwarded verbatim, a repository path inside one can only be present
+  // because the CALLER's own environment put it there -- the code under test
+  // never constructs an environment value, so such a path would be evidence
+  // about the test runner, not about a leak by the product. It is also a real
+  // false-failure source: npm prepends `<repo root>/node_modules/.bin` to PATH
+  // for every `npm run` script (this suite runs as `npm run test:release`),
+  // and a hermetic CI or local setup may legitimately place `HOME`, `TMPDIR`,
+  // or `XDG_CONFIG_HOME` inside the checkout, all of which are allowlisted and
+  // forwarded on purpose. The paths the probe ITSELF chooses are covered where
+  // they are genuinely constructed by the product: argv and cwd, in
+  // assertProbeInvocationIsSourceFree above.
+  //
+  // The loop also states the seeded-fixture-marker content claim for the
+  // environment, but see the honesty note at that assertion: with today's
+  // ordering it is subsumed by the verbatim-equality check and is not counted
+  // as independent evidence. The falsifiable content evidence lives on the
+  // argv side, in assertProbeInvocationIsSourceFree.
+  //
+  // See the oracle note above EXPECTED_MODEL_PROBE_ENV_ALLOWLIST for why that
+  // list is a documented hard-coded copy here.
   const allowedUpper = new Set(
     EXPECTED_MODEL_PROBE_ENV_ALLOWLIST.map((key) => key.toUpperCase()),
   );
@@ -1282,34 +1418,20 @@ function assertProbeEnvironmentIsAllowlisted(
       process.env[key],
       `${label} forwarded a fabricated value for ${key}`,
     );
-    // The repository-path-leak check deliberately EXEMPTS the executable
-    // search path. `PATH`/`PATHEXT` are allowlisted on purpose (see
-    // MODEL_PROBE_ENV_ALLOWLIST's own doc comment in
-    // apps/cli/src/model-probe.ts: the client needs PATH to be launchable
-    // at all) and are forwarded verbatim from the ambient environment, so
-    // their value legitimately contains whatever the invoking shell put
-    // there -- npm itself prepends `<repo root>/node_modules/.bin` to
-    // PATH for every `npm run` script, which is exactly how this suite
-    // runs in the repo and in CI (`npm run test:release`). Asserting no
-    // checkout path appears in PATH would therefore fail for a reason
-    // that has nothing to do with the product leaking source: the value
-    // is the caller's, not something the probe constructed. What still
-    // guards these two keys is the `value === process.env[key]` assertion
-    // immediately above (verbatim ambient forwarding, nothing fabricated
-    // or augmented) plus the allowlist-subset assertion; the argv and cwd
-    // assertions above cover the paths the probe itself chooses. Every
-    // other forwarded key keeps the full leak check.
-    const isExecutableSearchPathKey =
-      key.toUpperCase() === "PATH" || key.toUpperCase() === "PATHEXT";
-    if (!isExecutableSearchPathKey) {
-      for (const fragment of forbiddenPathFragments) {
-        assert.ok(
-          !normalizePathForComparison(value).includes(fragment),
-          `${label} forwarded environment key ${key} containing a ` +
-            "repository path",
-        );
-      }
-    }
+    // Honesty note: this content check is SUBSUMED by the verbatim-equality
+    // assertion immediately above -- any value carrying repository content
+    // would differ from the ambient value and fail there first, and the marker
+    // exists in no ambient environment, so this line cannot fail on its own
+    // with today's helper ordering. It is kept because the claim
+    // ("no forwarded environment value carries repository file content") is
+    // worth stating where a reader looks for it, and it becomes genuinely
+    // load-bearing if the verbatim assertion is ever relaxed. It is NOT
+    // counted as independent evidence; the argv-side marker check is.
+    assert.ok(
+      !value.includes(PROBE_FIXTURE_SOURCE_MARKER),
+      `${label} forwarded environment key ${key} carrying repository file ` +
+        `CONTENT (the seeded fixture marker ${PROBE_FIXTURE_SOURCE_MARKER})`,
+    );
   }
   assert.equal(
     invocation.env[PROBE_ENV_SENTINEL_KEY],
@@ -1898,8 +2020,17 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         probeConsent: true,
         // The one normalized success shape this cycle covers: clean exit plus
         // the fixed prompt's expected reply, which the real classifier maps to
-        // `available`/`success`.
-        probeResult: { exitCode: 0, stdout: "OK", stderr: "", timedOut: false },
+        // `available`/`success`. Each stream additionally carries a unique raw
+        // marker (see PROBE_RAW_STDOUT_MARKER/PROBE_RAW_STDERR_MARKER above)
+        // so the redaction assertions below can prove the wizard discards the
+        // runner's raw output instead of echoing it; the markers are inert for
+        // classification.
+        probeResult: {
+          exitCode: 0,
+          stdout: `OK\n${PROBE_RAW_STDOUT_MARKER}`,
+          stderr: PROBE_RAW_STDERR_MARKER,
+          timedOut: false,
+        },
         recordInvocation: (invocation) => ({
           ...invocation,
           // Captured at invocation time, because the orchestrator removes this
@@ -2038,10 +2169,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
           forbiddenPathFragments,
           repository: consentRepository,
         });
-        assertProbeEnvironmentIsAllowlisted(invocation, {
-          label,
-          forbiddenPathFragments,
-        });
+        assertProbeEnvironmentIsAllowlisted(invocation, { label });
       }
 
       // Each probed candidate's temporary working directory was removed again
@@ -2066,6 +2194,25 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         "the removed temporary probe directories must be exactly the working " +
           `directories the probe invocations ran in, observed: ${describeProbeTempMutations()}`,
       );
+      // Final-state proof, not just attempted-call proof. The two assertions
+      // above are recorded at CALL time: withFsWriteSentinel's allowMutation
+      // hook records the method and target before delegating to the real
+      // `rm`, and runModelProbe swallows removal failures
+      // (`await tempDirs.remove(cwd).catch(() => undefined)` in
+      // apps/cli/src/model-probe.ts), so a cleanup that was attempted but
+      // rejected -- or was otherwise ineffective -- would leave both of them
+      // green while the temporary directory survived on disk. Checking the
+      // directory is actually gone is what closes the bounded-lifetime claim.
+      for (const { cwd } of invocations) {
+        assert.equal(
+          fs.existsSync(cwd),
+          false,
+          "the probe's temporary working directory must no longer exist " +
+            `after the run returned, but ${cwd} is still on disk -- cleanup ` +
+            "was attempted (see the rm assertions above) yet did not take " +
+            "effect",
+        );
+      }
 
       // One recorded result per planned selection (same `available`
       // short-circuit reasoning as the process count above), rendered in the
@@ -2094,12 +2241,49 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
           `${JSON.stringify(declinedSummaryLine)}, got:\n${consentStdout}`,
       );
       assert.match(consentStdout, /No files written\./u);
+      const consentAfter = snapshot(consentRepository);
       assert.deepEqual(
-        snapshot(consentRepository),
+        consentAfter,
         before,
         "consenting to the probe but declining the write plan must not write " +
           "anything into the repository",
       );
+
+      // Redaction boundary, proven rather than implied. The probe classifies
+      // the runner's output in memory and only the closed status/evidence
+      // label survives (apps/cli/src/model-probe.ts's "Redaction boundary"
+      // block); docs/research/013-model-probe-invocation-evidence.md states
+      // the raw output is never persisted or printed. The consented summary
+      // line asserted above does NOT establish that: it reports a result
+      // COUNT and would render identically if the packed wizard also echoed
+      // the runner's raw stdout/stderr. These assertions are what would fail
+      // in that regression -- the two markers exist nowhere else, so any
+      // occurrence is necessarily runner output that escaped the boundary.
+      for (const [stream, text, marker] of [
+        ["stdout", consentStdout, PROBE_RAW_STDOUT_MARKER],
+        ["stdout", consentStdout, PROBE_RAW_STDERR_MARKER],
+        ["stderr", consentStderr, PROBE_RAW_STDOUT_MARKER],
+        ["stderr", consentStderr, PROBE_RAW_STDERR_MARKER],
+      ]) {
+        assert.ok(
+          !text.includes(marker),
+          `the packed wizard must not expose raw probe output, but the ` +
+            `captured ${stream} contains ${marker}:\n${text}`,
+        );
+      }
+      // Stated completely rather than left to follow from the snapshot
+      // equality above: no file in the fixture repository carries either raw
+      // marker afterwards. (Nothing is written in this scenario at all, so
+      // this is a belt-and-braces restatement of the claim in the terms the
+      // redaction contract is actually written in.)
+      for (const marker of [PROBE_RAW_STDOUT_MARKER, PROBE_RAW_STDERR_MARKER]) {
+        assert.deepEqual(
+          snapshotFilesContaining(consentAfter, marker),
+          [],
+          `raw probe output must never be persisted, but ${marker} was found ` +
+            "in the fixture repository after the run",
+        );
+      }
     },
   );
 
