@@ -19,8 +19,9 @@ corpus. Each evaluation uses a fresh reviewer, raw task artifacts, and no
 expected finding list or prior conclusions.
 
 Add a context-ablation evaluation comparing the projection-based reviewer
-and orchestration prompts against the pre-simplification candidate on the
-same blinded cases, measuring seeded P1 category recovery, total validated
+and orchestration prompts against the pinned pre-simplification baseline
+fixture checked in by I1 (never a baseline reconstructed by the evaluator)
+on the same blinded cases, measuring seeded P1 category recovery, total validated
 blocker recovery, false positives, `NEEDS_CONTEXT` rate, malformed-result
 rate, reviewer invocations needed, generated prompt/context size, and
 variability across the two permitted runs. The target is the smallest

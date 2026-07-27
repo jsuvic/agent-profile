@@ -176,6 +176,13 @@ telemetry or making GitHub a dependency.
   - recurrence classification
   - scoped-rule and mechanical-guard actions
   - ownership and retirement rules
+- The evaluation projection contains only:
+  - blinded case-selection rules
+  - measured-metric definitions (recovery, false positives, `NEEDS_CONTEXT`
+    rate, malformed-result rate, invocation counts, context footprint)
+  - run-count limits and required recovery thresholds
+  - the identity of the pinned ablation-baseline fixture
+  Its only consumer is the I6 evaluation harness.
 - Generated surfaces MUST reference their authoritative projection instead of
   restating unrelated policy sections.
 - Retry counts, promotion thresholds, learning-record fields, and historical
@@ -190,6 +197,14 @@ telemetry or making GitHub a dependency.
   without reimplementing the review loop. Nested or wrapping surfaces MUST
   verify or propagate the owner's terminal result rather than invoke another
   review of the same snapshot.
+- The owner communicates through one closed snapshot-bound handoff record,
+  `ChangeRiskOrchestrationStateV1`, carrying: `policyVersion`, the reviewed
+  `snapshotId`, the current or terminal status, logical-invocation,
+  fix-round, and transient-attempt counters, and the
+  required/satisfied confirmation state. `implement-next` and `final-review`
+  validate that record — rejecting a terminal result whose `snapshotId` does
+  not match the current snapshot (modulo the excluded review-metadata paths)
+  — and never interpret free-form prose state or reset consumed budgets.
 - These composition rules are provider-neutral: they apply to Codex and Claude
   artifacts now and to any future Tabnine equivalent.
 - Hard safety, permission, ownership, and no-upload contracts remain explicit
@@ -253,6 +268,16 @@ change-risk-reviewer -> final-review`.
   not free-form reviewer prose, validates their relationships.
 
 ```ts
+type EvidenceReference = {
+  kind: "file" | "diff-hunk" | "symbol" | "test" | "contract"
+    | "command-output";
+  path?: string;
+  symbol?: string;
+  lines?: { start: number; end: number };
+  commit?: string;
+  summary: string;
+};
+
 type ChangeRiskFindingV1 = {
   priority: "P1" | "P2" | "P3";
   category: ChangeRiskCategory;
@@ -294,9 +319,17 @@ type ChangeRiskResultV1 = {
 };
 ```
 
+- Every finding carries at least one `EvidenceReference`. The `summary`
+  describes secret-shaped values by shape only and MUST NOT reproduce
+  secrets, raw transcripts, or source beyond the minimum needed to locate
+  the defect.
 - `missingInputs` MUST be empty except for `NEEDS_CONTEXT`.
 - `scope.completed` MUST be `true` only for `CLEAN` or a completed
   findings result.
+- `FINDINGS_FOUND` is valid only with `scope.completed: true` and full
+  manifest/domain coverage. An envelope whose scope is incomplete and whose
+  status is anything other than `NEEDS_CONTEXT` is an invalid attempt, never
+  a partial review.
 - P1/P2 findings MUST reject `disposition`; P3 findings MUST carry one valid
   `disposition`.
 - `CLEAN` is valid only for the requested snapshot with an empty findings
@@ -315,7 +348,11 @@ type ChangeRiskResultV1 = {
 
 ### Priority and disposition contract
 
-- Every validated P1 and P2 blocks completion regardless of count.
+- Every validated P1 and P2 with `resolution: open` blocks completion
+  regardless of count. A P1/P2 whose closure a later review verifies —
+  `fixed`, `obsolete`, or `false-positive` with invalidating evidence — no
+  longer blocks; blocking is defined by `resolution`, never by the finding's
+  historical existence.
 - Every P3 is non-blocking but MUST use exactly one disposition:
   `fixed | accepted-debt | follow-up | false-positive | obsolete`.
 - Every finding MUST use exactly one resolution:
@@ -324,7 +361,14 @@ type ChangeRiskResultV1 = {
   disposition of `fixed`, `false-positive`, or `obsolete` uses the matching
   resolution; `accepted-debt` and `follow-up` remain `open`.
 - A false positive MUST include the evidence that invalidates it.
-- Any code change invalidates the preceding clean result.
+- Any code change invalidates the preceding clean result, with one closed
+  exclusion: review-workflow metadata artifacts written after the terminal
+  state — the current change's learning record under `docs/review-learning/`
+  and promoted-rule or proposed-patch outputs on human-owned rule surfaces —
+  are not part of the reviewed snapshot identity, do not invalidate a
+  terminal result, and are recorded after that result exists. `final-review`
+  verifies the terminal result against the snapshot excluding exactly those
+  metadata paths; any other post-review edit invalidates as usual.
 
 ### Retry and escalation contract
 
@@ -367,6 +411,12 @@ type ChangeRiskResultV1 = {
   fix rounds, or when the change touches permissions, secrets, atomic writes,
   release workflows, external network/process execution, generated
   ownership, or published packages.
+- High-risk classification is deterministic: the shared policy source
+  defines the closed high-risk surface set as path/glob and contract-level
+  predicates evaluated over the changed-file manifest, not semantic
+  judgement. A documentation-only mention of a high-risk term does not
+  qualify. Boundary fixtures MUST cover qualifying paths and their
+  non-qualifying neighbors.
 
 ### Review-learning record contract
 
@@ -382,9 +432,9 @@ type ChangeRiskResultV1 = {
 - Schema version `review-learning/v1` requires: date, product version when
   known, source policy, base/head identifiers, worktree snapshot identifier
   when uncommitted content participated, reviewer surface/version when known,
-  round outcomes, stable finding fingerprints, category, priority, evidence,
-  affected contract, safe path, resolution, conditional P3 disposition, and
-  terminal status.
+  round outcomes, stable finding fingerprints, category with its
+  categorization taxonomy version, priority, evidence, affected contract,
+  safe path, resolution, conditional P3 disposition, and terminal status.
 - Logical-invocation and transient-attempt counts are required only for
   `sourcePolicy: change-risk/v1` records. `legacy-external` records omit
   them instead of fabricating provenance.
@@ -413,9 +463,24 @@ type ChangeRiskResultV1 = {
 ### Learning-promotion contract
 
 - Promotion recurrence is keyed on canonical category identity, not raw
-  wording. `ChangeRiskCategory` is a closed, versioned identifier set in the
-  shared policy source, with an explicit alias/normalization rule mapping
-  variant labels onto one canonical identifier before recurrence is counted.
+  wording. `ChangeRiskCategory` is a closed identifier set in the shared
+  policy source under taxonomy version `change-risk-categories/v1`, with an
+  explicit alias table mapping variant labels onto one canonical identifier
+  before recurrence is counted. Exact canonical identifiers take precedence
+  over aliases; a label matching neither maps to `uncategorized`, which is
+  excluded from promotion counting until a human assigns a canonical
+  category. The initial identifier set MUST cover the July 2026 sample
+  classes: cross-consumer integration, preview-before-write ordering,
+  ownership and atomicity, network/process boundaries, parser and version
+  contracts, published-package seams, runtime proof, state classification,
+  and secret-like output. Adding, renaming, or re-aliasing identifiers
+  advances the taxonomy version with a migration rule for existing records;
+  every record carries the taxonomy version used to categorize it.
+- The occurrence unit is one reviewed change: repeated rounds, repeated
+  fingerprints, and unresolved recurrences within the same change
+  deduplicate to at most one occurrence per canonical category. Recurrence
+  thresholds count distinct reviewed changes with at least one validated
+  finding in that category.
 - A first systemic P1 safety/contract failure immediately adds a
   regression test and a scoped review rule where practical.
 - A first validated non-systemic P1 follows the record-and-categorize path:
@@ -603,10 +668,13 @@ type ChangeRiskResultV1 = {
 - Local forward evaluation using fresh reviewers, raw historical diffs, and
   no expected-answer leakage.
 - Context-ablation evaluation comparing the projection-based reviewer and
-  orchestration prompts against the pre-simplification candidate on the same
-  blinded cases, recording footprint, recovery, false positives,
-  `NEEDS_CONTEXT` rate, malformed-result rate, and run variability for Codex
-  and Claude independently.
+  orchestration prompts against the pinned pre-simplification baseline
+  fixture on the same blinded cases, recording footprint, recovery, false
+  positives, `NEEDS_CONTEXT` rate, malformed-result rate, and run
+  variability for Codex and Claude independently. The baseline is a
+  versioned, checked-in evaluation fixture rendered by I1 from the complete
+  un-projected policy — never a shipped artifact and never reconstructed
+  ad hoc by the evaluator.
 - Packed published-journey assertion that emitted reviewer and orchestration
   artifacts are present, internally consistent, and source-free.
 
@@ -668,10 +736,13 @@ integration slice and requires I5's accepted backfill evidence.
   and that no closed count or transition value is duplicated across surfaces.
 - Verify initial/final clean-room context excludes historical records,
   recurrence counts, and historical finding examples.
-- Verify every emitted reviewer and record carries `change-risk/v1`, and the
-  reviewer resolves model policy through `critical-reviewer`.
-- Reject every incomplete or invalid result envelope; only explicit valid
-  `CLEAN` may produce a clean review state.
+- Verify every emitted reviewer artifact and every workflow-produced record
+  carries `change-risk/v1`, that `legacy-external` records satisfy their
+  separate provenance rules instead, and that the reviewer resolves model
+  policy through `critical-reviewer`.
+- Reject every incomplete or invalid result envelope; only an explicit valid
+  `CLEAN`, or a completed `FINDINGS_FOUND` whose findings are exclusively
+  dispositioned P3s, may produce a clean review state.
 - Confirm initial/final clean-room inputs do not leak prior findings or
   implementer conclusions.
 - Confirm remediation reviews search the whole updated change, not only the

@@ -33,6 +33,14 @@ learning-record, promotion, and evaluation projections; each target-specific
 artifact renders only the projection it needs so later orchestration slices
 cannot drift and no artifact receives unrelated policy sections.
 
+This slice also renders, once, a complete un-projected policy rendering as a
+versioned checked-in evaluation fixture — the pinned pre-simplification
+baseline that I6's context-ablation comparison consumes. It is test/eval
+material only, never a shipped artifact. The policy source additionally owns
+the `change-risk-categories/v1` taxonomy (canonical identifiers, alias
+table, `uncategorized` fallback) and the deterministic path/contract
+predicates for high-risk classification from the parent spec.
+
 ## Non-goals
 
 - Orchestrating retries or fixes; I2 owns that behavior.
@@ -70,6 +78,11 @@ cannot drift and no artifact receives unrelated policy sections.
   detailed domain rubrics live in selectively loaded reference material.
 - Projection tests prove both required inclusion and forbidden unrelated
   content.
+- The pinned pre-simplification baseline fixture exists, is versioned, and
+  is excluded from shipped output.
+- The `change-risk-categories/v1` taxonomy and high-risk predicates have
+  focused unit tests, including alias precedence, `uncategorized` fallback,
+  and qualifying/non-qualifying boundary paths.
 
 ## Expected RED proof
 

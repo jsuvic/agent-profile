@@ -50,6 +50,11 @@ escalation using `change-risk/v1`.
   multiple generated skill bodies.
 - Contract tests fail when two surfaces independently define the same retry,
   round, confirmation, or escalation value.
+- The owner returns the closed snapshot-bound
+  `ChangeRiskOrchestrationStateV1` handoff record; `implement-next` and
+  `final-review` validate it, reject a terminal result whose snapshot does
+  not match the current snapshot (modulo excluded review-metadata paths),
+  and never reset consumed budgets from free-form state.
 - Initial review, remediation review, and final clean-room confirmation use
   their distinct context rules.
 - The state machine permits at most three fix rounds, six completed logical
