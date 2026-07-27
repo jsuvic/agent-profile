@@ -23,8 +23,9 @@ remediation review plus any then-required final confirmation; otherwise the
 workflow escalates. Repeated fingerprints or two rounds without blocker-count
 improvement produce `NO_PROGRESS`; remaining blockers or exhausted transient
 retries produce `NEEDS_HUMAN_REVIEW`. When both terminal triggers apply,
-`NEEDS_HUMAN_REVIEW` takes precedence. A completed result whose findings are
-exclusively dispositioned P3s reaches terminal clean without re-review. Any
+`NEEDS_HUMAN_REVIEW` takes precedence. A completed result with no open P1/P2
+findings — every blocker verified closed and every P3 dispositioned —
+reaches terminal clean without re-review. Any
 code change invalidates an earlier clean result, except files under the
 `docs/review-learning/` metadata prefix (the learning record and promotion
 proposals written after the terminal state), which are excluded from
