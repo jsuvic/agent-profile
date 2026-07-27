@@ -22,6 +22,10 @@ Repeated fingerprints or two rounds without blocker-count improvement produce
 
 Final clean-room confirmation is required after a P1, after two or more fix
 rounds, or for the high-risk surfaces enumerated in phase-33/001.
+That confirmation intentionally re-reviews the unchanged final snapshot;
+other unchanged-snapshot repetition is skipped. Empty, malformed, mismatched,
+or `NEEDS_CONTEXT` reviewer output is incomplete and consumes the bounded
+attempt retry path rather than producing a clean result.
 
 ## Rationale
 

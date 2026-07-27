@@ -98,11 +98,16 @@ telemetry or making GitHub a dependency.
   rules.
 - Complete committed `base...HEAD` diff for a PR workflow.
 - For an uncommitted local workflow, the same accumulated committed diff plus
-  staged and unstaged patches as one identified change snapshot; no commit is
-  required solely for review.
+  staged and unstaged patches and every identified relevant untracked file as
+  one change snapshot; no commit or staging mutation is required solely for
+  review.
 - Base and head commit identifiers and an optional worktree snapshot
   identifier.
 - Prior finding fingerprints for remediation reviews only.
+- Existing provider-neutral `critical-reviewer` model-policy resolution,
+  including mapping-v2, mapping-v3, and exact per-client overrides.
+- Sanitized checked-in historical review fixtures. A live review-thread read
+  is an optional replacement input only after explicit user approval.
 - External review findings when the user has independently requested or
   enabled that provider.
 
@@ -120,12 +125,28 @@ telemetry or making GitHub a dependency.
 
 ## Contracts
 
+### Review policy version contract
+
+- The initial workflow-policy version is `change-risk/v1`.
+- The reviewer result envelope, orchestration skills, and
+  `review-learning/v1` records MUST emit the same exact workflow-policy
+  version.
+- Increment the workflow-policy version when changing snapshot completeness,
+  the closed result envelope, priority/disposition semantics, retry or
+  confirmation limits, escalation outcomes, high-risk triggers, or promotion
+  thresholds. Editorial clarification that preserves those contracts does not
+  increment it.
+
 ### Reviewer contract
 
 - The pipeline order is:
   `implementer -> spec-reviewer -> code-quality-reviewer ->
 change-risk-reviewer -> final-review`.
 - The change-risk reviewer is review-only and MUST NOT edit the change.
+- `change-risk-reviewer` is the generated agent/reviewer identifier, but its
+  provider-neutral model-policy role is the existing `critical-reviewer`.
+  Mapping-v2, mapping-v3, target-native effort, and exact per-client overrides
+  MUST resolve through that role; this phase adds no new model-policy role ID.
 - The initial review MUST use a fresh reviewer and the complete change
   snapshot. It MUST NOT receive the implementer report, prior praise, or a
   prior finding list.
@@ -141,12 +162,28 @@ change-risk-reviewer -> final-review`.
 - Findings MUST lead with `P1`, `P2`, or `P3`, cite concrete evidence and the
   affected contract or safe path, and carry a stable human-readable
   fingerprint that survives wording changes across rounds.
+- Every invocation MUST return one complete result envelope with
+  `policyVersion: change-risk/v1`, the reviewed snapshot identifier, exactly
+  one status from `CLEAN | FINDINGS_FOUND | NEEDS_CONTEXT`, and a findings
+  array.
+- `CLEAN` is valid only for the requested snapshot with an empty findings
+  array and an explicit completed-scope confirmation. `FINDINGS_FOUND`
+  requires at least one structurally valid finding. `NEEDS_CONTEXT` requires a
+  non-empty list of missing inputs and is not a completed review.
+- Empty, truncated, unparseable, version/snapshot-mismatched, internally
+  inconsistent, or otherwise malformed output is an invalid attempt, never a
+  clean review.
 
 ### Priority and disposition contract
 
 - Every validated P1 and P2 blocks completion regardless of count.
 - Every P3 is non-blocking but MUST use exactly one disposition:
   `fixed | accepted-debt | follow-up | false-positive | obsolete`.
+- Every finding MUST use exactly one resolution:
+  `open | fixed | false-positive | obsolete`.
+- `disposition` is required for P3 and MUST be absent for P1/P2. A P3
+  disposition of `fixed`, `false-positive`, or `obsolete` uses the matching
+  resolution; `accepted-debt` and `follow-up` remain `open`.
 - A false positive MUST include the evidence that invalidates it.
 - Any code change invalidates the preceding clean result.
 
@@ -156,18 +193,22 @@ change-risk-reviewer -> final-review`.
 - At most three fix rounds may follow the initial review.
 - At most five logical reviewer invocations may complete: the initial review,
   up to three remediation reviews, and one final clean-room confirmation.
-- One logical reviewer invocation may retry a transient capacity/tool failure
-  at most twice. Failed transient attempts are recorded separately and do not
-  become review findings or fix rounds.
+- One logical reviewer invocation may retry a transient capacity/tool failure,
+  invalid result envelope, or `NEEDS_CONTEXT` result at most twice after the
+  missing input is supplied. Failed or incomplete attempts are recorded
+  separately and do not become review findings or fix rounds.
 - The same unresolved fingerprint appearing twice without progress produces
   `NO_PROGRESS`.
 - Failure to reduce the blocking-finding count across two consecutive
   remediation reviews produces `NO_PROGRESS`.
 - Remaining P1/P2 findings after the third fix round produce
   `NEEDS_HUMAN_REVIEW`.
-- Exhausted transient retries produce `NEEDS_HUMAN_REVIEW`; they MUST NOT be
+- Exhausted attempt retries produce `NEEDS_HUMAN_REVIEW`; they MUST NOT be
   converted to a clean result.
-- Review against an unchanged snapshot is not repeated.
+- Initial or remediation review against an unchanged snapshot is not
+  repeated. A required final clean-room confirmation is the sole exception:
+  it intentionally re-reviews the same final snapshot as an independent
+  logical invocation.
 - Final clean-room confirmation is required after any P1, after two or more
   fix rounds, or when the change touches permissions, secrets, atomic writes,
   release workflows, external network/process execution, generated
@@ -180,18 +221,19 @@ change-risk-reviewer -> final-review`.
 - Raw prompts, transcripts, hidden reasoning, and unfiltered tool output MUST
   remain in a local ignored location and MUST NOT be committed.
 - Schema version `review-learning/v1` requires: date, product version when
-  known, workflow-policy version, base/head identifiers, optional worktree
+  known, workflow-policy version `change-risk/v1`, base/head identifiers,
+  optional worktree
   snapshot identifier, reviewer surface/version when known, logical
   invocation and transient-attempt counts, round outcomes, stable finding
   fingerprints, category, priority, evidence, affected contract, safe path,
-  resolution, disposition, and terminal status.
+  resolution, conditional P3 disposition, and terminal status.
 - Terminal status is one of:
-  `clean | blockers-open | no-progress | needs-human-review`.
+  `clean | no-progress | needs-human-review`.
 - Unknown provider or model versions are recorded as `unknown`, never guessed.
 
 ### Learning-promotion contract
 
-- A first validated P1 or systemic safety/contract failure immediately adds a
+- A first systemic P1 safety/contract failure immediately adds a
   regression test and a scoped review rule where practical.
 - A first ordinary P2/P3 is recorded and categorized.
 - A second validated occurrence of the same category adds a scoped
@@ -213,6 +255,11 @@ change-risk-reviewer -> final-review`.
   Exhausted budget escalates to `NEEDS_HUMAN_REVIEW`.
 - Absence, failure, or nondeterminism of an external provider cannot prevent
   the local workflow from running.
+- Historical backfill uses sanitized checked-in fixtures by default. The
+  workflow MUST request explicit user approval immediately before any live
+  GitHub review-thread read; refusal or unavailable approval performs no
+  network call and either continues from sufficient fixtures or stops with the
+  missing evidence reported.
 
 ## Security Rules
 
@@ -254,26 +301,34 @@ change-risk-reviewer -> final-review`.
 
 1. A qualifying subagent-driven profile emits a dedicated
    `change-risk-reviewer` for Codex and Claude and references it from every
-   generated orchestration surface without dangling references.
+   generated orchestration surface without dangling references. Its model and
+   effort resolve through the existing `critical-reviewer` role for
+   mapping-v2, mapping-v3, and exact per-client override profiles.
 2. The reviewer prompt and golden fixtures enforce complete-snapshot,
    clean-room, unchanged-consumer, risk-domain, priority, evidence,
-   fingerprint, read-only, and no-upload contracts.
+   fingerprint, read-only, and no-upload contracts. The
+   `change-risk/v1` result envelope makes empty, malformed, mismatched, and
+   `NEEDS_CONTEXT` output incapable of producing a clean result.
 3. The generated workflow encodes the exact three-fix-round, five-logical-
    invocation, two-transient-retry, non-progress, confirmation, and
    human-escalation rules without conflicting counts or statuses.
-4. P1/P2 always block; P3 always receives one allowed disposition; any code
-   change invalidates a prior clean result.
+4. P1/P2 always block and omit disposition; P3 always receives one allowed
+   disposition; every finding has one closed resolution; any code change
+   invalidates a prior clean result.
 5. A `review-learning/v1` template and workflow instructions produce a
    normalized committed record with all required version/date/snapshot,
-   attempt, finding, disposition, and terminal-status fields while excluding
-   raw transcripts.
+   attempt, finding, conditional-disposition, and terminal-status fields while
+   excluding raw transcripts. The workflow-policy version is
+   `change-risk/v1` and advances only under the versioning rule above.
 6. Promotion instructions implement the approved first/second/third
    occurrence policy and preserve generated/manual instruction ownership.
 7. PRs #125 and #127-#133 are backfilled in a separate slice. The normalized
    corpus reconciles to 126 findings: 23 P1 and 103 P2, with source date and
    any later state drift disclosed.
 8. A provider-neutral external-review rule reopens validated blockers without
-   making network access or GitHub mandatory.
+   making network access or GitHub mandatory. Historical backfill uses
+   checked-in fixtures by default and requires explicit approval before a live
+   GitHub read.
 9. Forward evaluation uses fresh reviewers and raw change artifacts without
    leaking the expected findings. Every seeded P1 category is recovered in at
    least one of two allowed clean-room evaluation runs; misses and variability
@@ -287,8 +342,12 @@ change-risk-reviewer -> final-review`.
 
 ## Tests
 
-- Core/unit tests for the immutable review policy: priorities, dispositions,
-  terminal statuses, risk surfaces, retry counts, and confirmation triggers.
+- Core/unit tests for `change-risk/v1`: priorities, conditional dispositions,
+  resolutions, result-envelope statuses, terminal statuses, risk surfaces,
+  retry counts, and confirmation triggers.
+- Model-policy tests proving `change-risk-reviewer` resolves through
+  `critical-reviewer` for mapping-v2, mapping-v3, target-native effort, and
+  exact per-client overrides.
 - Skill-selection tests for conditional reviewer emission and no dangling
   references across pack/client combinations.
 - Codex and Claude golden fixtures for the reviewer definition and every
@@ -298,10 +357,14 @@ change-risk-reviewer -> final-review`.
 - Content-contract tests proving initial/final clean-room prompts omit prior
   findings and remediation prompts require both closure verification and a
   fresh complete-snapshot search.
+- Result-envelope tests for explicit clean, findings found, needs context,
+  empty/truncated output, invalid status, policy/snapshot mismatch, and
+  exhausted invalid-attempt retries.
 - Table-driven state-machine tests for clean on initial review, one-to-three
-  fix rounds, same-fingerprint recurrence, unchanged snapshot, blocker-count
-  stagnation, transient retry exhaustion, required confirmation, code change
-  after clean, and validated external blockers.
+  fix rounds, same-fingerprint recurrence, unchanged remediation snapshots,
+  required confirmation on an unchanged final snapshot, blocker-count
+  stagnation, attempt-retry exhaustion, code change after clean, and validated
+  external blockers.
 - Record-schema fixtures for all terminal statuses and every P3 disposition,
   including unknown reviewer versions and secret-shaped evidence redaction.
 - Promotion fixtures for first systemic P1, first ordinary P2/P3, second
@@ -319,9 +382,10 @@ highest fast seam is `compile(profile) -> emitted reviewer and skill
 artifacts`, supported by pure policy/state-machine return values; no internal
 renderer is mocked.
 
-I5 is a deterministic transformation slice. Its seam is
-`validated review-thread snapshot -> normalized review-learning Markdown`;
-only the external GitHub read boundary may be replaced by checked-in fixtures.
+I5 is a deterministic transformation slice. Its default seam is
+`sanitized checked-in review-thread fixture -> normalized review-learning
+Markdown`; a live GitHub read is an explicitly approved unmanaged input, never
+the default.
 
 One slice owns one primary observable result and begins with a focused failing
 unit, contract, golden, corpus, or published-journey assertion.
@@ -339,9 +403,11 @@ See `docs/specs/phase-33/issues/`:
 
 Dependency map:
 
-`I1 -> I2`; `I1 + I3 -> I4`; `I3 -> I5`; `I1 + I2 + I3 + I4 -> I6`.
+`I1 -> I2`; `I1 + I3 -> I4`; `I3 -> I5`;
+`I1 + I2 + I3 + I4 + I5 -> I6`.
 I1 and I3 are parallel-safe. I5 is parallel-safe with I2 and I4 once I3
-lands. I6 is the final integration slice and does not require I5 to finish.
+lands. I6 is the final integration slice and requires I5's accepted backfill
+evidence.
 
 ## Documentation Updates
 
@@ -357,8 +423,13 @@ lands. I6 is the final integration slice and does not require I5 to finish.
 
 - Build a spec-to-test matrix for every MUST, acceptance criterion, status,
   retry limit, disposition, and error/escalation contract.
-- Verify the complete-snapshot contract includes uncommitted staged/unstaged
-  changes without requiring an agent commit.
+- Verify the complete-snapshot contract includes uncommitted staged,
+  unstaged, and relevant untracked files without requiring a commit or staging
+  mutation.
+- Verify every emitted reviewer and record carries `change-risk/v1`, and the
+  reviewer resolves model policy through `critical-reviewer`.
+- Reject every incomplete or invalid result envelope; only explicit valid
+  `CLEAN` may produce a clean review state.
 - Confirm initial/final clean-room inputs do not leak prior findings or
   implementer conclusions.
 - Confirm remediation reviews search the whole updated change, not only the
@@ -368,6 +439,8 @@ lands. I6 is the final integration slice and does not require I5 to finish.
 - Review every generated/manual ownership boundary.
 - Confirm raw transcripts and secret-like values cannot enter committed
   learning records.
+- Confirm historical backfill performs no live GitHub read without explicit
+  user approval.
 - Reconcile the historical corpus counts and disclose source-date drift.
 - Run fresh-reviewer forward evaluation without expected-answer leakage.
 - Run affected unit/golden tests, full tests, check, doctor, and

@@ -11,12 +11,17 @@ that exposed the current workflow gap.
 
 ## Behavior slice
 
-Read the thread-aware review findings for PRs #125 and #127-#133, validate and
-normalize them into `review-learning/v1` records, reconcile the approved
-priority totals, categorize root causes, and identify the first rules or
-mechanical regressions required by the promotion policy. Record the source
-date and disclose any review-thread state that changed after the approved
-snapshot.
+Use sanitized checked-in thread-aware review fixtures for PRs #125 and
+#127-#133, validate and normalize them into `review-learning/v1` records,
+reconcile the approved priority totals, categorize root causes, and identify
+the first rules or mechanical regressions required by the promotion policy.
+Record the source date and disclose any review-thread state that changed after
+the approved snapshot.
+
+If required source evidence is missing, request explicit user approval
+immediately before a live read-only GitHub fetch. Without approval, perform no
+network call and stop with the missing evidence identified rather than
+silently weakening the backfill.
 
 ## Non-goals
 
@@ -24,6 +29,7 @@ snapshot.
 - Fixing the historical PR code in this slice.
 - Copying raw review transcripts into the repository.
 - Expanding the corpus beyond the approved eight PRs.
+- Treating live GitHub access as the default input.
 
 ## Acceptance criteria
 
@@ -34,12 +40,15 @@ snapshot.
   `#129 16 (5/11)`, `#130 19 (3/16)`, `#131 10 (0/10)`,
   `#132 2 (1/1)`, and `#133 12 (1/11)`.
 - Every normalized finding has a stable fingerprint, category, priority,
-  evidence summary, affected contract/safe path, and disposition or current
-  resolution.
+  evidence summary, affected contract/safe path, and closed resolution; P3
+  also has its required disposition while P1/P2 omit disposition.
 - The records distinguish the approved historical snapshot from later GitHub
   state instead of rewriting history.
 - Recurring categories seed reviewer regression cases and promotion proposals.
 - No GitHub mutation occurs.
+- The default path makes no network call. A live review-thread read occurs only
+  after explicit user approval; refusal leaves the fixtures unchanged and
+  reports any missing evidence.
 
 ## Expected RED proof
 
@@ -59,8 +68,9 @@ category summary`.
 
 ## Allowed mock boundary
 
-The read-only GitHub review-thread API may be replaced by checked-in sanitized
-fixtures. Do not mock normalization, fingerprint/category assignment, or count
+Checked-in sanitized fixtures are the default input. After explicit user
+approval, the unmanaged read-only GitHub review-thread API may refresh missing
+evidence. Do not mock normalization, fingerprint/category assignment, or count
 reconciliation.
 
 ## Test command guidance
@@ -90,8 +100,9 @@ Adds historical evidence only; it does not change product runtime behavior.
 
 ## Security impact
 
-Use read-only GitHub access, retain no raw transcript, source payload, secret,
-or private endpoint, and perform no replies or resolutions.
+Do not access GitHub without explicit user approval. When approved, use
+read-only access, retain no raw transcript, source payload, secret, or private
+endpoint, and perform no replies or resolutions.
 
 ## Documentation impact
 

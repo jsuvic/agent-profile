@@ -15,8 +15,9 @@ Define `review-learning/v1`, add a concise normalized Markdown template under
 `docs/review-learning/`, and update generated workflow instructions to create
 one record per reviewed PR/change. Records include version/date/snapshot,
 reviewer surface, attempt counts, round outcomes, fingerprints, evidence,
-resolution, P3 disposition, and terminal status. Raw review material is
-explicitly local and ignored.
+closed resolution, conditional P3 disposition, and terminal status. Every
+record carries workflow-policy version `change-risk/v1`. Raw review material
+is explicitly local and ignored.
 
 ## Non-goals
 
@@ -31,12 +32,13 @@ explicitly local and ignored.
   value from the parent spec.
 - Unknown provider/model versions use `unknown`.
 - Every P3 row requires exactly one allowed disposition.
+- P1/P2 rows omit disposition; every priority uses one allowed resolution.
 - False positives require invalidating evidence.
 - Raw transcript/diff/secret-shaped content is explicitly excluded from the
   committed record.
 - Generated skills reference the normalized record, not an implementation
   report or free-form diary.
-- Fixtures cover clean, blockers-open, no-progress, and needs-human-review.
+- Fixtures cover clean, no-progress, and needs-human-review.
 
 ## Expected RED proof
 
@@ -73,7 +75,7 @@ the broader compiler suite.
 
 ## Dependencies
 
-`parallel-safe` with I1.
+`ready`; no dependency on I1.
 
 ## Parallelism notes
 

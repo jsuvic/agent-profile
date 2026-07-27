@@ -50,8 +50,8 @@ validation outcome. _Avoid:_ "telemetry", "prompt log".
 
 **Change snapshot**
 The complete accumulated change presented for review: committed base-to-head
-diff plus any identified staged and unstaged patch. _Avoid:_ "changed-file
-list", "last fix".
+diff plus identified staged, unstaged, and relevant untracked files. _Avoid:_
+"changed-file list", "last fix".
 
 **Change-risk review**
 An independent adversarial pass that searches a complete change snapshot and
@@ -65,6 +65,11 @@ praise, or prior finding lists. _Avoid:_ "rerun", "closure check".
 **Finding fingerprint**
 A stable human-readable identifier for one defect class across review rounds,
 independent of wording changes. _Avoid:_ "comment id", "finding text hash".
+
+**Review result envelope**
+The closed versioned result for one reviewer invocation, tied to the reviewed
+change snapshot and carrying its status and findings. _Avoid:_ "free-form
+review response", "empty means clean".
 
 **Review-learning record**
 A versioned normalized Markdown record of review inputs, rounds, findings,

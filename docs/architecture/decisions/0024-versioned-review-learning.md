@@ -15,10 +15,11 @@ unnecessary source, secret-like values, or hidden reasoning.
 
 Commit one normalized `review-learning/v1` Markdown record per PR/change under
 `docs/review-learning/`; keep raw transcripts local and ignored. P1/P2 block,
-while each P3 receives one explicit disposition. Promote a first systemic P1
-immediately, a second ordinary occurrence into a scoped review rule and
-reviewer regression, and a third occurrence into a mechanical guard where
-practical.
+while each P3 receives one explicit disposition and P1/P2 omit disposition.
+Every record carries workflow-policy version `change-risk/v1`. Promote a first
+systemic P1 immediately, a second ordinary occurrence into a scoped review
+rule and reviewer regression, and a third occurrence into a mechanical guard
+where practical.
 
 Promotions write only to human-owned manual/scoped instruction surfaces and
 never silently alter compiler-generated regions.

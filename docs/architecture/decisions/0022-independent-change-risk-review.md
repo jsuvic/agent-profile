@@ -22,6 +22,10 @@ prior praise, or prior finding lists. Remediation passes verify known
 fingerprints and independently search the complete updated snapshot for new
 findings.
 
+The generated reviewer identifier resolves model policy through the existing
+provider-neutral `critical-reviewer` role, preserving mapping-v2, mapping-v3,
+target-native effort, and exact per-client overrides without adding a role ID.
+
 ## Rationale
 
 An independent objective and fresh context make it possible to challenge both

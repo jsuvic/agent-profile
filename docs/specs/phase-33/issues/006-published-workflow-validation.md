@@ -82,12 +82,12 @@ full `npm test`, `npm run check`, `npm run doctor`, and
 
 ## Dependencies
 
-`sequenced` after I1-I4. I5 is not a merge prerequisite but its completed
-corpus may expand the evaluation evidence.
+`sequenced` after I1-I5. I5's accepted backfill and count reconciliation are
+required inputs to the final spec-to-test matrix.
 
 ## Parallelism notes
 
-Final integration slice; do not run in parallel with unresolved I1-I4 changes
+Final integration slice; do not run in parallel with unresolved I1-I5 changes
 to shared workflow artifacts.
 
 ## Contract impact

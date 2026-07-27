@@ -16,10 +16,17 @@ For every profile that qualifies for the generated subagent-driven workflow,
 emit a `change-risk-reviewer` definition for supported Codex and Claude
 targets. The prompt is review-only, receives a complete change snapshot and
 governing rules, searches the approved risk domains, and returns prioritized
-evidence-bearing findings with stable fingerprints.
+evidence-bearing findings with stable fingerprints inside the closed
+`change-risk/v1` result envelope.
+
+The generated `change-risk-reviewer` identifier resolves its provider-neutral
+model policy through the existing `critical-reviewer` role. Mapping-v2,
+mapping-v3, target-native effort, and exact per-client overrides retain their
+configured critical-review capability without adding a new role ID.
 
 Before adding the prompt, establish one immutable review-policy/content source
-for priorities, dispositions, terminal statuses, retry limits, confirmation
+for the `change-risk/v1` identifier, result statuses, priorities,
+dispositions, resolutions, terminal statuses, retry limits, confirmation
 triggers, and high-risk surfaces. Render target-specific artifacts from that
 source so later orchestration slices cannot drift.
 
@@ -29,6 +36,7 @@ source so later orchestration slices cannot drift.
 - Writing review-learning records; I3 owns that behavior.
 - Running an external hosted reviewer.
 - Adding a new profile-schema toggle.
+- Adding or migrating a model-policy role ID.
 
 ## Acceptance criteria
 
@@ -40,6 +48,11 @@ source so later orchestration slices cannot drift.
 - The prompt requires complete-snapshot and unchanged-consumer inspection,
   every risk domain from the parent spec, P1/P2/P3, a stable fingerprint,
   concrete evidence, affected contract/safe path, and read-only behavior.
+- The prompt returns exactly one valid `change-risk/v1` envelope with
+  `CLEAN | FINDINGS_FOUND | NEEDS_CONTEXT`; empty, malformed, mismatched, or
+  incomplete output cannot mean clean.
+- Mapping-v2, mapping-v3, target-native effort, and exact override fixtures
+  prove resolution through `critical-reviewer`.
 - Shared closed policy values have one authoritative source and focused unit
   tests.
 
@@ -76,6 +89,8 @@ affected compiler golden suite.
 - A focused review-policy/content module under `packages/compiler/src/`
 - `packages/compiler/src/skill-selection.ts` when conditional emission needs
   extension
+- Existing model-policy resolver/guidance seams for the `critical-reviewer`
+  mapping
 - Codex/Claude expected fixtures and focused core/compiler tests
 
 ## Dependencies
@@ -90,8 +105,9 @@ policy module.
 
 ## Contract impact
 
-Adds one built-in reviewer role and generated artifact for qualifying
-subagent-driven profiles. No `ai-profile.yaml` schema change.
+Adds one built-in reviewer artifact for qualifying subagent-driven profiles.
+It reuses the public `critical-reviewer` model-policy role; no
+`ai-profile.yaml` schema or role-ID change.
 
 ## Security impact
 

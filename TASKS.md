@@ -1920,11 +1920,11 @@ finding promotion, and a provider-neutral external-review boundary.
 | --- | ----------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
 | I1  | Emit the independent change-risk reviewer       | ready         | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                   |
 | I2  | Orchestrate bounded review remediation          | sequenced     | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)       |
-| I3  | Persist versioned review-learning records       | parallel-safe | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)             |
+| I3  | Persist versioned review-learning records       | ready         | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)             |
 | I4  | Promote recurring findings into stronger guards | sequenced     | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)     |
 | I5  | Backfill the recent PR review corpus            | sequenced     | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
 | I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
 
-Dependency map: I1 -> I2; I1+I3 -> I4; I3 -> I5; I1+I2+I3+I4 -> I6.
+Dependency map: I1 -> I2; I1+I3 -> I4; I3 -> I5; I1+I2+I3+I4+I5 -> I6.
 I1 and I3 are parallel-safe. I5 is parallel-safe with I2 and I4 after I3
-lands. I6 is final integration and does not require I5 to finish.
+lands. I6 is final integration and requires I5's accepted backfill evidence.
