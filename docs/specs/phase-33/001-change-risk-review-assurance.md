@@ -299,6 +299,8 @@ type ChangeRiskFindingV1 = {
   resolution: "open" | "fixed" | "false-positive" | "obsolete";
   source?: "local" | "external";
   provider?: string;
+  systemic?: boolean;
+  systemicReason?: string;
   disposition?:
     | "fixed"
     | "accepted-debt"
@@ -332,6 +334,11 @@ type ChangeRiskResultV1 = {
   absent otherwise. A reviewer invocation itself only emits `local`
   findings; `external` is set solely by the orchestration owner's external
   validation handoff.
+- `systemic` and `systemicReason` are set together by the orchestration
+  owner when it validates a P1, per the promotion contract's closed
+  predicate; both MUST be present on every validated P1 in the persisted
+  record and absent on P2/P3 findings. Reviewer invocations do not emit
+  them.
 - Every finding carries at least one `EvidenceReference`. The `summary`
   describes secret-shaped values by shape only and MUST NOT reproduce
   secrets, raw transcripts, or source beyond the minimum needed to locate
@@ -339,6 +346,14 @@ type ChangeRiskResultV1 = {
 - `missingInputs` MUST be empty except for `NEEDS_CONTEXT`.
 - `scope.completed` MUST be `true` only for `CLEAN` or a completed
   findings result.
+- Every completed result (`CLEAN` or completed `FINDINGS_FOUND`) requires
+  `inspectedChangeManifest: true` and `inspectedRelevantConsumers: true`. A
+  completed status with either boolean `false` is an invalid attempt — a
+  review that skipped unchanged-consumer inspection can never self-approve.
+- A domain entry with `applicability: "not-applicable"` requires a
+  non-empty `reason`; `reason` MUST be absent for applicable domains. A
+  missing or empty inapplicability reason makes the envelope invalid, and a
+  negative fixture covers it.
 - `FINDINGS_FOUND` is valid only with `scope.completed: true` and full
   manifest/domain coverage. An envelope whose scope is incomplete and whose
   status is anything other than `NEEDS_CONTEXT` is an invalid attempt, never
@@ -375,13 +390,17 @@ type ChangeRiskResultV1 = {
   resolution; `accepted-debt` and `follow-up` remain `open`.
 - A false positive MUST include the evidence that invalidates it.
 - Any code change invalidates the preceding clean result, with one closed
-  exclusion: review-workflow metadata artifacts written after the terminal
-  state — the current change's learning record under `docs/review-learning/`
-  and promoted-rule or proposed-patch outputs on human-owned rule surfaces —
-  are not part of the reviewed snapshot identity, do not invalidate a
-  terminal result, and are recorded after that result exists. `final-review`
-  verifies the terminal result against the snapshot excluding exactly those
-  metadata paths; any other post-review edit invalidates as usual.
+  path exclusion: files under `docs/review-learning/` — the current change's
+  learning record and any proposed-patch artifact under
+  `docs/review-learning/proposals/` — are not part of the reviewed snapshot
+  identity, do not invalidate a terminal result, and are written after that
+  result exists. Promotion never edits a human-owned rule surface as part of
+  the reviewed change: it emits a proposed-patch artifact into the excluded
+  path, and applying that patch to `AGENTS.md` or another rule surface is a
+  separate later change that is reviewed and invalidates as usual.
+  `final-review` verifies the terminal result against the snapshot excluding
+  exactly the `docs/review-learning/` path prefix; any other post-review
+  edit invalidates as usual.
 
 ### Retry and escalation contract
 
@@ -403,6 +422,11 @@ type ChangeRiskResultV1 = {
   invalid result envelope, or `NEEDS_CONTEXT` result at most twice after the
   missing input is supplied. Failed or incomplete attempts are recorded
   separately and do not become review findings or fix rounds.
+- When a `NEEDS_CONTEXT` missing input cannot be supplied — it is
+  unavailable, or providing it is forbidden by the safety, permission, or
+  no-upload contracts — the invocation escalates to `NEEDS_HUMAN_REVIEW`
+  immediately with the unsatisfiable request recorded, instead of waiting on
+  a supplied-context retry that can never occur.
 - The same unresolved fingerprint appearing twice without progress produces
   `NO_PROGRESS`.
 - Failure to reduce the blocking-finding count across two consecutive
@@ -468,8 +492,13 @@ type ChangeRiskResultV1 = {
   contributed carry `source: external` with the provider recorded (or
   `unknown`) and no fabricated local execution data. A record never
   collapses mixed local and external provenance into one value.
-- Terminal status is one of:
-  `clean | no-progress | needs-human-review`.
+- Terminal status is one of `clean | no-progress | needs-human-review` for
+  `sourcePolicy: change-risk/v1` records. `legacy-external` records use the
+  closed status `external-only` instead — they never executed the local
+  state machine, and a local terminal status is never guessed from thread
+  state.
+- The record `date` is a UTC ISO 8601 calendar date, exactly `YYYY-MM-DD`;
+  timestamps, offsets, and locale-dependent forms are malformed.
 - Unknown provider or model versions are recorded as `unknown`, never guessed.
 - Records SHOULD reference commits, paths, symbols, contracts, and tests
   rather than reproducing source, specs, or full reviewer explanations.
@@ -513,11 +542,14 @@ type ChangeRiskResultV1 = {
   finding in that category.
 - A local finding is validated by the recorded closure evidence, not by
   reviewer assertion alone: promotion counts only findings whose recorded
-  terminal resolution is `fixed` or `open`. Findings resolved
+  terminal resolution is `fixed`, or `open` where the orchestration owner —
+  not the reviewer — recorded the disposition decision (`accepted-debt` or
+  `follow-up`) with its supporting evidence. A reviewer-proposed disposition
+  the owner never confirmed does not count. Findings resolved
   `false-positive` (with invalidating evidence) or `obsolete` are excluded
-  from recurrence counting. The orchestration owner records that resolution
-  and its evidence in the learning record during remediation verification;
-  promotion logic reads the persisted resolution and never re-adjudicates
+  from recurrence counting. The orchestration owner records resolutions,
+  confirmed dispositions, and their evidence in the learning record;
+  promotion logic reads the persisted values and never re-adjudicates
   prose.
 - A validated P1 is classified `systemic` by a closed predicate: its
   affected contract is a hard safety, permission, ownership, redaction, or
@@ -543,9 +575,11 @@ type ChangeRiskResultV1 = {
 - Promoted rules MUST be concise, consequential, scoped to the narrowest
   applicable path, and include the unsafe condition and safe path or
   counterexample.
-- Promotion MUST NOT silently modify compiler-generated instruction regions.
-  It writes only to a human-owned manual/scoped rule surface or produces a
-  proposed patch requiring the normal write boundary.
+- Promotion MUST NOT silently modify compiler-generated instruction regions,
+  and within the reviewed change it writes only proposed-patch artifacts
+  under `docs/review-learning/proposals/` (the excluded metadata path).
+  Applying a proposal to a human-owned manual/scoped rule surface is a
+  separate later change through the normal write boundary and review.
 
 ### Promoted-rule lifecycle
 

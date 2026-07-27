@@ -51,8 +51,10 @@ only and are never loaded wholesale into clean-room reviewer context.
   committed record.
 - Generated skills reference the normalized record, not an implementation
   report or free-form diary.
-- Fixtures cover clean, no-progress, and needs-human-review, plus both
-  `sourcePolicy` values with their conditional execution fields.
+- Fixtures cover clean, no-progress, and needs-human-review for
+  `change-risk/v1` records and `external-only` for `legacy-external`
+  records, plus both `sourcePolicy` values with their conditional execution
+  fields and the exact `YYYY-MM-DD` UTC date boundary.
 - Closed values come from the I1 shared policy source's learning-record
   projection; no duplicated constants.
 - Generated skills exclude historical records, recurrence counts, and prior
