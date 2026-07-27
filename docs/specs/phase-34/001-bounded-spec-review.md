@@ -1,0 +1,305 @@
+# Spec: Bounded Pre-Implementation Spec Review
+
+## Status
+
+Draft 2026-07-27, pending grill approval. Motivated by the phase-33 spec
+review on PR #134: nine external review rounds against the approved spec set
+produced 71 validated findings, including 12 P1-class contract defects —
+unreachable terminal states, a reviewer able to self-close its own blockers,
+budget paths with no valid transition — all before any implementation
+existed. The loop had no budget, no stop rule, and no residual-finding
+disposition; convergence was judged manually, and one third of the final
+rounds' findings were drift between the spec, its ADRs, and the task ledger
+introduced by earlier amendment rounds.
+
+## Problem
+
+The grill workflow clarifies product intent, and synthesis persists the
+derived spec set, but nothing reviews that spec set adversarially before the
+first implementation slice is dispatched. Contract defects that are cheap to
+fix in a document become expensive mid-implementation rework, and when an
+external reviewer is applied ad hoc, the review loop is unbounded: each
+amendment round can introduce new cross-document drift, findings shift from
+contract defects to validator minutiae, and only a human noticing the trend
+stops the churn.
+
+## Goal
+
+After grill approval and synthesis persistence, the generated workflow runs a
+bounded clean-room review loop over the complete persisted spec set. The loop
+fixes contract-level defects, dispositions residual detail findings
+explicitly, terminates on a closed stop rule, and gates the first
+implementation slice on its terminal result.
+
+## Intent
+
+Catch specification defects at the document stage where they are cheapest to
+fix, using the same discipline phase 33 applies to implementation review:
+fresh clean-room context, complete-input access, typed results, bounded
+rounds, explicit escalation, and recorded learning. Keep the reviewer's
+authority narrow: it challenges consistency, completeness, and testability;
+it never relitigates product decisions the grill agreement made.
+
+## Decision Rules
+
+1. Authority doubt -> a conflict with the approved agreement record is a
+   finding to report, never a decision to overturn.
+2. Convergence doubt -> a round yielding zero P1 findings terminates the
+   loop; do not keep reviewing because more findings are imaginable.
+3. Residual doubt -> a P2/P3 finding at loop end receives an explicit
+   disposition; `defer-to-implementation` is a first-class recorded outcome,
+   not a silent drop.
+4. Drift doubt -> treat spec/ADR/ledger/glossary disagreement as a
+   first-class finding category; one amendment fixes every copy.
+5. Progress doubt -> the same unresolved fingerprint across two rounds, or a
+   round producing more P1 findings than the previous round, escalates to
+   the human instead of consuming another round.
+6. Depth doubt -> when a finding asks for detail the implementation's typed
+   policy source must own anyway, defer it with evidence rather than
+   duplicating the value into prose.
+
+## Non-Goals
+
+- Reviewing implementation diffs; phase 33 owns change snapshots.
+- Reopening, weakening, or re-deciding approved agreement-record decisions.
+- Unlimited review rounds or reviewer-driven scope growth.
+- A required external review provider, network access, or GitHub dependency.
+- Blocking the loop on P2/P3 findings that have an explicit disposition.
+- A new `ai-profile.yaml` option for this first change.
+- Replacing the human's ability to stop, accept, or reopen at any point.
+
+## User Flow
+
+1. The user approves the grill agreement record; synthesis persists the spec
+   set (spec, issue briefs, ledger entries, glossary terms, qualifying
+   ADRs). The new implementation tasks persist as not yet dispatchable.
+2. A fresh `spec-reviewer` receives the agreement record, the complete
+   persisted document manifest, and the governing repository contracts. It
+   returns a typed result over the closed spec-risk categories.
+3. Validated P1 findings are fixed by amending the documents in one bounded
+   amendment round; P2/P3 findings receive dispositions.
+4. A fresh review of the complete amended document set verifies prior
+   fingerprints and searches for new findings, including drift the
+   amendments introduced.
+5. The loop terminates on the first round with zero P1 findings, or
+   escalates to the human when budgets or progress rules trip.
+6. The terminal result is recorded under `docs/review-learning/`, residual
+   dispositions included, and the ledger gate opens the first implementation
+   slice only on `approved-for-implementation`.
+
+## Inputs
+
+- The approved grill agreement record for the change.
+- The complete persisted document manifest: spec, issue briefs, ledger
+  section, glossary additions, and qualifying ADRs, plus the repository
+  contracts and upstream specs they reference.
+- Prior finding fingerprints for revision reviews only.
+- The shared review machinery established by phase 33 I1/I3: typed envelope
+  patterns, fingerprint normalization, learning-record schema, and the
+  context-composition projection discipline.
+- Existing provider-neutral `critical-reviewer` model-policy resolution.
+
+## Outputs
+
+- Generated Codex and Claude `spec-reviewer` definitions.
+- Updated generated grill/synthesis workflow instructions that run the loop
+  and gate implementation dispatch.
+- One `review-learning/v1` record per reviewed spec set with
+  `sourcePolicy: spec-review/v1`.
+- Explicit `approved-for-implementation` or `needs-grill` outcomes.
+- Golden fixtures and contract tests for the generated loop.
+
+## Contracts
+
+### Spec-review policy version contract
+
+- The initial workflow-policy version is `spec-review/v1`.
+- Reviewer envelopes, orchestration instructions, and learning records
+  produced by this loop MUST emit that exact version. The phase-33
+  versioning rule applies: contract changes increment it, editorial
+  clarification does not.
+
+### Reviewer contract
+
+- The spec reviewer is review-only: it MUST NOT edit documents, and
+  amendments are authored by the synthesis/author surface, never by the
+  reviewer.
+- The initial and every revision review use a fresh reviewer. Revision
+  reviews receive only the fingerprints from the immediately preceding
+  round; no review receives authoring rationale, prior praise, or the grill
+  transcript.
+- The reviewer receives complete and lossless access to the persisted
+  document manifest under the phase-33 snapshot-disclosure pattern:
+  manifest-first, with instructions and ability to read every document and
+  any referenced upstream contract.
+- The approved agreement record is ground truth for product decisions. A
+  document that diverges from it is an `agreement-divergence` finding; a
+  reviewer preference against an agreed decision is not a finding.
+- The spec-risk categories are a closed identifier set:
+  `spec-contradiction | unreachable-state | undefined-closed-value |
+  missing-error-contract | doc-sync-drift | untestable-criterion |
+  agreement-divergence`.
+- Results use a typed envelope mirroring the phase-33 shape
+  (`SpecReviewResultV1`): `policyVersion`, a manifest identifier, exactly
+  one status from `CLEAN | FINDINGS_FOUND | NEEDS_CONTEXT`, a completed-
+  scope confirmation over the full manifest, findings with priority,
+  category, document location, evidence, component-derived normalized
+  fingerprint, and resolution. The phase-33 envelope validity rules apply:
+  newly discovered findings are `open`, incomplete or malformed output is an
+  invalid attempt, and `CLEAN`/completed results require full manifest
+  coverage.
+- Priorities: P1 is a defect that would make the spec unimplementable,
+  self-contradictory, or unsafe to implement as written; P2 is a consequential
+  gap with a safe default; P3 is minor. P1 blocks the loop from terminating;
+  P2/P3 require dispositions only.
+
+### Bounded loop contract
+
+- The loop permits at most three logical reviews: the initial review and at
+  most two revision reviews, each preceded by at most one amendment round.
+- The phase-33 transient-retry rule applies per logical review: at most two
+  retries for invalid envelopes or supplied-`NEEDS_CONTEXT`; unsatisfiable
+  context requests escalate immediately.
+- Stop rule: the first completed round with zero P1 findings terminates the
+  loop as `approved-for-implementation`, after every residual P2/P3 receives
+  one disposition from
+  `fixed | defer-to-implementation | reject-with-evidence`.
+- `defer-to-implementation` requires naming the implementation artifact
+  expected to close it (a typed policy value, validator, test, or fixture);
+  the deferral is recorded in the learning record and is available to the
+  affected slice's implementer and reviewers.
+- Non-progress: the same unresolved P1 fingerprint across two consecutive
+  rounds, or a revision round reporting more P1 findings than the previous
+  round, terminates as `needs-grill`.
+- Budget exhaustion with P1 findings still open terminates as `needs-grill`.
+- `needs-grill` returns the open findings to the human, who may reopen the
+  grill, amend the agreement record, or explicitly accept a finding with a
+  recorded decision; the loop never overrides that decision.
+- Terminal status is one of `approved-for-implementation | needs-grill`, and
+  the ledger keeps every implementation slice of the reviewed spec set
+  non-dispatchable until `approved-for-implementation` is recorded.
+
+### Ownership and reuse contract
+
+- Amendments triggered by findings update every affected copy — spec, issue
+  briefs, ledger, glossary, ADRs — in the same amendment round;
+  `doc-sync-drift` findings against a prior amendment count toward the
+  non-progress rule.
+- The loop reuses phase-33 machinery rather than duplicating it: the shared
+  policy-source pattern with a spec-review projection, the fingerprint
+  normalization approach, and the `review-learning/v1` record schema with
+  `sourcePolicy: spec-review/v1` and terminal statuses
+  `approved-for-implementation | needs-grill` added as closed values for
+  this source policy only.
+- The spec reviewer resolves model policy through the existing
+  `critical-reviewer` role; no new role ID.
+- Generated surfaces receive only their projection: the spec reviewer does
+  not receive the change-risk rubric, promotion thresholds, or historical
+  records, and the change-risk reviewer does not receive spec-review
+  categories.
+
+## Security Rules
+
+- The loop is local: no document, transcript, or finding is uploaded.
+- The reviewer is read-only and cannot edit documents, the agreement record,
+  or the ledger.
+- Learning records follow the phase-33 redaction rules; raw transcripts stay
+  local and ignored.
+- Reviewer prompts preserve existing hard denials and cannot broaden
+  permissions.
+
+## Acceptance Criteria
+
+1. A qualifying profile emits `spec-reviewer` definitions for Codex and
+   Claude, resolving model policy through `critical-reviewer`, with no
+   dangling references and byte-identical output for non-qualifying
+   profiles.
+2. The generated grill/synthesis workflow runs the bounded loop after
+   persistence: three-logical-review budget, one amendment round per
+   revision, transient-retry rule, stop rule, non-progress rules, and both
+   terminal statuses, with no conflicting counts.
+3. The typed `SpecReviewResultV1` envelope enforces the closed categories,
+   full-manifest completed scope, open-only new findings, and
+   invalid-attempt handling; malformed output can never terminate the loop.
+4. Residual P2/P3 findings at termination each carry one closed disposition;
+   `defer-to-implementation` names its expected closing artifact and is
+   surfaced to the affected slice.
+5. Implementation slices of a reviewed spec set are non-dispatchable until
+   `approved-for-implementation` is recorded; `needs-grill` returns open
+   findings to the human without overriding agreement-record decisions.
+6. One `review-learning/v1` record per reviewed spec set carries
+   `sourcePolicy: spec-review/v1`, the round outcomes, dispositions, and
+   terminal status, excluding raw transcripts.
+7. Full compiler/core tests, affected golden tests, check, doctor, and
+   packed verification run before the phase is reported complete.
+
+## Tests
+
+- Policy unit tests for `spec-review/v1` closed values: categories,
+  priorities, dispositions, budgets, stop rule, non-progress rules, and
+  terminal statuses.
+- Envelope tests for valid clean, findings, needs-context, malformed,
+  incomplete-scope, and self-closed-finding rejection.
+- Table-driven loop tests: clean on initial review, one and two revision
+  rounds, zero-P1 termination with residual dispositions, same-fingerprint
+  non-progress, P1-count regression, budget exhaustion, and unsatisfiable
+  context.
+- Golden fixtures for the reviewer definition and changed grill/synthesis
+  skills on Codex and Claude; negative fixtures for non-qualifying profiles.
+- Record fixtures for both terminal statuses and every disposition,
+  including `defer-to-implementation` artifact naming.
+- Ledger-gate tests proving implementation slices stay non-dispatchable
+  until the terminal record exists.
+
+## TDD Strategy
+
+All slices are deterministic-generator/policy slices. The highest fast seam
+is `compile(profile) -> emitted spec-reviewer and workflow artifacts`,
+supported by pure policy/loop-transition return values; no internal renderer
+is mocked. Each slice begins with a focused failing unit, contract, or
+golden assertion.
+
+## Issue Plan
+
+See `docs/specs/phase-34/issues/`:
+
+- I1 defines the spec-review policy projection and emits the reviewer.
+- I2 integrates the bounded loop and ledger gate into the generated
+  grill/synthesis workflow.
+- I3 validates the packed integrated loop and records phase evidence.
+
+Dependency map: phase-33 I1 + I3 -> phase-34 I1; `I1 -> I2`; `I1 + I2 -> I3`.
+Phase-34 I1 consumes the shared policy-source pattern and record schema that
+phase-33 I1/I3 establish; it does not fork them.
+
+## ADR Candidates
+
+- Bounded pre-implementation spec review: one ADR recording the decision to
+  gate implementation dispatch on a budgeted clean-room spec review with a
+  zero-P1 stop rule and explicit residual dispositions, with the PR #134
+  review history as evidence. Persisted on approval as the next ADR number.
+
+## Documentation Updates
+
+- Phase-34 README and issue briefs.
+- `CONTEXT.md` glossary: spec-risk review, stop rule, residual disposition,
+  `defer-to-implementation`.
+- Generated workflow documentation where it describes the grill/synthesis
+  flow.
+
+## Final Review Checklist
+
+- Build a spec-to-test matrix for every MUST, budget, stop rule,
+  non-progress rule, disposition, and terminal status.
+- Verify the reviewer cannot edit documents or overturn agreement-record
+  decisions, and that `agreement-divergence` findings cite the record.
+- Verify clean-room inputs exclude the grill transcript and authoring
+  rationale, and revision reviews receive only prior fingerprints.
+- Verify the ledger gate holds every slice of the reviewed set until the
+  terminal record exists.
+- Verify residual dispositions are recorded and `defer-to-implementation`
+  reaches the affected slice.
+- Confirm no upload, no transcript persistence, and no permission
+  broadening.
+- Run affected unit/golden tests, full tests, check, doctor, and
+  `verify:pack`.

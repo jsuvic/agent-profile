@@ -1930,3 +1930,23 @@ I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
 shared policy source's closed values and learning-record projection. I5 is
 parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
 requires I5's accepted backfill evidence.
+
+## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
+
+Draft 2026-07-27, pending grill approval; the spec itself is human-gated.
+Adds a budgeted clean-room spec-review loop after grill approval and
+synthesis persistence, with a zero-P1 stop rule, explicit residual
+dispositions, and a ledger gate on implementation dispatch. Motivated by
+the phase-33 PR #134 review history (nine rounds, 71 findings, 12 P1s,
+all pre-implementation).
+
+| Id  | Task                                            | State      | Brief                                                                                                     |
+| --- | ----------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------- |
+| G1  | Grill session: approve the phase-34 spec        | human-gate | [001-bounded-spec-review.md](docs/specs/phase-34/001-bounded-spec-review.md)                              |
+| I1  | Define the spec-review policy and reviewer      | blocked    | [001-spec-review-policy-and-reviewer.md](docs/specs/phase-34/issues/001-spec-review-policy-and-reviewer.md) |
+| I2  | Integrate the bounded loop and ledger gate      | sequenced  | [002-spec-review-loop-integration.md](docs/specs/phase-34/issues/002-spec-review-loop-integration.md)     |
+| I3  | Validate the published spec-review loop         | sequenced  | [003-spec-review-validation.md](docs/specs/phase-34/issues/003-spec-review-validation.md)                 |
+
+Dependency map: G1 -> I1; phase-33 I1 + I3 -> I1; I1 -> I2; I1+I2 -> I3.
+I1 is blocked on both the spec approval (G1) and the phase-33 shared policy
+source and record schema it consumes.
