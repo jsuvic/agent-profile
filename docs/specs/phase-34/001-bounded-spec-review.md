@@ -44,8 +44,8 @@ it never relitigates product decisions the grill agreement made.
 
 1. Authority doubt -> a conflict with the approved agreement record is a
    finding to report, never a decision to overturn.
-2. Convergence doubt -> a round yielding zero P1 findings terminates the
-   loop; do not keep reviewing because more findings are imaginable.
+2. Convergence doubt -> a round yielding zero open P1 findings terminates
+   the loop; do not keep reviewing because more findings are imaginable.
 3. Residual doubt -> a P2/P3 finding at loop end receives an explicit
    disposition; `defer-to-implementation` is a first-class recorded outcome,
    not a silent drop.
@@ -160,21 +160,42 @@ it never relitigates product decisions the grill agreement made.
 - The phase-33 transient-retry rule applies per logical review: at most two
   retries for invalid envelopes or supplied-`NEEDS_CONTEXT`; unsatisfiable
   context requests escalate immediately.
-- Stop rule: the first completed round with zero P1 findings terminates the
-  loop as `approved-for-implementation`, after every residual P2/P3 receives
-  one disposition from
+- Stop rule: the first completed round with zero P1 findings at
+  `resolution: open` terminates the loop as `approved-for-implementation`,
+  after every residual P2/P3 receives one disposition from
   `fixed | defer-to-implementation | reject-with-evidence`.
+- At a terminating round, `fixed` is valid only for a finding whose closure
+  that round's review already verified. A residual finding cannot be
+  dispositioned `fixed` by amending documents after the terminating review:
+  any amendment to the manifest invalidates the terminal result and either
+  consumes a remaining revision round on the amended manifest or terminates
+  as `needs-grill` when no budget remains. The recorded approval is bound to
+  the exact reviewed manifest identifier.
 - `defer-to-implementation` requires naming the implementation artifact
   expected to close it (a typed policy value, validator, test, or fixture);
   the deferral is recorded in the learning record and is available to the
   affected slice's implementer and reviewers.
 - Non-progress: the same unresolved P1 fingerprint across two consecutive
-  rounds, or a revision round reporting more P1 findings than the previous
-  round, terminates as `needs-grill`.
+  rounds, or a revision round whose count of P1 findings at
+  `resolution: open` exceeds the previous round's open-P1 count, terminates
+  as `needs-grill`. Prior P1s a revision verifies closed are excluded from
+  both sides of that comparison.
 - Budget exhaustion with P1 findings still open terminates as `needs-grill`.
-- `needs-grill` returns the open findings to the human, who may reopen the
-  grill, amend the agreement record, or explicitly accept a finding with a
-  recorded decision; the loop never overrides that decision.
+- The phase-33 transient-retry exhaustion rule maps to this loop's terminal
+  set: exhausted retries terminate as `needs-grill`, never as a hang, an
+  extra attempt, or a phase-33 status.
+- `needs-grill` returns the open findings to the human, who resolves it
+  through one of two closed paths; the loop never overrides that decision:
+  - Reopen the grill or amend the agreement record: synthesis re-persists
+    the document set and a new loop instance starts with a full budget,
+    bound to the new manifest.
+  - Explicitly accept specific findings: each accepted finding records the
+    human decision as disposition `accepted-by-human` with its reason, and
+    one fresh confirmation review runs against the current manifest. When
+    that review reports zero open P1 findings excluding the human-accepted
+    ones, the loop terminates `approved-for-implementation` bound to that
+    manifest, superseding the `needs-grill` record; otherwise it returns to
+    `needs-grill`.
 - Terminal status is one of `approved-for-implementation | needs-grill`, and
   the ledger keeps every implementation slice of the reviewed spec set
   non-dispatchable until `approved-for-implementation` is recorded.
@@ -188,11 +209,25 @@ it never relitigates product decisions the grill agreement made.
 - The loop reuses phase-33 machinery rather than duplicating it: the shared
   policy-source pattern with a spec-review projection, the fingerprint
   normalization approach, and the `review-learning/v1` record schema with
-  `sourcePolicy: spec-review/v1` and terminal statuses
-  `approved-for-implementation | needs-grill` added as closed values for
-  this source policy only.
+  the following closed extensions valid only for
+  `sourcePolicy: spec-review/v1` records:
+  - terminal statuses `approved-for-implementation | needs-grill`;
+  - the conditional disposition field applies to P2 and P3 findings (not
+    only P3) with the closed set
+    `fixed | defer-to-implementation | reject-with-evidence |
+    accepted-by-human`, reusing the existing owner-confirmation marker and
+    evidence shape;
+  - the reviewed manifest identifier in place of base/head snapshot
+    identifiers.
+  Records from other source policies reject these extensions.
 - The spec reviewer resolves model policy through the existing
   `critical-reviewer` role; no new role ID.
+- The qualification predicate is closed: a profile qualifies exactly when it
+  both emits the generated grill/synthesis workflow (the existing
+  `workflow.sdd` gate) and qualifies for the phase-33 subagent-driven
+  reviewer chain. SDD-only profiles without the subagent chain, and
+  subagent profiles without the SDD workflow, remain byte-identical; the
+  boundary tests cover both sides.
 - Generated surfaces receive only their projection: the spec reviewer does
   not receive the change-risk rubric, promotion thresholds, or historical
   records, and the change-risk reviewer does not receive spec-review
@@ -216,8 +251,10 @@ it never relitigates product decisions the grill agreement made.
    profiles.
 2. The generated grill/synthesis workflow runs the bounded loop after
    persistence: three-logical-review budget, one amendment round per
-   revision, transient-retry rule, stop rule, non-progress rules, and both
-   terminal statuses, with no conflicting counts.
+   revision, transient-retry rule with exhaustion mapping to `needs-grill`,
+   zero-open-P1 stop rule with manifest binding, non-progress rules over
+   open findings, both terminal statuses, and both closed human-resolution
+   paths, with no conflicting counts.
 3. The typed `SpecReviewResultV1` envelope enforces the closed categories,
    full-manifest completed scope, open-only new findings, and
    invalid-attempt handling; malformed output can never terminate the loop.
@@ -241,9 +278,13 @@ it never relitigates product decisions the grill agreement made.
 - Envelope tests for valid clean, findings, needs-context, malformed,
   incomplete-scope, and self-closed-finding rejection.
 - Table-driven loop tests: clean on initial review, one and two revision
-  rounds, zero-P1 termination with residual dispositions, same-fingerprint
-  non-progress, P1-count regression, budget exhaustion, and unsatisfiable
-  context.
+  rounds, zero-open-P1 termination with residual dispositions, rejection of
+  `fixed` for unverified closure at termination, post-termination amendment
+  invalidation and rebinding, same-fingerprint non-progress, open-P1-count
+  regression with verified-closed exclusion, budget exhaustion, retry
+  exhaustion to `needs-grill`, unsatisfiable context, and both
+  human-resolution paths including the accepted-by-human confirmation
+  review.
 - Golden fixtures for the reviewer definition and changed grill/synthesis
   skills on Codex and Claude; negative fixtures for non-qualifying profiles.
 - Record fixtures for both terminal statuses and every disposition,

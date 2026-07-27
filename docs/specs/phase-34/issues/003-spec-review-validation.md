@@ -32,6 +32,14 @@ false positives, and variability in an evidence matrix.
 - The blinded corpus covers every closed spec-risk category with at least
   one representative case; every seeded P1-class defect is recovered in at
   least one of two runs, with misses recorded.
+- Recovery and quality thresholds are evaluated independently per generated
+  reviewer target: Codex and Claude each get their own runs, and a recovery
+  on one target never counts for the other.
+- Per-target absolute maximum rates for false positives, malformed
+  envelopes, and `NEEDS_CONTEXT` results are pre-registered before any run;
+  exceeding a bound fails the criterion unless an explicit recorded spec
+  decision accepts it. Recovery achieved by over-reporting is a failure,
+  not a pass.
 - Evaluation inputs expose no expected findings or prior conclusions.
 - Full validation from the parent spec completes or reports exact
   unrelated failures.
