@@ -1908,3 +1908,25 @@ model-selection lifecycles instead of adding temporary manual guidance.
 Dependency map: Phase 31.5 I9 -> (I1, I3, I4); I1 -> I2; I3+I4 -> I5;
 I2+I5 -> I6. I1, I3, and I4 are parallel-safe after Phase 31.5; I6 is final
 integration only.
+
+## phase-33: Change-Risk Review Assurance (`docs/specs/phase-33/001-change-risk-review-assurance.md`)
+
+Approved 2026-07-24 from the change-risk review grill agreement. Adds an
+independent full-change reviewer after spec and code-quality review, bounded
+remediation and escalation, versioned review-learning records, recurring-
+finding promotion, and a provider-neutral external-review boundary.
+
+| Id  | Task                                            | State         | Brief                                                                                                   |
+| --- | ----------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
+| I1  | Emit the independent change-risk reviewer       | ready         | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                   |
+| I2  | Orchestrate bounded review remediation          | sequenced     | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)       |
+| I3  | Persist versioned review-learning records       | sequenced     | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)             |
+| I4  | Promote recurring findings into stronger guards | sequenced     | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)     |
+| I5  | Backfill the recent PR review corpus            | human-gate    | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
+| I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
+
+Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
+I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
+shared policy source's closed values and learning-record projection. I5 is
+parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
+requires I5's accepted backfill evidence.
