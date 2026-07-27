@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0
-// SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
@@ -1175,6 +1174,32 @@ test("doctor validates a generated-owned Tabnine model settings output against c
     valid.issues.some((issue) => issue.code === "LINT-LOCK-007"),
     false,
     JSON.stringify(valid.issues, null, 2),
+  );
+
+  const corruptedTargetRoot = await createModelPolicyTabnineProject();
+  const corruptedTargetLock = await readLockfile(corruptedTargetRoot);
+  const corruptedTargetOutput = corruptedTargetLock.outputs.find(
+    (output) => output.path === ".tabnine/agent/settings.json",
+  );
+  assert.ok(corruptedTargetOutput);
+  corruptedTargetOutput.target = "agents-md";
+  await writeLockfile(corruptedTargetRoot, corruptedTargetLock);
+  assertHasIssue(
+    await runDoctor({ rootDir: corruptedTargetRoot, models: true }),
+    "LINT-LOCK-005",
+  );
+
+  const corruptedTemplateRoot = await createModelPolicyTabnineProject();
+  const corruptedTemplateLock = await readLockfile(corruptedTemplateRoot);
+  const corruptedTemplateOutput = corruptedTemplateLock.outputs.find(
+    (output) => output.path === ".tabnine/agent/settings.json",
+  );
+  assert.ok(corruptedTemplateOutput);
+  corruptedTemplateOutput.templateId = "targets/agents-md@1";
+  await writeLockfile(corruptedTemplateRoot, corruptedTemplateLock);
+  assertHasIssue(
+    await runDoctor({ rootDir: corruptedTemplateRoot, models: true }),
+    "LINT-LOCK-005",
   );
 
   const changedOverrideRoot = await createModelPolicyTabnineProject();

@@ -1837,11 +1837,23 @@ removed overrides, invalid-compile lock suppression, and exact probe-temp
 cleanup. Final review result: spec compliant and code quality acceptable.
 Validated: `npm test --workspace @agent-profile/doctor` (109/109),
 `node --test scripts/release/phase31_5-published-journey.test.mjs` (11/11),
-`npm run check`, `npm run verify:pack`, Prettier, and `git diff --check`.
-`npm test` remains inconclusive after a no-output 124-second timeout; root
-`npm run doctor` reports only pre-existing user-owned `.claude/settings.local.json`
-and `.mcp.json` drift, which remains outside I9 scope. Phase 32 I1 may now
-proceed according to its own ledger prerequisites.
+the complete `npm test` workspace and release suite, `npm run check`,
+`npm run verify:pack`, Prettier, and `git diff --check`. Root `npm run doctor`
+reports only pre-existing user-owned `.claude/settings.local.json` and
+`.mcp.json` drift, which remains outside I9 scope. Phase 32 I1 may now proceed
+according to its own ledger prerequisites.
+
+I9 PR review closure 2026-07-27: Doctor's expected generated-owned Tabnine
+metadata is now an independent product oracle, so a corrupt lock cannot teach
+the validator its own wrong target or template id. The packed journey
+instruments `mkdtemp` before allowing probe-directory cleanup, watches
+credential and client-config roots as well as the repository, proves offline
+Doctor never calls the injected probe runner, and exercises mapping-v2 retain
+and adoption as real byte-preserving/mutating transitions. The final matrix
+enumerates the Phase 31.5 validation codes, closed probe statuses, CLI exit,
+Doctor finding codes, redaction evidence, and static-only provider boundary.
+The full `npm test` gate completed successfully, replacing the earlier timed
+out attempt.
 
 ## phase-31.9: Upgrade "custom exact" model-policy strategy (`docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`)
 

@@ -64,6 +64,9 @@ import type {
 
 const PROFILE_PATH = "ai-profile.yaml";
 const LOCKFILE_PATH = "ai-profile.lock";
+const TABNINE_MODEL_SETTINGS_PATH = ".tabnine/agent/settings.json";
+const TABNINE_MODEL_SETTINGS_TARGET = "tabnine";
+const TABNINE_MODEL_SETTINGS_TEMPLATE_ID = "tabnine-model-settings@1";
 // Skill roots: `.agents/skills` for Codex (per current official Codex skills
 // docs) and `.claude/skills` for Claude. The legacy `.codex/skills/` path is
 // not scanned; see docs/specs/phase-04/006-doctor-skill-checks.md.
@@ -275,7 +278,7 @@ function collectExpectedTabnineModelSettings(
 
   const lockedOutput = lockfile.outputs.find(
     (output) =>
-      output.path === ".tabnine/agent/settings.json" &&
+      output.path === TABNINE_MODEL_SETTINGS_PATH &&
       output.ownership === "generated-owned",
   );
   if (lockedOutput === undefined) return [];
@@ -285,12 +288,13 @@ function collectExpectedTabnineModelSettings(
   const bytes = Buffer.from(plan.bytes, "utf8");
   return [
     {
-      path: lockedOutput.path,
-      // Lock output targets are intentionally wider than CompilerTargetId for
-      // this CLI-owned Tabnine artifact; preserving its recorded target here
-      // lets the generic lock comparator validate the actual published record.
-      target: lockedOutput.target as GeneratedFile["target"],
-      templateId: lockedOutput.templateId,
+      // These identifiers are the fixed metadata contract written by the CLI
+      // ownership adapter. They must be independent of the lock record so the
+      // generic comparator can detect a schema-valid but corrupted target or
+      // template id instead of accepting it as its own oracle.
+      path: TABNINE_MODEL_SETTINGS_PATH,
+      target: TABNINE_MODEL_SETTINGS_TARGET as GeneratedFile["target"],
+      templateId: TABNINE_MODEL_SETTINGS_TEMPLATE_ID,
       bytes,
       sha256: sha256Hex(bytes),
     },

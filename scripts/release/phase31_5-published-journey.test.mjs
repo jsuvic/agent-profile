@@ -681,6 +681,7 @@ async function withFsWriteSentinel(action, options) {
   const mutatingMethods = [
     "writeFile",
     "mkdir",
+    "mkdtemp",
     "rename",
     "rm",
     "unlink",
@@ -707,6 +708,15 @@ async function withFsWriteSentinel(action, options) {
   try {
     for (const name of mutatingMethods) {
       fs.promises[name] = (...args) => {
+        if (name === "mkdtemp") {
+          return original[name](...args).then((createdDirectory) => {
+            const target = classifyTarget(createdDirectory);
+            if (allowMutation?.(name, target) !== true) {
+              calls.push(`${name}(${target})`);
+            }
+            return createdDirectory;
+          });
+        }
         const target = classifyTarget(args[0]);
         if (allowMutation?.(name, target) !== true) {
           calls.push(`${name}(${target})`);
@@ -816,6 +826,29 @@ const SENTINEL_FS_READ_METHODS = [
   "existsSync",
 ];
 
+function defaultProbeCredentialRoots() {
+  const roots = [
+    ".config",
+    ".aws",
+    ".azure",
+    ".ssh",
+    ".kube",
+    ".codex",
+    ".claude",
+    ".tabnine",
+  ].map((relative) => path.join(os.homedir(), relative));
+  if (process.env.XDG_CONFIG_HOME) {
+    roots.push(path.resolve(process.env.XDG_CONFIG_HOME));
+  }
+  for (const base of [process.env.APPDATA, process.env.LOCALAPPDATA]) {
+    if (!base) continue;
+    for (const client of ["Codex", "Claude", "Tabnine"]) {
+      roots.push(path.resolve(base, client));
+    }
+  }
+  return [...new Set(roots.map((rootPath) => path.resolve(rootPath)))];
+}
+
 // A repository-READ sentinel, the falsifiable form of "the probe window
 // touches nothing in the repository". It complements -- and does NOT replace --
 // PROBE_FIXTURE_SOURCE_MARKER: the marker can only witness content from the two
@@ -859,7 +892,10 @@ const SENTINEL_FS_READ_METHODS = [
 // `readdirSync` of the probe working directory) are never recorded -- without
 // it, the liveness assertion below could be satisfied by test code and would
 // prove nothing about the shipped read path.
-function createRepositoryReadSentinel(repository) {
+function createRepositoryReadSentinel(
+  repository,
+  { credentialRoots = defaultProbeCredentialRoots() } = {},
+) {
   let sequence = 0;
   let installed = false;
   let recording = true;
@@ -867,6 +903,7 @@ function createRepositoryReadSentinel(repository) {
   let originalFs;
   const observedReads = [];
   const repositoryReads = [];
+  const credentialReads = [];
   const unclassifiedReads = [];
   const probeInvocationSequences = [];
 
@@ -889,6 +926,17 @@ function createRepositoryReadSentinel(repository) {
         return;
       }
       if (inside) repositoryReads.push(entry);
+      for (const credentialRoot of credentialRoots) {
+        try {
+          if (isInsideDirectory(classified.path, credentialRoot)) {
+            credentialReads.push({ ...entry, credentialRoot });
+            break;
+          }
+        } catch {
+          unclassifiedReads.push(entry);
+          return;
+        }
+      }
       return;
     }
     // "unclassifiable": deliberately NOT silently treated as outside the
@@ -937,6 +985,7 @@ function createRepositoryReadSentinel(repository) {
   return {
     observedReads,
     repositoryReads,
+    credentialReads,
     unclassifiedReads,
     probeInvocationSequences,
     recordProbeInvocation() {
@@ -1026,6 +1075,17 @@ function assertProbeWindowTouchedNoRepositoryFile(sentinel, { label }) {
       `the last probe invocation, #${lastProbeSequence})`,
   );
   assert.deepEqual(
+    sentinel.credentialReads.map(
+      ({ sequence, api, target, credentialRoot }) =>
+        `${api}(${target}) inside ${credentialRoot} [#${sequence}]`,
+    ),
+    [],
+    `${label}: the probe window must not read a credential or client-config ` +
+      "root (home config, SSH/cloud stores, or Codex/Claude/Tabnine config); " +
+      "the probe adapter must rely only on its fixed prompt, isolated cwd, " +
+      "and allowlisted ambient environment",
+  );
+  assert.deepEqual(
     sentinel.unclassifiedReads.map(
       ({ sequence, api, target }) => `${api}(${target}) [#${sequence}]`,
     ),
@@ -1035,6 +1095,30 @@ function assertProbeWindowTouchedNoRepositoryFile(sentinel, { label }) {
       "repository -- teach classifyFsPathArgument the shape (and re-derive " +
       "whether the read is legitimate) rather than letting an unclassifiable " +
       "argument pass as evidence",
+  );
+}
+
+function assertCredentialReadSentinelDetectsConfiguredRoot(repository) {
+  const credentialRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), "agent-profile-credential-sentinel-"),
+  );
+  const marker = path.join(credentialRoot, "inert-config-marker.txt");
+  fs.writeFileSync(marker, "secret-free sentinel\n", "utf8");
+  const sentinel = createRepositoryReadSentinel(repository, {
+    credentialRoots: [credentialRoot],
+  });
+  try {
+    sentinel.install();
+    fs.readFileSync(marker, "utf8");
+  } finally {
+    sentinel.uninstall();
+    fs.rmSync(credentialRoot, { recursive: true, force: true });
+  }
+  assert.deepEqual(
+    sentinel.credentialReads.map(({ target }) => path.resolve(target)),
+    [path.resolve(marker)],
+    "the credential-read sentinel must detect a read under a configured " +
+      "credential root; otherwise the packed no-secret-read claim is vacuous",
   );
 }
 
@@ -2024,6 +2108,7 @@ function assertProbeEnvironmentIsAllowlistedAndVerbatim(invocation, { label }) {
 // exception limited to precisely one removal per candidate.
 function createProbeTempDirectoryAllowance() {
   const mutations = [];
+  const createdCwds = new Set();
   const invocationCwds = new Set();
   return {
     mutations,
@@ -2033,6 +2118,12 @@ function createProbeTempDirectoryAllowance() {
         isProbeTempDirectoryTarget(cwd),
         `probe invocation cwd must have the expected temporary-directory ` +
           `shape before it can receive a cleanup allowance: ${cwd}`,
+      );
+      assert.equal(
+        createdCwds.has(cwd),
+        true,
+        `probe invocation cwd ${cwd} was not created by an instrumented ` +
+          "node:fs/promises mkdtemp call during this run",
       );
       assert.equal(
         invocationCwds.has(cwd),
@@ -2046,6 +2137,13 @@ function createProbeTempDirectoryAllowance() {
       const classified = classifyFsPathArgument(target);
       if (classified.kind !== "path") return false;
       const resolvedTarget = path.resolve(classified.path);
+      if (method === "mkdtemp") {
+        if (!isProbeTempDirectoryTarget(resolvedTarget)) return false;
+        if (createdCwds.has(resolvedTarget)) return false;
+        createdCwds.add(resolvedTarget);
+        mutations.push({ method, target: resolvedTarget });
+        return true;
+      }
       if (!invocationCwds.has(resolvedTarget)) return false;
       mutations.push({ method, target: resolvedTarget });
       return true;
@@ -2080,17 +2178,15 @@ function assertProbeTempAllowanceRejectsForeignDirectory(allowance) {
 // this).
 //
 // Verified against the shipped code rather than assumed: runModelProbe's
-// per-candidate `finally` calls `tempDirs.remove(cwd)`
+// per-candidate setup calls `tempDirs.create()` and its `finally` calls
+// `tempDirs.remove(cwd)`
 // (apps/cli/src/model-probe.ts), and the default provider's `remove` is `rm`
-// from node:fs/promises -- which IS in withFsWriteSentinel's `mutatingMethods`
-// list -- so exactly one `rm(<probe temp dir>)` per probed candidate is
-// observable here. Asserting that (a) proves the `allowMutation` allowance is
-// genuinely needed rather than dead permissiveness, and (b) catches a cleanup
-// regression that leaked the temporary probe directory, or one that moved
-// cleanup after the sentinel was restored, both of which would otherwise be
-// invisible. (The matching `mkdtemp` create is NOT instrumented by the
-// sentinel, so only the removal side is observable -- that asymmetry is why the
-// assertion is written against `rm` specifically.)
+// and its `create` is `mkdtemp` from node:fs/promises. Both are instrumented,
+// so exactly one creation and one removal per probed candidate are observable
+// here. Asserting that (a) proves the allowance is genuinely needed rather
+// than dead permissiveness, (b) catches setup before consent, and (c) catches
+// cleanup regressions that leak a directory or move cleanup after the sentinel
+// is restored.
 function assertProbeTempDirectoriesWereCleanedUp({
   mutations,
   invocations,
@@ -2098,24 +2194,25 @@ function assertProbeTempDirectoriesWereCleanedUp({
 }) {
   // Each probed candidate's temporary working directory was removed again
   // before the run returned, and nothing else was mutated inside one: exactly
-  // one `rm` per invocation, targeting exactly the directories the invocations
-  // actually ran in (compared as sorted sets, since neither ordering is
-  // contractual).
+  // one `mkdtemp` and one `rm` per invocation, targeting exactly the
+  // directories the invocations actually ran in.
   const describeMutations = () =>
     mutations.map(({ method, target }) => `${method}(${target})`).join(", ") ||
     "(none)";
   assert.deepEqual(
     mutations.map(({ method }) => method),
-    invocations.map(() => "rm"),
-    `${label}: expected exactly one node:fs/promises rm() per probe ` +
-      "invocation for temporary-probe-directory cleanup and no other mutation " +
+    invocations.flatMap(() => ["mkdtemp", "rm"]),
+    `${label}: expected exactly one node:fs/promises mkdtemp() and rm() per ` +
+      "probe invocation and no other mutation " +
       `inside one, observed: ${describeMutations()}`,
   );
   assert.deepEqual(
     mutations.map(({ target }) => path.resolve(target)).sort(),
-    invocations.map(({ cwd }) => path.resolve(cwd)).sort(),
-    `${label}: the removed temporary probe directories must be exactly the ` +
-      "working directories the probe invocations ran in, observed: " +
+    invocations
+      .flatMap(({ cwd }) => [path.resolve(cwd), path.resolve(cwd)])
+      .sort(),
+    `${label}: the created and removed temporary probe directories must be ` +
+      "exactly the working directories the probe invocations ran in, observed: " +
       describeMutations(),
   );
   // Final-state proof, not just attempted-call proof. The two assertions above
@@ -2459,6 +2556,7 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
   const packDestination = path.join(temporary, "tarballs");
   fs.mkdirSync(packDestination);
+  assertCredentialReadSentinelDetectsConfiguredRoot(temporary);
 
   buildPackedWorkspaces();
   const packed = new Map(
@@ -4505,35 +4603,147 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         "ordinary compile must reuse, not rewrite, the exact locked model provenance",
       );
 
-      // These are separate explicit choices, even when the fresh v3 lock means
-      // neither needs to change a byte. The packed command must accept both
-      // paths without a provider/package call or implicit probe. Supplying the
-      // CLI's own non-interactive strategy makes the consent boundary explicit.
-      for (const strategy of ["retain", "adopt"]) {
-        const upgrade = await runPackedCliScenario({
-          packedCliUrl,
-          repository,
-          args: [
-            "upgrade",
-            "--root",
-            repository,
-            "--non-interactive",
-            "--model-policy-strategy",
-            strategy,
-            "--write",
-          ],
-          clients: [],
-          filesystemMutations: "strict",
-        });
-        assert.equal(upgrade.exitCode, 0, `${strategy}: ${upgrade.stderr}`);
-        assert.equal(upgrade.stderr, "", `${strategy}: ${upgrade.stderr}`);
-        assert.equal(
-          fs.readFileSync(lockPath, "utf8"),
-          initialLockText,
-          `${strategy}: an explicit no-op upgrade must preserve the persisted ` +
-            "exact lock bytes rather than silently remapping them",
+      const createMappingV2Fixture = (directoryName) => {
+        const mappingRepository = path.join(temporary, directoryName);
+        assertFixtureDirectoryIsFresh(mappingRepository);
+        fs.cpSync(absentRunRepository, mappingRepository, { recursive: true });
+        const mappingProfilePath = path.join(
+          mappingRepository,
+          "ai-profile.yaml",
         );
-      }
+        const v3ProfileText = fs.readFileSync(mappingProfilePath, "utf8");
+        const mappingProfileText = v3ProfileText.replace(
+          /^  preset: role-aware\r?\n/mu,
+          "",
+        );
+        assert.notEqual(
+          mappingProfileText,
+          v3ProfileText,
+          "the mapping-v2 fixture must remove the explicit v3 preset",
+        );
+        fs.writeFileSync(mappingProfilePath, mappingProfileText, "utf8");
+
+        const mappingLockPath = path.join(
+          mappingRepository,
+          LOCKFILE_RELATIVE_PATH,
+        );
+        const mappingLock = JSON.parse(
+          fs.readFileSync(mappingLockPath, "utf8"),
+        );
+        assert.ok(
+          mappingLock.modelPolicy,
+          "the source fixture must start with v3 provenance before it is " +
+            "downgraded to a mapping-v2 baseline",
+        );
+        delete mappingLock.modelPolicy;
+        mappingLock.profile.sha256 = sha256Hex(
+          Buffer.from(mappingProfileText, "utf8"),
+        );
+        fs.writeFileSync(
+          mappingLockPath,
+          `${JSON.stringify(mappingLock, null, 2)}\n`,
+          "utf8",
+        );
+        return {
+          repository: mappingRepository,
+          profilePath: mappingProfilePath,
+          lockPath: mappingLockPath,
+        };
+      };
+
+      // Mapping-v2 retain is meaningfully distinct from the v3 no-op above:
+      // the starting profile has no preset and the starting lock has no
+      // modelPolicy block. Retain must preserve both bytes and must not adopt
+      // v3 merely because --write was supplied.
+      const retained = createMappingV2Fixture(
+        "packed-lifecycle-mapping-v2-retain",
+      );
+      const retainedProfileText = fs.readFileSync(retained.profilePath, "utf8");
+      const retainedLockText = fs.readFileSync(retained.lockPath, "utf8");
+      assert.equal(JSON.parse(retainedLockText).modelPolicy, undefined);
+      const retain = await runPackedCliScenario({
+        packedCliUrl,
+        repository: retained.repository,
+        args: [
+          "upgrade",
+          "--root",
+          retained.repository,
+          "--non-interactive",
+          "--model-policy-strategy",
+          "retain",
+          "--write",
+        ],
+        clients: [],
+        filesystemMutations: "strict",
+      });
+      assert.equal(retain.exitCode, 0, retain.stderr);
+      assert.equal(retain.stderr, "", retain.stderr);
+      assert.deepEqual(retain.invocations, []);
+      assert.equal(
+        fs.readFileSync(retained.profilePath, "utf8"),
+        retainedProfileText,
+        "mapping-v2 retain must preserve the profile byte-for-byte",
+      );
+      assert.equal(
+        fs.readFileSync(retained.lockPath, "utf8"),
+        retainedLockText,
+        "mapping-v2 retain must preserve a lock with no modelPolicy block",
+      );
+
+      // Mapping-v2 adopt starts from the same legacy provenance shape but must
+      // make the opposite outcome observable: insert the v3 preset and persist
+      // a real modelPolicy block through the packed write path.
+      const adopted = createMappingV2Fixture(
+        "packed-lifecycle-mapping-v2-adopt",
+      );
+      const adoptedProfileBefore = fs.readFileSync(adopted.profilePath, "utf8");
+      const adoptedLockBefore = fs.readFileSync(adopted.lockPath, "utf8");
+      const adoptAllowance = createRepositoryWriteAllowance(adopted.repository);
+      const adopt = await runPackedCliScenario({
+        packedCliUrl,
+        repository: adopted.repository,
+        args: [
+          "upgrade",
+          "--root",
+          adopted.repository,
+          "--non-interactive",
+          "--model-policy-strategy",
+          "adopt",
+          "--write",
+        ],
+        clients: [],
+        filesystemMutations: {
+          allowMutation: adoptAllowance.allowMutation,
+        },
+      });
+      assert.equal(adopt.exitCode, 0, adopt.stderr);
+      assert.equal(adopt.stderr, "", adopt.stderr);
+      assert.deepEqual(adopt.invocations, []);
+      const adoptedProfileAfter = fs.readFileSync(adopted.profilePath, "utf8");
+      const adoptedLockAfter = fs.readFileSync(adopted.lockPath, "utf8");
+      assert.notEqual(
+        adoptedProfileAfter,
+        adoptedProfileBefore,
+        "mapping-v2 adopt must make the v3 profile transition observable",
+      );
+      assert.match(adoptedProfileAfter, /^  preset: role-aware$/mu);
+      assert.notEqual(
+        adoptedLockAfter,
+        adoptedLockBefore,
+        "mapping-v2 adopt must replace legacy lock provenance",
+      );
+      assert.ok(
+        JSON.parse(adoptedLockAfter).modelPolicy,
+        "mapping-v2 adopt must persist a v3 modelPolicy block",
+      );
+      assertRepositoryMutationsAreAccountedFor({
+        mutations: adoptAllowance.mutations,
+        repository: adopted.repository,
+        before: adopt.before,
+        after: snapshot(adopted.repository),
+        requiredPaths: ["ai-profile.yaml", LOCKFILE_RELATIVE_PATH],
+        label: "mapping-v2 adopt",
+      });
 
       const doctor = await runPackedCliScenario({
         packedCliUrl,
@@ -4548,6 +4758,11 @@ test("published Phase 31.5 model-selection journey: packed model-policy assets a
         `offline doctor failed:\n${doctor.stderr}${doctor.stdout}`,
       );
       assert.equal(doctor.stderr, "", doctor.stderr);
+      assert.deepEqual(
+        doctor.invocations,
+        [],
+        "offline doctor --models must not invoke the injected probe runner",
+      );
       assert.match(
         doctor.stdout,
         /LINT-MODEL-001 \/modelPolicy\/implementer\/tabnine/u,
