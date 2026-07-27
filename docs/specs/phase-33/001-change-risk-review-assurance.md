@@ -249,11 +249,13 @@ change-risk-reviewer -> final-review`.
 - A final clean-room confirmation, when required, MUST use a fresh reviewer
   without a prior finding list.
 - The change-risk domains are a closed identifier set (`ChangeRiskDomain`) in
-  the shared policy source covering: unchanged consumers and call paths, state
-  transitions, ownership and write safety, compatibility and platform
-  behavior, parsing and validation order, external network/process
-  boundaries, generated-file ownership, published-package seams, runtime
-  proof, redaction, and contract completeness.
+  the shared policy source. The exact initial identifiers are:
+  `unchanged-consumers | state-transitions | ownership-write-safety |
+  compatibility-platform | parsing-validation-order |
+  network-process-boundaries | generated-ownership | published-seams |
+  runtime-proof | redaction | contract-completeness`. Envelope validation
+  accepts exactly these strings; adding or renaming one advances the
+  workflow-policy version.
 - Short domain names and applicability requirements remain in the reviewer
   interface. Detailed domain rubrics, known failure patterns, and evidence
   expectations live in selectively loaded reference material, not in every
@@ -407,6 +409,10 @@ type ChangeRiskResultV1 = {
   repeated. A required final clean-room confirmation is the sole exception:
   it intentionally re-reviews the same final snapshot as an independent
   logical invocation.
+- A fix round that leaves the reviewed snapshot unchanged while open
+  blockers remain consumes no logical invocation and produces `NO_PROGRESS`
+  immediately, unless a `NEEDS_HUMAN_REVIEW` trigger also applies, in which
+  case the precedence rule below decides.
 - Final clean-room confirmation is required after any P1, after two or more
   fix rounds, or when the change touches permissions, secrets, atomic writes,
   release workflows, external network/process execution, generated
@@ -504,8 +510,11 @@ type ChangeRiskResultV1 = {
   regression test is added where practical. Its recorded category feeds the
   same second- and third-occurrence thresholds.
 - A first ordinary P2/P3 is recorded and categorized.
-- A second validated occurrence of the same canonical category adds a scoped
-  `## Code Review Rules` rule plus a reviewer regression case.
+- A second validated occurrence of the same canonical category adds a
+  reviewer regression case, plus a scoped `## Code Review Rules` rule unless
+  an existing mechanical guard already provides equivalent or stronger
+  protection — in that case the prompt rule is omitted (or reduced to
+  navigation guidance) and the promotion record cites the guard instead.
 - A third validated occurrence means the prompt/rule is insufficient and adds
   a test, lint, validator, or shared helper where practical.
 - Promoted rules MUST be concise, consequential, scoped to the narrowest
@@ -541,6 +550,15 @@ type ChangeRiskResultV1 = {
 
 - GitHub Codex or another external review provider is an independent
   comparison signal only.
+- External findings enter the loop only through a closed validation handoff
+  owned by the orchestration owner (`subagent-driven-change`): the owner
+  reproduces the reported unsafe condition from local evidence against the
+  current snapshot and either normalizes it into a `ChangeRiskFindingV1`
+  with `source: external`, or records it as `false-positive` with the
+  invalidating evidence or `obsolete` with the superseding change. The
+  validation decision and its evidence persist in the learning record;
+  external output is never trusted automatically and never silently
+  discarded.
 - A validated external P1/P2 reopens the local loop when budget remains.
   Exhausted budget escalates to `NEEDS_HUMAN_REVIEW`.
 - Absence, failure, or nondeterminism of an external provider cannot prevent

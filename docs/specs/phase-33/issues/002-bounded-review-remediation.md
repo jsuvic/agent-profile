@@ -70,7 +70,8 @@ escalation using `change-risk/v1`.
   outcome.
 - `NEEDS_CONTEXT` or invalid/empty/truncated/mismatched output retries within
   the per-invocation cap and can never transition to clean.
-- P1/P2 block; P3 requires one allowed disposition.
+- P1/P2 findings with `resolution: open` block, and verified-closed P1/P2
+  findings stop blocking; P3 requires one allowed disposition.
 - A validated external P1/P2 reopens the loop only within the remaining local
   budget.
 
