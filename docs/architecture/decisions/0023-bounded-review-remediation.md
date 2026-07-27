@@ -15,17 +15,20 @@ enumerated.
 
 Allow an initial review followed by at most three fix rounds, at most six
 completed logical reviewer invocations including up to two final clean-room
-confirmations (the second exists only for the path where confirmation of an
-initially clean high-risk change discovers blockers and remediation then
-requires a new confirmation), and at most two transient retries per logical
-invocation. A fix round may begin only when the remaining budget covers its
+confirmations (the second exists for any path where a required confirmation
+discovers blockers, remediation follows within the remaining fix-round
+budget, and the still-applicable trigger requires a new confirmation), and
+at most two transient retries per logical invocation. A fix round may begin only when the remaining budget covers its
 remediation review plus any then-required final confirmation; otherwise the
 workflow escalates. Repeated fingerprints or two rounds without blocker-count
 improvement produce `NO_PROGRESS`; remaining blockers or exhausted transient
 retries produce `NEEDS_HUMAN_REVIEW`. When both terminal triggers apply,
 `NEEDS_HUMAN_REVIEW` takes precedence. A completed result whose findings are
 exclusively dispositioned P3s reaches terminal clean without re-review. Any
-code change invalidates an earlier clean result.
+code change invalidates an earlier clean result, except files under the
+`docs/review-learning/` metadata prefix (the learning record and promotion
+proposals written after the terminal state), which are excluded from
+snapshot invalidation per phase-33/001.
 
 Final clean-room confirmation is required after a P1, after two or more fix
 rounds, or for the high-risk surfaces enumerated in phase-33/001.

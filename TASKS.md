@@ -1922,7 +1922,7 @@ finding promotion, and a provider-neutral external-review boundary.
 | I2  | Orchestrate bounded review remediation          | sequenced     | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)       |
 | I3  | Persist versioned review-learning records       | sequenced     | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)             |
 | I4  | Promote recurring findings into stronger guards | sequenced     | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)     |
-| I5  | Backfill the recent PR review corpus            | sequenced     | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
+| I5  | Backfill the recent PR review corpus            | human-gate    | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
 | I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;

@@ -61,6 +61,12 @@ reduction percentage.
   through an explicit spec decision.
 - Context reduction is accepted because evaluation preserves assurance, not
   merely because the prompt became shorter.
+- The evaluation projection pre-registers, per target and before any run,
+  absolute maximum rates for false positives, `NEEDS_CONTEXT` results, and
+  malformed envelopes in addition to the seeded-P1 recovery minimum.
+  Exceeding any pre-registered bound — even when the baseline is equally
+  bad — fails the criterion unless an explicit recorded spec decision
+  accepts it; relative-to-baseline disclosure alone is not acceptance.
 - Codex and Claude are evaluated independently; success on one target does
   not prove parity for the other.
 - Full required validation from the parent spec completes or reports exact

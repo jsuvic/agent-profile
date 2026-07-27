@@ -29,8 +29,11 @@ deterministic guard is retired and no longer rendered into generated context.
 Historical records are evaluation and promotion evidence only and are never
 loaded into clean-room reviewer context.
 
-Promotions write only to human-owned manual/scoped instruction surfaces and
-never silently alter compiler-generated regions.
+Within the reviewed change, promotion writes only proposed-patch artifacts
+under `docs/review-learning/proposals/`; applying a proposal to a
+human-owned manual/scoped instruction surface is a separate later reviewed
+change through the normal write boundary. Promotion never silently alters
+compiler-generated regions.
 
 ## Rationale
 

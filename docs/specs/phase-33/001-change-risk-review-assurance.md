@@ -108,9 +108,13 @@ telemetry or making GitHub a dependency.
   rules.
 - Complete committed `base...HEAD` diff for a PR workflow.
 - For an uncommitted local workflow, the same accumulated committed diff plus
-  staged and unstaged patches and every identified relevant untracked file as
-  one change snapshot; no commit or staging mutation is required solely for
-  review.
+  staged and unstaged patches and untracked files as one change snapshot; no
+  commit or staging mutation is required solely for review. The untracked
+  rule is closed and auditable: every untracked file not excluded by the
+  repository's committed ignore rules enters the snapshot by default, and
+  any additional exclusion is listed in the manifest with its path and a
+  concise reason so the reviewer can verify — "relevant" is never an
+  unstated judgement call that hides a file.
 - Base and head commit identifiers. Whenever staged, unstaged, or untracked
   content participates in the snapshot, a deterministic worktree snapshot
   identifier over the exact reviewed byte set is required so that different
@@ -343,6 +347,14 @@ type ChangeRiskResultV1 = {
   describes secret-shaped values by shape only and MUST NOT reproduce
   secrets, raw transcripts, or source beyond the minimum needed to locate
   the defect.
+- `EvidenceReference` is discriminated by `kind` with per-kind required
+  locators: `file` requires `path`; `diff-hunk` requires `path` and `lines`;
+  `symbol` requires `path` and `symbol`; `test` requires `path`; `contract`
+  requires the contract name or document path in `path`; `command-output`
+  requires the executed command in `summary` alongside the observation.
+  `lines` requires `1 <= start <= end`. A reference missing its per-kind
+  locator or with invalid bounds is malformed and makes the envelope
+  invalid.
 - `missingInputs` MUST be empty except for `NEEDS_CONTEXT`.
 - `scope.completed` MUST be `true` only for `CLEAN` or a completed
   findings result.
@@ -360,6 +372,14 @@ type ChangeRiskResultV1 = {
   a partial review.
 - P1/P2 findings MUST reject `disposition`; P3 findings MUST carry one valid
   `disposition`.
+- A newly discovered finding is always `resolution: open`. An invocation may
+  emit `fixed`, `false-positive`, or `obsolete` only for a finding whose
+  fingerprint matches a prior-round finding supplied for closure
+  verification; because initial and final clean-room reviews receive no
+  prior finding list, every finding they emit MUST be `open`, and a
+  non-`open` resolution without a matching supplied fingerprint makes the
+  envelope invalid. A reviewer can never close its own newly discovered
+  blocker.
 - `CLEAN` is valid only for the requested snapshot with an empty findings
   array and an explicit completed-scope confirmation covering the complete
   manifest and every domain's applicability. `FINDINGS_FOUND` requires at
@@ -480,8 +500,11 @@ type ChangeRiskResultV1 = {
   round outcomes with per-round/per-finding source markers, stable finding
   fingerprints, category with its categorization taxonomy version, priority,
   the systemic classification and reason for validated P1s, evidence,
-  affected contract, safe path, resolution, conditional P3 disposition, and
-  terminal status.
+  affected contract, safe path, resolution, conditional P3 disposition with
+  a closed owner-confirmation marker (`dispositionConfirmed: true | false`
+  plus the owner's decision evidence for every open P3 — a reviewer-proposed
+  disposition records `false` until the owner confirms it), and terminal
+  status.
 - Logical-invocation and transient-attempt counts are required only for
   `sourcePolicy: change-risk/v1` records. `legacy-external` records omit
   them instead of fabricating provenance.
@@ -528,11 +551,13 @@ type ChangeRiskResultV1 = {
   before recurrence is counted. Exact canonical identifiers take precedence
   over aliases; a label matching neither maps to `uncategorized`, which is
   excluded from promotion counting until a human assigns a canonical
-  category. The initial identifier set MUST cover the July 2026 sample
-  classes: cross-consumer integration, preview-before-write ordering,
-  ownership and atomicity, network/process boundaries, parser and version
-  contracts, published-package seams, runtime proof, state classification,
-  and secret-like output. Adding, renaming, or re-aliasing identifiers
+  category. The exact `change-risk-categories/v1` identifiers are:
+  `cross-consumer-integration | preview-before-write-ordering |
+  ownership-atomicity | network-process-boundary | parser-version-contract |
+  published-package-seam | runtime-proof | state-classification |
+  secret-output`. The v1 alias table starts empty; normalization maps a
+  variant label onto a canonical identifier only through an explicit table
+  entry, never by fuzzy matching. Adding, renaming, or re-aliasing identifiers
   advances the taxonomy version with a migration rule for existing records;
   every record carries the taxonomy version used to categorize it.
 - The occurrence unit is one reviewed change: repeated rounds, repeated
@@ -542,10 +567,11 @@ type ChangeRiskResultV1 = {
   finding in that category.
 - A local finding is validated by the recorded closure evidence, not by
   reviewer assertion alone: promotion counts only findings whose recorded
-  terminal resolution is `fixed`, or `open` where the orchestration owner —
-  not the reviewer — recorded the disposition decision (`accepted-debt` or
-  `follow-up`) with its supporting evidence. A reviewer-proposed disposition
-  the owner never confirmed does not count. Findings resolved
+  terminal resolution is `fixed`, or `open` where the persisted record
+  carries `dispositionConfirmed: true` — the orchestration owner, not the
+  reviewer, confirmed the `accepted-debt` or `follow-up` decision with its
+  supporting evidence. A reviewer-proposed disposition with
+  `dispositionConfirmed: false` does not count. Findings resolved
   `false-positive` (with invalidating evidence) or `obsolete` are excluded
   from recurrence counting. The orchestration owner records resolutions,
   confirmed dispositions, and their evidence in the learning record;
