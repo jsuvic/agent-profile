@@ -12,14 +12,17 @@ approves the spec set.
 
 ## Behavior slice
 
-Update the generated grill/synthesis workflow instructions to own the
-bounded loop: initial review, at most two amendment-plus-revision rounds,
-transient retries, the zero-P1 stop rule, residual-disposition recording,
-non-progress and budget escalation to `needs-grill`, and the ledger gate
-that opens implementation slices only on `approved-for-implementation`.
-Amendments update every affected document copy in the same round. The
-terminal result persists as a `review-learning/v1` record with
-`sourcePolicy: spec-review/v1`.
+Update the generated grill/synthesis workflow instructions so the synthesis
+surface owns the bounded loop: initial review, at most two
+amendment-plus-revision rounds, transient retries, the zero-open-P1 stop
+rule with manifest binding and the terminating-round `fixed` restriction,
+residual-disposition recording, non-progress and budget escalation to
+`needs-grill`, the three closed human-resolution paths (reopen/amend,
+accept with one bounded confirmation review, restart for the mechanical
+case), and the ledger gate that opens implementation slices only on
+`approved-for-implementation`. Amendments update every affected document
+copy in the same round. The terminal result persists as a
+`review-learning/v1` record with `sourcePolicy: spec-review/v1`.
 
 ## Non-goals
 

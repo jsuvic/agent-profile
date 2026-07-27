@@ -52,7 +52,7 @@ it never relitigates product decisions the grill agreement made.
 4. Drift doubt -> treat spec/ADR/ledger/glossary disagreement as a
    first-class finding category; one amendment fixes every copy.
 5. Progress doubt -> the same unresolved fingerprint across two rounds, or a
-   round producing more P1 findings than the previous round, escalates to
+   round with more open P1 findings than the previous round, escalates to
    the human instead of consuming another round.
 6. Depth doubt -> when a finding asks for detail the implementation's typed
    policy source must own anyway, defer it with evidence rather than
@@ -81,7 +81,7 @@ it never relitigates product decisions the grill agreement made.
 4. A fresh review of the complete amended document set verifies prior
    fingerprints and searches for new findings, including drift the
    amendments introduced.
-5. The loop terminates on the first round with zero P1 findings, or
+5. The loop terminates on the first round with zero open P1 findings, or
    escalates to the human when budgets or progress rules trip.
 6. The terminal result is recorded under `docs/review-learning/`, residual
    dispositions included, and the ledger gate opens the first implementation
@@ -139,8 +139,11 @@ it never relitigates product decisions the grill agreement made.
   `spec-contradiction | unreachable-state | undefined-closed-value |
   missing-error-contract | doc-sync-drift | untestable-criterion |
   agreement-divergence`.
+- The manifest identifier is deterministic over the exact byte set of the
+  persisted documents in the manifest: different reviewed content can never
+  share an identifier, and every terminal result binds to one.
 - Results use a typed envelope mirroring the phase-33 shape
-  (`SpecReviewResultV1`): `policyVersion`, a manifest identifier, exactly
+  (`SpecReviewResultV1`): `policyVersion`, the manifest identifier, exactly
   one status from `CLEAN | FINDINGS_FOUND | NEEDS_CONTEXT`, a completed-
   scope confirmation over the full manifest, findings with priority,
   category, document location, evidence, component-derived normalized
@@ -184,8 +187,8 @@ it never relitigates product decisions the grill agreement made.
 - The phase-33 transient-retry exhaustion rule maps to this loop's terminal
   set: exhausted retries terminate as `needs-grill`, never as a hang, an
   extra attempt, or a phase-33 status.
-- `needs-grill` returns the open findings to the human, who resolves it
-  through one of two closed paths; the loop never overrides that decision:
+- `needs-grill` returns to the human, who resolves it through one of three
+  closed paths; the loop never overrides that decision:
   - Reopen the grill or amend the agreement record: synthesis re-persists
     the document set and a new loop instance starts with a full budget,
     bound to the new manifest.
@@ -196,12 +199,26 @@ it never relitigates product decisions the grill agreement made.
     ones, the loop terminates `approved-for-implementation` bound to that
     manifest, superseding the `needs-grill` record; otherwise it returns to
     `needs-grill`.
+  - Restart: when `needs-grill` was reached mechanically — retry exhaustion
+    with no open findings — the human may restart a new loop instance with
+    a full budget on the unchanged manifest. The first two paths apply to
+    finding-bearing `needs-grill`; restart applies only to the mechanical
+    case.
+- The acceptance confirmation review is a distinct human-triggered
+  invocation outside the three-review autonomous budget, limited to exactly
+  one per recorded acceptance decision; a further cycle requires a new
+  explicit human decision. The autonomous loop can never trigger it.
 - Terminal status is one of `approved-for-implementation | needs-grill`, and
   the ledger keeps every implementation slice of the reviewed spec set
   non-dispatchable until `approved-for-implementation` is recorded.
 
 ### Ownership and reuse contract
 
+- Exactly one generated surface owns the loop state machine: the synthesis
+  workflow surface that persists the spec set and authors amendments. The
+  grill skill hands off to it on approval, and implementation-dispatch
+  surfaces only verify or propagate its terminal result; no other surface
+  invokes the spec reviewer or redefines budgets and transitions.
 - Amendments triggered by findings update every affected copy — spec, issue
   briefs, ledger, glossary, ADRs — in the same amendment round;
   `doc-sync-drift` findings against a prior amendment count toward the
@@ -217,6 +234,12 @@ it never relitigates product decisions the grill agreement made.
     `fixed | defer-to-implementation | reject-with-evidence |
     accepted-by-human`, reusing the existing owner-confirmation marker and
     evidence shape;
+  - a P1 finding may carry a disposition only on the human-acceptance path,
+    and `accepted-by-human` is the only disposition valid on a P1; only the
+    recorded human decision may set it. An accepted finding retains
+    `resolution: open` — acceptance is a decision about the finding, not a
+    claim that it was fixed — and findings with `accepted-by-human` are
+    excluded from every open-P1 count;
   - the reviewed manifest identifier in place of base/head snapshot
     identifiers.
   Records from other source policies reject these extensions.
@@ -253,8 +276,9 @@ it never relitigates product decisions the grill agreement made.
    persistence: three-logical-review budget, one amendment round per
    revision, transient-retry rule with exhaustion mapping to `needs-grill`,
    zero-open-P1 stop rule with manifest binding, non-progress rules over
-   open findings, both terminal statuses, and both closed human-resolution
-   paths, with no conflicting counts.
+   open findings, both terminal statuses, and the three closed
+   human-resolution paths with bounded confirmation accounting, with no
+   conflicting counts.
 3. The typed `SpecReviewResultV1` envelope enforces the closed categories,
    full-manifest completed scope, open-only new findings, and
    invalid-attempt handling; malformed output can never terminate the loop.
@@ -282,13 +306,17 @@ it never relitigates product decisions the grill agreement made.
   `fixed` for unverified closure at termination, post-termination amendment
   invalidation and rebinding, same-fingerprint non-progress, open-P1-count
   regression with verified-closed exclusion, budget exhaustion, retry
-  exhaustion to `needs-grill`, unsatisfiable context, and both
-  human-resolution paths including the accepted-by-human confirmation
-  review.
+  exhaustion to `needs-grill`, unsatisfiable context, and all three
+  human-resolution paths — including one-confirmation-per-acceptance
+  accounting and the mechanical restart case.
 - Golden fixtures for the reviewer definition and changed grill/synthesis
   skills on Codex and Claude; negative fixtures for non-qualifying profiles.
 - Record fixtures for both terminal statuses and every disposition,
-  including `defer-to-implementation` artifact naming.
+  including `defer-to-implementation` artifact naming, an accepted P1 with
+  `accepted-by-human` and `resolution: open`, and rejection of any other
+  P1 disposition.
+- Manifest-identifier determinism tests: identical content yields the same
+  identifier, any byte change yields a different one.
 - Ledger-gate tests proving implementation slices stay non-dispatchable
   until the terminal record exists.
 
