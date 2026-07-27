@@ -432,12 +432,21 @@ type ChangeRiskResultV1 = {
 - Schema version `review-learning/v1` requires: date, product version when
   known, source policy, base/head identifiers, worktree snapshot identifier
   when uncommitted content participated, reviewer surface/version when known,
-  round outcomes, stable finding fingerprints, category with its
-  categorization taxonomy version, priority, evidence, affected contract,
-  safe path, resolution, conditional P3 disposition, and terminal status.
+  round outcomes with per-round/per-finding source markers, stable finding
+  fingerprints, category with its categorization taxonomy version, priority,
+  the systemic classification and reason for validated P1s, evidence,
+  affected contract, safe path, resolution, conditional P3 disposition, and
+  terminal status.
 - Logical-invocation and transient-attempt counts are required only for
   `sourcePolicy: change-risk/v1` records. `legacy-external` records omit
   them instead of fabricating provenance.
+- Record-level `sourcePolicy` names the orchestration that produced the
+  record. Within a `change-risk/v1` record, every round and finding carries
+  a closed `source: local | external` marker: local rounds keep their
+  required execution counters, while findings a validated external review
+  contributed carry `source: external` with the provider recorded (or
+  `unknown`) and no fabricated local execution data. A record never
+  collapses mixed local and external provenance into one value.
 - Terminal status is one of:
   `clean | no-progress | needs-human-review`.
 - Unknown provider or model versions are recorded as `unknown`, never guessed.
@@ -481,6 +490,13 @@ type ChangeRiskResultV1 = {
   deduplicate to at most one occurrence per canonical category. Recurrence
   thresholds count distinct reviewed changes with at least one validated
   finding in that category.
+- A validated P1 is classified `systemic` by a closed predicate: its
+  affected contract is a hard safety, permission, ownership, redaction, or
+  no-upload contract, or its unsafe condition demonstrably reaches two or
+  more independent consumers or surfaces beyond the single reviewed path.
+  The classification is persisted on the validated finding as a required
+  `systemic: true | false` field with a one-line reason; when the predicate
+  is uncertain, the finding is non-systemic and the reason says why.
 - A first systemic P1 safety/contract failure immediately adds a
   regression test and a scoped review rule where practical.
 - A first validated non-systemic P1 follows the record-and-categorize path:
@@ -591,9 +607,11 @@ type ChangeRiskResultV1 = {
    terminal-precedence, confirmation, and human-escalation rules without
    conflicting counts or statuses, with `subagent-driven-change` as the sole
    owner of the state machine.
-4. P1/P2 always block and omit disposition; P3 always receives one allowed
-   disposition; every finding has one closed resolution; any code change
-   invalidates a prior clean result.
+4. P1/P2 findings with `resolution: open` always block and omit disposition,
+   and verified-closed P1/P2 findings stop blocking; P3 always receives one
+   allowed disposition; every finding has one closed resolution; any code
+   change outside the excluded review-metadata paths invalidates a prior
+   clean result.
 5. A `review-learning/v1` template and workflow instructions produce a
    normalized committed record with all required version/date/snapshot,
    attempt, finding, conditional-disposition, and terminal-status fields while
@@ -747,7 +765,8 @@ integration slice and requires I5's accepted backfill evidence.
   implementer conclusions.
 - Confirm remediation reviews search the whole updated change, not only the
   last patch.
-- Verify all P1/P2 paths block and all P3 paths carry one disposition.
+- Verify all open-resolution P1/P2 paths block, verified-closed P1/P2
+  findings stop blocking, and all P3 paths carry one disposition.
 - Exercise all retry, non-progress, confirmation, and escalation transitions.
 - Review every generated/manual ownership boundary.
 - Confirm raw transcripts and secret-like values cannot enter committed
