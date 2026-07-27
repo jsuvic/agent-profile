@@ -98,7 +98,13 @@ required for docs-only records unless a validator or shared policy changes.
 
 ## Dependencies
 
-`sequenced` after I3.
+`sequenced` after I3, and additionally human-gated on source evidence: the
+sanitized thread-aware fixtures for PRs #125 and #127-#133 do not yet exist
+in the repository, and the aggregate counts alone cannot produce the 126
+required fingerprints, evidence summaries, resolutions, and categories.
+Before dispatch, either the approved sanitized fixtures are checked in or
+the user explicitly approves the live read-only GitHub fetch; otherwise the
+slice stops with the missing evidence identified.
 
 ## Parallelism notes
 

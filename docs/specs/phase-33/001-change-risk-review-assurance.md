@@ -200,8 +200,12 @@ telemetry or making GitHub a dependency.
 - The owner communicates through one closed snapshot-bound handoff record,
   `ChangeRiskOrchestrationStateV1`, carrying: `policyVersion`, the reviewed
   `snapshotId`, the current or terminal status, logical-invocation,
-  fix-round, and transient-attempt counters, and the
-  required/satisfied confirmation state. `implement-next` and `final-review`
+  fix-round, and transient-attempt counters, the required/satisfied
+  confirmation state, and the progress history the non-progress guards
+  need: per-completed-round blocker counts and unresolved fingerprint
+  checkpoints (inline or via a closed durable-state reference). A resumed
+  owner enforces same-fingerprint recurrence and stagnation from that
+  carried history and never resets it. `implement-next` and `final-review`
   validate that record — rejecting a terminal result whose `snapshotId` does
   not match the current snapshot (modulo the excluded review-metadata paths)
   — and never interpret free-form prose state or reset consumed budgets.
@@ -293,6 +297,8 @@ type ChangeRiskFindingV1 = {
   affectedContract: string;
   safePath: string;
   resolution: "open" | "fixed" | "false-positive" | "obsolete";
+  source?: "local" | "external";
+  provider?: string;
   disposition?:
     | "fixed"
     | "accepted-debt"
@@ -321,6 +327,11 @@ type ChangeRiskResultV1 = {
 };
 ```
 
+- `source` defaults to `local` when absent. `provider` is required (using
+  `unknown` when unidentifiable) when `source` is `external` and MUST be
+  absent otherwise. A reviewer invocation itself only emits `local`
+  findings; `external` is set solely by the orchestration owner's external
+  validation handoff.
 - Every finding carries at least one `EvidenceReference`. The `summary`
   describes secret-shaped values by shape only and MUST NOT reproduce
   secrets, raw transcripts, or source beyond the minimum needed to locate
@@ -378,9 +389,11 @@ type ChangeRiskResultV1 = {
 - At most three fix rounds may follow the initial review.
 - At most six logical reviewer invocations may complete: the initial review,
   up to three remediation reviews, and up to two final clean-room
-  confirmations. The second confirmation exists only for the path where a
-  required confirmation of an initially clean high-risk change discovers
-  blockers, remediation follows, and a new confirmation is then required.
+  confirmations. The second confirmation exists only for paths where a
+  required final confirmation discovers blockers, remediation follows within
+  the remaining fix-round budget, and the still-applicable trigger then
+  requires a new confirmation; when either budget cannot accommodate that
+  path, the reservation rule below escalates instead.
 - A fix round may begin only when the remaining logical-invocation budget can
   accommodate its remediation review plus any final clean-room confirmation
   that would then be required. When it cannot, the workflow escalates to
@@ -400,11 +413,13 @@ type ChangeRiskResultV1 = {
   converted to a clean result.
 - When two or more terminal triggers apply to the same transition,
   `NEEDS_HUMAN_REVIEW` takes precedence over `NO_PROGRESS`.
-- A completed `FINDINGS_FOUND` result whose findings are exclusively P3 with
-  a valid disposition each contains no blocker. It reaches terminal `clean`
-  exactly as a `CLEAN` result would — without relabeling the reviewer
-  envelope and without an additional review of the unchanged snapshot —
-  subject to the same required-confirmation triggers.
+- A completed `FINDINGS_FOUND` result containing no P1/P2 with
+  `resolution: open` — every P1/P2 verified `fixed`, `obsolete`, or an
+  evidenced `false-positive`, and every P3 carrying a valid disposition —
+  contains no blocker. It reaches terminal `clean` exactly as a `CLEAN`
+  result would — without relabeling the reviewer envelope and without an
+  additional review of the unchanged snapshot — subject to the same
+  required-confirmation triggers.
 - Initial or remediation review against an unchanged snapshot is not
   repeated. A required final clean-room confirmation is the sole exception:
   it intentionally re-reviews the same final snapshot as an independent
@@ -496,6 +511,14 @@ type ChangeRiskResultV1 = {
   deduplicate to at most one occurrence per canonical category. Recurrence
   thresholds count distinct reviewed changes with at least one validated
   finding in that category.
+- A local finding is validated by the recorded closure evidence, not by
+  reviewer assertion alone: promotion counts only findings whose recorded
+  terminal resolution is `fixed` or `open`. Findings resolved
+  `false-positive` (with invalidating evidence) or `obsolete` are excluded
+  from recurrence counting. The orchestration owner records that resolution
+  and its evidence in the learning record during remediation verification;
+  promotion logic reads the persisted resolution and never re-adjudicates
+  prose.
 - A validated P1 is classified `systemic` by a closed predicate: its
   affected contract is a hard safety, permission, ownership, redaction, or
   no-upload contract, or its unsafe condition demonstrably reaches two or
@@ -689,8 +712,9 @@ type ChangeRiskResultV1 = {
 - Result-envelope tests for explicit clean, findings found, needs context,
   empty/truncated output, invalid status, policy/snapshot mismatch, and
   exhausted invalid-attempt retries.
-- Table-driven state-machine tests for clean on initial review, dispositioned
-  P3-only terminal clean, one-to-three fix rounds, same-fingerprint
+- Table-driven state-machine tests for clean on initial review,
+  no-open-blocker terminal clean (verified-closed P1/P2 and dispositioned
+  P3-only variants), one-to-three fix rounds, same-fingerprint
   recurrence, unchanged remediation snapshots, required confirmation on an
   unchanged final snapshot, confirmation-discovers-blockers budget
   reservation, overlapping terminal-trigger precedence, blocker-count
@@ -777,7 +801,7 @@ integration slice and requires I5's accepted backfill evidence.
   separate provenance rules instead, and that the reviewer resolves model
   policy through `critical-reviewer`.
 - Reject every incomplete or invalid result envelope; only an explicit valid
-  `CLEAN`, or a completed `FINDINGS_FOUND` whose findings are exclusively
+  `CLEAN`, or a completed `FINDINGS_FOUND` with no open P1/P2 and fully
   dispositioned P3s, may produce a clean review state.
 - Confirm initial/final clean-room inputs do not leak prior findings or
   implementer conclusions.

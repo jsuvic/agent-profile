@@ -16,10 +16,15 @@ Define `review-learning/v1`, add a concise normalized Markdown template under
 one record per reviewed PR/change. Records include version/date/snapshot,
 reviewer surface, attempt counts, round outcomes, fingerprints, evidence,
 closed resolution, conditional P3 disposition, and terminal status. Every
-record carries a closed `sourcePolicy`: `change-risk/v1` for reviews this
-workflow executed (with required invocation/attempt counts) or
-`legacy-external` for historical or external reviews (which omit those
-execution fields). Raw review material is explicitly local and ignored.
+record carries a closed `sourcePolicy` naming the producing orchestration:
+`change-risk/v1` for runs this workflow executed (with required
+invocation/attempt counts), or `legacy-external` only when the entire
+record's orchestration was outside this workflow — historical backfill or an
+external-only review. A local run that incorporates a validated external
+finding remains a `change-risk/v1` record and keeps its local counters; the
+external contribution is marked per-round/per-finding with the parent
+`source: local | external` markers, never by downgrading the record's
+`sourcePolicy`. Raw review material is explicitly local and ignored.
 
 The record schema consumes the closed values and learning-record projection
 of the shared policy source established by I1; it does not duplicate those
