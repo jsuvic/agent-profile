@@ -32,7 +32,11 @@ import {
 } from "@agent-profile/core";
 import { isMap, isScalar, parseDocument, type Node } from "yaml";
 
-import { buildCompileWrites, planRegionAwareWrites } from "./compile-plan.js";
+import {
+  buildCompileWrites,
+  hasSecretLikeModelOverride,
+  planRegionAwareWrites,
+} from "./compile-plan.js";
 import { createPersonalActivationService } from "./personal-activation.js";
 import { WizardCancelled } from "./wizard.js";
 
@@ -332,6 +336,19 @@ export async function runConfigurePermissionFlow(
         guidance: [
           "ai-profile.yaml did not validate, so no posture can be resolved.",
           "Run `agent-profile doctor` to see the validation issues.",
+        ],
+      },
+    });
+  }
+  if (hasSecretLikeModelOverride(parsed.profile)) {
+    return finish(prompts, {
+      ...emptyReport(),
+      outcome: "refused",
+      refusal: {
+        reason: "profile-invalid",
+        guidance: [
+          "The profile contains a model override that resembles secret material.",
+          "Remove the secret-like value and use a public model identifier.",
         ],
       },
     });

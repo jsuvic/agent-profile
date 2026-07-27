@@ -742,23 +742,27 @@ export async function readRegionAwareFile(
   relativePath: string,
 ): Promise<{ refused: boolean; bytes?: Uint8Array }> {
   const safePath = safeOutputPath(relativePath);
-  const absolutePath = path.resolve(rootDir, ...safePath.split("/"));
-
-  let stat: Awaited<ReturnType<typeof fsPromises.lstat>>;
-  try {
-    stat = await fsPromises.lstat(absolutePath);
-  } catch (error) {
-    if (isNodeNotFound(error)) {
-      return { refused: false, bytes: undefined };
+  let absolutePath = path.resolve(rootDir);
+  let stat: Awaited<ReturnType<typeof fsPromises.lstat>> | undefined;
+  for (const component of safePath.split("/")) {
+    absolutePath = path.join(absolutePath, component);
+    try {
+      stat = await fsPromises.lstat(absolutePath);
+    } catch (error) {
+      if (isNodeNotFound(error)) {
+        return { refused: false, bytes: undefined };
+      }
+      throw error;
     }
-    throw error;
+
+    // Checking each component prevents a regular final file underneath a
+    // symlinked directory from being read outside the project root.
+    if (stat.isSymbolicLink()) {
+      return { refused: true };
+    }
   }
 
-  if (stat.isSymbolicLink()) {
-    return { refused: true };
-  }
-
-  if (!stat.isFile()) {
+  if (!stat?.isFile()) {
     return { refused: false, bytes: undefined };
   }
 

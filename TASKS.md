@@ -148,8 +148,8 @@ completed Phase 31 I8 and before Phase 32 I1.
 | I6d | Tabnine model-resolution reconciliation | done | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
 | I6e | Upgrade write ownership refusal and rollback | done | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
 | I7 | Offline Doctor model policy and explicit recheck | done | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
-| I8 | Local UI model policy and user documentation | ready | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
-| I9 | Published model-selection journey and final integration | sequenced | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
+| I8 | Local UI model policy and user documentation | done | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
+| I9 | Published model-selection journey and final integration | done | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
 
 I1R added 2026-07-17: I1 was marked done but never wired `preset`, the
 `routine-implementer` role, or open exact-override acceptance into the public
@@ -1355,6 +1355,505 @@ unverified and Tabnine organization/private status rendering, retired-entry
 picker handling, and the entire documentation-impact deliverable (root/
 package README, schema, target, CLI, privacy, release docs). State stays
 `ready`, not `done`.
+
+I8 completed 2026-07-25 via two further `/implement-next` cycles (UI, then
+documentation), closing every remaining acceptance criterion.
+
+Cycle 2 (read-only model-policy UI, AC2 visibility/AC3/AC4/AC5): added
+`apps/web/src/lib/server/modelPolicyView.ts`, a pure projection that builds
+the profile page's model-policy table from the compiler's own resolvers
+(`buildModelPolicyTargetTable`, `buildModelPolicyTabnineTargetTable`,
+`deriveModelPolicyRoleOverrides`/`...TabnineRoleOverrides`) and contains zero
+model identifiers, lifecycle values, or status literals of its own - the
+brief's hard "do not embed a second model catalog in Svelte components or
+prose tests" rule, which the tests also honor by asserting against resolver
+output rather than hardcoded ids (even the retired fixture id is discovered
+from `TABNINE_MODEL_POLICY_CATALOG`). Rendered in `+page.svelte` as a
+read-only section: preset (with the standing recommendation), catalog
+version, the primary role hoisted out, and the full per-role table behind a
+`<details>` expander. Spec review found two real blockers, both fixed rather
+than disclosed: (1) AC3's required Tabnine `organization/private - unrated`
+label was missing (the UI rendered a bare `unrated`) - fixed by extracting
+`tabnineLifecycleLabel` in `packages/compiler/src/subagent-policy-guidance.ts`
+as the single owner of that wording, consumed by both `renderTabnineModelCell`
+and the web view so the page and the generated guidance tables cannot drift;
+(2) AC4's "profile/lock" half was unimplemented - the view resolved fresh and
+ignored a prior lock's retained rows, so the UI could disagree with the
+generated files - fixed by adding `readLockModelPolicy` (deliberately NOT
+called from `loadProjectContext`, which runs on every navigation including
+the write endpoints, so eleven other consumers don't pay for a field only
+this route reads) and threading `previousModelPolicy` into both table
+builders. Code-quality review then flagged two untested claims that were
+both backing already-shipped documentation - the secret-like redaction of
+resolved identifiers, and the lockfile read/validate/project chain itself
+(the AC4 test hand-built its lock object and bypassed the file read) - both
+closed with real regression tests, plus an invalid-lockfile-degrades test.
+Also applied from review: expose `recommendedPreset` unconditionally so a
+project on a non-default preset is still told what is recommended, suppress
+the lifecycle badge when no model resolved, redact `alternatives`/
+`guidedCandidates`, and type `statusTone`/`lifecycleTone` to the core unions
+- which immediately caught a latent out-of-union `"unknown"` fallback in
+`headlineStatus`. RED proof: with `modelPolicyView.ts` moved aside the new
+suite failed 0-pass/1-fail; the lock-replay and org/private tests failed
+against the pre-fix code for their own reasons. GREEN: 20 model-policy
+tests, `apps/web` 216/216, `packages/compiler` 331 pass/0 fail (no golden
+churn from the label extraction), root `npm run check` clean.
+
+Cycle 3 (AC6 documentation): rewrote root `README.md`'s "Recommended Model
+Settings" from generic prose predating the phase into the implemented
+lifecycle (preset table with `role-aware` as recommended default, the
+before-write exact-name guarantee, the four capability statuses and what
+each actually means, and honest per-tool reality - Codex writes only the
+primary role's row into `.codex/config.toml`, Claude is guidance-only,
+Tabnine is guided manual selection with an ownership-gated `model.id` write
+and permanently `unsupported` effort); mirrored it into the published
+`packages/agent-profile/README.md`; documented the previously-undocumented
+`upgrade --model-policy-strategy`, `--check-for-updates` (incl. its `--json`
+rejection) and `--probe-models` in `docs/cli/README.md`, closing the gap
+I6a/I6b had disclosed; accuracy pass on `docs/targets/subagent-policy.md`.
+`docs/security/trust-model.md`'s "Network Behavior" section was found
+actively contradicting the implementation - it still claimed commands "must
+run without network access" full stop, predating the two shipped opt-in
+paths - and was rewritten with a table of exactly what each path sends and
+persists, the probe's source-free isolation guarantees, and the UI's
+never-probes/no-account-data boundary; its "Local UI Server" section gained
+the lockfile read-only/degradation rule and the server-side `subagentPolicy`
+preservation + redaction rules.
+
+Carried forward as open scope, deliberately not claimed by I8: advanced
+per-role/exact-override *editing* UI in the browser (the brief's AC2 wording
+"progressively exposed" is satisfied for visibility; editing remains
+CLI-only by design, and the page says so). Also still open from the earlier
+fix-round: `findSecretLikePaths`/`findNulStringPaths` do not scan
+subagentPolicy fields - the block stays server-preserved-only and
+non-user-editable through the browser, so no new user-controlled input
+surface exists today, but this must be revisited if an editing UI ever
+ships. Display helpers in `+page.svelte` (`statusTone`/`lifecycleTone`/
+`modelLabel`/`headlineStatus`) remain in the component rather than extracted
+to a testable `$lib` module per this page's own `profileEditor.ts`
+precedent - a disclosed code-quality follow-up, not a behavior gap.
+
+I9 first RED-first `/implement-next` cycle completed 2026-07-24, a disclosed
+partial slice: added `scripts/release/phase31_5-published-journey.test.mjs`
+(picked up automatically by root `test:release`'s `scripts/release/*.test.mjs`
+glob), mirroring the already-shipped Phase 31 I8 precedent
+(`scripts/release/phase31-published-journey.test.mjs`)'s helper shape
+(`runNpm`, `buildPackedWorkspaces`, `npmPack`, `extractPackage`,
+`linkRuntimeDependency`, `snapshot`, `withRuntimeSentinels`) and building/
+packing the same six workspaces (`@agent-profile/web` excluded, as before).
+Proceeded despite I9's own `Dependencies: I1-I8` line technically being
+unsatisfied (I8 is still `ready`, not `done`) because I8's only remaining
+open scope is the web app's advanced-override UI and documentation, which
+none of I9's own acceptance criteria touch - disclosed, not silently
+resolved. This cycle closes three of I9's acceptance-criteria bullets, for
+the packed CLI `init` scenario only: (1) packed `@agent-profile/core`/
+`compiler`/`doctor` tarballs are proven (against the real
+`fixtures/npm-pack/agent-profile-*.json` file-list fixtures) to include their
+model-policy dist runtime assets and to contain no test-only model-probe/
+catalog fixture path; (2) the packed CLI's non-interactive-scripted `init`
+wizard is proven to render the exact role-aware default per-role model/
+effort/status summary in stdout before any write commits, with expected
+values computed from the actually-built `packages/compiler/dist/index.js`'s
+`buildModelPolicyTargetTable("role-aware")` output rather than hand-guessed
+strings; (3) that entire scenario runs inside a `withRuntimeSentinels`
+deny-all wrapper (fetch/child_process/net), proving zero external calls.
+One environment-only addition beyond the Phase 31 precedent: a `toTarPath`
+helper converts absolute Windows paths to POSIX-style (`/c/...`) form before
+invoking `tar`, working around a Git-for-Windows/MSYS `tar` quirk (confirmed,
+not assumed, to also affect the untouched Phase 31 precedent file on the same
+machine) that misparses `C:\...` paths as remote-host specs; scoped only to
+the new file, deliberately not backported to the precedent file. RED proof:
+the file did not exist before this cycle. GREEN proof: the new file's own
+`node --test` run passes 1/1; `npm run check` and `npm run verify:pack` both
+pass. The full `npm test` (every workspace plus all `scripts/release/*.test.mjs`)
+was not run this cycle, a disclosed time-budget tradeoff substituted with
+`npm run check` + `npm run verify:pack` + the new file's own direct run.
+Spec review passed COMPLIANT (verified the package-contents assertions
+against the real pack fixtures, traced the full `init` call chain to confirm
+the asserted stdout shape matches already-shipped, already-tested wizard
+output verbatim, and confirmed the network sentinel wraps the exact call
+under test). Code-quality review passed ACCEPTABLE with three non-blocking
+Minor notes (left as-is): inconsistent-but-currently-safe `escapeRegExp`
+usage across closed-enum vs. free-form interpolations, a doc comment on
+`toTarPath` that overclaims cross-platform-Windows-tar safety when only
+Git-for-Windows/MSYS tar was actually verified (CI is Ubuntu-only), and an
+unused `confirmModelProbe` prompt-call tracking field. Still left open for
+later I9 cycles: probe consent/decline and one normalized probe path,
+Tabnine organization/private manual path and the ownership-aware
+settings-file write path (absent/generated-owned reaching a real write;
+unowned staying preserved/advisory), normal compile lock reuse, upgrade
+retain/adopt, offline Doctor, the full published-asset inventory beyond
+model-policy assets, the final spec-to-test matrix document, and release-
+notes/documentation-impact deliverables. State stays `ready`, not `done`.
+
+I9 cycle 1 PR review fix rounds (2026-07-24, PR #133): a Codex bot automated
+review found and confirmed 12 real findings across three rounds against
+`scripts/release/phase31_5-published-journey.test.mjs`, all fixed with
+RED-first regression evidence (typically a scratch script proving the old
+code missed a synthetic violation the new code catches), all replied to and
+resolved as GitHub review threads. Round 1 (4 findings): (1) the role-aware
+table assertion checked only the primary role's stdout summary, missing a
+corrupted/omitted non-primary role - fixed by `assert.deepEqual`-ing the
+*entire* per-role table passed to `selectModelPreset` against the packed
+compiler's own `buildModelPolicyTargetTable` output (disclosed as a partial
+fix: exercising `createClackPrompts`'s own on-screen rendering of that table
+remains out of reach without a product-code change, since it is not part of
+the packed CLI's public surface today); (2) `withRuntimeSentinels`'s `deny()`
+only threw, so a forbidden call caught-and-normalized internally (e.g. a
+future probe/update-check path) would pass silently - fixed by recording
+denied surfaces and asserting none were reached after `action()` completes;
+(3) the packed CLI's dynamic import happened outside the sentinel-guarded
+closure - moved inside; (4) the declined-write assertion relied only on a
+before/after directory snapshot, which a write-then-restore sequence would
+not catch - fixed with a new opt-in `withFsWriteSentinel` instrumenting
+`node:fs/promises`'s mutating surface. Round 2 (4 more findings, all
+confirmed via investigation before fixing): (1) the `--force-local`/
+`toTarPath` tar workaround was GNU-tar-specific and would break on macOS/
+native Windows bsdtar - fixed with a cached `tarIsGnu()` runtime detection
+that only applies the workaround for GNU tar; (2) the four runtime
+dependencies (`ajv`/`yaml`/`jsonc-parser`/`@clack/prompts`) linked into the
+isolated `node_modules` graph were hard-coded rather than derived from the
+packed CLI's own manifest - fixed with `computeRuntimeDependencyGraph`, a
+BFS over each packed workspace's own published `package.json` starting from
+the packed CLI (added `@agent-profile/scanner` to the built/packed
+workspaces, since the CLI's manifest depends on it); (3) the role-aware
+table oracle imported from the raw workspace `packages/compiler/dist/
+index.js` rather than the packed compiler tarball, so a broken published
+entry point would go undetected - fixed by importing from the
+extracted, packed `@agent-profile/compiler` tarball instead; (4) the
+test-only-fixture-path scan covered only the three model-policy-owning
+workspaces, missing e.g. a fixture accidentally published by
+`@agent-profile/cli` itself - fixed by scanning every packed workspace.
+Round 3 (3 P2 findings plus one P1): (1) `computeRuntimeDependencyGraph`
+derived the dependency graph but discarded every declared version/range,
+so a stale or incompatible pin would still silently extract/link whatever
+was present - fixed by asserting internal `@agent-profile/*` edges'
+declared versions exactly match the dependency's own packed version, and
+external dependencies' declared ranges are satisfied by the linked root
+`node_modules` package, via a new deliberately minimal
+`satisfiesDeclaredVersionRange` comparator (exact versions and
+`^major.minor.patch` only, matching this repo's actual manifests - no
+`semver` dependency added, none is resolvable from this repo); (2)
+`withFsWriteSentinel` patched only module-level `fs.promises.*` functions,
+completely missing the real production write path
+(`packages/compiler/src/write-plan.ts`'s `writeTempBeside`, which mutates
+bytes and permissions through a `FileHandle`'s own instance methods after
+`fsPromises.open`) - fixed by wrapping `fs.promises.open` so the returned
+handle is a `Proxy` intercepting its mutating instance methods
+(`write`/`writev`/`writeFile`/`chmod`/`truncate`/`appendFile`/`datasync`),
+plus adding `chmod`/`chown` to the module-level list; (3) the preview
+assertions only checked the final accumulated stdout, not that the preview
+rendered *before* `confirmWritePlan` fired - fixed by snapshotting stdout
+inside that prompt callback and asserting the preview lines are already
+present in that snapshot, in addition to the final-stdout check. The P1
+finding asked for the full validation suite to actually be run before
+treating this cycle as reviewed and compliant (a prior round had
+substituted `npm run check`/`verify:pack` for time-budget reasons) - `npm
+test` was run in full: 1537 tests, 1523 pass, 1 fail, 13 skipped; the one
+failure is the untouched sibling `scripts/release/phase31-published-
+journey.test.mjs` hitting the identical MSYS/Git-for-Windows tar
+drive-letter bug already fixed in this cycle's own file but deliberately
+not backported to the sibling (a pre-existing, disclosed, environment-
+specific issue unrelated to this change); `npm run doctor` exits 1 on
+pre-existing `.claude/settings.json`/`.claude/settings.local.json`/
+`.mcp.json` drift unrelated to this file; no separate golden-test command
+exists (golden fixtures are ordinary `node:test` cases already inside
+`npm run test --workspace @agent-profile/compiler`, itself part of `npm
+test`). Round 4 (2 more P2 findings): (1) `satisfiesDeclaredVersionRange`'s
+caret-range branch treated any `^major.minor.patch` as "same major, and
+minor.patch >= declared" regardless of major version, which is wrong for a
+zero-major package under real npm/node-semver caret semantics (`^0.2.0`
+must reject `0.3.0`, not accept it, since pre-1.0 minor bumps are breaking)
+- fixed by branching on the declared major: nonzero-major keeps the
+original behavior, `^0.y.z` (y>0) locks major.minor and only allows patch
+to float upward, and `^0.0.z` locks to that exact version. No current
+manifest uses a zero-major external dependency, so this changed no
+existing pass/fail outcome, but closed a real gap; (2) the sentence above
+this Round 4 addendum ("proven against the real
+`fixtures/npm-pack/agent-profile-*.json` file-list fixtures") was accurate
+only as a one-time manual cross-check performed during cycle 1's
+implementation - the test itself never actually read those fixture files
+at runtime, so a future drift between the golden fixture and the
+hard-coded required-asset list would have gone unnoticed. Fixed for real
+(not just reworded): a new `readNpmPackFixture` helper now reads each
+fixture from disk at test time and asserts every required asset path is
+still listed there, in addition to the existing check against the freshly
+packed tarball - genuine three-way runtime coupling (hard-coded list <->
+golden fixture <-> fresh pack output) rather than static-only evidence.
+Round 5 (1 more P2 finding): `computeRuntimeDependencyGraph` unconditionally
+skips `@agent-profile/web` when walking the CLI's declared dependencies, so
+a stale/missing/unusable packed `web` release could not be caught the way
+every other internal dependency edge now is. Judged as a disclosed partial
+mitigation rather than a full fix: `apps/cli/bundle.mjs`'s own comment
+documents `@agent-profile/web` as a lazy, `require.resolve`-only dependency
+needed solely for the `ui` subcommand, which this journey's only scenario
+(`init`) never touches; the already-shipped, already-`done` sibling
+`scripts/release/phase31-published-journey.test.mjs` has this exact same
+exclusion and was never flagged for it; and fully building/packing a
+SvelteKit app purely to validate an unexercised dependency edge would be a
+disproportionate scope expansion for a review-fix round. Added a cheap,
+real check instead: a new `assertWebDependencyVersionMatches` compares
+`apps/cli/package.json`'s declared `@agent-profile/web` version against
+`apps/web/package.json`'s own version directly from the source tree (no
+build/pack required), catching the common stale-version-bump failure mode,
+with a code comment documenting the tradeoff and naming a future
+`ui`-subcommand cycle as the natural point to add real packed validation.
+Round 6 (4 more P2 findings, all in the same file): (1) the packed-compiler
+import (the role-aware table oracle) ran before `withRuntimeSentinels`
+installed its guards, so a side effect in a compiler-only module the CLI
+bundle tree-shakes away could execute unrecorded - moved into its own
+guarded closure, kept separate from the later `init`-scenario guard since
+they are two conceptually distinct actions; (2) `withFsWriteSentinel`
+patched `fs.promises` properties but never called
+`syncBuiltinESMExports()`, so a write reached through a named ESM import
+(e.g. `import { open } from "node:fs/promises"`, the pattern shipped
+modules like `personal-activation.ts`/`model-probe.ts` actually use) could
+bypass the patched bindings entirely and evade detection - fixed by adding
+the sync call after patching and again after restoring, mirroring
+`withRuntimeSentinels`'s existing pattern exactly; (3)
+`testOnlyFixturePathPattern` missed common test-only naming conventions
+(a plain `fixtures/` directory segment without a leading double
+underscore, a `.fixture.` infix, `.spec.` suffixes, and `.mjs` test files)
+- broadened accordingly, re-verified against the repo's real packed file
+lists for false positives; (4) `buildPackedWorkspaces` never cleaned prior
+build output before rebuilding, so `tsc -b`'s incremental build could leave
+a stale orphaned `dist/` asset (from a since-removed/renamed source file)
+in the packed tarball even though a genuine clean-checkout build would
+never produce it - fixed by removing each workspace's `dist/` before
+rebuilding, with one important correction found during verification and
+documented in the code comment: deleting `dist/` alone is insufficient,
+since `tsc -b` consults `tsconfig.tsbuildinfo` (which lives next to
+`tsconfig.json`, not inside `dist/`) to decide whether a rebuild is needed
+at all, so removing only `dist/` left it seeing unchanged source hashes and
+skipping emission entirely (worse than the original stale-file problem);
+the fix also removes each workspace's `tsconfig.tsbuildinfo`. All six
+rounds' fixes (19 findings total) were scoped to the one owned file; no
+product code, `TASKS.md` (until this entry), or the sibling precedent file
+were touched. State stays `ready`, not `done` - same open scope as the
+cycle-1 entry above.
+
+I9 second RED-first `/implement-next` cycle completed 2026-07-26, another
+disclosed partial slice in the same owned file
+(`scripts/release/phase31_5-published-journey.test.mjs`, no product code
+touched). Closes exactly one more acceptance-criteria fragment - "probe
+decline and one normalized probe path" - as two `await t.test(...)` subtests
+inside the existing top-level test body, deliberately reusing the one
+expensive `buildPackedWorkspaces()` + seven `npm pack` runs rather than
+paying them again in a second top-level `test()`; cycle 1's assertions are
+untouched. Scenario A (decline): scripted headless prompts with
+`confirmModelProbe -> false` plus an injected fake `probeRunner` prove the
+injected runner is invoked zero times (recorded invocations, not just a
+count - `runModelProbe`'s consent gate returns before touching the runner
+seam), that `confirmModelProbe` was genuinely reached with `default: false`
+and disclosed a call bound at least as large as the planned selections (so
+"zero invocations" cannot pass by skipping the step), that the exact declined
+summary line rendered in a stdout snapshot captured *inside*
+`confirmWritePlan` (proving preview-before-confirmation, not merely
+present-somewhere), and that nothing was written (strict `withFsWriteSentinel`
+plus `snapshot()` equality). Scenario B (one normalized consented path, fake
+runner returning `{exitCode:0, stdout:"OK"}` which the real classifier maps to
+`available`): exactly one process per planned selection - correct by contract,
+not coincidence, since `available` breaks out of the candidate loop before any
+ordered alternative runs - and within the `maxCalls` bound disclosed to the
+user; per invocation, the pinned source-free/non-persistent contract from
+`docs/research/013-model-probe-invocation-evidence.md` is asserted against the
+invocation object the fake runner actually receives: correct executable,
+`--model <exact model resolved by the packed compiler>`, the fixed
+content-free prompt verbatim exactly once, Codex's isolation/non-persistence
+argv (`exec --sandbox read-only`, `--skip-git-repo-check`, `--ephemeral`,
+`--ignore-user-config`, `--ignore-rules`) with adjacency enforced, a
+`-c model_reasoning_effort=` argument, no repository/checkout path anywhere in
+argv, a fresh empty cwd outside both the fixture repo and this checkout,
+an environment restricted to `MODEL_PROBE_ENV_ALLOWLIST` with every forwarded
+value equal to the real ambient value and a deliberately injected
+non-allowlisted ambient sentinel key proven dropped. `withFsWriteSentinel`
+gained an optional `allowMutation(method, target)` predicate (omitting it
+preserves cycle 1's strict behavior byte-for-byte, and scenario A uses the
+strict form); scenario B needs it because `runModelProbe` legitimately `rm`s
+its own temporary probe directory, and the predicate is narrowed to
+`os.tmpdir()` paths prefixed `agent-profile-probe-` only, with the resulting
+`rm` calls asserted 1:1 against the invocation cwds rather than merely
+collected - so the allowance is proven necessary instead of leaving an
+unexercised hole. Both scenarios run the packed `import()` and `runCli` inside
+`withRuntimeSentinels`. Spec review returned ISSUES_FOUND with one genuine
+HIGH defect the implementer's own bare `node --test` run could not see: the
+"no repository path in any forwarded env value" assertion also applied to
+`PATH`, which the product intentionally allowlists and forwards verbatim, and
+`npm run` prepends `<repo root>/node_modules/.bin` to it - so the assertion
+failed under the repo's own `npm run test:release`/CI invocation. Fixed by
+exempting `PATH`/`PATHEXT` from the leak check only (the value-equals-ambient
+and allowlist-subset assertions still guard those keys), and the RED was
+re-captured through `npm run test:release` to prove it. Spec review's two
+other findings were fixed the same round (the `allowMutation` predicate had
+been wider than its own disclosure, permitting any mutation outside the repo
+including HOME/config and the extracted `node_modules` graph; and the subtest
+named "non-persistent invocation" asserted none of the pinned isolation
+flags). Code-quality review returned ISSUES_FOUND with no blockers; landed
+this cycle: four `assert.ok(..., rawStdout)` calls whose messages replaced the
+diff with a wall of stdout without naming the expected line, the write-only
+`probeTempMutations` list described above, the effort-forwarding check, two
+overclaiming comments (the header and in-loop comments implied both clients'
+isolation rows were exercised, but `probeClients = ["codex"]`, so the Claude
+row is a dormant pinned expectation - now stated as such), and prettier
+formatting (this file is covered by the root `prettier --write .` but not by
+`npm run check`, since `scripts/` is outside every workspace). Verified:
+`npm run test:release` passes all three tests in this file (64 tests, 63 pass,
+1 fail - the untouched sibling `scripts/release/phase31-published-journey.test.mjs`
+hitting the same pre-existing MSYS/Git-for-Windows `tar` drive-letter bug
+already documented in cycle 1, unrelated to this change); `npm run check`
+clean. Disclosed, accepted tradeoffs: four hard-coded oracle copies (fixed
+prompt, env allowlist, isolation argv, temp-dir prefix) because
+`apps/cli/src/model-probe.ts` is re-exported by no packed artifact (the packed
+CLI's only real exports are `runCli` and `CLI_VERSION`) - re-verified, not
+assumed, each with an in-file source-of-truth pointer and a failure message
+naming the file to sync; the allowlist coupling is subset-only, so a *shrunk*
+allowlist still passes; probe bounds are checked structurally only (the pinned
+maxima are unexported and already unit-tested in
+`apps/cli/src/model-probe.test.ts`); the effort *value* mapping is not
+re-derived; the cwd-inside-`os.tmpdir()` assertion is near-tautological and
+labelled as such; Claude's isolation row activates only when a later scenario
+selects `claude`. Code-quality follow-up deferred by explicit agreement, to be
+done BEFORE the next scenario is added to this file rather than after:
+extract the ~200-line per-invocation assertion loop into named helpers,
+extract a shared `runPackedProbeInit` harness (the two scenarios currently
+copy the whole run scaffolding), and de-index-couple the
+`expectedProbeSelections[index]` pairing (harmless with one client, will
+silently mispair once a scenario selects both). Still left open for later I9
+cycles: Tabnine organization/private manual path and the ownership-aware
+settings-file write path, normal compile lock reuse, upgrade retain/adopt,
+offline Doctor, the full published-asset inventory beyond model-policy
+assets, the final spec-to-test matrix document, and release-notes/
+documentation-impact deliverables. State stays `ready`, not `done`.
+
+I9 third `/implement-next` cycle completed 2026-07-26, in the same owned file
+(no product code). Two parts. Part A paid the refactor debt cycle 2's
+code-quality review deferred on the explicit condition that it land BEFORE any
+new scenario was added: extracted `assertProbeInvocationIsSourceFree` and
+`assertProbeEnvironmentIsAllowlisted` from the ~200-line inline per-invocation
+loop, extracted `runPackedInitScenario` as the shared run harness both probe
+subtests now use (its `filesystemMutations` option has no default and must be
+either the literal `"strict"` - which passes no options object to
+`withFsWriteSentinel`, i.e. cycle-1 behavior byte-for-byte - or
+`{ allowMutation }`, so a scenario can no longer silently inherit the weaker
+claim), and replaced the index-coupled `expectedProbeSelections[index]` pairing
+with an `expectedByClient` lookup plus a sorted-multiset assertion and a loud
+failure for an unplanned client. Behavior preservation was checked by running
+the suite before and after (identical results), and spec review independently
+mapped every cycle-2 assertion to its new location. One coverage item was
+deliberately dropped and disclosed: execution ORDER of independent selections
+is no longer asserted (nothing in the probe contract makes it observable, and
+with one client the sorted compare is exact equality). Part B closed one more
+acceptance-criteria fragment - "Tabnine organization/private manual path",
+advisory path only - as three new subtests reusing the same single build/pack:
+the guided-manual advisory line for a Tabnine selection with no override; an
+uncatalogued private/organization id proven ACCEPTED (never rejected, per
+Tabnine's documented no-auto-selection contract - `validateModelPolicyOverride`
+rejects only empty/oversized/control-character ids, with no catalog check) and
+labelled `[unverified, uncatalogued]`; and a catalogued id labelled
+`[catalogued]`, so the two labels are distinguished differentially by real
+behavior rather than one asserted in isolation. The catalogued id is READ at
+runtime from the packed compiler tarball's own `TABNINE_MODEL_POLICY_CATALOG`
+(verified reachable: `packages/compiler/src/index.ts` re-exports it, so no
+hard-coded catalog copy was needed) and the private id is a fixed literal
+asserted ABSENT from that same packed catalog, so a catalog change can never
+leave these scenarios asserting the wrong label. Notable: the CLI bundle
+inlines its own copy of the catalog while the oracle comes from the separately
+packed compiler, so a divergence between the two published artifacts would
+surface here. All three run under `withRuntimeSentinels` with the packed
+`import()` inside the guard, use strict `withFsWriteSentinel` (Tabnine is never
+probed, so no temp-dir allowance is needed), decline the write plan, and assert
+the preview line against the stdout snapshot captured inside `confirmWritePlan`
+before re-checking final stdout. Spec review returned ISSUES_FOUND with no
+blockers and no real defects, confirming byte-exactness of both rendered
+`formatModelPolicySummary` branches, that the `respondToAdvancedOverrides`
+function-or-absent switch encodes two genuinely different wizard code paths
+(omitting `selectAdvancedOverrides` skips the step entirely; supplying one that
+returns `undefined` runs it and declines), and that nothing out of scope was
+started. Code-quality review returned ISSUES_FOUND with two Important items,
+both fixed this cycle: (1) the extraction banner claimed "nothing was weakened,
+dropped, or merged" while the moved `assert.equal(invocation.command,
+expected.client)` had become unfalsifiable under the new by-client lookup - the
+tautological assertion was deleted, its WHY comment moved to the multiset
+assertion that genuinely proves it, and the banner reworded to enumerate its
+exceptions honestly (the same overclaiming-comment class cycles 1 and 2 both
+rejected); (2) the Slice 5 banner claimed a Tabnine-only selection "skips the
+probe step entirely" while the only evidence was zero runner invocations, which
+a step that ran and was declined would produce identically - now asserted
+directly via the absence of any `confirmModelProbe` call. Five Minor items were
+folded in: dropped two redundant/never-emitted stdout assertions in the
+private-override scenario (both wizard rejection paths write to stderr, so
+`stderr === ""` plus the exact line is the whole proof), added an
+`expectedByClient.size` guard against silently collapsed duplicate-client
+selections, corrected the "both ids derived from the catalog" overclaim,
+renamed the harness option to `allowMutation` so the name no longer changes
+across the call boundary, and added a named `DECLINE_ADVANCED_OVERRIDES`
+constant so the absent-vs-declined contrast is visible at the call site.
+Tests: all six tests in the file pass (`npm run test:release`: 67 tests, 66
+pass, 1 fail - the untouched sibling
+`scripts/release/phase31-published-journey.test.mjs` hitting the same
+pre-existing MSYS/Git-for-Windows `tar` drive-letter bug documented in cycle
+1); `npm run check` clean; prettier clean. Disclosed, accepted: the two
+rendered Tabnine strings are hard-coded byte-exact copies, since
+`formatModelPolicySummary` is module-private in `apps/cli` and unexported from
+every packed artifact (re-verified); the catalogued-branch scenario has no
+independent RED of its own (its label is behavior-derived via the private
+scenario's own RED, which asserted `[catalogued]` against the private id and
+failed showing `[unverified, uncatalogued]`); and all three scenarios select
+`["tabnine"]` alone, so mixed Tabnine+Codex/Claude summaries stay uncovered.
+Code-quality follow-up scheduled BEFORE the Tabnine settings-file write
+scenario lands (both reviewers agree that scenario is what these will collide
+with): generalize `runPackedInitScenario` with `args`/`confirmWrite` (renaming
+to `runPackedCliScenario`, since the remaining scenarios are not all `init` and
+the write path needs a committed write); migrate the still-hand-rolled
+role-aware scenario onto the shared harness (needs `tables` recorded
+unconditionally in the prompts factory); extract the now-triplicated "rendered
+before confirmation / survived to final stdout / nothing written" assertion
+block; give `environmentOverrides` save-and-restore semantics instead of
+unconditional delete, and document the sequential-subtest invariant the two
+process-global sentinels depend on; rename the two assertion helpers (the
+"source-free" one also asserts isolation argv, cwd, and bounds) and collapse
+their duplicated `forbiddenPathFragments`/`repository` parameters; rename the
+probe-flavoured shared helpers and banners now that Tabnine scenarios use them;
+and add a fixture-directory collision guard. Still left open for later I9
+cycles: Tabnine's ownership-aware settings-file write path (absent and
+generated-owned reaching a real write; unowned staying preserved/advisory),
+normal compile lock reuse, upgrade retain/adopt, offline Doctor, the full
+published-asset inventory beyond model-policy assets, the final spec-to-test
+matrix document, and release-notes/documentation-impact deliverables. State
+stays `ready`, not `done`.
+
+I9 completed 2026-07-26. The packed-only journey now builds, packs, extracts,
+and installs the complete CLI dependency graph (including `@agent-profile/web`)
+in an isolated fixture; proves the role-aware, probe, Tabnine manual and
+ownership-aware write, lock-reuse, retain/adopt, and offline-Doctor outcomes;
+and checks the published help, schema, runtime assets, fixture exclusion, and
+Phase 31.5 documentation links. The final matrix and release notes record the
+remaining static-only documentation evidence. A packed-journey RED exposed a
+Doctor false positive (`LINT-LOCK-005`) for a generated-owned Tabnine file;
+Doctor now preserves its baseline compiler-error short circuit before loading
+the lock and recompiles with retained model policy only after baseline success.
+Focused Doctor and packed tests protect valid retained ownership, changed or
+removed overrides, invalid-compile lock suppression, and exact probe-temp
+cleanup. Final review result: spec compliant and code quality acceptable.
+Validated: `npm test --workspace @agent-profile/doctor` (109/109),
+`node --test scripts/release/phase31_5-published-journey.test.mjs` (11/11),
+the complete `npm test` workspace and release suite, `npm run check`,
+`npm run verify:pack`, Prettier, and `git diff --check`. Root `npm run doctor`
+reports only pre-existing user-owned `.claude/settings.local.json` and
+`.mcp.json` drift, which remains outside I9 scope. Phase 32 I1 may now proceed
+according to its own ledger prerequisites.
+
+I9 PR review closure 2026-07-27: Doctor's expected generated-owned Tabnine
+metadata is now an independent product oracle, so a corrupt lock cannot teach
+the validator its own wrong target or template id. The packed journey
+instruments `mkdtemp` before allowing probe-directory cleanup, watches
+credential and client-config roots as well as the repository, proves offline
+Doctor never calls the injected probe runner, and exercises mapping-v2 retain
+and adoption as real byte-preserving/mutating transitions. The final matrix
+enumerates the Phase 31.5 validation codes, closed probe statuses, CLI exit,
+Doctor finding codes, redaction evidence, and static-only provider boundary.
+The full `npm test` gate completed successfully, replacing the earlier timed
+out attempt.
 
 ## phase-31.9: Upgrade "custom exact" model-policy strategy (`docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md`)
 

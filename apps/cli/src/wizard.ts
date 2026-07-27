@@ -12,6 +12,7 @@ import {
   type ModelPolicyTargetRow,
 } from "@agent-profile/compiler";
 import {
+  containsSecretLikeLiteral,
   DEFAULT_MODEL_POLICY_PRESET,
   findModelCatalogEntry,
   MODEL_POLICY_PRESETS,
@@ -995,8 +996,12 @@ export async function runInitWizard(input: {
       const rawTabnineModel = advanced?.tabnineModel;
       if (rawTabnineModel !== undefined) {
         const validation = validateModelPolicyOverride(rawTabnineModel);
-        if (validation.ok) {
+        if (validation.ok && !containsSecretLikeLiteral(rawTabnineModel)) {
           tabnineModelOverride = rawTabnineModel;
+        } else if (validation.ok) {
+          input.io.stderr(
+            "Ignoring secret-like Tabnine model override; guided manual selection stays in effect.\n",
+          );
         } else {
           input.io.stderr(
             `Ignoring invalid Tabnine model override (${validation.code}); guided manual selection stays in effect.\n`,

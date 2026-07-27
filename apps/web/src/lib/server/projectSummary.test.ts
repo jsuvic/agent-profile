@@ -91,3 +91,22 @@ test("diff source labels placeholder data as example data", async () => {
   assert.match(source, /example modified/);
   assert.match(source, /example-4c8a11e0/);
 });
+
+test("profile write confirmation renders every reviewed model-policy row", async () => {
+  const source = await readFile(
+    path.join(process.cwd(), "src/routes/profile/+page.svelte"),
+    "utf8",
+  );
+  const modal = source.slice(source.indexOf("Diff confirmation modal"));
+
+  assert.match(modal, /\{#if reviewedModelPolicy\}/u);
+  assert.match(
+    modal,
+    /\{#each reviewedModelPolicy\.rows as row \(row\.role\)\}/u,
+  );
+  assert.match(modal, /\{#each row\.cells as cell \(cell\.client\)\}/u);
+  assert.match(
+    source,
+    /validationErrors\["subagentPolicy"\].*field-err/su,
+  );
+});
