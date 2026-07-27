@@ -18,6 +18,15 @@ then forward-evaluate the generated reviewer on a local sanitized historical
 corpus. Each evaluation uses a fresh reviewer, raw task artifacts, and no
 expected finding list or prior conclusions.
 
+Add a context-ablation evaluation comparing the projection-based reviewer
+and orchestration prompts against the pre-simplification candidate on the
+same blinded cases, measuring seeded P1 category recovery, total validated
+blocker recovery, false positives, `NEEDS_CONTEXT` rate, malformed-result
+rate, reviewer invocations needed, generated prompt/context size, and
+variability across the two permitted runs. The target is the smallest
+context that preserves the phase's assurance properties, not a fixed
+reduction percentage.
+
 ## Non-goals
 
 - Claiming parity with a hosted provider's private reviewer.
@@ -40,6 +49,19 @@ expected finding list or prior conclusions.
   conclusions, or implementer praise.
 - Misses, variability, and residual risk are recorded and feed I4 rather than
   being silently accepted.
+- The evidence matrix records the byte or token footprint of each generated
+  reviewer and orchestration projection.
+- A context-ablation comparison evaluates the projection-based prompt against
+  the pre-simplification candidate using the same blinded cases.
+- The projection-based form MUST preserve the required seeded-P1 recovery
+  threshold.
+- Any loss in blocker recovery, increase in false positives, or increase in
+  `NEEDS_CONTEXT` results is disclosed and either corrected or accepted
+  through an explicit spec decision.
+- Context reduction is accepted because evaluation preserves assurance, not
+  merely because the prompt became shorter.
+- Codex and Claude are evaluated independently; success on one target does
+  not prove parity for the other.
 - Full required validation from the parent spec completes or reports exact
   unrelated/pre-existing failures.
 

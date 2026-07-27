@@ -5,6 +5,14 @@
 Approved on 2026-07-24. Synthesized from the approved change-risk review
 grill agreement of the same date.
 
+Amended on 2026-07-27, before any I1 implementation, to add context
+composition and ownership, snapshot disclosure, a typed reviewer interface,
+single orchestration ownership, learning-record context isolation,
+promoted-rule lifecycle, and context-ablation evaluation contracts, and to
+close the open review findings on PR #134. Because no `change-risk/v1`
+artifact has been implemented or released, the workflow-policy version
+remains `change-risk/v1`.
+
 ## Problem
 
 The generated implementation workflow can report spec compliance and
@@ -25,7 +33,8 @@ and secret-like output.
 
 Generated Codex and Claude workflows add an independent
 `change-risk-reviewer` after spec and code-quality review. The orchestration
-reviews the complete change snapshot, applies a bounded remediation policy,
+gives the reviewer complete and lossless access to the change snapshot,
+applies a bounded remediation policy,
 records every review round in a versioned Markdown learning record, and
 promotes repeated validated findings into scoped review rules and mechanical
 guards.
@@ -77,7 +86,8 @@ telemetry or making GitHub a dependency.
 2. The implementer, spec reviewer, and code-quality reviewer run in their
    existing order.
 3. A fresh `change-risk-reviewer` receives the governing contracts, scoped
-   repository review rules, and the complete change snapshot.
+   repository review rules, and complete and lossless access to the change
+   snapshot via its manifest and read instructions.
 4. The reviewer inspects the changed code plus unchanged consumers, call
    paths, state transitions, ownership, compatibility, published seams,
    runtime proof, and external boundaries.
@@ -101,8 +111,11 @@ telemetry or making GitHub a dependency.
   staged and unstaged patches and every identified relevant untracked file as
   one change snapshot; no commit or staging mutation is required solely for
   review.
-- Base and head commit identifiers and an optional worktree snapshot
-  identifier.
+- Base and head commit identifiers. Whenever staged, unstaged, or untracked
+  content participates in the snapshot, a deterministic worktree snapshot
+  identifier over the exact reviewed byte set is required so that different
+  reviewed contents can never share the same snapshot identity; for a purely
+  committed snapshot it is optional.
 - Prior finding fingerprints for remediation reviews only.
 - Existing provider-neutral `critical-reviewer` model-policy resolution,
   including mapping-v2, mapping-v3, and exact per-client overrides.
@@ -129,13 +142,78 @@ telemetry or making GitHub a dependency.
 
 - The initial workflow-policy version is `change-risk/v1`.
 - The reviewer result envelope, orchestration skills, and
-  `review-learning/v1` records MUST emit the same exact workflow-policy
-  version.
+  `review-learning/v1` records produced by this workflow MUST emit the same
+  exact workflow-policy version. Records normalized from reviews that this
+  workflow did not execute carry `sourcePolicy: legacy-external` instead of a
+  fabricated policy version.
 - Increment the workflow-policy version when changing snapshot completeness,
   the closed result envelope, priority/disposition semantics, retry or
   confirmation limits, escalation outcomes, high-risk triggers, or promotion
   thresholds. Editorial clarification that preserves those contracts does not
   increment it.
+
+### Context composition and ownership contract
+
+- Every consequential instruction or closed policy value MUST have exactly one
+  authoritative owner.
+- The shared change-risk policy MUST expose surface-specific projections rather
+  than rendering the complete policy into every generated artifact.
+- The reviewer projection contains only:
+  - reviewer objective and authority boundary
+  - snapshot-access contract
+  - applicable risk-domain rubric
+  - finding/result interface
+  - read-only and safety constraints
+- The orchestration projection contains only:
+  - pipeline order
+  - invocation and fix-round budgets
+  - retry, invalidation, non-progress, confirmation, and escalation transitions
+- The learning-record projection contains only:
+  - normalized record schema
+  - redaction requirements
+  - persistence location and ownership
+- The promotion projection contains only:
+  - recurrence classification
+  - scoped-rule and mechanical-guard actions
+  - ownership and retirement rules
+- Generated surfaces MUST reference their authoritative projection instead of
+  restating unrelated policy sections.
+- Retry counts, promotion thresholds, learning-record fields, and historical
+  examples MUST NOT be embedded in the change-risk reviewer prompt unless the
+  reviewer requires them to produce its own result.
+- Risk-domain descriptions MUST NOT be repeated independently across reviewer
+  and orchestration skills.
+- Exactly one generated surface owns the complete change-risk state machine:
+  `subagent-driven-change`. `implement-next` initiates or resumes that
+  orchestration and reports its current state without redefining budgets or
+  transitions. `final-review` verifies that an allowed terminal state exists
+  without reimplementing the review loop. Nested or wrapping surfaces MUST
+  verify or propagate the owner's terminal result rather than invoke another
+  review of the same snapshot.
+- These composition rules are provider-neutral: they apply to Codex and Claude
+  artifacts now and to any future Tabnine equivalent.
+- Hard safety, permission, ownership, and no-upload contracts remain explicit
+  even when other guidance is simplified.
+
+### Snapshot disclosure contract
+
+- Snapshot completeness means that no changed, staged, unstaged, or relevant
+  untracked file is hidden from the reviewer.
+- Snapshot completeness does not require eagerly inserting every file and diff
+  byte into the initial reviewer prompt.
+- The initial reviewer context SHOULD contain:
+  - snapshot identifier
+  - base and head identifiers
+  - deterministic changed-file manifest
+  - staged, unstaged, and relevant-untracked classifications
+  - governing contracts and applicable repository-rule references
+  - instructions for reading the complete diff and reachable consumers
+- The reviewer MUST be able to inspect every snapshot component and any
+  unchanged consumer required to complete the review.
+- A `CLEAN` result requires explicit confirmation that the complete manifest
+  was covered, including any skipped or non-applicable risk domains.
+- Context retrieval MUST remain local and MUST NOT weaken the no-upload
+  contract.
 
 ### Reviewer contract
 
@@ -147,32 +225,93 @@ change-risk-reviewer -> final-review`.
   provider-neutral model-policy role is the existing `critical-reviewer`.
   Mapping-v2, mapping-v3, target-native effort, and exact per-client overrides
   MUST resolve through that role; this phase adds no new model-policy role ID.
-- The initial review MUST use a fresh reviewer and the complete change
-  snapshot. It MUST NOT receive the implementer report, prior praise, or a
-  prior finding list.
+- The initial review MUST use a fresh reviewer with complete and lossless
+  access to the change snapshot under the snapshot disclosure contract. It
+  MUST NOT receive the implementer report, prior praise, or a prior finding
+  list.
 - Remediation reviews MUST inspect the complete updated snapshot, verify known
   fingerprints, and search independently for new findings.
 - A final clean-room confirmation, when required, MUST use a fresh reviewer
   without a prior finding list.
-- Review focus MUST include unchanged consumers and call paths, state
+- The change-risk domains are a closed identifier set (`ChangeRiskDomain`) in
+  the shared policy source covering: unchanged consumers and call paths, state
   transitions, ownership and write safety, compatibility and platform
   behavior, parsing and validation order, external network/process
   boundaries, generated-file ownership, published-package seams, runtime
   proof, redaction, and contract completeness.
-- Findings MUST lead with `P1`, `P2`, or `P3`, cite concrete evidence and the
-  affected contract or safe path, and carry a stable human-readable
-  fingerprint that survives wording changes across rounds.
-- Every invocation MUST return one complete result envelope with
-  `policyVersion: change-risk/v1`, the reviewed snapshot identifier, exactly
-  one status from `CLEAN | FINDINGS_FOUND | NEEDS_CONTEXT`, and a findings
-  array.
+- Short domain names and applicability requirements remain in the reviewer
+  interface. Detailed domain rubrics, known failure patterns, and evidence
+  expectations live in selectively loaded reference material, not in every
+  reviewer invocation prompt.
+- The reviewer MUST evaluate every applicable domain but MUST NOT manufacture
+  findings merely to satisfy a checklist. Inapplicable domains are explicitly
+  marked `not-applicable` with a concise reason.
+
+### Reviewer interface contract
+
+- Findings and results use the closed typed shapes below; the orchestrator,
+  not free-form reviewer prose, validates their relationships.
+
+```ts
+type ChangeRiskFindingV1 = {
+  priority: "P1" | "P2" | "P3";
+  category: ChangeRiskCategory;
+  location: {
+    path: string;
+    symbol?: string;
+    line?: number;
+  };
+  unsafeCondition: string;
+  evidence: EvidenceReference[];
+  affectedContract: string;
+  safePath: string;
+  resolution: "open" | "fixed" | "false-positive" | "obsolete";
+  disposition?:
+    | "fixed"
+    | "accepted-debt"
+    | "follow-up"
+    | "false-positive"
+    | "obsolete";
+  fingerprint: string;
+};
+
+type ChangeRiskResultV1 = {
+  policyVersion: "change-risk/v1";
+  snapshotId: string;
+  status: "CLEAN" | "FINDINGS_FOUND" | "NEEDS_CONTEXT";
+  scope: {
+    completed: boolean;
+    inspectedChangeManifest: boolean;
+    inspectedRelevantConsumers: boolean;
+    domains: Array<{
+      domain: ChangeRiskDomain;
+      applicability: "applicable" | "not-applicable";
+      reason?: string;
+    }>;
+  };
+  findings: ChangeRiskFindingV1[];
+  missingInputs: string[];
+};
+```
+
+- `missingInputs` MUST be empty except for `NEEDS_CONTEXT`.
+- `scope.completed` MUST be `true` only for `CLEAN` or a completed
+  findings result.
+- P1/P2 findings MUST reject `disposition`; P3 findings MUST carry one valid
+  `disposition`.
 - `CLEAN` is valid only for the requested snapshot with an empty findings
-  array and an explicit completed-scope confirmation. `FINDINGS_FOUND`
-  requires at least one structurally valid finding. `NEEDS_CONTEXT` requires a
-  non-empty list of missing inputs and is not a completed review.
+  array and an explicit completed-scope confirmation covering the complete
+  manifest and every domain's applicability. `FINDINGS_FOUND` requires at
+  least one structurally valid finding. `NEEDS_CONTEXT` requires a non-empty
+  `missingInputs` list and is not a completed review.
 - Empty, truncated, unparseable, version/snapshot-mismatched, internally
   inconsistent, or otherwise malformed output is an invalid attempt, never a
   clean review.
+- The fingerprint is derived from structured components —
+  `category + affected contract + normalized location + unsafe-condition
+  class` — where practical. The reviewer may supply those components; shared
+  deterministic code normalizes the final fingerprint so it survives wording
+  changes across rounds.
 
 ### Priority and disposition contract
 
@@ -191,8 +330,16 @@ change-risk-reviewer -> final-review`.
 
 - The initial review is not a fix round.
 - At most three fix rounds may follow the initial review.
-- At most five logical reviewer invocations may complete: the initial review,
-  up to three remediation reviews, and one final clean-room confirmation.
+- At most six logical reviewer invocations may complete: the initial review,
+  up to three remediation reviews, and up to two final clean-room
+  confirmations. The second confirmation exists only for the path where a
+  required confirmation of an initially clean high-risk change discovers
+  blockers, remediation follows, and a new confirmation is then required.
+- A fix round may begin only when the remaining logical-invocation budget can
+  accommodate its remediation review plus any final clean-room confirmation
+  that would then be required. When it cannot, the workflow escalates to
+  `NEEDS_HUMAN_REVIEW` instead of finishing without the required
+  confirmation.
 - One logical reviewer invocation may retry a transient capacity/tool failure,
   invalid result envelope, or `NEEDS_CONTEXT` result at most twice after the
   missing input is supplied. Failed or incomplete attempts are recorded
@@ -205,6 +352,13 @@ change-risk-reviewer -> final-review`.
   `NEEDS_HUMAN_REVIEW`.
 - Exhausted attempt retries produce `NEEDS_HUMAN_REVIEW`; they MUST NOT be
   converted to a clean result.
+- When two or more terminal triggers apply to the same transition,
+  `NEEDS_HUMAN_REVIEW` takes precedence over `NO_PROGRESS`.
+- A completed `FINDINGS_FOUND` result whose findings are exclusively P3 with
+  a valid disposition each contains no blocker. It reaches terminal `clean`
+  exactly as a `CLEAN` result would — without relabeling the reviewer
+  envelope and without an additional review of the unchanged snapshot —
+  subject to the same required-confirmation triggers.
 - Initial or remediation review against an unchanged snapshot is not
   repeated. A required final clean-room confirmation is the sole exception:
   it intentionally re-reviews the same final snapshot as an independent
@@ -220,23 +374,56 @@ change-risk-reviewer -> final-review`.
   per PR/change.
 - Raw prompts, transcripts, hidden reasoning, and unfiltered tool output MUST
   remain in a local ignored location and MUST NOT be committed.
+- The normalization-schema version (`review-learning/v1`) is separate from
+  the policy that produced the review. Every record carries a closed
+  `sourcePolicy` value: `change-risk/v1` for reviews executed by this
+  workflow, or `legacy-external` for reviews that predate it or come from an
+  external provider.
 - Schema version `review-learning/v1` requires: date, product version when
-  known, workflow-policy version `change-risk/v1`, base/head identifiers,
-  optional worktree
-  snapshot identifier, reviewer surface/version when known, logical
-  invocation and transient-attempt counts, round outcomes, stable finding
-  fingerprints, category, priority, evidence, affected contract, safe path,
-  resolution, conditional P3 disposition, and terminal status.
+  known, source policy, base/head identifiers, worktree snapshot identifier
+  when uncommitted content participated, reviewer surface/version when known,
+  round outcomes, stable finding fingerprints, category, priority, evidence,
+  affected contract, safe path, resolution, conditional P3 disposition, and
+  terminal status.
+- Logical-invocation and transient-attempt counts are required only for
+  `sourcePolicy: change-risk/v1` records. `legacy-external` records omit
+  them instead of fabricating provenance.
 - Terminal status is one of:
   `clean | no-progress | needs-human-review`.
 - Unknown provider or model versions are recorded as `unknown`, never guessed.
+- Records SHOULD reference commits, paths, symbols, contracts, and tests
+  rather than reproducing source, specs, or full reviewer explanations.
+
+### Learning-record context isolation
+
+- Historical review-learning records MUST NOT be loaded wholesale into initial
+  or final clean-room reviewer context.
+- Initial and final reviewers receive no historical finding list, recurrence
+  counts, expected categories, or prior reviewer conclusions.
+- Remediation reviews receive only fingerprints from the immediately preceding
+  relevant round.
+- Promotion logic may query normalized historical records by category.
+- Forward-evaluation harnesses may use records to select evaluation cases, but
+  expected findings and category labels MUST be stripped from reviewer input.
+- Historical findings and corrected outcomes are evaluation and promotion
+  evidence only. Production reviewer definitions MUST NOT include historical
+  finding examples, PR-specific diagnoses, expected categories, or corrected
+  patches.
 
 ### Learning-promotion contract
 
+- Promotion recurrence is keyed on canonical category identity, not raw
+  wording. `ChangeRiskCategory` is a closed, versioned identifier set in the
+  shared policy source, with an explicit alias/normalization rule mapping
+  variant labels onto one canonical identifier before recurrence is counted.
 - A first systemic P1 safety/contract failure immediately adds a
   regression test and a scoped review rule where practical.
+- A first validated non-systemic P1 follows the record-and-categorize path:
+  it is recorded and categorized like a first ordinary P2/P3, and a
+  regression test is added where practical. Its recorded category feeds the
+  same second- and third-occurrence thresholds.
 - A first ordinary P2/P3 is recorded and categorized.
-- A second validated occurrence of the same category adds a scoped
+- A second validated occurrence of the same canonical category adds a scoped
   `## Code Review Rules` rule plus a reviewer regression case.
 - A third validated occurrence means the prompt/rule is insufficient and adds
   a test, lint, validator, or shared helper where practical.
@@ -246,6 +433,28 @@ change-risk-reviewer -> final-review`.
 - Promotion MUST NOT silently modify compiler-generated instruction regions.
   It writes only to a human-owned manual/scoped rule surface or produces a
   proposed patch requiring the normal write boundary.
+
+### Promoted-rule lifecycle
+
+- Before adding a prose rule, determine whether the failure can be prevented
+  by a schema, interface, type, test, validator, lint rule, ownership check,
+  or shared helper.
+- A mechanical or interface-level guard MAY be introduced before the third
+  occurrence when it is clearly practical and proportionate.
+- A prompt rule is added only when model judgement remains part of the safe
+  decision.
+- Every promoted rule records:
+  - stable rule ID
+  - source category
+  - narrow scope
+  - evidence record references
+  - date introduced
+  - mechanical guard, when one exists
+  - lifecycle status: `active | superseded | retired`
+- When a deterministic guard provides equivalent or stronger protection, the
+  redundant prompt rule MUST be removed, retired, or reduced to navigation
+  guidance.
+- A retired rule MUST NOT continue to be rendered into generated context.
 
 ### External-review contract
 
@@ -287,7 +496,9 @@ change-risk-reviewer -> final-review`.
   surfaces, and output rules would otherwise be duplicated across several
   long generated instruction bodies.
 - Proposed interface: one immutable change-risk policy/content definition
-  rendered into the reviewer and orchestration skills.
+  exposing explicit reviewer, orchestration, learning-record, promotion, and
+  evaluation projections; each generated artifact renders only the projection
+  it needs.
 - Locality/leverage: a policy change has one source and deterministic target
   renderers instead of manually synchronized prose.
 - Test improvement: unit tests can assert the closed policy values while
@@ -304,14 +515,17 @@ change-risk-reviewer -> final-review`.
    generated orchestration surface without dangling references. Its model and
    effort resolve through the existing `critical-reviewer` role for
    mapping-v2, mapping-v3, and exact per-client override profiles.
-2. The reviewer prompt and golden fixtures enforce complete-snapshot,
-   clean-room, unchanged-consumer, risk-domain, priority, evidence,
-   fingerprint, read-only, and no-upload contracts. The
-   `change-risk/v1` result envelope makes empty, malformed, mismatched, and
-   `NEEDS_CONTEXT` output incapable of producing a clean result.
-3. The generated workflow encodes the exact three-fix-round, five-logical-
-   invocation, two-transient-retry, non-progress, confirmation, and
-   human-escalation rules without conflicting counts or statuses.
+2. The reviewer prompt and golden fixtures enforce complete-and-lossless
+   snapshot access, clean-room, unchanged-consumer, risk-domain, priority,
+   evidence, fingerprint, read-only, and no-upload contracts. The typed
+   `change-risk/v1` result envelope and its scope/`missingInputs`/disposition
+   relationships make empty, malformed, mismatched, and `NEEDS_CONTEXT`
+   output incapable of producing a clean result.
+3. The generated workflow encodes the exact three-fix-round, six-logical-
+   invocation, two-transient-retry, budget-reservation, non-progress,
+   terminal-precedence, confirmation, and human-escalation rules without
+   conflicting counts or statuses, with `subagent-driven-change` as the sole
+   owner of the state machine.
 4. P1/P2 always block and omit disposition; P3 always receives one allowed
    disposition; every finding has one closed resolution; any code change
    invalidates a prior clean result.
@@ -339,12 +553,26 @@ change-risk-reviewer -> final-review`.
 11. Full compiler/core tests, affected golden tests, check, doctor, and packed
     release verification run before the phase is reported complete, with
     unrelated local drift separated from regressions.
+12. Each generated artifact contains only its authoritative policy
+    projection; projection tests prove both required inclusion and forbidden
+    unrelated content, and no closed count or transition rule is
+    independently reproduced in two generated skill bodies.
+13. Initial and final clean-room reviewer context contains no historical
+    finding lists, recurrence counts, expected categories, or historical
+    finding examples; a context-ablation evaluation shows the projection-based
+    prompts preserve the required seeded-P1 recovery threshold.
 
 ## Tests
 
 - Core/unit tests for `change-risk/v1`: priorities, conditional dispositions,
-  resolutions, result-envelope statuses, terminal statuses, risk surfaces,
-  retry counts, and confirmation triggers.
+  resolutions, result-envelope statuses, scope/`missingInputs` relationships,
+  fingerprint normalization, canonical category identity and aliasing,
+  terminal statuses and precedence, risk-domain identifiers, retry counts,
+  budget reservation, and confirmation triggers.
+- Projection tests proving each generated artifact contains its required
+  projection content and excludes forbidden unrelated policy sections, and
+  failing when two surfaces independently define the same retry, round,
+  confirmation, or escalation value.
 - Model-policy tests proving `change-risk-reviewer` resolves through
   `critical-reviewer` for mapping-v2, mapping-v3, target-native effort, and
   exact per-client overrides.
@@ -360,9 +588,11 @@ change-risk-reviewer -> final-review`.
 - Result-envelope tests for explicit clean, findings found, needs context,
   empty/truncated output, invalid status, policy/snapshot mismatch, and
   exhausted invalid-attempt retries.
-- Table-driven state-machine tests for clean on initial review, one-to-three
-  fix rounds, same-fingerprint recurrence, unchanged remediation snapshots,
-  required confirmation on an unchanged final snapshot, blocker-count
+- Table-driven state-machine tests for clean on initial review, dispositioned
+  P3-only terminal clean, one-to-three fix rounds, same-fingerprint
+  recurrence, unchanged remediation snapshots, required confirmation on an
+  unchanged final snapshot, confirmation-discovers-blockers budget
+  reservation, overlapping terminal-trigger precedence, blocker-count
   stagnation, attempt-retry exhaustion, code change after clean, and validated
   external blockers.
 - Record-schema fixtures for all terminal statuses and every P3 disposition,
@@ -372,6 +602,11 @@ change-risk-reviewer -> final-review`.
 - Historical corpus reconciliation tests for per-PR and total priority counts.
 - Local forward evaluation using fresh reviewers, raw historical diffs, and
   no expected-answer leakage.
+- Context-ablation evaluation comparing the projection-based reviewer and
+  orchestration prompts against the pre-simplification candidate on the same
+  blinded cases, recording footprint, recovery, false positives,
+  `NEEDS_CONTEXT` rate, malformed-result rate, and run variability for Codex
+  and Claude independently.
 - Packed published-journey assertion that emitted reviewer and orchestration
   artifacts are present, internally consistent, and source-free.
 
@@ -403,11 +638,13 @@ See `docs/specs/phase-33/issues/`:
 
 Dependency map:
 
-`I1 -> I2`; `I1 + I3 -> I4`; `I3 -> I5`;
+`I1 -> I2`; `I1 -> I3`; `I1 + I3 -> I4`; `I3 -> I5`;
 `I1 + I2 + I3 + I4 + I5 -> I6`.
-I1 and I3 are parallel-safe. I5 is parallel-safe with I2 and I4 once I3
-lands. I6 is the final integration slice and requires I5's accepted backfill
-evidence.
+I3 is sequenced after I1 because I1 owns the shared policy source whose
+closed values (`change-risk/v1`, statuses, dispositions, categories) I3's
+record schema and learning-record projection must consume rather than
+duplicate. I5 is parallel-safe with I2 and I4 once I3 lands. I6 is the final
+integration slice and requires I5's accepted backfill evidence.
 
 ## Documentation Updates
 
@@ -425,7 +662,12 @@ evidence.
   retry limit, disposition, and error/escalation contract.
 - Verify the complete-snapshot contract includes uncommitted staged,
   unstaged, and relevant untracked files without requiring a commit or staging
-  mutation.
+  mutation, and that a deterministic worktree snapshot identifier is present
+  whenever uncommitted content participates.
+- Verify each generated artifact carries only its authoritative projection
+  and that no closed count or transition value is duplicated across surfaces.
+- Verify initial/final clean-room context excludes historical records,
+  recurrence counts, and historical finding examples.
 - Verify every emitted reviewer and record carries `change-risk/v1`, and the
   reviewer resolves model policy through `critical-reviewer`.
 - Reject every incomplete or invalid result envelope; only explicit valid

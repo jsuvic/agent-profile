@@ -16,10 +16,18 @@ unnecessary source, secret-like values, or hidden reasoning.
 Commit one normalized `review-learning/v1` Markdown record per PR/change under
 `docs/review-learning/`; keep raw transcripts local and ignored. P1/P2 block,
 while each P3 receives one explicit disposition and P1/P2 omit disposition.
-Every record carries workflow-policy version `change-risk/v1`. Promote a first
-systemic P1 immediately, a second ordinary occurrence into a scoped review
-rule and reviewer regression, and a third occurrence into a mechanical guard
-where practical.
+Every record carries a closed `sourcePolicy`: `change-risk/v1` for reviews
+this workflow executed, or `legacy-external` for historical/external reviews,
+which omit the execution-count fields instead of fabricating provenance.
+Promotion recurrence is keyed on a closed canonical category identity with
+alias normalization. Promote a first systemic P1 immediately, record and
+categorize a first non-systemic P1 and first ordinary P2/P3, promote a second
+occurrence into a scoped review rule and reviewer regression, and a third
+occurrence into a mechanical guard where practical. Promoted rules carry
+lifecycle status (`active | superseded | retired`); a rule made redundant by a
+deterministic guard is retired and no longer rendered into generated context.
+Historical records are evaluation and promotion evidence only and are never
+loaded into clean-room reviewer context.
 
 Promotions write only to human-owned manual/scoped instruction surfaces and
 never silently alter compiler-generated regions.

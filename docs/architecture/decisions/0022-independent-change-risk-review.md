@@ -16,9 +16,11 @@ anchoring to implementer context.
 ## Decision
 
 Add a dedicated `change-risk-reviewer` after spec and code-quality review. Its
-initial and final clean-room passes use a fresh reviewer, the complete
-accumulated change snapshot, and governing rules without implementer claims,
-prior praise, or prior finding lists. Remediation passes verify known
+initial and final clean-room passes use a fresh reviewer with complete and
+lossless access to the accumulated change snapshot (manifest-first, with
+instructions and ability to read every component, rather than eager full-diff
+injection) and governing rules without implementer claims, prior praise, or
+prior finding lists. Remediation passes verify known
 fingerprints and independently search the complete updated snapshot for new
 findings.
 

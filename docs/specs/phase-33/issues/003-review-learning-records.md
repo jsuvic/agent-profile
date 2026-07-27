@@ -16,8 +16,16 @@ Define `review-learning/v1`, add a concise normalized Markdown template under
 one record per reviewed PR/change. Records include version/date/snapshot,
 reviewer surface, attempt counts, round outcomes, fingerprints, evidence,
 closed resolution, conditional P3 disposition, and terminal status. Every
-record carries workflow-policy version `change-risk/v1`. Raw review material
-is explicitly local and ignored.
+record carries a closed `sourcePolicy`: `change-risk/v1` for reviews this
+workflow executed (with required invocation/attempt counts) or
+`legacy-external` for historical or external reviews (which omit those
+execution fields). Raw review material is explicitly local and ignored.
+
+The record schema consumes the closed values and learning-record projection
+of the shared policy source established by I1; it does not duplicate those
+constants. Generated workflow instructions follow the parent learning-record
+context-isolation contract: historical records feed promotion and evaluation
+only and are never loaded wholesale into clean-room reviewer context.
 
 ## Non-goals
 
@@ -38,7 +46,12 @@ is explicitly local and ignored.
   committed record.
 - Generated skills reference the normalized record, not an implementation
   report or free-form diary.
-- Fixtures cover clean, no-progress, and needs-human-review.
+- Fixtures cover clean, no-progress, and needs-human-review, plus both
+  `sourcePolicy` values with their conditional execution fields.
+- Closed values come from the I1 shared policy source's learning-record
+  projection; no duplicated constants.
+- Generated skills exclude historical records, recurrence counts, and prior
+  conclusions from initial/final clean-room reviewer context.
 
 ## Expected RED proof
 
@@ -75,12 +88,12 @@ the broader compiler suite.
 
 ## Dependencies
 
-`ready`; no dependency on I1.
+`sequenced` after I1, which owns the shared policy source and its
+learning-record projection.
 
 ## Parallelism notes
 
-Own record/template files and record-related skill sections only. Coordinate
-shared compiler renderer edits with I1.
+Own record/template files and record-related skill sections only.
 
 ## Contract impact
 

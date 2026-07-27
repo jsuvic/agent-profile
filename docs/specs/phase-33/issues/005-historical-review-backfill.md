@@ -12,7 +12,9 @@ that exposed the current workflow gap.
 ## Behavior slice
 
 Use sanitized checked-in thread-aware review fixtures for PRs #125 and
-#127-#133, validate and normalize them into `review-learning/v1` records,
+#127-#133, validate and normalize them into `review-learning/v1` records
+with `sourcePolicy: legacy-external` (these reviews predate `change-risk/v1`
+and omit its logical-invocation and transient-attempt fields),
 reconcile the approved priority totals, categorize root causes, and identify
 the first rules or mechanical regressions required by the promotion policy.
 Record the source date and disclose any review-thread state that changed after
@@ -30,6 +32,7 @@ silently weakening the backfill.
 - Copying raw review transcripts into the repository.
 - Expanding the corpus beyond the approved eight PRs.
 - Treating live GitHub access as the default input.
+- Feeding historical findings into production reviewer prompts.
 
 ## Acceptance criteria
 
@@ -45,6 +48,14 @@ silently weakening the backfill.
 - The records distinguish the approved historical snapshot from later GitHub
   state instead of rewriting history.
 - Recurring categories seed reviewer regression cases and promotion proposals.
+- Historical findings and corrected outcomes are evaluation and promotion
+  evidence only. Production reviewer definitions MUST NOT include historical
+  finding examples, PR-specific diagnoses, expected categories, or corrected
+  patches.
+- Category definitions derived from the corpus remain provider-neutral and
+  do not encode repository-specific historical wording.
+- Every record carries `sourcePolicy: legacy-external` with the historical
+  provenance encoding; no fabricated `change-risk/v1` execution data.
 - No GitHub mutation occurs.
 - The default path makes no network call. A live review-thread read occurs only
   after explicit user approval; refusal leaves the fixtures unchanged and

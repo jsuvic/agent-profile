@@ -53,6 +53,17 @@ The complete accumulated change presented for review: committed base-to-head
 diff plus identified staged, unstaged, and relevant untracked files. _Avoid:_
 "changed-file list", "last fix".
 
+**Snapshot disclosure**
+Complete and lossless reviewer access to every snapshot component via a
+deterministic manifest and read instructions, without eagerly injecting every
+diff byte into the initial prompt. _Avoid:_ "full-context dump", "partial
+file list".
+
+**Policy projection**
+The surface-specific subset of the shared change-risk policy that one
+generated artifact renders; each closed value has exactly one authoritative
+owner. _Avoid:_ "full policy copy", "duplicated counts".
+
 **Change-risk review**
 An independent adversarial pass that searches a complete change snapshot and
 its reachable consumers for correctness and contract gaps. _Avoid:_ "second

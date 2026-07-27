@@ -13,11 +13,23 @@ converge.
 ## Behavior slice
 
 Update generated `subagent-driven-change`, `implement-next`, and
-`final-review` instructions to invoke the change-risk reviewer after spec and
-code-quality review. Track logical invocations, transient attempts, snapshots,
-fingerprints, blocker counts, fix rounds, clean-result invalidation, required
-confirmation, result-envelope validity, and terminal escalation using
-`change-risk/v1`.
+`final-review` instructions with one ownership split:
+
+- `subagent-driven-change` owns the full orchestration state machine and is
+  the only surface that invokes the change-risk reviewer, after spec and
+  code-quality review.
+- `implement-next` initiates or resumes the orchestration and reports its
+  current state. It does not redefine budgets or transitions and does not
+  invoke another review.
+- `final-review` verifies that an allowed terminal state exists for the final
+  snapshot. It does not reimplement the review loop or re-review an
+  unchanged snapshot.
+
+The owning surface tracks logical invocations, transient attempts, snapshots,
+fingerprints, blocker counts, fix rounds, budget reservation for required
+confirmation, clean-result invalidation, required confirmation,
+result-envelope validity, terminal-trigger precedence, and terminal
+escalation using `change-risk/v1`.
 
 ## Non-goals
 
@@ -29,13 +41,26 @@ confirmation, result-envelope validity, and terminal escalation using
 ## Acceptance criteria
 
 - Pipeline order matches the parent spec.
+- Exactly one generated surface (`subagent-driven-change`) owns the complete
+  change-risk state machine. Other surfaces reference that owner and state
+  only their local entry, handoff, or terminal-verification
+  responsibilities; nested surfaces never trigger a second review of the
+  same unchanged snapshot.
+- Closed counts and transition rules are not independently reproduced in
+  multiple generated skill bodies.
+- Contract tests fail when two surfaces independently define the same retry,
+  round, confirmation, or escalation value.
 - Initial review, remediation review, and final clean-room confirmation use
   their distinct context rules.
-- The state machine permits at most three fix rounds, five completed logical
-  reviews, and two transient retries per logical invocation.
+- The state machine permits at most three fix rounds, six completed logical
+  reviews, and two transient retries per logical invocation, and reserves
+  budget so a fix round never starts without room for its remediation review
+  plus any then-required final confirmation.
 - Same-fingerprint recurrence, blocker-count stagnation, unchanged snapshots,
-  the unchanged-snapshot exception for required final confirmation, exhausted
-  attempt retries, remaining blockers, confirmation triggers, invalid result
+  the unchanged-snapshot exception for required final confirmation,
+  dispositioned P3-only terminal clean, overlapping terminal-trigger
+  precedence (`NEEDS_HUMAN_REVIEW` over `NO_PROGRESS`), exhausted attempt
+  retries, remaining blockers, confirmation triggers, invalid result
   envelopes, and code-after-clean transitions produce the exact required
   outcome.
 - `NEEDS_CONTEXT` or invalid/empty/truncated/mismatched output retries within
