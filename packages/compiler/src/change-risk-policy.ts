@@ -197,6 +197,14 @@ export const CHANGE_RISK_PIPELINE_ORDER: readonly ChangeRiskPipelineStage[] =
  */
 export const CHANGE_RISK_REVIEW_METADATA_PATH_PREFIX = "docs/review-learning/";
 
+/**
+ * Record field carrying the orchestration owner's decision evidence for an open
+ * P3. `dispositionConfirmed` alone cannot distinguish a substantiated owner
+ * decision from a reviewer proposal, and promotion counts an open finding only
+ * when that evidence is present.
+ */
+export const CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD = "dispositionEvidence";
+
 export const CHANGE_RISK_PROPOSAL_PATH_PREFIX =
   "docs/review-learning/proposals/";
 
@@ -356,7 +364,15 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
     {
       id: "network-process-execution",
       globs: [
+        // Every non-test source that imports node:child_process or performs an
+        // outbound fetch. `apps/*/src/index.ts` spawns the local server and the
+        // platform URL opener; `personal-activation.ts` and `model-probe.ts`
+        // execFile external tools; `update-check.ts` performs the only outbound
+        // fetch. Same-origin browser calls to the local UI's own /api routes
+        // are not an external boundary and are deliberately excluded.
+        "apps/*/src/index.ts",
         "apps/*/src/model-probe.ts",
+        "apps/*/src/personal-activation.ts",
         "apps/*/src/update-check.ts",
         "scripts/release/publish-*.mjs",
       ],
@@ -692,8 +708,10 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
   transitions: {
     retry: [
       "The initial review is not a fix round.",
+      // Derived from the constant: prose must never restate a closed limit.
       "One logical invocation may retry a transient failure, an invalid " +
-        "envelope, or a NEEDS_CONTEXT result at most twice.",
+        "envelope, or a NEEDS_CONTEXT result at most " +
+        `${CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation} times.`,
       "Failed or incomplete attempts are recorded separately and never " +
         "become findings or fix rounds.",
       "A fix round may begin only when the remaining invocation budget also " +
@@ -716,6 +734,11 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
     confirmationTriggers: CHANGE_RISK_CONFIRMATION_TRIGGERS,
     escalation: [
       "Remaining open P1 or P2 findings after the last allowed fix round.",
+      // The budget-reservation precondition in `retry` would otherwise leave
+      // this boundary with no valid transition.
+      "Open blockers remain but the invocation budget cannot cover another " +
+        "fix round's remediation review plus the confirmation that would " +
+        "then be required.",
       "Exhausted attempt retries; they are never converted to a clean result.",
       "An unsatisfiable missing input escalates immediately.",
       "needs-human-review takes precedence over no-progress when both apply.",
@@ -778,6 +801,8 @@ const LEARNING_RECORD_PROJECTION: ChangeRiskLearningRecordProjection =
         "reviewerSurfaceVersion when known, otherwise unknown",
         "systemic and systemicReason on every validated P1",
         "disposition and dispositionConfirmed on every P3",
+        `${CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD} carrying the owner's ` +
+          "decision evidence for every open P3",
         "provider on every external-sourced finding",
         "logicalInvocationCount and transientAttemptCount for local records",
       ],
@@ -815,6 +840,10 @@ export type ChangeRiskPromotionProjection = Readonly<{
     firstOrdinaryP2OrP3: string;
     secondOccurrence: string;
     thirdOccurrence: string;
+    /** Promoted-rule lifecycle preamble: prefer a guard over prose. */
+    guardPreference: readonly string[];
+    /** Mandatory content constraints on any promoted prose rule. */
+    promotedRuleRequirements: readonly string[];
   }>;
   ownership: Readonly<{
     generatedRegions: string;
@@ -835,7 +864,8 @@ const PROMOTION_PROJECTION: ChangeRiskPromotionProjection = deepFreeze({
     countedResolutions: ["fixed"],
     countedOpenRequires:
       "an open finding counts only when the persisted record carries " +
-      "dispositionConfirmed: true with the owner's decision evidence",
+      "dispositionConfirmed: true together with the owner's decision " +
+      `evidence in ${CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD}`,
     excludedResolutions: ["false-positive", "obsolete"],
     excludedCategories: [CHANGE_RISK_CATEGORY_UNCATEGORIZED],
     systemicPredicate: [
@@ -861,6 +891,22 @@ const PROMOTION_PROJECTION: ChangeRiskPromotionProjection = deepFreeze({
     thirdOccurrence:
       "Add a test, lint, validator, or shared helper where practical; the " +
       "prompt rule alone has proven insufficient.",
+    guardPreference: [
+      "Before adding a prose rule, determine whether the failure can be " +
+        "prevented by a schema, interface, type, test, validator, lint rule, " +
+        "ownership check, or shared helper.",
+      "A mechanical or interface-level guard may be introduced before the " +
+        "third occurrence when it is clearly practical and proportionate.",
+      "A prompt rule is added only when model judgement remains part of the " +
+        "safe decision.",
+    ],
+    promotedRuleRequirements: [
+      "Concise.",
+      "Consequential.",
+      "Scoped to the narrowest applicable path.",
+      "States the unsafe condition.",
+      "States the safe path or a counterexample.",
+    ],
   },
   ownership: {
     generatedRegions:
@@ -891,10 +937,26 @@ export type ChangeRiskEvaluationMetric =
   | "invocation-count"
   | "context-footprint";
 
+/**
+ * A closed measurement definition. Without numerator, denominator, aggregation,
+ * and unit, two harnesses can report incompatible numbers while both claiming
+ * to follow this policy.
+ */
+export type ChangeRiskEvaluationMetricDefinition = Readonly<{
+  id: ChangeRiskEvaluationMetric;
+  numerator: string;
+  denominator: string;
+  aggregation: string;
+  unit: string;
+}>;
+
+/** Allowed clean-room runs per evaluation case. */
+const EVALUATION_MAX_CLEAN_ROOM_RUNS = 2;
+
 export type ChangeRiskEvaluationProjection = Readonly<{
   policyVersion: ChangeRiskPolicyVersion;
   caseSelection: Readonly<{ blinded: boolean; rules: readonly string[] }>;
-  metrics: readonly ChangeRiskEvaluationMetric[];
+  metrics: readonly ChangeRiskEvaluationMetricDefinition[];
   runLimits: Readonly<{
     maxCleanRoomRuns: number;
     requiredRecovery: string;
@@ -919,18 +981,59 @@ const EVALUATION_PROJECTION: ChangeRiskEvaluationProjection = deepFreeze({
     ],
   },
   metrics: [
-    "recovery",
-    "false-positives",
-    "needs-context-rate",
-    "malformed-result-rate",
-    "invocation-count",
-    "context-footprint",
+    {
+      id: "recovery",
+      numerator: "seeded P1 categories recovered by at least one allowed run",
+      denominator: "seeded P1 categories present in the case",
+      aggregation:
+        "per case, then reported per client without averaging away a miss",
+      unit: "ratio in [0, 1]",
+    },
+    {
+      id: "false-positives",
+      numerator:
+        "reported findings the owner validated as false-positive with invalidating evidence",
+      denominator: "reported findings in the run",
+      aggregation: "per run, then median across runs",
+      unit: "ratio in [0, 1]",
+    },
+    {
+      id: "needs-context-rate",
+      numerator: "completed logical invocations returning NEEDS_CONTEXT",
+      denominator: "completed logical invocations in the run",
+      aggregation: "per run, then median across runs",
+      unit: "ratio in [0, 1]",
+    },
+    {
+      id: "malformed-result-rate",
+      numerator: "invocation attempts whose result envelope was invalid",
+      denominator: "invocation attempts in the run, including retried attempts",
+      aggregation: "per run, then median across runs",
+      unit: "ratio in [0, 1]",
+    },
+    {
+      id: "invocation-count",
+      numerator: "completed logical invocations",
+      denominator: "reviewed cases",
+      aggregation: "mean per case, reported with the observed maximum",
+      unit: "logical invocations",
+    },
+    {
+      id: "context-footprint",
+      numerator:
+        "rendered projection text supplied as reviewer context for one invocation",
+      denominator: "one logical reviewer invocation",
+      aggregation: "maximum across runs",
+      unit: "UTF-8 characters",
+    },
   ],
   runLimits: {
-    maxCleanRoomRuns: 2,
+    maxCleanRoomRuns: EVALUATION_MAX_CLEAN_ROOM_RUNS,
+    // Derived from the constant: prose must never restate a closed limit.
     requiredRecovery:
-      "Every seeded P1 category is recovered in at least one of the two " +
-      "allowed clean-room runs; misses and variability are recorded, never hidden.",
+      "Every seeded P1 category is recovered in at least one of the " +
+      `${EVALUATION_MAX_CLEAN_ROOM_RUNS} allowed clean-room runs; ` +
+      "misses and variability are recorded, never hidden.",
   },
   baselineFixture: {
     id: "change-risk-v1-unprojected-policy-baseline",

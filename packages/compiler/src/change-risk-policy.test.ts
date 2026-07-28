@@ -10,6 +10,7 @@ import {
   CHANGE_RISK_CATEGORY_TAXONOMY_VERSION,
   CHANGE_RISK_CATEGORY_UNCATEGORIZED,
   CHANGE_RISK_CONFIRMATION_TRIGGERS,
+  CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD,
   CHANGE_RISK_DISPOSITIONS,
   CHANGE_RISK_DOMAINS,
   CHANGE_RISK_EVIDENCE_KINDS,
@@ -704,6 +705,8 @@ test("the reviewer projection carries no orchestration, learning, or promotion c
     ["learningRecord", "legacy-external"],
     ["promotion", "recurrence"],
     ["promotion", "thirdOccurrence"],
+    ["promotion", "promotedRuleRequirements"],
+    ["learningRecord", CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
     ["evaluation", "baselineFixture"],
   ];
 
@@ -742,6 +745,8 @@ test("the orchestration projection owns budgets and transitions only", () => {
     ["learningRecord", "taxonomyVersion"],
     ["promotion", "recurrence"],
     ["promotion", "thirdOccurrence"],
+    ["promotion", "promotedRuleRequirements"],
+    ["learningRecord", CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
     ["evaluation", "baselineFixture"],
   ];
 
@@ -786,6 +791,8 @@ test("the learning-record projection owns the schema, redaction, and persistence
     ["reviewer", "snapshotAccess"],
     ["reviewer", "unchanged-consumers"],
     ["promotion", "thirdOccurrence"],
+    ["promotion", "promotedRuleRequirements"],
+    ["evaluation", "context-footprint"],
     ["evaluation", "baselineFixture"],
   ];
 
@@ -820,6 +827,7 @@ test("the promotion projection owns recurrence, actions, and ownership only", ()
     ["orchestration", "maxLogicalInvocations"],
     ["orchestration", "pipelineOrder"],
     ["learningRecord", "review-learning/v1"],
+    ["evaluation", "context-footprint"],
     ["evaluation", "baselineFixture"],
   ];
 
@@ -834,7 +842,7 @@ test("the evaluation projection owns case selection, metrics, limits, and the ba
   assert.equal(evaluation.caseSelection.blinded, true);
   assert.ok(evaluation.caseSelection.rules.length > 0);
   assert.deepEqual(
-    [...evaluation.metrics],
+    evaluation.metrics.map((metric) => metric.id),
     [
       "recovery",
       "false-positives",
@@ -857,6 +865,8 @@ test("the evaluation projection owns case selection, metrics, limits, and the ba
     ["orchestration", "pipelineOrder"],
     ["learningRecord", "redaction"],
     ["learningRecord", "dispositionConfirmed"],
+    ["promotion", "promotedRuleRequirements"],
+    ["learningRecord", CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
     ["promotion", "recurrence"],
   ];
 
@@ -880,4 +890,165 @@ test("no closed budget value is reproduced outside the orchestration projection"
       );
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// PR #139 review findings
+// ---------------------------------------------------------------------------
+
+test("real process-launch boundaries classify high-risk from a path-only manifest entry", () => {
+  // These files import node:child_process and spawn/execFile a real process.
+  // A path-only manifest entry is the ordinary case: `contracts` is optional,
+  // so the glob set alone must be enough to require the final confirmation.
+  for (const path of [
+    "apps/cli/src/index.ts",
+    "apps/cli/src/personal-activation.ts",
+    "apps/cli/src/model-probe.ts",
+    "apps/cli/src/update-check.ts",
+  ]) {
+    assert.equal(isHighRiskChange(manifest(path)), true, `high risk: ${path}`);
+    assert.ok(
+      classifyHighRiskSurfaces(manifest(path)).includes(
+        "network-process-execution",
+      ),
+      `${path} classifies as network-process-execution`,
+    );
+  }
+
+  // Neighbours in the same directory that launch nothing stay non-qualifying.
+  for (const path of [
+    "apps/cli/src/branding.ts",
+    "apps/cli/src/presentation.ts",
+  ]) {
+    assert.equal(
+      isHighRiskChange(manifest(path)),
+      false,
+      `not high risk: ${path}`,
+    );
+  }
+});
+
+test("orchestration retry prose is derived from the transient-retry constant", () => {
+  const expected =
+    "One logical invocation may retry a transient failure, an invalid " +
+    "envelope, or a NEEDS_CONTEXT result at most " +
+    `${CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation} times.`;
+
+  assert.ok(
+    changeRiskOrchestrationProjection().transitions.retry.includes(expected),
+    "the retry sentence must be built from CHANGE_RISK_LIMITS, not a literal",
+  );
+});
+
+test("evaluation recovery prose is derived from the clean-room run limit", () => {
+  const evaluation = changeRiskEvaluationProjection();
+  const expected =
+    "Every seeded P1 category is recovered in at least one of the " +
+    `${evaluation.runLimits.maxCleanRoomRuns} allowed clean-room runs; ` +
+    "misses and variability are recorded, never hidden.";
+
+  assert.equal(evaluation.runLimits.requiredRecovery, expected);
+});
+
+test("no projection prose restates a closed budget number as a literal", () => {
+  // Every numeral that appears in orchestration prose must be a live limit
+  // value, so a limit change cannot leave stale prose behind.
+  const limits = new Set(
+    Object.values(CHANGE_RISK_LIMITS).map((value) => String(value)),
+  );
+  const prose = [
+    ...changeRiskOrchestrationProjection().transitions.retry,
+    ...changeRiskOrchestrationProjection().transitions.nonProgress,
+    ...changeRiskOrchestrationProjection().transitions.escalation,
+    ...changeRiskOrchestrationProjection().transitions.invalidation,
+  ];
+
+  for (const sentence of prose) {
+    for (const numeral of sentence.match(/(?<![A-Za-z/])\d+/g) ?? []) {
+      assert.ok(
+        limits.has(numeral),
+        `orchestration prose contains the bare numeral ${numeral}, which is not a current limit value: ${sentence}`,
+      );
+    }
+  }
+});
+
+test("the learning-record and promotion projections agree on the P3 decision-evidence field", () => {
+  const learning = changeRiskLearningRecordProjection();
+  const promotion = changeRiskPromotionProjection();
+
+  assert.equal(CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD, "dispositionEvidence");
+
+  const evidenceField = learning.recordSchema.conditionalFields.find((field) =>
+    field.startsWith(CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD),
+  );
+  assert.ok(
+    evidenceField,
+    "the record schema must carry the owner's decision-evidence field for an open P3",
+  );
+
+  assert.ok(
+    promotion.recurrenceClassification.countedOpenRequires.includes(
+      CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD,
+    ),
+    "promotion must name the same decision-evidence field it depends on",
+  );
+});
+
+test("every evaluation metric carries a closed measurement definition", () => {
+  const evaluation = changeRiskEvaluationProjection();
+
+  for (const metric of evaluation.metrics) {
+    assert.ok(metric.numerator.length > 0, `${metric.id} numerator`);
+    assert.ok(metric.denominator.length > 0, `${metric.id} denominator`);
+    assert.ok(metric.aggregation.length > 0, `${metric.id} aggregation`);
+    assert.ok(metric.unit.length > 0, `${metric.id} unit`);
+  }
+
+  const footprint = evaluation.metrics.find(
+    (metric) => metric.id === "context-footprint",
+  );
+  assert.ok(footprint);
+  assert.equal(footprint.unit, "UTF-8 characters");
+});
+
+test("orchestration escalates when the budget cannot cover a required confirmation", () => {
+  const expected =
+    "Open blockers remain but the invocation budget cannot cover another " +
+    "fix round's remediation review plus the confirmation that would then " +
+    "be required.";
+
+  assert.ok(
+    changeRiskOrchestrationProjection().transitions.escalation.includes(
+      expected,
+    ),
+    "the budget-reservation boundary must have an explicit escalation terminal",
+  );
+});
+
+test("the promotion projection carries the promoted-rule content and guard rules", () => {
+  const actions = changeRiskPromotionProjection().actions;
+
+  assert.ok(actions.guardPreference.length >= 3);
+  assert.ok(
+    actions.guardPreference.some((rule) =>
+      rule.includes("model judgement remains part of the safe decision"),
+    ),
+    "a prompt rule is added only when model judgement is part of the safe decision",
+  );
+  assert.ok(
+    actions.guardPreference.some((rule) => rule.includes("shared helper")),
+    "prefer a mechanical or interface-level guard before a prose rule",
+  );
+
+  assert.deepEqual(
+    [...actions.promotedRuleRequirements],
+    [
+      "Concise.",
+      "Consequential.",
+      "Scoped to the narrowest applicable path.",
+      "States the unsafe condition.",
+      "States the safe path or a counterexample.",
+    ],
+  );
 });
