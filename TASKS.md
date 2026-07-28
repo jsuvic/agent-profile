@@ -1926,6 +1926,7 @@ finding promotion, and a provider-neutral external-review boundary.
 | I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
 | G2  | Grill session: approve amendment 002            | done          | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)    |
 | I7  | Cluster vocabularies and cluster-key derivation  | ready         | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)               |
+| G3  | Grill session: approve amendment 003             | human-gate    | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
@@ -1990,6 +1991,27 @@ fires readily by design, so two loosely related findings sharing a key across
 rounds will demand a guard, absorbed by the impracticality escape; and
 reviewer prompt context grows by an estimated 15-20 identifiers, cutting
 against the parent spec's footprint goal.
+
+G3 added 2026-07-28, same day, correcting a hole in the amendment approved
+hours earlier: PR #139's automated review found that amendment 002's
+within-change recurrence trigger is not evaluable by a resumed orchestration.
+`ChangeRiskOrchestrationStateV1` carries per-round blocker counts and
+UNRESOLVED fingerprint checkpoints, but the trigger needs the cluster keys of
+REMEDIATED findings - a different set that no carried field records. The
+learning record cannot substitute because it is persisted only after a
+terminal state is reached. A continuously-running orchestration is unaffected,
+so the defect is intermittent: an orchestration that pauses between
+remediation rounds silently misses recurrences and degrades to exactly the
+patch-by-patch behavior 002 exists to prevent, with no signal. Amendment 003
+(human-gated, draft) adds per-completed-round remediated cluster keys to the
+handoff record using the same inline-or-durable-reference mechanism the
+approved contract already uses for fingerprint checkpoints, and bounds guard
+demands at one per cluster key per change by escalating a post-guard
+recurrence to `NEEDS_HUMAN_REVIEW`. Its acceptance criteria require the
+regression test to reconstruct a resumed owner from a serialized record, since
+an in-memory test would pass against the broken contract. Version stays
+`change-risk/v1` under ADR 0027's emission precondition. 003 must land before
+I2 implements the trigger; I7, I3, and I4 are unaffected.
 
 I1 first RED-first cycle completed 2026-07-28, a disclosed partial slice
 covering only architecture-rescue candidate R1 - the prerequisite the brief's

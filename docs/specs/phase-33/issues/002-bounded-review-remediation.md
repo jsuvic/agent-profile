@@ -124,6 +124,13 @@ escalates to `NEEDS_HUMAN_REVIEW` with the impracticality recorded). Consume
 Budgets are unchanged - clustering re-scopes remediation and never adds an
 invocation or fix round.
 
+Amendment 003 (`docs/specs/phase-33/003-cluster-history-handoff-amendment.md`)
+MUST land before this slice implements the recurrence trigger. The approved
+handoff record carries unresolved fingerprint checkpoints but not remediated
+findings' cluster keys, so the trigger is not evaluable by a resumed owner
+without 003's addition. Implementing the trigger against the unamended record
+produces an intermittent defect that in-memory tests do not catch.
+
 ## Parallelism notes
 
 Can proceed in parallel with I5 after I1 and I3 land; it does not own
