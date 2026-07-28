@@ -708,6 +708,8 @@ test("the reviewer projection carries no orchestration, learning, or promotion c
     ["promotion", "promotedRuleRequirements"],
     ["learningRecord", CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
     ["evaluation", "baselineFixture"],
+    ["orchestration", "noOpenBlockerTerminal"],
+    ["learningRecord", "dateBasis"],
   ];
 
   for (const [owner, token] of foreign) {
@@ -748,6 +750,8 @@ test("the orchestration projection owns budgets and transitions only", () => {
     ["promotion", "promotedRuleRequirements"],
     ["learningRecord", CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
     ["evaluation", "baselineFixture"],
+    ["promotion", "withinReviewedChange"],
+    ["learningRecord", "dateBasis"],
   ];
 
   for (const [owner, token] of foreign) {
@@ -794,6 +798,8 @@ test("the learning-record projection owns the schema, redaction, and persistence
     ["promotion", "promotedRuleRequirements"],
     ["evaluation", "context-footprint"],
     ["evaluation", "baselineFixture"],
+    ["orchestration", "noOpenBlockerTerminal"],
+    ["promotion", "withinReviewedChange"],
   ];
 
   for (const [owner, token] of foreign) {
@@ -829,6 +835,8 @@ test("the promotion projection owns recurrence, actions, and ownership only", ()
     ["learningRecord", "review-learning/v1"],
     ["evaluation", "context-footprint"],
     ["evaluation", "baselineFixture"],
+    ["orchestration", "noOpenBlockerTerminal"],
+    ["learningRecord", "dateBasis"],
   ];
 
   for (const [owner, token] of foreign) {
@@ -868,6 +876,8 @@ test("the evaluation projection owns case selection, metrics, limits, and the ba
     ["promotion", "promotedRuleRequirements"],
     ["learningRecord", CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
     ["promotion", "recurrence"],
+    ["orchestration", "noOpenBlockerTerminal"],
+    ["promotion", "withinReviewedChange"],
   ];
 
   for (const [owner, token] of foreign) {
@@ -1050,5 +1060,137 @@ test("the promotion projection carries the promoted-rule content and guard rules
       "States the unsafe condition.",
       "States the safe path or a counterexample.",
     ],
+  );
+});
+
+// ---------------------------------------------------------------------------
+// PR #139 review findings, second round
+// ---------------------------------------------------------------------------
+
+test("the marketing build script counts as a process-execution boundary", () => {
+  // apps/web/scripts/build-marketing.mjs imports node:child_process and
+  // spawnSync's a build command.
+  const path = "apps/web/scripts/build-marketing.mjs";
+
+  assert.equal(isHighRiskChange(manifest(path)), true);
+  assert.ok(
+    classifyHighRiskSurfaces(manifest(path)).includes(
+      "network-process-execution",
+    ),
+  );
+});
+
+test("root generated instruction files count as generated ownership", () => {
+  // Both carry agent-profile:generated region markers.
+  for (const path of ["AGENTS.md", "CLAUDE.md"]) {
+    assert.equal(isHighRiskChange(manifest(path)), true, `high risk: ${path}`);
+    assert.ok(
+      classifyHighRiskSurfaces(manifest(path)).includes("generated-ownership"),
+      `${path} classifies as generated-ownership`,
+    );
+  }
+
+  // A hand-written sibling at the repository root is not a generated surface.
+  assert.equal(isHighRiskChange(manifest("CONTRIBUTING.md")), false);
+});
+
+test("orchestration owns the no-open-blocker terminal transition", () => {
+  const transition =
+    changeRiskOrchestrationProjection().transitions.noOpenBlockerTerminal;
+
+  assert.ok(transition.length >= 3);
+  assert.ok(
+    transition.some((rule) => rule.includes("without relabeling")),
+    "the reviewer envelope is never relabelled",
+  );
+  assert.ok(
+    transition.some((rule) => rule.includes("no additional review")),
+    "the unchanged snapshot is not reviewed again",
+  );
+  assert.ok(
+    transition.some((rule) => rule.includes("confirmation")),
+    "the same required-confirmation triggers still apply",
+  );
+});
+
+test("rate metrics are measured over invocation attempts, not completed reviews", () => {
+  // NEEDS_CONTEXT is explicitly not a completed review, and an invalid envelope
+  // is an invalid attempt, so both rates must be attempt-based on each side.
+  const evaluation = changeRiskEvaluationProjection();
+
+  for (const id of ["needs-context-rate", "malformed-result-rate"] as const) {
+    const metric = evaluation.metrics.find((entry) => entry.id === id);
+    assert.ok(metric, id);
+    assert.ok(
+      metric.numerator.includes("attempt"),
+      `${id} numerator must count attempts: ${metric.numerator}`,
+    );
+    assert.ok(
+      metric.denominator.includes("attempt"),
+      `${id} denominator must count attempts: ${metric.denominator}`,
+    );
+    assert.ok(
+      !metric.numerator.includes("completed logical invocation"),
+      `${id} numerator must not require a completed invocation`,
+    );
+  }
+});
+
+test("the reviewer result interface lists the closed category identifiers", () => {
+  const resultInterface = changeRiskReviewerProjection().resultInterface;
+
+  assert.deepEqual(
+    [...resultInterface.categories],
+    [...CHANGE_RISK_CATEGORIES],
+  );
+  assert.ok(
+    resultInterface.requiredFindingFields.includes("category"),
+    "category is a required finding field, so its closed set must travel with it",
+  );
+});
+
+test("invocation counters are keyed on sourcePolicy, not an undefined local record", () => {
+  const conditionalFields =
+    changeRiskLearningRecordProjection().recordSchema.conditionalFields;
+
+  const counters = conditionalFields.find((field) =>
+    field.startsWith("logicalInvocationCount"),
+  );
+  assert.ok(counters);
+  assert.ok(
+    counters.includes(CHANGE_RISK_POLICY_VERSION),
+    "the counter rule must name the policy version it applies to",
+  );
+  assert.ok(
+    counters.includes("legacy-external"),
+    "the counter rule must name the only source policy that omits them",
+  );
+  assert.ok(
+    !counters.includes("local records"),
+    "provenance is per finding; the record-level key is sourcePolicy",
+  );
+});
+
+test("promotion ownership states the proposal-only write boundary", () => {
+  const ownership = changeRiskPromotionProjection().ownership;
+
+  assert.ok(
+    ownership.withinReviewedChange.includes(CHANGE_RISK_PROPOSAL_PATH_PREFIX),
+    "the only artifact promotion writes in the reviewed change is the proposal",
+  );
+  assert.ok(
+    ownership.applyingProposal.includes("separate later change"),
+    "applying a proposal is a separate later change",
+  );
+});
+
+test("the record date is pinned to a UTC calendar date, not just a shape", () => {
+  const recordSchema = changeRiskLearningRecordProjection().recordSchema;
+
+  assert.equal(recordSchema.dateFormat, "YYYY-MM-DD");
+  assert.ok(recordSchema.dateBasis.includes("UTC"));
+  assert.ok(
+    recordSchema.dateBasis.includes("malformed"),
+    "timestamps, offsets, and locale-dependent forms are malformed",
   );
 });

@@ -375,6 +375,7 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
         "apps/*/src/personal-activation.ts",
         "apps/*/src/update-check.ts",
         "scripts/release/publish-*.mjs",
+        "apps/*/scripts/build-*.mjs",
       ],
       contracts: ["network-process-boundary"],
     },
@@ -384,6 +385,10 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
         "packages/compiler/src/regions.ts",
         "packages/compiler/src/golden.ts",
         "fixtures/**",
+        // Root instruction files are compiler outputs: each carries
+        // `agent-profile:generated` region markers.
+        "AGENTS.md",
+        "CLAUDE.md",
         ".agents/**",
         ".claude/**",
         ".codex/**",
@@ -580,6 +585,8 @@ export type ChangeRiskReviewerProjection = Readonly<{
     policyVersion: ChangeRiskPolicyVersion;
     statuses: readonly ChangeRiskResultStatus[];
     priorities: readonly ChangeRiskPriority[];
+    /** `category` is a required finding field, so its closed set travels with it. */
+    categories: readonly ChangeRiskCategory[];
     resolutions: readonly ChangeRiskResolution[];
     p3Dispositions: readonly ChangeRiskDisposition[];
     evidenceKinds: readonly ChangeRiskEvidenceKind[];
@@ -651,6 +658,7 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
     policyVersion: CHANGE_RISK_POLICY_VERSION,
     statuses: CHANGE_RISK_RESULT_STATUSES,
     priorities: CHANGE_RISK_PRIORITIES,
+    categories: CHANGE_RISK_CATEGORIES,
     resolutions: CHANGE_RISK_RESOLUTIONS,
     p3Dispositions: CHANGE_RISK_DISPOSITIONS,
     evidenceKinds: CHANGE_RISK_EVIDENCE_KINDS,
@@ -695,6 +703,8 @@ export type ChangeRiskOrchestrationProjection = Readonly<{
     retry: readonly string[];
     invalidation: readonly string[];
     nonProgress: readonly string[];
+    /** How a completed findings result with no open blocker reaches `clean`. */
+    noOpenBlockerTerminal: readonly string[];
     confirmationTriggers: readonly ChangeRiskConfirmationTrigger[];
     escalation: readonly string[];
     terminalStatuses: readonly ChangeRiskTerminalStatus[];
@@ -731,6 +741,15 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
       "A fix round that leaves the reviewed snapshot unchanged while open " +
         "blockers remain consumes no invocation and reports no progress.",
     ],
+    noOpenBlockerTerminal: [
+      "A completed FINDINGS_FOUND result whose P1 and P2 findings are all " +
+        "verified fixed, obsolete, or evidenced false-positive, and whose " +
+        "every P3 carries a valid disposition, contains no blocker.",
+      "It reaches terminal clean exactly as a CLEAN result would, without " +
+        "relabeling the reviewer envelope.",
+      "There is no additional review of the unchanged snapshot; the same " +
+        "required-confirmation triggers still apply.",
+    ],
     confirmationTriggers: CHANGE_RISK_CONFIRMATION_TRIGGERS,
     escalation: [
       "Remaining open P1 or P2 findings after the last allowed fix round.",
@@ -756,6 +775,7 @@ export type ChangeRiskLearningRecordProjection = Readonly<{
     terminalStatuses: readonly ChangeRiskTerminalStatus[];
     legacyTerminalStatus: typeof CHANGE_RISK_LEGACY_TERMINAL_STATUS;
     dateFormat: "YYYY-MM-DD";
+    dateBasis: string;
     requiredFields: readonly string[];
     conditionalFields: readonly string[];
   }>;
@@ -778,6 +798,11 @@ const LEARNING_RECORD_PROJECTION: ChangeRiskLearningRecordProjection =
       terminalStatuses: CHANGE_RISK_TERMINAL_STATUSES,
       legacyTerminalStatus: CHANGE_RISK_LEGACY_TERMINAL_STATUS,
       dateFormat: "YYYY-MM-DD",
+      // Shape alone is ambiguous: in a non-UTC environment the local calendar
+      // date can differ from the UTC one around midnight.
+      dateBasis:
+        "UTC ISO 8601 calendar date; timestamps, offsets, and " +
+        "locale-dependent or local-timezone forms are malformed",
       requiredFields: [
         "date",
         "sourcePolicy",
@@ -804,7 +829,9 @@ const LEARNING_RECORD_PROJECTION: ChangeRiskLearningRecordProjection =
         `${CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD} carrying the owner's ` +
           "decision evidence for every open P3",
         "provider on every external-sourced finding",
-        "logicalInvocationCount and transientAttemptCount for local records",
+        "logicalInvocationCount and transientAttemptCount on every " +
+          `${CHANGE_RISK_POLICY_VERSION} record, whatever the per-finding ` +
+          "provenance, and omitted only on a legacy-external record",
       ],
     },
     redaction: [
@@ -848,6 +875,10 @@ export type ChangeRiskPromotionProjection = Readonly<{
   ownership: Readonly<{
     generatedRegions: string;
     proposalPathPrefix: string;
+    /** The only thing promotion may write inside the reviewed change. */
+    withinReviewedChange: string;
+    /** Applying a proposal is always a separate, separately reviewed change. */
+    applyingProposal: string;
     ruleRecordFields: readonly string[];
     ruleLifecycleStatuses: readonly string[];
     retirement: string;
@@ -912,6 +943,14 @@ const PROMOTION_PROJECTION: ChangeRiskPromotionProjection = deepFreeze({
     generatedRegions:
       "Never silently modify a compiler-generated instruction region.",
     proposalPathPrefix: CHANGE_RISK_PROPOSAL_PATH_PREFIX,
+    withinReviewedChange:
+      "Within the reviewed change, promotion writes only a proposed-patch " +
+      `artifact under ${CHANGE_RISK_PROPOSAL_PATH_PREFIX} and never edits a ` +
+      "human-owned rule surface.",
+    applyingProposal:
+      "Applying a proposal to AGENTS.md or another human-owned rule surface " +
+      "is a separate later change through the normal write boundary, " +
+      "reviewed and invalidating as usual.",
     ruleRecordFields: [
       "ruleId",
       "sourceCategory",
@@ -999,8 +1038,10 @@ const EVALUATION_PROJECTION: ChangeRiskEvaluationProjection = deepFreeze({
     },
     {
       id: "needs-context-rate",
-      numerator: "completed logical invocations returning NEEDS_CONTEXT",
-      denominator: "completed logical invocations in the run",
+      // NEEDS_CONTEXT is an incomplete attempt, never a completed review, so
+      // both sides must be attempt-based or the numerator can never occur.
+      numerator: "invocation attempts returning NEEDS_CONTEXT",
+      denominator: "invocation attempts in the run, including retried attempts",
       aggregation: "per run, then median across runs",
       unit: "ratio in [0, 1]",
     },
