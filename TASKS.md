@@ -2015,6 +2015,67 @@ from `packages/compiler/src/index.ts`, so the four packed `dist` artifacts are
 currently inert payload - pair the re-export with that fixture when a consumer
 lands.
 
+I1 PR review rounds 1-3 (2026-07-28, PR #139) resolved 25 automated P2
+findings across three rounds. Rounds 1-2 (14 findings) were individual
+corrections: missing process-execution and generated-ownership globs, prose
+independently restating closed numeric limits, a `dispositionConfirmed` with
+no owner-evidence field, bare evaluation metric identifiers with no
+measurement definitions, a budget-reservation boundary with no valid state
+transition, absent promoted-rule content constraints, execution counters keyed
+on an undefined "local record" rather than `sourcePolicy`, a missing
+no-open-blocker terminal transition, a category set the reviewer projection
+never listed, and a date format carrying shape without the UTC basis. One
+round-2 finding was a defect a round-1 fix had introduced: `needs-context-rate`
+was defined over completed logical invocations, which a `NEEDS_CONTEXT` result
+by contract never is, so the metric would have read a constant zero.
+
+Round 3 stopped patching. Four of its eleven findings were the same defect
+class in its third consecutive appearance - the high-risk glob table
+enumerates known files, so it keeps missing newly added ones - and this
+phase's own promotion contract says a third validated occurrence means the
+prose/data fix is insufficient and a mechanical guard is required. Added
+`packages/compiler/src/change-risk-surface-coverage.test.ts`, which scans
+`apps/`, `packages/`, `scripts/`, and the repository root and asserts the
+closed table covers what it claims, reading the generated-output list from
+`PHASE_14_SUPPORTED_PATHS` rather than hand-typing it. On first run it caught
+all four reviewer-reported files plus three the reviewers missed
+(`create-bump-commit.mjs`, `guards.mjs`, `verify-pack-files.mjs` all import
+`node:child_process` and were covered by `release-workflows`/
+`published-packages` but not by the process-execution surface itself), and two
+further hits proved to be wrong detectors rather than a wrong table (a
+same-origin fetch reached through a variable binding, and a module that only
+re-exports the atomic-write symbols) and were fixed as detectors. Guard
+verified load-bearing by mutation: removing one glob fails the suite and names
+the offending path. Also narrowed `fixtures/**` to `fixtures/*/expected/**`,
+which was a false positive in the opposite direction - it classified manual
+fixture inputs as generated ownership and would have forced an unnecessary
+confirmation and consumed reservation budget.
+
+Four round-3 findings were deliberately NOT implemented and are owned by their
+own briefs, not I1: preregistered per-target absolute rate caps for false
+positives/`NEEDS_CONTEXT`/malformed envelopes, total validated-blocker
+recovery and run-variability metric definitions, and zero-denominator
+behavior for the false-positive rate on a `CLEAN` run all belong to I6's
+evaluation harness; recording why a third-occurrence mechanical guard is
+impractical belongs to I4's promotion bookkeeping. The parent spec's
+composition contract makes the evaluation projection's only consumer the I6
+harness, so I1 fixing that harness's measurement policy now would repeat the
+same unstated-invention problem spec review already flagged against the
+`ChangeRiskContractId` set. I2/I4/I6 should pick these up rather than treat
+them as closed.
+
+Residual limits of the guard, disclosed rather than hidden: it is a textual
+scan, so a process launch reached through an indirection it cannot see (a
+dynamically built import, a spawn wrapper re-exported from another package)
+still slips past; the same-origin `fetch` heuristic resolves one level of
+variable binding and reports anything more indirect as outbound, which fails
+safe toward extra confirmation; it scans only `apps/`, `packages/`,
+`scripts/`, and the root, so a boundary in a new top-level directory is
+invisible until `SCANNED_ROOTS` is extended; and the atomic-write detector
+keys on two named entry points, so a third atomic-write API must be added to
+`ATOMIC_WRITE_ENTRY_POINTS` - the same enumeration weakness one level up,
+though far narrower than enumerating call sites.
+
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
 Draft 2026-07-27, pending grill approval; the spec itself is human-gated.
