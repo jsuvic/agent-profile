@@ -150,6 +150,19 @@ export type ChangeRiskTerminalStatus =
 export const CHANGE_RISK_TERMINAL_STATUSES: readonly ChangeRiskTerminalStatus[] =
   Object.freeze(["clean", "no-progress", "needs-human-review"] as const);
 
+/**
+ * Non-clean workflow outcomes, as the parent spec's retry-and-escalation
+ * contract names them. Deliberately NOT the same vocabulary as
+ * `CHANGE_RISK_TERMINAL_STATUSES`: those are the lowercase statuses persisted
+ * in a `review-learning/v1` record, while these are the uppercase outcomes the
+ * running state machine reports. The spec gives no uppercase token for the
+ * clean stop; a clean workflow is persisted as the record status `clean`.
+ */
+export type ChangeRiskWorkflowOutcome = "NO_PROGRESS" | "NEEDS_HUMAN_REVIEW";
+
+export const CHANGE_RISK_WORKFLOW_OUTCOMES: readonly ChangeRiskWorkflowOutcome[] =
+  Object.freeze(["NO_PROGRESS", "NEEDS_HUMAN_REVIEW"] as const);
+
 export type ChangeRiskSourcePolicy =
   ChangeRiskPolicyVersion | "legacy-external";
 
@@ -722,7 +735,7 @@ export type ChangeRiskOrchestrationProjection = Readonly<{
     validatedExternalBlocker: readonly string[];
     confirmationTriggers: readonly ChangeRiskConfirmationTrigger[];
     escalation: readonly string[];
-    terminalStatuses: readonly ChangeRiskTerminalStatus[];
+    workflowOutcomes: readonly ChangeRiskWorkflowOutcome[];
   }>;
 }>;
 
@@ -769,7 +782,7 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
       "A validated external P1 or P2 reopens the local loop when fix-round " +
         "and logical-invocation budget remains.",
       "When that budget is exhausted the workflow escalates to " +
-        "needs-human-review rather than retaining a clean terminal state.",
+        "NEEDS_HUMAN_REVIEW rather than retaining a clean terminal state.",
       "External findings enter only through the orchestration owner's " +
         "validation handoff; an unreproduced report is never trusted " +
         "automatically and never silently discarded.",
@@ -784,9 +797,9 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
         "then be required.",
       "Exhausted attempt retries; they are never converted to a clean result.",
       "An unsatisfiable missing input escalates immediately.",
-      "needs-human-review takes precedence over no-progress when both apply.",
+      "NEEDS_HUMAN_REVIEW takes precedence over NO_PROGRESS when both apply.",
     ],
-    terminalStatuses: CHANGE_RISK_TERMINAL_STATUSES,
+    workflowOutcomes: CHANGE_RISK_WORKFLOW_OUTCOMES,
   },
 } satisfies ChangeRiskOrchestrationProjection);
 

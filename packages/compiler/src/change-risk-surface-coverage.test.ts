@@ -117,9 +117,15 @@ function importsChildProcess(source: string): boolean {
 /**
  * An outbound fetch. A same-origin call targets the local UI's own API routes
  * and is not an external network boundary. Same-origin is recognised two ways,
- * both deterministic: a string or template literal beginning with `/`, or a
- * bare identifier that the same file binds to such a literal.
+ * both deterministic: a string or template literal beginning with a single `/`,
+ * or a bare identifier that the same file binds to such a literal.
+ *
+ * A protocol-relative `//host/path` prefix also begins with `/` but resolves to
+ * an external host, so it is explicitly excluded on both paths. Anything the
+ * scan cannot prove same-origin is treated as outbound.
  */
+const SAME_ORIGIN_LITERAL = /^["'`]\/(?!\/)/u;
+
 function performsOutboundFetch(source: string): boolean {
   for (const match of source.matchAll(/\bfetch\(\s*([^\s,)]+)/gu)) {
     const argument = match[1];
@@ -127,13 +133,13 @@ function performsOutboundFetch(source: string): boolean {
       continue;
     }
 
-    if (/^["'`]\//u.test(argument)) {
+    if (SAME_ORIGIN_LITERAL.test(argument)) {
       continue;
     }
 
     if (/^[A-Za-z_$][\w$]*$/u.test(argument)) {
       const binding = new RegExp(
-        `\\b(?:const|let|var)\\s+${argument}\\s*(?::[^=]+)?=\\s*["'\`]/`,
+        `\\b(?:const|let|var)\\s+${argument}\\s*(?::[^=]+)?=\\s*["'\`]/(?!/)`,
         "u",
       );
       if (binding.test(source)) {
@@ -208,4 +214,86 @@ test("every generated artifact matches a generated-ownership glob", () => {
     "generated-ownership",
     "carry a generated region marker or are declared compiler outputs",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Detector unit tests
+//
+// These exercise the detectors directly rather than through the repository
+// scan, because a false negative here silently disarms the guard above. The
+// helpers are module-scope in this file, so no test-only export is needed.
+// ---------------------------------------------------------------------------
+
+test("a protocol-relative fetch URL is outbound, not same-origin", () => {
+  assert.equal(
+    performsOutboundFetch('await fetch("//external.example/api");'),
+    true,
+    "a // prefix resolves to an external host",
+  );
+  assert.equal(
+    performsOutboundFetch("await fetch(`//external.example/api`);"),
+    true,
+  );
+  assert.equal(
+    performsOutboundFetch(
+      'const url = "//external.example/api";\nawait fetch(url);',
+    ),
+    true,
+    "the same rule applies through an identifier binding",
+  );
+});
+
+test("an identifier bound to an absolute URL is outbound", () => {
+  assert.equal(
+    performsOutboundFetch(
+      'const endpoint = "https://example.com";\nawait fetch(endpoint);',
+    ),
+    true,
+  );
+  assert.equal(
+    performsOutboundFetch(
+      'const endpoint: string = "http://example.com";\nawait fetch(endpoint);',
+    ),
+    true,
+  );
+  assert.equal(
+    performsOutboundFetch("await fetch(endpoint);"),
+    true,
+    "an unresolvable identifier is treated as outbound",
+  );
+});
+
+test("a single-slash same-origin fetch is not an external boundary", () => {
+  assert.equal(
+    performsOutboundFetch('await fetch("/api/profile/plan");'),
+    false,
+  );
+  assert.equal(
+    performsOutboundFetch("await fetch(`/api/profile/plan`);"),
+    false,
+  );
+  assert.equal(
+    performsOutboundFetch(
+      'const url = "/api/migration/preview";\nawait fetch(url);',
+    ),
+    false,
+  );
+  assert.equal(
+    performsOutboundFetch(
+      "const url = `/api/migration/preview?path=${p}`;\nawait fetch(url);",
+    ),
+    false,
+  );
+});
+
+test("child_process imports are detected in both module syntaxes", () => {
+  assert.equal(
+    importsChildProcess('import { spawn } from "node:child_process";'),
+    true,
+  );
+  assert.equal(
+    importsChildProcess('const cp = require("child_process");'),
+    true,
+  );
+  assert.equal(importsChildProcess('import fs from "node:fs";'), false);
 });

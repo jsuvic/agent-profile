@@ -27,6 +27,7 @@ import {
   CHANGE_RISK_REVIEW_METADATA_PATH_PREFIX,
   CHANGE_RISK_SOURCE_POLICIES,
   CHANGE_RISK_TERMINAL_STATUSES,
+  CHANGE_RISK_WORKFLOW_OUTCOMES,
   changeRiskEvaluationProjection,
   changeRiskLearningRecordProjection,
   changeRiskOrchestrationProjection,
@@ -696,8 +697,8 @@ test("the reviewer projection carries no orchestration, learning, or promotion c
     ["orchestration", "maxLogicalInvocations"],
     ["orchestration", "maxTransientRetriesPerInvocation"],
     ["orchestration", "maxFinalCleanRoomConfirmations"],
-    ["orchestration", "no-progress"],
-    ["orchestration", "needs-human-review"],
+    ["orchestration", "NO_PROGRESS"],
+    ["orchestration", "NEEDS_HUMAN_REVIEW"],
     ["learningRecord", "review-learning"],
     ["learningRecord", CHANGE_RISK_REVIEW_METADATA_PATH_PREFIX],
     ["learningRecord", "dispositionConfirmed"],
@@ -731,8 +732,8 @@ test("the orchestration projection owns budgets and transitions only", () => {
     [...CHANGE_RISK_CONFIRMATION_TRIGGERS],
   );
   assert.deepEqual(
-    [...orchestration.transitions.terminalStatuses],
-    [...CHANGE_RISK_TERMINAL_STATUSES],
+    [...orchestration.transitions.workflowOutcomes],
+    [...CHANGE_RISK_WORKFLOW_OUTCOMES],
   );
   assert.ok(orchestration.transitions.retry.length > 0);
   assert.ok(orchestration.transitions.nonProgress.length > 0);
@@ -1243,7 +1244,7 @@ test("orchestration owns the validated-external-blocker transition", () => {
     "a validated external P1/P2 reopens the local loop when budget remains",
   );
   assert.ok(
-    transition.some((rule) => rule.includes("needs-human-review")),
+    transition.some((rule) => rule.includes("NEEDS_HUMAN_REVIEW")),
     "exhausted budget escalates instead of staying clean",
   );
 });
@@ -1264,4 +1265,53 @@ test("round and finding provenance are separately required record fields", () =>
     requiredFields.some((field) => field.startsWith("findings[].source")),
     "every finding carries its own source marker",
   );
+});
+
+test("workflow outcomes and persisted record statuses are distinct vocabularies", () => {
+  assert.deepEqual(
+    [...CHANGE_RISK_WORKFLOW_OUTCOMES],
+    ["NO_PROGRESS", "NEEDS_HUMAN_REVIEW"],
+  );
+
+  // No token appears in both closed sets.
+  for (const outcome of CHANGE_RISK_WORKFLOW_OUTCOMES) {
+    assert.ok(
+      !CHANGE_RISK_TERMINAL_STATUSES.includes(outcome as never),
+      `${outcome} is a workflow outcome, not a persisted record status`,
+    );
+  }
+  for (const status of CHANGE_RISK_TERMINAL_STATUSES) {
+    assert.ok(
+      !CHANGE_RISK_WORKFLOW_OUTCOMES.includes(status as never),
+      `${status} is a persisted record status, not a workflow outcome`,
+    );
+  }
+});
+
+test("orchestration carries workflow outcomes and the record keeps record statuses", () => {
+  const orchestration = JSON.stringify(changeRiskOrchestrationProjection());
+  const learning = JSON.stringify(changeRiskLearningRecordProjection());
+
+  assert.deepEqual(
+    [...changeRiskOrchestrationProjection().transitions.workflowOutcomes],
+    [...CHANGE_RISK_WORKFLOW_OUTCOMES],
+  );
+  assert.deepEqual(
+    [...changeRiskLearningRecordProjection().recordSchema.terminalStatuses],
+    [...CHANGE_RISK_TERMINAL_STATUSES],
+  );
+
+  // The hyphenated lowercase record tokens are the record's own vocabulary.
+  for (const status of ["no-progress", "needs-human-review"]) {
+    assert.ok(
+      !orchestration.includes(status),
+      `orchestration must use the uppercase workflow outcome, not ${status}`,
+    );
+  }
+  for (const outcome of CHANGE_RISK_WORKFLOW_OUTCOMES) {
+    assert.ok(
+      !learning.includes(outcome),
+      `the learning record must use its own status vocabulary, not ${outcome}`,
+    );
+  }
 });

@@ -154,9 +154,9 @@ making the reviewer aware of cluster history.
 
 ## Ownership
 
-- I1 (follow-up cycle): the two closed vocabularies and cluster-key derivation
-  beside fingerprint normalization in the shared policy source, plus the
-  widened `ChangeRiskContractId`.
+- I7: the two closed vocabularies and cluster-key derivation beside fingerprint
+  normalization in the shared policy source, plus the widened
+  `ChangeRiskContractId`.
 - I2: the batch-clustering and within-change recurrence transitions in the
   orchestration state machine.
 - I3: the learning-record cluster fields.
