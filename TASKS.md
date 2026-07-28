@@ -1924,12 +1924,30 @@ finding promotion, and a provider-neutral external-review boundary.
 | I4  | Promote recurring findings into stronger guards | sequenced     | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)     |
 | I5  | Backfill the recent PR review corpus            | human-gate    | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
 | I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
+| G2  | Grill session: approve amendment 002            | human-gate    | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)    |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
 shared policy source's closed values and learning-record projection. I5 is
 parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
 requires I5's accepted backfill evidence.
+
+G2 added 2026-07-28: proposed amendment 002 (root-cause clustering) is
+human-gated pending grill approval. Motivated by PR #139's own review
+history - three rounds, 25 findings, four in round 3 sharing one root cause -
+where the approved contracts would have bounded the loop (fix-round cap,
+blocker-count stagnation) but not diagnosed it: fingerprints identify the
+same finding across rounds, nothing groups distinct findings sharing a
+cause, and the within-change occurrence dedup means repeated same-class
+misses inside one change can never reach a promotion threshold. The
+amendment adds a cluster key (fingerprint components minus location), a
+batch-clustering rule for fix-round scoping, a within-change
+cluster-recurrence trigger that converts the discretionary early-guard
+clause into a requirement for that case, and learning-record cluster
+fields. If approved, the touched slices are I1 (cluster-key derivation in
+the policy source), I2 (state-machine transitions), I3 (record fields), and
+I4 (unchanged thresholds consuming persisted cluster events). Until G2 is
+approved, I2 and I3 implement only the base spec.
 
 I1 first RED-first cycle completed 2026-07-28, a disclosed partial slice
 covering only architecture-rescue candidate R1 - the prerequisite the brief's
@@ -2031,9 +2049,17 @@ by contract never is, so the metric would have read a constant zero.
 
 Round 3 stopped patching. Four of its eleven findings were the same defect
 class in its third consecutive appearance - the high-risk glob table
-enumerates known files, so it keeps missing newly added ones - and this
-phase's own promotion contract says a third validated occurrence means the
-prose/data fix is insufficient and a mechanical guard is required. Added
+enumerates known files, so it keeps missing newly added ones. Correction
+2026-07-28: the guard was originally justified here (and in commit d3ef825's
+message and three PR replies) by the promotion contract's third-occurrence
+rule; that citation was wrong. The occurrence unit is one reviewed change, so
+three rounds inside one change deduplicate to a single occurrence and the
+third-occurrence rule cannot fire. The accurate authorization is the
+promoted-rule lifecycle's discretionary clause - "a mechanical or
+interface-level guard MAY be introduced before the third occurrence when it
+is clearly practical and proportionate" - which this plainly was. The gap
+that made the wrong citation tempting (no within-change trigger exists at
+all) is the subject of the proposed amendment 002 below. Added
 `packages/compiler/src/change-risk-surface-coverage.test.ts`, which scans
 `apps/`, `packages/`, `scripts/`, and the repository root and asserts the
 closed table covers what it claims, reading the generated-output list from
