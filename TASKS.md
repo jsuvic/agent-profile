@@ -1924,12 +1924,247 @@ finding promotion, and a provider-neutral external-review boundary.
 | I4  | Promote recurring findings into stronger guards | sequenced     | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)     |
 | I5  | Backfill the recent PR review corpus            | human-gate    | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
 | I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
+| G2  | Grill session: approve amendment 002            | done          | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)    |
+| I7  | Cluster vocabularies and cluster-key derivation  | ready         | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)               |
+| G3  | Grill session: approve amendment 003             | human-gate    | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
 shared policy source's closed values and learning-record projection. I5 is
 parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
 requires I5's accepted backfill evidence.
+
+G2 completed 2026-07-28: amendment 002 (root-cause clustering) approved from
+its grill and synthesized. Motivated by PR #139's own review history - three
+rounds, 25 findings, six across rounds 2 and 3 sharing one root cause - where
+the approved contracts would have bounded the loop (fix-round cap,
+blocker-count stagnation) but not diagnosed it: fingerprints identify the same
+finding across rounds, nothing groups distinct findings sharing a cause, and
+the within-change occurrence dedup means repeated same-class misses inside one
+change can never reach a promotion threshold.
+
+The grill rejected three of the draft's four substantive points, so the file
+was rewritten rather than patched. (1) The draft keyed clusters on
+`category + affected contract + unsafe-condition class`; applied to the actual
+corpus that splits the motivating cluster, because `change-risk-categories/v1`
+classifies product risk while the shared cause was a defect mechanism - a
+missing process-execution glob reads as `network-process-boundary`, a missing
+generated-ownership glob as `ownership-atomicity`. Cluster key is now
+mechanism-keyed (`affectedContractId + unsafeConditionClass`), category
+excluded (ADR 0026). (2) Both components are closed reviewer-supplied
+vocabularies with an `other` fallback, mirroring the proven
+`change-risk-categories/v1` shape; the rejected alternative (free text plus an
+owner-side alias table) would have shipped inert, since a v1 alias table
+starts empty and clusters would form only on byte-identical reviewer prose.
+This also resolves F4 by giving `ChangeRiskContractId` a sanctioned job,
+widened beyond its seven high-risk surfaces. (3) The draft gated the
+escalation trigger on a cluster having formed, which traced against the corpus
+misses its own motivating case: round 2 had only two same-key members, below
+the threshold, so no cluster formed and round 3's four-member cluster would
+not have counted as a recurrence. Batching (>= 3) and the recurrence trigger
+are now decoupled - recurrence fires on a new finding matching ANY
+earlier-remediated finding's cluster key in the same change, clustered or not.
+(4) The draft asserted the policy version stays `change-risk/v1`; the
+amendment changes the closed result envelope and escalation outcomes, so by
+the versioning rule's letter it increments. Retained at `v1`, but the
+precondition is now a stated rule - the version increments only once an
+artifact has been emitted or a record persisted (ADR 0027) - because this is
+the second amendment to rely on unwritten precedent.
+
+Synthesis persisted: the rewritten amendment, ADRs 0026 and 0027, three
+`CONTEXT.md` glossary terms (`cluster key`, `cluster`, `within-change cluster
+recurrence`), and issue brief I7. Ownership: I7 owns the vocabularies and
+cluster-key derivation in the policy source; I2 owns the transitions; I3 owns
+the record fields; I4 consumes persisted cluster events with thresholds
+unchanged.
+
+Sequencing constraint recorded in I7 and the amendment: I1's pinned
+pre-simplification ablation baseline fixture MUST be rendered AFTER I7 lands.
+Pinning it first captures a prompt shape without the two vocabularies, and
+I6's context-ablation comparison would then measure two different prompt
+shapes rather than the projection change it intends to evaluate.
+
+Known risks carried into implementation: a reviewer mislabelling either
+component silently splits a cluster with no mechanical detection (degrades to
+pre-amendment behavior rather than failing loudly); the recurrence trigger
+fires readily by design, so two loosely related findings sharing a key across
+rounds will demand a guard, absorbed by the impracticality escape; and
+reviewer prompt context grows by an estimated 15-20 identifiers, cutting
+against the parent spec's footprint goal.
+
+G3 added 2026-07-28, same day, correcting a hole in the amendment approved
+hours earlier: PR #139's automated review found that amendment 002's
+within-change recurrence trigger is not evaluable by a resumed orchestration.
+`ChangeRiskOrchestrationStateV1` carries per-round blocker counts and
+UNRESOLVED fingerprint checkpoints, but the trigger needs the cluster keys of
+REMEDIATED findings - a different set that no carried field records. The
+learning record cannot substitute because it is persisted only after a
+terminal state is reached. A continuously-running orchestration is unaffected,
+so the defect is intermittent: an orchestration that pauses between
+remediation rounds silently misses recurrences and degrades to exactly the
+patch-by-patch behavior 002 exists to prevent, with no signal. Amendment 003
+(human-gated, draft) adds per-completed-round remediated cluster keys to the
+handoff record using the same inline-or-durable-reference mechanism the
+approved contract already uses for fingerprint checkpoints, and bounds guard
+demands at one per cluster key per change by escalating a post-guard
+recurrence to `NEEDS_HUMAN_REVIEW`. Its acceptance criteria require the
+regression test to reconstruct a resumed owner from a serialized record, since
+an in-memory test would pass against the broken contract. Version stays
+`change-risk/v1` under ADR 0027's emission precondition. 003 must land before
+I2 implements the trigger; I7, I3, and I4 are unaffected.
+
+I1 first RED-first cycle completed 2026-07-28, a disclosed partial slice
+covering only architecture-rescue candidate R1 - the prerequisite the brief's
+own Behavior Slice names ("Before adding the prompt, establish one immutable
+review-policy/content source"). Added `packages/compiler/src/change-risk-policy.ts`
+(994 lines, pure data plus pure predicates, no I/O, imported by nothing but its
+own test) holding every closed `change-risk/v1` value verbatim from the parent
+spec: the 11 `ChangeRiskDomain` identifiers, the 9
+`change-risk-categories/v1` identifiers with an empty v1 alias table and
+`uncategorized` fallback, result statuses, priorities, the 5 dispositions, 4
+resolutions, 3 terminal statuses plus the separate `external-only` legacy
+status, evidence kinds, pipeline order, the limits (3 fix rounds / 6 logical
+invocations / 2 transient retries / 2 final confirmations), the 3 confirmation
+triggers, and a closed 7-surface high-risk table as deterministic globs plus
+contract-level predicates. Exposes the five spec-mandated projections
+(`reviewer`, `orchestration`, `learningRecord`, `promotion`, `evaluation`),
+each derived from the shared constants rather than restating literals, all
+deep-frozen. RED proof: the test file was written and run first, failing
+`ERR_MODULE_NOT_FOUND` on the not-yet-existing module. Spec review returned
+ISSUES_FOUND with three real defects, all fixed RED-first: (F1, P1) the new
+module emits four `dist/change-risk-policy.*` artifacts into the packed
+tarball, and `fixtures/npm-pack/agent-profile-compiler.json` is an exact list,
+so `npm run verify:pack` failed with "Unexpected in pack output" - the
+implementer's "no generated-output change" claim was true of compiler output
+but false of packed output; fixed by hand-adding the four paths (nothing in
+the repo regenerates that fixture) and the break is now confirmed closed; (F2,
+P2) the documentation-only short-circuit vetoed an entry BEFORE both the glob
+and contract predicates, so a path explicitly declaring a closed contract, or
+a generated-ownership Markdown artifact, was silently non-high-risk - narrowed
+so a documentation path simply matches nothing on its own and can never
+suppress a real match; (F3, P2) `normalizePath` handled only backslashes and a
+single leading `./`, so `docs/../packages/compiler/src/write-plan.ts` evaded
+the atomic-writes gate - now resolves `.`/`..`, collapses duplicate
+separators, and strips a leading `/`, canonicalizing rather than throwing
+because the manifest is machine-produced and a classification outage is the
+worse failure mode for a gate on the final clean-room confirmation. Code-quality
+review found one Important item: `isChangeRiskDocumentationOnlyPath` and its
+glob table were left exported but unreferenced AND contradicted the classifier
+on real inputs (`.claude/CONTEXT.md`, `.codex/notes.mdx`), so the next cycle
+was likely to wire them back in as a veto and reopen F2 - deleted both rather
+than renamed, since the spec rule is now enforced structurally (the closed
+high-risk glob set contains no documentation-only path) and the two F2
+precedence tests stand as the regression guard. Also fixed: three
+forbidden-substring projection assertions were permanently vacuous
+(`"ablation"`, `"fixRound"`, `"promotion"` appear nowhere in the module), now
+replaced by an `assertExcludesForeignToken(subject, owner, token)` helper that
+asserts the token is absent from the subject projection AND genuinely present
+in its owning projection, so a token that stops existing fails loudly instead
+of passing silently; two `as never` casts narrowed; a redundant
+`mapped !== undefined` guard removed. Tests: `packages/compiler` 376/369, 0
+failures, 7 pre-existing POSIX-only skips on win32; `npm run check` (`tsc -b` +
+`tsconfig.test.json --noEmit`) and `npm run verify:pack` ("passed for 8
+packages") both clean. Generated bytes unchanged - no diff under `fixtures/`
+(beyond the pack manifest), `.claude/`, `.agents/`, `.codex/`, or `.tabnine/`.
+
+State stays `ready`, not `done` - most of I1's acceptance criteria remain open
+for later cycles: no `change-risk-reviewer` agent/subagent definition is
+emitted for Codex or Claude and no orchestration surface references it; no
+reviewer prompt exists, so the clean-room/snapshot-access/domain-applicability/
+evidence/fingerprint/read-only criteria are unmet; no `critical-reviewer`
+model-policy wiring or its mapping-v2/v3/target-native-effort/exact-override
+fixtures; artifact-level projection tests (inclusion/exclusion is proven at the
+policy-source level only, since no artifact consumes it yet); the pinned
+pre-simplification un-projected baseline evaluation fixture; and envelope
+validation. Two items need an explicit decision in a later cycle rather than
+silent adoption: the `ChangeRiskContractId` set (`permission-model`,
+`secret-handling`, `atomic-write-ownership`, `release-workflow`,
+`network-process-boundary`, `generated-region-ownership`,
+`published-package-seam`) and the baseline identity string
+`change-risk-v1-unprojected-policy-baseline` are both inventions with no
+parent-spec text behind them, and the contract ids became genuinely
+load-bearing after F2. The typed `ChangeRiskFindingV1`/`ChangeRiskResultV1`/
+`EvidenceReference`/`ChangeRiskOrchestrationStateV1` shapes and the shared
+deterministic fingerprint normalizer must land in this module, not in the
+reviewer prompt, or R1's "one authoritative owner" rule is defeated - the
+envelope relationship rules currently exist only as prose inside
+`reviewer.resultInterface.invalidAttemptRules`. Smaller disclosed follow-ups:
+`normalizePath` matching stays case-sensitive (undecided, untested on a safety
+gate); the hand-rolled matcher/canonicalizer could move to
+`change-risk-path-match.ts`; `matchSegment`'s `a**b` branch is unreachable
+against the closed glob table; and the module is deliberately not re-exported
+from `packages/compiler/src/index.ts`, so the four packed `dist` artifacts are
+currently inert payload - pair the re-export with that fixture when a consumer
+lands.
+
+I1 PR review rounds 1-3 (2026-07-28, PR #139) resolved 25 automated P2
+findings across three rounds. Rounds 1-2 (14 findings) were individual
+corrections: missing process-execution and generated-ownership globs, prose
+independently restating closed numeric limits, a `dispositionConfirmed` with
+no owner-evidence field, bare evaluation metric identifiers with no
+measurement definitions, a budget-reservation boundary with no valid state
+transition, absent promoted-rule content constraints, execution counters keyed
+on an undefined "local record" rather than `sourcePolicy`, a missing
+no-open-blocker terminal transition, a category set the reviewer projection
+never listed, and a date format carrying shape without the UTC basis. One
+round-2 finding was a defect a round-1 fix had introduced: `needs-context-rate`
+was defined over completed logical invocations, which a `NEEDS_CONTEXT` result
+by contract never is, so the metric would have read a constant zero.
+
+Round 3 stopped patching. Four of its eleven findings were the same defect
+class in its third consecutive appearance - the high-risk glob table
+enumerates known files, so it keeps missing newly added ones. Correction
+2026-07-28: the guard was originally justified here (and in commit d3ef825's
+message and three PR replies) by the promotion contract's third-occurrence
+rule; that citation was wrong. The occurrence unit is one reviewed change, so
+three rounds inside one change deduplicate to a single occurrence and the
+third-occurrence rule cannot fire. The accurate authorization is the
+promoted-rule lifecycle's discretionary clause - "a mechanical or
+interface-level guard MAY be introduced before the third occurrence when it
+is clearly practical and proportionate" - which this plainly was. The gap
+that made the wrong citation tempting (no within-change trigger exists at
+all) is the subject of the proposed amendment 002 below. Added
+`packages/compiler/src/change-risk-surface-coverage.test.ts`, which scans
+`apps/`, `packages/`, `scripts/`, and the repository root and asserts the
+closed table covers what it claims, reading the generated-output list from
+`PHASE_14_SUPPORTED_PATHS` rather than hand-typing it. On first run it caught
+all four reviewer-reported files plus three the reviewers missed
+(`create-bump-commit.mjs`, `guards.mjs`, `verify-pack-files.mjs` all import
+`node:child_process` and were covered by `release-workflows`/
+`published-packages` but not by the process-execution surface itself), and two
+further hits proved to be wrong detectors rather than a wrong table (a
+same-origin fetch reached through a variable binding, and a module that only
+re-exports the atomic-write symbols) and were fixed as detectors. Guard
+verified load-bearing by mutation: removing one glob fails the suite and names
+the offending path. Also narrowed `fixtures/**` to `fixtures/*/expected/**`,
+which was a false positive in the opposite direction - it classified manual
+fixture inputs as generated ownership and would have forced an unnecessary
+confirmation and consumed reservation budget.
+
+Four round-3 findings were deliberately NOT implemented and are owned by their
+own briefs, not I1: preregistered per-target absolute rate caps for false
+positives/`NEEDS_CONTEXT`/malformed envelopes, total validated-blocker
+recovery and run-variability metric definitions, and zero-denominator
+behavior for the false-positive rate on a `CLEAN` run all belong to I6's
+evaluation harness; recording why a third-occurrence mechanical guard is
+impractical belongs to I4's promotion bookkeeping. The parent spec's
+composition contract makes the evaluation projection's only consumer the I6
+harness, so I1 fixing that harness's measurement policy now would repeat the
+same unstated-invention problem spec review already flagged against the
+`ChangeRiskContractId` set. I2/I4/I6 should pick these up rather than treat
+them as closed.
+
+Residual limits of the guard, disclosed rather than hidden: it is a textual
+scan, so a process launch reached through an indirection it cannot see (a
+dynamically built import, a spawn wrapper re-exported from another package)
+still slips past; the same-origin `fetch` heuristic resolves one level of
+variable binding and reports anything more indirect as outbound, which fails
+safe toward extra confirmation; it scans only `apps/`, `packages/`,
+`scripts/`, and the root, so a boundary in a new top-level directory is
+invisible until `SCANNED_ROOTS` is extended; and the atomic-write detector
+keys on two named entry points, so a third atomic-write API must be added to
+`ATOMIC_WRITE_ENTRY_POINTS` - the same enumeration weakness one level up,
+though far narrower than enumerating call sites.
 
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 

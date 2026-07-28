@@ -111,7 +111,25 @@ affected workflow-selection suite.
 
 ## Dependencies
 
-`sequenced` after I1.
+`sequenced` after I1, and after I7 for cluster identity.
+
+Amendment 002 (`docs/specs/phase-33/002-root-cause-clustering-amendment.md`,
+approved 2026-07-28) adds two transitions this slice owns: the
+batch-clustering rule (three or more open findings sharing a cluster key are
+remediated as one shared cause in one fix round) and the within-change
+cluster-recurrence trigger (a new finding whose cluster key matches ANY
+earlier-remediated finding in the same change requires a mechanical guard, or
+escalates to `NEEDS_HUMAN_REVIEW` with the impracticality recorded). Consume
+`deriveChangeRiskClusterKey` from I7; do not re-derive cluster identity here.
+Budgets are unchanged - clustering re-scopes remediation and never adds an
+invocation or fix round.
+
+Amendment 003 (`docs/specs/phase-33/003-cluster-history-handoff-amendment.md`)
+MUST land before this slice implements the recurrence trigger. The approved
+handoff record carries unresolved fingerprint checkpoints but not remediated
+findings' cluster keys, so the trigger is not evaluable by a resumed owner
+without 003's addition. Implementing the trigger against the unamended record
+produces an intermittent defect that in-memory tests do not catch.
 
 ## Parallelism notes
 

@@ -91,6 +91,23 @@ log".
 One bounded batch that addresses validated blocking findings before the
 complete updated change is reviewed again. _Avoid:_ "retry", "patch review".
 
+**Cluster key**
+The defect-mechanism identity of a finding, derived from its affected
+contract and unsafe-condition class. Deliberately excludes category, so one
+cluster may span product-risk categories. _Avoid:_ "finding group id",
+"category key".
+
+**Cluster**
+Three or more open findings in one review round sharing a cluster key,
+remediated as one shared cause rather than as separate findings. _Avoid:_
+"batch", "duplicate findings".
+
+**Within-change cluster recurrence**
+A later round of the same change reporting a new finding whose cluster key
+matches any finding already remediated in that change, requiring a mechanical
+guard instead of another patch. _Avoid:_ "repeat finding", "second
+occurrence".
+
 ## Model Selection
 
 **Model preset**

@@ -1,6 +1,10 @@
 {
   "workspace": "@agent-profile/compiler",
   "files": [
+    "dist/change-risk-policy.d.ts",
+    "dist/change-risk-policy.d.ts.map",
+    "dist/change-risk-policy.js",
+    "dist/change-risk-policy.js.map",
     "dist/compiler.d.ts",
     "dist/compiler.d.ts.map",
     "dist/compiler.js",
