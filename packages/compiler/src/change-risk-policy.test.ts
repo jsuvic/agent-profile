@@ -710,6 +710,7 @@ test("the reviewer projection carries no orchestration, learning, or promotion c
     ["evaluation", "baselineFixture"],
     ["orchestration", "noOpenBlockerTerminal"],
     ["learningRecord", "dateBasis"],
+    ["orchestration", "validatedExternalBlocker"],
   ];
 
   for (const [owner, token] of foreign) {
@@ -878,6 +879,7 @@ test("the evaluation projection owns case selection, metrics, limits, and the ba
     ["promotion", "recurrence"],
     ["orchestration", "noOpenBlockerTerminal"],
     ["promotion", "withinReviewedChange"],
+    ["orchestration", "validatedExternalBlocker"],
   ];
 
   for (const [owner, token] of foreign) {
@@ -1015,11 +1017,7 @@ test("every evaluation metric carries a closed measurement definition", () => {
     assert.ok(metric.unit.length > 0, `${metric.id} unit`);
   }
 
-  const footprint = evaluation.metrics.find(
-    (metric) => metric.id === "context-footprint",
-  );
-  assert.ok(footprint);
-  assert.equal(footprint.unit, "UTF-8 characters");
+  // The exact context-footprint unit is pinned by its own dedicated test.
 });
 
 test("orchestration escalates when the budget cannot cover a required confirmation", () => {
@@ -1192,5 +1190,78 @@ test("the record date is pinned to a UTC calendar date, not just a shape", () =>
   assert.ok(
     recordSchema.dateBasis.includes("malformed"),
     "timestamps, offsets, and locale-dependent forms are malformed",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// PR #139 review findings, final round
+// ---------------------------------------------------------------------------
+
+test("generated fixture outputs qualify but fixture inputs do not", () => {
+  // Regeneration scripts read the family's input and write only beneath
+  // expected/, so only expected/ is a generated-ownership surface.
+  for (const path of [
+    "fixtures/subagents-enabled/expected/.codex/AGENTS.md",
+    "fixtures/minimal-valid/expected/AGENTS.md",
+  ]) {
+    assert.ok(
+      classifyHighRiskSurfaces(manifest(path)).includes("generated-ownership"),
+      `generated output: ${path}`,
+    );
+  }
+
+  for (const path of [
+    "fixtures/minimal-valid/ai-profile.yaml",
+    "fixtures/invalid/ai-profile.yaml",
+    "fixtures/npm-pack/agent-profile-compiler.json",
+    "fixtures/README.md",
+  ]) {
+    assert.equal(
+      isHighRiskChange(manifest(path)),
+      false,
+      `fixture input must not force a confirmation: ${path}`,
+    );
+  }
+});
+
+test("context-footprint is measured in a single unambiguous unit", () => {
+  const footprint = changeRiskEvaluationProjection().metrics.find(
+    (metric) => metric.id === "context-footprint",
+  );
+
+  assert.ok(footprint);
+  assert.equal(footprint.unit, "UTF-8 bytes");
+});
+
+test("orchestration owns the validated-external-blocker transition", () => {
+  const transition =
+    changeRiskOrchestrationProjection().transitions.validatedExternalBlocker;
+
+  assert.ok(transition.length >= 2);
+  assert.ok(
+    transition.some((rule) => rule.includes("reopens")),
+    "a validated external P1/P2 reopens the local loop when budget remains",
+  );
+  assert.ok(
+    transition.some((rule) => rule.includes("needs-human-review")),
+    "exhausted budget escalates instead of staying clean",
+  );
+});
+
+test("round and finding provenance are separately required record fields", () => {
+  const requiredFields =
+    changeRiskLearningRecordProjection().recordSchema.requiredFields;
+
+  assert.ok(
+    !requiredFields.includes("source"),
+    "a flat source field cannot express mixed provenance",
+  );
+  assert.ok(
+    requiredFields.some((field) => field.startsWith("roundOutcomes[].source")),
+    "every round carries its own source marker",
+  );
+  assert.ok(
+    requiredFields.some((field) => field.startsWith("findings[].source")),
+    "every finding carries its own source marker",
   );
 });

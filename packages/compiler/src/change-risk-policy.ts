@@ -353,6 +353,10 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
       globs: [
         "packages/compiler/src/write-plan.ts",
         "apps/*/src/compile-plan.ts",
+        "apps/*/src/configure.ts",
+        "apps/*/src/index.ts",
+        // The mutating local-UI server routes.
+        "apps/*/src/routes/api/**/apply/+server.ts",
       ],
       contracts: ["atomic-write-ownership"],
     },
@@ -374,7 +378,10 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
         "apps/*/src/model-probe.ts",
         "apps/*/src/personal-activation.ts",
         "apps/*/src/update-check.ts",
-        "scripts/release/publish-*.mjs",
+        // Release scripts spawn git, npm, and packaging commands. They are also
+        // release-workflow surfaces; a file may belong to more than one.
+        "scripts/release/**",
+        "scripts/verify-pack-files.mjs",
         "apps/*/scripts/build-*.mjs",
       ],
       contracts: ["network-process-boundary"],
@@ -384,11 +391,17 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
       globs: [
         "packages/compiler/src/regions.ts",
         "packages/compiler/src/golden.ts",
-        "fixtures/**",
-        // Root instruction files are compiler outputs: each carries
-        // `agent-profile:generated` region markers.
+        // Only the generated half of a fixture family. The sibling
+        // `ai-profile.yaml` and the negative/hand-maintained families are
+        // inputs, and classifying them would force a needless confirmation.
+        "fixtures/*/expected/**",
+        // Root files the compiler owns: the instruction files carry
+        // `agent-profile:generated` region markers, and the lockfile and MCP
+        // config are declared compiler outputs.
         "AGENTS.md",
         "CLAUDE.md",
+        "ai-profile.lock",
+        ".mcp.json",
         ".agents/**",
         ".claude/**",
         ".codex/**",
@@ -705,6 +718,8 @@ export type ChangeRiskOrchestrationProjection = Readonly<{
     nonProgress: readonly string[];
     /** How a completed findings result with no open blocker reaches `clean`. */
     noOpenBlockerTerminal: readonly string[];
+    /** What a validated external P1/P2 does to an existing terminal state. */
+    validatedExternalBlocker: readonly string[];
     confirmationTriggers: readonly ChangeRiskConfirmationTrigger[];
     escalation: readonly string[];
     terminalStatuses: readonly ChangeRiskTerminalStatus[];
@@ -749,6 +764,15 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
         "relabeling the reviewer envelope.",
       "There is no additional review of the unchanged snapshot; the same " +
         "required-confirmation triggers still apply.",
+    ],
+    validatedExternalBlocker: [
+      "A validated external P1 or P2 reopens the local loop when fix-round " +
+        "and logical-invocation budget remains.",
+      "When that budget is exhausted the workflow escalates to " +
+        "needs-human-review rather than retaining a clean terminal state.",
+      "External findings enter only through the orchestration owner's " +
+        "validation handoff; an unreproduced report is never trusted " +
+        "automatically and never silently discarded.",
     ],
     confirmationTriggers: CHANGE_RISK_CONFIRMATION_TRIGGERS,
     escalation: [
@@ -809,7 +833,10 @@ const LEARNING_RECORD_PROJECTION: ChangeRiskLearningRecordProjection =
         "baseId",
         "headId",
         "roundOutcomes",
-        "source",
+        // Provenance is per round AND per finding: a mixed record must never
+        // collapse local and external into one value.
+        "roundOutcomes[].source (local | external)",
+        "findings[].source (local | external)",
         "fingerprint",
         "category",
         "categoryTaxonomyVersion",
@@ -1065,7 +1092,9 @@ const EVALUATION_PROJECTION: ChangeRiskEvaluationProjection = deepFreeze({
         "rendered projection text supplied as reviewer context for one invocation",
       denominator: "one logical reviewer invocation",
       aggregation: "maximum across runs",
-      unit: "UTF-8 characters",
+      // Bytes, code points, and UTF-16 code units all differ for non-ASCII
+      // text, so the unit is pinned to the most reproducible of the three.
+      unit: "UTF-8 bytes",
     },
   ],
   runLimits: {
