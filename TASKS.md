@@ -1924,7 +1924,8 @@ finding promotion, and a provider-neutral external-review boundary.
 | I4  | Promote recurring findings into stronger guards | sequenced     | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)     |
 | I5  | Backfill the recent PR review corpus            | human-gate    | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
 | I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
-| G2  | Grill session: approve amendment 002            | human-gate    | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)    |
+| G2  | Grill session: approve amendment 002            | done          | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)    |
+| I7  | Cluster vocabularies and cluster-key derivation  | ready         | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)               |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
@@ -1932,22 +1933,63 @@ shared policy source's closed values and learning-record projection. I5 is
 parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
 requires I5's accepted backfill evidence.
 
-G2 added 2026-07-28: proposed amendment 002 (root-cause clustering) is
-human-gated pending grill approval. Motivated by PR #139's own review
-history - three rounds, 25 findings, four in round 3 sharing one root cause -
-where the approved contracts would have bounded the loop (fix-round cap,
-blocker-count stagnation) but not diagnosed it: fingerprints identify the
-same finding across rounds, nothing groups distinct findings sharing a
-cause, and the within-change occurrence dedup means repeated same-class
-misses inside one change can never reach a promotion threshold. The
-amendment adds a cluster key (fingerprint components minus location), a
-batch-clustering rule for fix-round scoping, a within-change
-cluster-recurrence trigger that converts the discretionary early-guard
-clause into a requirement for that case, and learning-record cluster
-fields. If approved, the touched slices are I1 (cluster-key derivation in
-the policy source), I2 (state-machine transitions), I3 (record fields), and
-I4 (unchanged thresholds consuming persisted cluster events). Until G2 is
-approved, I2 and I3 implement only the base spec.
+G2 completed 2026-07-28: amendment 002 (root-cause clustering) approved from
+its grill and synthesized. Motivated by PR #139's own review history - three
+rounds, 25 findings, six across rounds 2 and 3 sharing one root cause - where
+the approved contracts would have bounded the loop (fix-round cap,
+blocker-count stagnation) but not diagnosed it: fingerprints identify the same
+finding across rounds, nothing groups distinct findings sharing a cause, and
+the within-change occurrence dedup means repeated same-class misses inside one
+change can never reach a promotion threshold.
+
+The grill rejected three of the draft's four substantive points, so the file
+was rewritten rather than patched. (1) The draft keyed clusters on
+`category + affected contract + unsafe-condition class`; applied to the actual
+corpus that splits the motivating cluster, because `change-risk-categories/v1`
+classifies product risk while the shared cause was a defect mechanism - a
+missing process-execution glob reads as `network-process-boundary`, a missing
+generated-ownership glob as `ownership-atomicity`. Cluster key is now
+mechanism-keyed (`affectedContractId + unsafeConditionClass`), category
+excluded (ADR 0026). (2) Both components are closed reviewer-supplied
+vocabularies with an `other` fallback, mirroring the proven
+`change-risk-categories/v1` shape; the rejected alternative (free text plus an
+owner-side alias table) would have shipped inert, since a v1 alias table
+starts empty and clusters would form only on byte-identical reviewer prose.
+This also resolves F4 by giving `ChangeRiskContractId` a sanctioned job,
+widened beyond its seven high-risk surfaces. (3) The draft gated the
+escalation trigger on a cluster having formed, which traced against the corpus
+misses its own motivating case: round 2 had only two same-key members, below
+the threshold, so no cluster formed and round 3's four-member cluster would
+not have counted as a recurrence. Batching (>= 3) and the recurrence trigger
+are now decoupled - recurrence fires on a new finding matching ANY
+earlier-remediated finding's cluster key in the same change, clustered or not.
+(4) The draft asserted the policy version stays `change-risk/v1`; the
+amendment changes the closed result envelope and escalation outcomes, so by
+the versioning rule's letter it increments. Retained at `v1`, but the
+precondition is now a stated rule - the version increments only once an
+artifact has been emitted or a record persisted (ADR 0027) - because this is
+the second amendment to rely on unwritten precedent.
+
+Synthesis persisted: the rewritten amendment, ADRs 0026 and 0027, three
+`CONTEXT.md` glossary terms (`cluster key`, `cluster`, `within-change cluster
+recurrence`), and issue brief I7. Ownership: I7 owns the vocabularies and
+cluster-key derivation in the policy source; I2 owns the transitions; I3 owns
+the record fields; I4 consumes persisted cluster events with thresholds
+unchanged.
+
+Sequencing constraint recorded in I7 and the amendment: I1's pinned
+pre-simplification ablation baseline fixture MUST be rendered AFTER I7 lands.
+Pinning it first captures a prompt shape without the two vocabularies, and
+I6's context-ablation comparison would then measure two different prompt
+shapes rather than the projection change it intends to evaluate.
+
+Known risks carried into implementation: a reviewer mislabelling either
+component silently splits a cluster with no mechanical detection (degrades to
+pre-amendment behavior rather than failing loudly); the recurrence trigger
+fires readily by design, so two loosely related findings sharing a key across
+rounds will demand a guard, absorbed by the impracticality escape; and
+reviewer prompt context grows by an estimated 15-20 identifiers, cutting
+against the parent spec's footprint goal.
 
 I1 first RED-first cycle completed 2026-07-28, a disclosed partial slice
 covering only architecture-rescue candidate R1 - the prerequisite the brief's

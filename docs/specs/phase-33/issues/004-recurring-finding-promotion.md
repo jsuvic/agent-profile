@@ -88,6 +88,16 @@ compiler suite.
 
 `sequenced` after I1 and I3.
 
+Amendment 002 (`docs/specs/phase-33/002-root-cause-clustering-amendment.md`,
+approved 2026-07-28) leaves this slice's thresholds and occurrence unit
+UNCHANGED. A cluster remains one occurrence per reviewed change. The only
+addition is that promotion reads I3's persisted cluster events alongside
+category counts. Do not treat a within-change cluster recurrence as a second
+or third cross-change occurrence: that trigger is within-change only and is
+answered by I2's guard requirement, not by promotion. Cluster identity is
+mechanism-keyed and may span categories (ADR 0026), so cluster keys must never
+be substituted for canonical categories in recurrence counting.
+
 ## Parallelism notes
 
 Can run in parallel with I5 once I3 fixes the record schema and category

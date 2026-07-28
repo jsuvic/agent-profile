@@ -96,7 +96,17 @@ the broader compiler suite.
 ## Dependencies
 
 `sequenced` after I1, which owns the shared policy source and its
-learning-record projection.
+learning-record projection, and after I7 for cluster identity.
+
+Amendment 002 (`docs/specs/phase-33/002-root-cause-clustering-amendment.md`,
+approved 2026-07-28) adds per-round cluster fields to the record schema: the
+cluster keys of any clusters formed, and whether a within-change cluster
+recurrence fired including the guard introduced or the recorded
+impracticality. Records with `sourcePolicy: legacy-external` omit cluster data
+rather than fabricating it. Persist cluster events separately from category
+counts - cluster identity deliberately diverges from the promotion taxonomy
+and a cluster may span categories (ADR 0026), so collapsing the two would
+corrupt I4's recurrence counting.
 
 ## Parallelism notes
 
