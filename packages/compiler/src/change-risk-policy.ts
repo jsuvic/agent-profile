@@ -46,6 +46,16 @@ export type ReviewLearningSchemaVersion = "review-learning/v1";
 export const CHANGE_RISK_POLICY_VERSION: ChangeRiskPolicyVersion =
   "change-risk/v1";
 
+/**
+ * A policy amendment advances the emitted version only after this policy has
+ * emitted an artifact or persisted a learning record. Until then, approved
+ * amendments are absorbed into the current version.
+ */
+export const CHANGE_RISK_POLICY_VERSIONING_RULE =
+  "Increment the workflow-policy version only after a change-risk artifact " +
+  "has been emitted or a review-learning record has been persisted; approved " +
+  "pre-emission amendments remain change-risk/v1.";
+
 /** Category taxonomy version recorded on every categorized finding. */
 export const CHANGE_RISK_CATEGORY_TAXONOMY_VERSION: ChangeRiskCategoryTaxonomyVersion =
   "change-risk-categories/v1";
@@ -114,6 +124,84 @@ export const CHANGE_RISK_CATEGORY_UNCATEGORIZED = "uncategorized" as const;
 
 export type ChangeRiskCategoryLabel =
   ChangeRiskCategory | typeof CHANGE_RISK_CATEGORY_UNCATEGORIZED;
+
+/**
+ * Closed reviewer-supplied identifiers for the contract a finding affects.
+ * High-risk surface contracts are a subset; this vocabulary also covers the
+ * general contracts a reviewer may identify.
+ */
+export type ChangeRiskContractId =
+  | "permission-model"
+  | "secret-handling"
+  | "atomic-write-ownership"
+  | "release-workflow"
+  | "network-process-boundary"
+  | "generated-region-ownership"
+  | "published-package-seam"
+  | "state-transition"
+  | "parsing-validation"
+  | "compatibility-platform"
+  | "runtime-proof"
+  | "contract-completeness"
+  | "other";
+
+export const CHANGE_RISK_CONTRACT_IDS: readonly ChangeRiskContractId[] =
+  Object.freeze([
+    "permission-model",
+    "secret-handling",
+    "atomic-write-ownership",
+    "release-workflow",
+    "network-process-boundary",
+    "generated-region-ownership",
+    "published-package-seam",
+    "state-transition",
+    "parsing-validation",
+    "compatibility-platform",
+    "runtime-proof",
+    "contract-completeness",
+    "other",
+  ] as const);
+
+/** Closed reviewer-supplied identifiers for a finding's defect mechanism. */
+export type ChangeRiskUnsafeConditionClass =
+  | "missing-validation"
+  | "unsafe-ordering"
+  | "ownership-violation"
+  | "incomplete-propagation"
+  | "compatibility-regression"
+  | "boundary-violation"
+  | "missing-runtime-proof"
+  | "redaction-failure"
+  | "other";
+
+export const CHANGE_RISK_UNSAFE_CONDITION_CLASSES: readonly ChangeRiskUnsafeConditionClass[] =
+  Object.freeze([
+    "missing-validation",
+    "unsafe-ordering",
+    "ownership-violation",
+    "incomplete-propagation",
+    "compatibility-regression",
+    "boundary-violation",
+    "missing-runtime-proof",
+    "redaction-failure",
+    "other",
+  ] as const);
+
+/**
+ * Derive the shared root-cause identity for a finding. Categories and
+ * locations intentionally do not participate: one defect mechanism can span
+ * product-risk categories and paths. `other` is deliberately non-clusterable
+ * so an uncertain classification cannot fabricate a shared cause.
+ */
+export function deriveChangeRiskClusterKey(
+  affectedContractId: ChangeRiskContractId,
+  unsafeConditionClass: ChangeRiskUnsafeConditionClass,
+): string | undefined {
+  if (affectedContractId === "other" || unsafeConditionClass === "other") {
+    return undefined;
+  }
+  return `${affectedContractId}+${unsafeConditionClass}`;
+}
 
 export type ChangeRiskResultStatus =
   "CLEAN" | "FINDINGS_FOUND" | "NEEDS_CONTEXT";
@@ -187,6 +275,314 @@ export const CHANGE_RISK_EVIDENCE_KINDS: readonly ChangeRiskEvidenceKind[] =
     "contract",
     "command-output",
   ] as const);
+
+/** Typed, snapshot-bound result envelope returned by one reviewer invocation. */
+export type ChangeRiskEvidenceReferenceV1 = Readonly<{
+  kind: ChangeRiskEvidenceKind;
+  path?: string;
+  symbol?: string;
+  lines?: Readonly<{ start: number; end: number }>;
+  commit?: string;
+  summary: string;
+}>;
+
+export type ChangeRiskFindingV1 = Readonly<{
+  priority: ChangeRiskPriority;
+  category: ChangeRiskCategory;
+  location: Readonly<{ path: string; symbol?: string; line?: number }>;
+  unsafeCondition: string;
+  evidence: readonly ChangeRiskEvidenceReferenceV1[];
+  affectedContractId: ChangeRiskContractId;
+  unsafeConditionClass: ChangeRiskUnsafeConditionClass;
+  safePath: string;
+  resolution: ChangeRiskResolution;
+  disposition?: ChangeRiskDisposition;
+  fingerprint: string;
+}>;
+
+/** Orchestration-owned enrichment for persisted/external records, never reviewer output. */
+export type ChangeRiskEnrichedFindingV1 = ChangeRiskFindingV1 &
+  Readonly<{
+    source?: "local" | "external";
+    provider?: string;
+    systemic?: boolean;
+    systemicReason?: string;
+  }>;
+
+export type ChangeRiskScopeDomainV1 = Readonly<{
+  domain: ChangeRiskDomain;
+  applicability: "applicable" | "not-applicable";
+  reason?: string;
+}>;
+
+export type ChangeRiskResultV1 = Readonly<{
+  policyVersion: ChangeRiskPolicyVersion;
+  snapshotId: string;
+  status: ChangeRiskResultStatus;
+  scope: Readonly<{
+    completed: boolean;
+    inspectedChangeManifest: boolean;
+    inspectedRelevantConsumers: boolean;
+    domains: readonly ChangeRiskScopeDomainV1[];
+  }>;
+  findings: readonly ChangeRiskFindingV1[];
+  missingInputs: readonly string[];
+}>;
+
+export type ChangeRiskResultValidation =
+  | Readonly<{ ok: true; value: ChangeRiskResultV1 }>
+  | Readonly<{ ok: false; reason: string }>;
+
+/** Normalize a reviewer location without trusting a free-form fingerprint. */
+export function normalizeChangeRiskFindingLocation(
+  location: Pick<ChangeRiskFindingV1["location"], "path" | "symbol" | "line">,
+): string {
+  const normalizedPath = location.path
+    .trim()
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+  const symbol = location.symbol?.trim();
+  const suffix = [
+    symbol === undefined || symbol.length === 0 ? undefined : `#${symbol}`,
+    location.line === undefined ? undefined : `:${location.line}`,
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join("");
+  return `${normalizedPath}${suffix}`;
+}
+
+/** Shared stable identity: structured fields, never reviewer prose, own it. */
+export function deriveChangeRiskFingerprint(
+  finding: Pick<
+    ChangeRiskFindingV1,
+    "category" | "affectedContractId" | "location" | "unsafeConditionClass"
+  >,
+): string {
+  return [
+    finding.category,
+    finding.affectedContractId,
+    normalizeChangeRiskFindingLocation(finding.location),
+    finding.unsafeConditionClass,
+  ].join("+");
+}
+
+export type ChangeRiskReviewerValidationOptions = Readonly<{
+  mode?: "initial" | "final" | "remediation";
+  /** Only remediation may receive closure candidates from the prior round. */
+  priorFingerprints?: readonly string[];
+  /** Current snapshot identity supplied by the invocation owner, when known. */
+  expectedSnapshotId?: string;
+}>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isClosedValue<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): value is T {
+  return typeof value === "string" && allowed.includes(value as T);
+}
+
+function validateEvidence(
+  value: unknown,
+): value is ChangeRiskEvidenceReferenceV1 {
+  if (
+    !isRecord(value) ||
+    !isClosedValue(value.kind, CHANGE_RISK_EVIDENCE_KINDS) ||
+    !nonEmptyString(value.summary)
+  )
+    return false;
+  if (
+    (value.kind === "file" ||
+      value.kind === "test" ||
+      value.kind === "contract") &&
+    !nonEmptyString(value.path)
+  )
+    return false;
+  if (value.kind === "diff-hunk") {
+    if (
+      !nonEmptyString(value.path) ||
+      !isRecord(value.lines) ||
+      !Number.isInteger(value.lines.start) ||
+      !Number.isInteger(value.lines.end) ||
+      (value.lines.start as number) < 1 ||
+      (value.lines.start as number) > (value.lines.end as number)
+    )
+      return false;
+  }
+  if (
+    value.kind === "symbol" &&
+    (!nonEmptyString(value.path) || !nonEmptyString(value.symbol))
+  )
+    return false;
+  return value.kind !== "command-output" || nonEmptyString(value.summary);
+}
+
+function validateFinding(
+  value: unknown,
+  options: Required<ChangeRiskReviewerValidationOptions>,
+): value is ChangeRiskFindingV1 {
+  if (
+    !isRecord(value) ||
+    !isClosedValue(value.priority, CHANGE_RISK_PRIORITIES) ||
+    !isClosedValue(value.category, CHANGE_RISK_CATEGORIES) ||
+    !isRecord(value.location) ||
+    !nonEmptyString(value.location.path) ||
+    !nonEmptyString(value.unsafeCondition) ||
+    !Array.isArray(value.evidence) ||
+    value.evidence.length === 0 ||
+    !value.evidence.every(validateEvidence) ||
+    !isClosedValue(value.affectedContractId, CHANGE_RISK_CONTRACT_IDS) ||
+    !isClosedValue(
+      value.unsafeConditionClass,
+      CHANGE_RISK_UNSAFE_CONDITION_CLASSES,
+    ) ||
+    !nonEmptyString(value.safePath) ||
+    !isClosedValue(value.resolution, CHANGE_RISK_RESOLUTIONS) ||
+    !nonEmptyString(value.fingerprint)
+  )
+    return false;
+  if (value.location.path.replaceAll("\\", "/").split("/").includes(".."))
+    return false;
+  if (
+    (value.location.symbol !== undefined &&
+      !nonEmptyString(value.location.symbol)) ||
+    (value.location.line !== undefined &&
+      (typeof value.location.line !== "number" ||
+        !Number.isInteger(value.location.line) ||
+        value.location.line < 1))
+  )
+    return false;
+  if (
+    value.location.path
+      .trim()
+      .replaceAll("\\", "/")
+      .split("/")
+      .filter((segment) => segment.length > 0 && segment !== ".").length === 0
+  )
+    return false;
+  if (value.priority === "P3") {
+    if (!isClosedValue(value.disposition, CHANGE_RISK_DISPOSITIONS))
+      return false;
+  } else if (value.disposition !== undefined) return false;
+  if (
+    value.source !== undefined ||
+    value.provider !== undefined ||
+    value.systemic !== undefined ||
+    value.systemicReason !== undefined
+  )
+    return false;
+  if (
+    value.fingerprint !==
+    deriveChangeRiskFingerprint({
+      category: value.category,
+      affectedContractId: value.affectedContractId,
+      location: value.location as ChangeRiskFindingV1["location"],
+      unsafeConditionClass: value.unsafeConditionClass,
+    })
+  )
+    return false;
+  if (value.resolution === "open") return true;
+  return (
+    options.mode === "remediation" &&
+    options.priorFingerprints.includes(value.fingerprint)
+  );
+}
+
+/**
+ * Validate the closed reviewer envelope. Invalid, incomplete, or mismatched
+ * data is deliberately distinguishable from CLEAN so no caller can treat a
+ * malformed attempt as a clean review.
+ */
+export function validateChangeRiskResultV1(
+  value: unknown,
+  input: ChangeRiskReviewerValidationOptions = {},
+): ChangeRiskResultValidation {
+  const options: Required<ChangeRiskReviewerValidationOptions> = {
+    mode: input.mode ?? "initial",
+    priorFingerprints: input.priorFingerprints ?? [],
+    expectedSnapshotId: input.expectedSnapshotId ?? "",
+  };
+  if (
+    options.mode !== "remediation" &&
+    options.priorFingerprints.length > 0
+  )
+    return { ok: false, reason: "prior fingerprints require remediation" };
+  if (
+    !isRecord(value) ||
+    value.policyVersion !== CHANGE_RISK_POLICY_VERSION ||
+    !nonEmptyString(value.snapshotId) ||
+    !isClosedValue(value.status, CHANGE_RISK_RESULT_STATUSES) ||
+    !isRecord(value.scope) ||
+    !Array.isArray(value.findings) ||
+    !Array.isArray(value.missingInputs)
+  )
+    return { ok: false, reason: "malformed envelope" };
+  const { scope } = value;
+  if (
+    typeof scope.completed !== "boolean" ||
+    typeof scope.inspectedChangeManifest !== "boolean" ||
+    typeof scope.inspectedRelevantConsumers !== "boolean" ||
+    !Array.isArray(scope.domains) ||
+    !value.missingInputs.every(nonEmptyString) ||
+    !value.findings.every((finding) => validateFinding(finding, options))
+  )
+    return { ok: false, reason: "malformed fields" };
+  const seenDomains = new Set<string>();
+  for (const domain of scope.domains) {
+    if (
+      !isRecord(domain) ||
+      !isClosedValue(domain.domain, CHANGE_RISK_DOMAINS) ||
+      seenDomains.has(domain.domain) ||
+      (domain.applicability !== "applicable" &&
+        domain.applicability !== "not-applicable")
+    )
+      return { ok: false, reason: "invalid domain coverage" };
+    seenDomains.add(domain.domain);
+    if (
+      (domain.applicability === "not-applicable" &&
+        !nonEmptyString(domain.reason)) ||
+      (domain.applicability === "applicable" && domain.reason !== undefined)
+    )
+      return { ok: false, reason: "invalid domain reason" };
+  }
+  const completeScope =
+    scope.completed &&
+    scope.inspectedChangeManifest &&
+    scope.inspectedRelevantConsumers &&
+    seenDomains.size === CHANGE_RISK_DOMAINS.length;
+  if (
+    completeScope &&
+    options.expectedSnapshotId.length > 0 &&
+    value.snapshotId !== options.expectedSnapshotId
+  )
+    return { ok: false, reason: "snapshot mismatch" };
+  if (value.status === "CLEAN") {
+    return completeScope &&
+      value.findings.length === 0 &&
+      value.missingInputs.length === 0
+      ? { ok: true, value: value as ChangeRiskResultV1 }
+      : { ok: false, reason: "invalid clean result" };
+  }
+  if (value.status === "FINDINGS_FOUND") {
+    return completeScope &&
+      value.findings.length > 0 &&
+      value.missingInputs.length === 0
+      ? { ok: true, value: value as ChangeRiskResultV1 }
+      : { ok: false, reason: "invalid findings result" };
+  }
+  return !scope.completed && value.missingInputs.length > 0
+    ? { ok: true, value: value as ChangeRiskResultV1 }
+    : { ok: false, reason: "invalid needs-context result" };
+}
 
 export type ChangeRiskPipelineStage =
   | "implementer"
@@ -326,15 +722,6 @@ export const CHANGE_RISK_HIGH_RISK_SURFACE_IDS: readonly ChangeRiskHighRiskSurfa
     "generated-ownership",
     "published-packages",
   ] as const);
-
-export type ChangeRiskContractId =
-  | "permission-model"
-  | "secret-handling"
-  | "atomic-write-ownership"
-  | "release-workflow"
-  | "network-process-boundary"
-  | "generated-region-ownership"
-  | "published-package-seam";
 
 export type ChangeRiskHighRiskSurface = Readonly<{
   id: ChangeRiskHighRiskSurfaceId;
@@ -613,6 +1000,8 @@ export type ChangeRiskReviewerProjection = Readonly<{
     priorities: readonly ChangeRiskPriority[];
     /** `category` is a required finding field, so its closed set travels with it. */
     categories: readonly ChangeRiskCategory[];
+    affectedContractIds: readonly ChangeRiskContractId[];
+    unsafeConditionClasses: readonly ChangeRiskUnsafeConditionClass[];
     resolutions: readonly ChangeRiskResolution[];
     p3Dispositions: readonly ChangeRiskDisposition[];
     evidenceKinds: readonly ChangeRiskEvidenceKind[];
@@ -685,6 +1074,8 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
     statuses: CHANGE_RISK_RESULT_STATUSES,
     priorities: CHANGE_RISK_PRIORITIES,
     categories: CHANGE_RISK_CATEGORIES,
+    affectedContractIds: CHANGE_RISK_CONTRACT_IDS,
+    unsafeConditionClasses: CHANGE_RISK_UNSAFE_CONDITION_CLASSES,
     resolutions: CHANGE_RISK_RESOLUTIONS,
     p3Dispositions: CHANGE_RISK_DISPOSITIONS,
     evidenceKinds: CHANGE_RISK_EVIDENCE_KINDS,
@@ -694,7 +1085,8 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
       "location",
       "unsafeCondition",
       "evidence",
-      "affectedContract",
+      "affectedContractId",
+      "unsafeConditionClass",
       "safePath",
       "resolution",
       "fingerprint",
@@ -729,6 +1121,7 @@ export type ChangeRiskOrchestrationProjection = Readonly<{
     retry: readonly string[];
     invalidation: readonly string[];
     nonProgress: readonly string[];
+    clustering: readonly string[];
     /** How a completed findings result with no open blocker reaches `clean`. */
     noOpenBlockerTerminal: readonly string[];
     /** What a validated external P1/P2 does to an existing terminal state. */
@@ -752,8 +1145,7 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
         `${CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation} times.`,
       "Failed or incomplete attempts are recorded separately and never " +
         "become findings or fix rounds.",
-      "A fix round may begin only when the remaining invocation budget also " +
-        "covers its review plus any confirmation that would then be required.",
+      "Before starting a fix round, reserve a remediation review plus any required final confirmation in the remaining invocation budget.",
     ],
     invalidation: [
       "Any code change invalidates the preceding clean result.",
@@ -767,7 +1159,11 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
       "Failure to reduce the blocking-finding count across two consecutive " +
         "remediation reviews.",
       "A fix round that leaves the reviewed snapshot unchanged while open " +
-        "blockers remain consumes no invocation and reports no progress.",
+      "blockers remain consumes no invocation and reports no progress.",
+    ],
+    clustering: [
+      "Three or more open findings sharing a cluster key are remediated as one shared cause in one fix round.",
+      "For a within-change cluster recurrence, add a mechanical guard or record impracticality with rationale and evidence before escalating to NEEDS_HUMAN_REVIEW.",
     ],
     noOpenBlockerTerminal: [
       "A completed FINDINGS_FOUND result whose P1 and P2 findings are all " +

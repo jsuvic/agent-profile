@@ -41,6 +41,7 @@ import type {
   LockfileValidationResult,
   SkillId,
 } from "./index.js";
+import { validateChangeRiskResultV1 } from "./change-risk-policy.js";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const minimalFixtureDir = new URL(
@@ -1557,8 +1558,14 @@ test("phase-25 I2 emits enforcement lines in Codex and Claude implementer, code-
   // final-review skill (Codex + Claude).
   const claudeFinal = bytesFor(".claude/skills/final-review/SKILL.md");
   const codexFinal = bytesFor(".agents/skills/final-review/SKILL.md");
-  assert.equal(claudeFinal.includes(LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE), true);
-  assert.equal(codexFinal.includes(LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE), true);
+  assert.equal(
+    claudeFinal.includes(LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE),
+    true,
+  );
+  assert.equal(
+    codexFinal.includes(LOGGING_ENFORCEMENT_FINAL_REVIEW_LINE),
+    true,
+  );
   // The item is a numbered checklist entry inside ## Instructions, before ## Output.
   for (const text of [claudeFinal, codexFinal]) {
     const instructionsStart = text.indexOf("## Instructions");
@@ -3779,9 +3786,10 @@ test("phase-12 MCP recommendations pack emits advisory-only skills", () => {
     ".agents/skills/mcp-fit-check/SKILL.md",
     ".claude/skills/mcp-fit-check/SKILL.md",
   ]) {
-    const file = result.files.find((candidate) => candidate.path === path);
-    assert.ok(file, path);
-    const body = Buffer.from(file.bytes).toString("utf8");
+    const workflowFile = result.files.find((candidate) => candidate.path === path);
+    assert.ok(workflowFile, path);
+    if (workflowFile === undefined) continue;
+    const body = Buffer.from(workflowFile.bytes).toString("utf8");
     assert.match(body, /never install or configure/iu);
     assert.doesNotMatch(
       body,
@@ -3853,6 +3861,333 @@ test("phase-12 reviewer-subagents pack expands through Claude and Codex only", (
     first.files.map((file) => Buffer.from(file.bytes).toString("utf8")),
     second.files.map((file) => Buffer.from(file.bytes).toString("utf8")),
   );
+});
+
+test("phase-33 I1 emits the policy-backed change-risk reviewer only for qualifying Codex and Claude workflows", () => {
+  const qualifying: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
+  };
+
+  const result = compileProfile({ profile: qualifying });
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result.issues));
+  if (!result.ok) return;
+
+  const reviewerFiles = result.files.filter((file) =>
+    file.path.includes("change-risk-reviewer"),
+  );
+  assert.deepEqual(reviewerFiles.map((file) => file.path).sort(), [
+    ".claude/agents/change-risk-reviewer.md",
+    ".codex/agents/change-risk-reviewer.toml",
+  ]);
+  for (const file of reviewerFiles) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.match(body, /change-risk\/v1/u, file.path);
+    assert.match(
+      body,
+      /complete accumulated change and its reachable consumers/u,
+      file.path,
+    );
+    assert.match(body, /manifest/u, file.path);
+    assert.match(body, /CLEAN \| FINDINGS_FOUND \| NEEDS_CONTEXT/u, file.path);
+    assert.match(body, /component-derived normalized fingerprint/u, file.path);
+    assert.match(body, /never edit/u, file.path);
+    assert.doesNotMatch(
+      body,
+      /maxFixRounds|promotion threshold|historical corpus|review-learning\/v1/u,
+      file.path,
+    );
+  }
+  assert.equal(
+    result.files.some((file) =>
+      file.path.includes(".tabnine/agent/agents/change-risk-reviewer"),
+    ),
+    false,
+  );
+
+  const nonQualifying = compileProfile({
+    profile: {
+      ...qualifying,
+      workflow: {
+        ...qualifying.workflow,
+        subagentDrivenDevelopment: false,
+      },
+    },
+  });
+  assert.equal(nonQualifying.ok, true);
+  if (!nonQualifying.ok) return;
+  assert.equal(
+    nonQualifying.files.some((file) =>
+      file.path.includes("change-risk-reviewer"),
+    ),
+    false,
+  );
+});
+
+test("phase-33 I1 resolves change-risk-reviewer through critical-reviewer for mapping-v2 and mapping-v3 overrides", () => {
+  const base: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
+  };
+  const cases: ReadonlyArray<{
+    name: string;
+    policy: NonNullable<AiProfile["subagentPolicy"]>;
+    codexModel: string;
+    codexEffort: string;
+    claudeModel: string;
+    claudeEffort: string;
+  }> = [
+    {
+      name: "mapping-v2 exact critical-reviewer overrides",
+      policy: {
+        enabled: true,
+        roles: {
+          "critical-reviewer": {
+            capability: "strongest",
+            effort: "high",
+            overrides: {
+              codex: { model: "gpt-5.1-codex-mini", effort: "low" },
+              claude: { model: "claude-3-5-haiku-20241022", effort: "medium" },
+            },
+          },
+        },
+      },
+      codexModel: "gpt-5.1-codex-mini",
+      codexEffort: "low",
+      claudeModel: "claude-3-5-haiku-20241022",
+      claudeEffort: "medium",
+    },
+    {
+      name: "mapping-v3 exact critical-reviewer overrides",
+      policy: {
+        enabled: true,
+        preset: "role-aware",
+        roles: {
+          "critical-reviewer": {
+            capability: "strongest",
+            effort: "extra-high",
+            overrides: {
+              codex: { model: "gpt-5.3-codex", effort: "high" },
+              claude: { model: "claude-opus-4-1-20250805", effort: "medium" },
+            },
+          },
+        },
+      },
+      codexModel: "gpt-5.3-codex",
+      codexEffort: "high",
+      claudeModel: "claude-opus-4-1-20250805",
+      claudeEffort: "medium",
+    },
+    {
+      name: "mapping-v2 critical-reviewer retains target-native default effort",
+      policy: { enabled: true },
+      codexModel: "gpt-5.2-codex",
+      codexEffort: "high",
+      claudeModel: "claude-opus-4-1-20250805",
+      claudeEffort: "high",
+    },
+  ];
+
+  for (const entry of cases) {
+    const result = compileProfile({
+      profile: { ...base, subagentPolicy: entry.policy },
+    });
+    assert.equal(
+      result.ok,
+      true,
+      result.ok
+        ? entry.name
+        : `${entry.name}: ${JSON.stringify(result.issues)}`,
+    );
+    if (!result.ok) continue;
+    const byPath = new Map(
+      result.files.map((file) => [
+        file.path,
+        Buffer.from(file.bytes).toString("utf8"),
+      ]),
+    );
+    const codex = byPath.get(".codex/agents/change-risk-reviewer.toml");
+    const claude = byPath.get(".claude/agents/change-risk-reviewer.md");
+    assert.ok(codex, `${entry.name}: Codex reviewer`);
+    assert.ok(claude, `${entry.name}: Claude reviewer`);
+    assert.match(codex, new RegExp(`model = "${entry.codexModel}"`, "u"));
+    assert.match(
+      codex,
+      new RegExp(`model_reasoning_effort = "${entry.codexEffort}"`, "u"),
+    );
+    assert.match(claude, new RegExp(`model: ${entry.claudeModel}`, "u"));
+    assert.match(claude, new RegExp(`effort: ${entry.claudeEffort}`, "u"));
+  }
+});
+
+test("phase-33 I1 Codex and Claude reviewer artifacts instruct a validator-compatible envelope", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    clients: { tabnine: { enabled: false }, codex: { enabled: true }, claude: { enabled: true } },
+    workflow: { ...phase12Profile({ packs: [] }).workflow, sdd: true, subagentDrivenDevelopment: true },
+    capabilities: { delegation: { subagents: { enabled: true, agents: [
+      { useTemplate: "implementer" }, { useTemplate: "spec-reviewer" }, { useTemplate: "code-quality-reviewer" },
+    ] } } },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const envelope = {
+    policyVersion: "change-risk/v1",
+    snapshotId: "snapshot-1",
+    status: "FINDINGS_FOUND",
+    scope: { completed: true, inspectedChangeManifest: true, inspectedRelevantConsumers: true, domains: [
+      "unchanged-consumers", "state-transitions", "ownership-write-safety", "compatibility-platform", "parsing-validation-order", "network-process-boundaries", "generated-ownership", "published-seams", "runtime-proof", "redaction", "contract-completeness",
+    ].map((domain) => ({ domain, applicability: "applicable" as const })) },
+    findings: [{ priority: "P2", category: "runtime-proof", location: { path: "packages/compiler/src/compiler.ts" }, unsafeCondition: "missing proof", evidence: [{ kind: "file", path: "packages/compiler/src/compiler.ts", summary: "missing proof" }], affectedContractId: "runtime-proof", unsafeConditionClass: "missing-runtime-proof", safePath: "add proof", resolution: "open", fingerprint: "runtime-proof+runtime-proof+packages/compiler/src/compiler.ts+missing-runtime-proof" }],
+    missingInputs: [],
+  };
+  assert.equal(validateChangeRiskResultV1(envelope).ok, true);
+  for (const file of result.files.filter((file) => file.path.includes("change-risk-reviewer"))) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.match(body, /affectedContractId, unsafeConditionClass/u, file.path);
+    assert.match(body, /permission-model \| secret-handling/u, file.path);
+    assert.match(body, /missing-validation \| unsafe-ordering/u, file.path);
+    assert.match(body, /fixed \| accepted-debt \| follow-up/u, file.path);
+    assert.match(body, /category, affected contract, normalized location, unsafe-condition class/u, file.path);
+    assert.match(body, /Initial and final clean-room reviews receive no prior fingerprints/u, file.path);
+    assert.match(body, /Remediation receives only supplied prior fingerprints/u, file.path);
+  }
+});
+
+test("phase-33 I1 qualifying orchestration artifacts invoke change-risk-reviewer after code-quality-reviewer", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    clients: { tabnine: { enabled: false }, codex: { enabled: true }, claude: { enabled: true } },
+    workflow: { ...phase12Profile({ packs: [] }).workflow, sdd: true, subagentDrivenDevelopment: true },
+    capabilities: { delegation: { subagents: { enabled: true, agents: [
+      { useTemplate: "implementer" }, { useTemplate: "spec-reviewer" }, { useTemplate: "code-quality-reviewer" },
+    ] } } },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  const paths = [
+    ".agents/skills/subagent-driven-change/SKILL.md",
+    ".agents/skills/implement-next/SKILL.md",
+    ".claude/skills/subagent-driven-change/SKILL.md",
+    ".claude/skills/implement-next/SKILL.md",
+  ];
+  for (const path of paths) {
+    const workflowFile: GeneratedFile | undefined = result.files.find(
+      (candidate) => candidate.path === path,
+    );
+    assert.ok(workflowFile, path);
+    if (workflowFile === undefined) continue;
+    const body: string = Buffer.from(workflowFile.bytes).toString("utf8");
+    const quality = body.indexOf("code-quality-reviewer");
+    const risk = body.indexOf("change-risk-reviewer");
+    assert.ok(quality !== -1 && risk > quality, `${path}: pipeline position`);
+    assert.equal(
+      (body.match(/change-risk-reviewer/gu) ?? []).length,
+      path.includes("subagent-driven-change") ? 2 : 1,
+      `${path}: every reference is an intentional pipeline reference`,
+    );
+  }
+});
+
+test("phase-33 I2 renders complete bounded change-risk owner rules from the projection", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    clients: { tabnine: { enabled: false }, codex: { enabled: true }, claude: { enabled: true } },
+    workflow: { ...phase12Profile({ packs: [] }).workflow, sdd: true, subagentDrivenDevelopment: true },
+    capabilities: { delegation: { subagents: { enabled: true, agents: [
+      { useTemplate: "implementer" }, { useTemplate: "spec-reviewer" }, { useTemplate: "code-quality-reviewer" },
+    ] } } },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  for (const file of result.files.filter((candidate) =>
+    candidate.path.endsWith("/subagent-driven-change/SKILL.md"),
+  )) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    for (const required of [
+      "at most 3 fix rounds, 6 completed logical reviews, and 2 transient retries",
+      "reserve a remediation review plus any required final confirmation",
+      "NEEDS_HUMAN_REVIEW takes precedence over NO_PROGRESS",
+      "three or more open findings sharing a cluster key",
+      "mechanical guard or record impracticality with rationale and evidence",
+      "NEEDS_HUMAN_REVIEW",
+    ]) assert.match(body, new RegExp(required, "iu"), file.path);
+    assert.equal(body.includes("Apply the authoritative orchestration projection"), false, file.path);
+  }
+});
+
+test("phase-33 I2 implement-next requires a validated terminal CLEAN handoff for the current snapshot", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    clients: { tabnine: { enabled: false }, codex: { enabled: true }, claude: { enabled: true } },
+    workflow: { ...phase12Profile({ packs: [] }).workflow, sdd: true, subagentDrivenDevelopment: true },
+    capabilities: { delegation: { subagents: { enabled: true, agents: [
+      { useTemplate: "implementer" }, { useTemplate: "spec-reviewer" }, { useTemplate: "code-quality-reviewer" },
+    ] } } },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  for (const file of result.files.filter((candidate) =>
+    candidate.path.endsWith("/implement-next/SKILL.md"),
+  )) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.equal(
+      body.includes("validated terminal `CLEAN` handoff"),
+      true,
+      file.path,
+    );
+    assert.equal(
+      body.includes("snapshot matches the current snapshot"),
+      true,
+      file.path,
+    );
+    assert.equal(body.includes("`NO_PROGRESS` or `NEEDS_HUMAN_REVIEW`"), true, file.path);
+    assert.equal(body.includes("do not mark the task `done`"), true, file.path);
+  }
 });
 
 test("phase-12 tabnine keeps custom subagents with reviewer names when the pack is off", () => {
@@ -4616,7 +4951,11 @@ test("phase-22 each loop skill body contains the three bounding sections", () =>
     // Hard-coded integer bound present.
     assert.match(body, /at most \d+ iterations/u, file.path);
     // Instruction-only: no tool grants or shell/execution semantics.
-    assert.doesNotMatch(body, /allowed-tools|tools:\s|```(?:bash|sh)/u, file.path);
+    assert.doesNotMatch(
+      body,
+      /allowed-tools|tools:\s|```(?:bash|sh)/u,
+      file.path,
+    );
   }
 });
 
@@ -4665,7 +5004,9 @@ test("phase-22 loop cross-references point only to co-generated skills", () => {
   // Every `run `<skill>`` pointer in any loop skill must resolve to a skill
   // generated for the same target (no dangling reference).
   for (const file of result.files) {
-    if (!LOOP_SKILL_NAMES.some((name) => file.path.endsWith(`/${name}/SKILL.md`))) {
+    if (
+      !LOOP_SKILL_NAMES.some((name) => file.path.endsWith(`/${name}/SKILL.md`))
+    ) {
       continue;
     }
     const root = file.path.startsWith(".claude/skills")
@@ -4818,22 +5159,14 @@ test("phase-24 I2 request-to-spec-issues emits Seam & Interface Design, brief se
     assert.equal(text.includes("orchestration"), true, file.path);
     assert.equal(text.includes("deterministic generator"), true, file.path);
     assert.equal(
-      text.includes(
-        "highest boundary that keeps tests fast and deterministic",
-      ),
+      text.includes("highest boundary that keeps tests fast and deterministic"),
       true,
       file.path,
     );
     assert.equal(text.includes("Prefer an existing seam"), true, file.path);
+    assert.equal(text.includes("unmanaged dependencies only"), true, file.path);
     assert.equal(
-      text.includes("unmanaged dependencies only"),
-      true,
-      file.path,
-    );
-    assert.equal(
-      text.includes(
-        "one slice = one seam = one observable outcome = one RED",
-      ),
+      text.includes("one slice = one seam = one observable outcome = one RED"),
       true,
       file.path,
     );
@@ -4916,9 +5249,7 @@ test("phase-24 I3 tdd-change emits tautological anti-pattern, boundary-only mock
     // Tautological-test anti-pattern.
     assert.equal(text.includes("tautological"), true, file.path);
     assert.equal(
-      text.includes(
-        "expected values must come from an independent source",
-      ),
+      text.includes("expected values must come from an independent source"),
       true,
       file.path,
     );
@@ -5165,13 +5496,10 @@ test("phase-24 I4 emits implement-next body for Claude and Codex with the entry-
   const files = result.files.filter((f) =>
     f.path.endsWith("/implement-next/SKILL.md"),
   );
-  assert.deepEqual(
-    files.map((f) => f.path).sort(),
-    [
-      ".agents/skills/implement-next/SKILL.md",
-      ".claude/skills/implement-next/SKILL.md",
-    ],
-  );
+  assert.deepEqual(files.map((f) => f.path).sort(), [
+    ".agents/skills/implement-next/SKILL.md",
+    ".claude/skills/implement-next/SKILL.md",
+  ]);
 
   for (const file of files) {
     const text = Buffer.from(file.bytes).toString("utf8");
@@ -5188,11 +5516,7 @@ test("phase-24 I4 emits implement-next body for Claude and Codex with the entry-
       true,
       file.path,
     );
-    assert.equal(
-      text.includes("Stop at a `human-gate` task"),
-      true,
-      file.path,
-    );
+    assert.equal(text.includes("Stop at a `human-gate` task"), true, file.path);
     assert.equal(
       text.includes("Skip `blocked` and `sequenced` tasks"),
       true,
@@ -5200,17 +5524,24 @@ test("phase-24 I4 emits implement-next body for Claude and Codex with the entry-
     );
     // State transitions.
     assert.equal(text.includes("Mark the selected task `in-progress`"), true);
-    assert.equal(text.includes("mark the task `done` and stop"), true);
+    assert.equal(
+      text.includes("validated terminal `CLEAN` handoff"),
+      true,
+    );
     // Runs subagent-driven-change with the brief as Fresh Context (no dangling).
     assert.equal(
-      text.includes("run `subagent-driven-change` with the brief as Fresh Context"),
+      text.includes(
+        "run `subagent-driven-change` with the brief as Fresh Context",
+      ),
       true,
       file.path,
     );
     // Failure path (D7): BLOCKED with reason, never continue / edit brief.
     assert.equal(text.includes("Stop and report `BLOCKED`"), true, file.path);
     assert.equal(
-      text.includes("mark the task `blocked` in `TASKS.md` with a one-line reason"),
+      text.includes(
+        "mark the task `blocked` in `TASKS.md` with a one-line reason",
+      ),
       true,
       file.path,
     );
@@ -5219,11 +5550,7 @@ test("phase-24 I4 emits implement-next body for Claude and Codex with the entry-
       true,
       file.path,
     );
-    assert.equal(
-      text.includes("Do not iterate across tasks"),
-      true,
-      file.path,
-    );
+    assert.equal(text.includes("Do not iterate across tasks"), true, file.path);
 
     assert.equal(text.includes("\r"), false, file.path);
     assert.equal(text.endsWith("\n"), true, file.path);
@@ -5319,7 +5646,9 @@ test("phase-24 I6 encodes automatic post-grill handoff, single bounded persisten
     );
     // Old duplicate-approval precondition removed.
     assert.equal(
-      text.includes("The user has confirmed the direction is ready for synthesis"),
+      text.includes(
+        "The user has confirmed the direction is ready for synthesis",
+      ),
       false,
       file.path,
     );
@@ -5478,9 +5807,7 @@ test("phase-29 I1 Tabnine-only omits delegation-dependent skills and emits an in
       `Tabnine-only must not emit ${skill}`,
     );
     assert.equal(
-      result.templates.some((template) =>
-        template.id.includes(`/${skill}@`),
-      ),
+      result.templates.some((template) => template.id.includes(`/${skill}@`)),
       false,
       `Tabnine-only must not list a template for ${skill}`,
     );
@@ -5563,7 +5890,9 @@ test("phase-29 I1 caveat note does not fire when Tabnine is disabled", () => {
 test("phase-29 I1 enabling Tabnine alongside Codex changes no .agents/skills byte", () => {
   const codexOnly = compileProfile({
     profile: {
-      ...tabnineOnlyProfile({ packs: ["automation", "review", "advanced-review"] }),
+      ...tabnineOnlyProfile({
+        packs: ["automation", "review", "advanced-review"],
+      }),
       clients: {
         tabnine: { enabled: false },
         codex: { enabled: true },
@@ -5573,7 +5902,9 @@ test("phase-29 I1 enabling Tabnine alongside Codex changes no .agents/skills byt
   });
   const codexAndTabnine = compileProfile({
     profile: {
-      ...tabnineOnlyProfile({ packs: ["automation", "review", "advanced-review"] }),
+      ...tabnineOnlyProfile({
+        packs: ["automation", "review", "advanced-review"],
+      }),
       clients: {
         tabnine: { enabled: true },
         codex: { enabled: true },
@@ -5741,10 +6072,6 @@ test("phase-29 I1 with Codex enabled, implement-next reaches Tabnine via the sha
   );
   // Nothing under the Tabnine-proprietary agent path.
   for (const file of result.files) {
-    assert.equal(
-      file.path.startsWith(".tabnine/agent/"),
-      false,
-      file.path,
-    );
+    assert.equal(file.path.startsWith(".tabnine/agent/"), false, file.path);
   }
 });

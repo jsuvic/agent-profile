@@ -11,7 +11,7 @@ description: Use when a scoped implementation can be delegated to an implementat
 
 Use this workflow only when the task has a clear spec, acceptance criteria, and file ownership. Keep tightly coupled or architectural decisions in the parent session unless the user explicitly asks for delegation.
 
-Required subagents: `implementer`, `spec-reviewer`, and `code-quality-reviewer`.
+Required subagents: `implementer`, `spec-reviewer`, `code-quality-reviewer`, and `change-risk-reviewer`.
 
 ## Fresh Context
 
@@ -26,7 +26,27 @@ Each subagent prompt must include the full task text, relevant spec excerpts, no
 5. Fix or escalate every spec-review issue before requesting code-quality review.
 6. Dispatch `code-quality-reviewer` only after spec review reports compliance.
 7. Fix Critical and Important code-quality issues before handoff, or document why a finding is intentionally deferred.
-8. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
+8. This surface alone owns the `change-risk/v1` state machine. Invoke `change-risk-reviewer` only after code-quality review, keep its closed `ChangeRiskOrchestrationStateV1` handoff snapshot-bound, and never let a nested surface invoke it again for an unchanged snapshot.
+9. Initial review is clean-room; remediation supplies prior fingerprints and searches the complete updated snapshot; required final confirmation is clean-room again. Any code change invalidates the preceding clean result. Files under docs/review-learning/ are excluded from snapshot identity and do not invalidate a terminal result. An initial or remediation review is never repeated against an unchanged snapshot; a required final confirmation is the exception.
+10. Apply these bounded owner rules and preserve counters, actual snapshot IDs, and completed-round fingerprint and remediated-cluster-key history across resume:
+
+- at most 3 fix rounds, 6 completed logical reviews, and 2 transient retries per logical invocation.
+- The initial review is not a fix round.
+- One logical invocation may retry a transient failure, an invalid envelope, or a NEEDS_CONTEXT result at most 2 times.
+- Failed or incomplete attempts are recorded separately and never become findings or fix rounds.
+- Before starting a fix round, reserve a remediation review plus any required final confirmation in the remaining invocation budget.
+- The same unresolved fingerprint appearing twice without progress.
+- Failure to reduce the blocking-finding count across two consecutive remediation reviews.
+- A fix round that leaves the reviewed snapshot unchanged while open blockers remain consumes no invocation and reports no progress.
+- Three or more open findings sharing a cluster key are remediated as one shared cause in one fix round.
+- For a within-change cluster recurrence, add a mechanical guard or record impracticality with rationale and evidence before escalating to NEEDS_HUMAN_REVIEW.
+- Remaining open P1 or P2 findings after the last allowed fix round.
+- Open blockers remain but the invocation budget cannot cover another fix round's remediation review plus the confirmation that would then be required.
+- Exhausted attempt retries; they are never converted to a clean result.
+- An unsatisfiable missing input escalates immediately.
+- NEEDS_HUMAN_REVIEW takes precedence over NO_PROGRESS when both apply.
+
+11. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
 
 ## Status Values
 

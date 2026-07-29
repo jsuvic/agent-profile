@@ -1918,15 +1918,15 @@ finding promotion, and a provider-neutral external-review boundary.
 
 | Id  | Task                                            | State         | Brief                                                                                                   |
 | --- | ----------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
-| I1  | Emit the independent change-risk reviewer       | ready         | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                   |
-| I2  | Orchestrate bounded review remediation          | sequenced     | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)       |
+| I1  | Emit the independent change-risk reviewer       | done          | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                   |
+| I2  | Orchestrate bounded review remediation          | done         | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)       |
 | I3  | Persist versioned review-learning records       | sequenced     | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)             |
 | I4  | Promote recurring findings into stronger guards | sequenced     | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)     |
 | I5  | Backfill the recent PR review corpus            | human-gate    | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
 | I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
 | G2  | Grill session: approve amendment 002            | done          | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)    |
-| I7  | Cluster vocabularies and cluster-key derivation  | ready         | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)               |
-| G3  | Grill session: approve amendment 003             | human-gate    | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
+| I7  | Cluster vocabularies and cluster-key derivation  | done          | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)               |
+| G3  | Grill session: approve amendment 003             | done          | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the

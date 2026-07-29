@@ -2,7 +2,7 @@
 
 ## Status
 
-Draft 2026-07-28, pending grill approval. Amends
+Approved 2026-07-29. Amends
 `001-change-risk-review-assurance.md` and completes
 `002-root-cause-clustering-amendment.md`.
 

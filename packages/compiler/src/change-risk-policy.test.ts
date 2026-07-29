@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   CHANGE_RISK_CATEGORIES,
+  CHANGE_RISK_CONTRACT_IDS,
   CHANGE_RISK_CATEGORY_ALIASES,
   CHANGE_RISK_CATEGORY_TAXONOMY_VERSION,
   CHANGE_RISK_CATEGORY_UNCATEGORIZED,
@@ -27,22 +28,60 @@ import {
   CHANGE_RISK_REVIEW_METADATA_PATH_PREFIX,
   CHANGE_RISK_SOURCE_POLICIES,
   CHANGE_RISK_TERMINAL_STATUSES,
+  CHANGE_RISK_UNSAFE_CONDITION_CLASSES,
   CHANGE_RISK_WORKFLOW_OUTCOMES,
+  CHANGE_RISK_POLICY_VERSIONING_RULE,
   changeRiskEvaluationProjection,
   changeRiskLearningRecordProjection,
   changeRiskOrchestrationProjection,
   changeRiskPromotionProjection,
   changeRiskReviewerProjection,
   classifyHighRiskSurfaces,
+  deriveChangeRiskClusterKey,
+  deriveChangeRiskFingerprint,
   isHighRiskChange,
   matchesChangeRiskGlob,
   normalizeChangeRiskCategory,
   normalizeChangeRiskCategoryWithAliases,
   REVIEW_LEARNING_SCHEMA_VERSION,
+  validateChangeRiskResultV1,
   type ChangeRiskCategory,
+  type ChangeRiskContractId,
+  type ChangeRiskUnsafeConditionClass,
   type ChangeRiskHighRiskSurfaceId,
   type ChangeRiskManifestEntry,
 } from "./change-risk-policy.js";
+
+const completeScope = {
+  completed: true,
+  inspectedChangeManifest: true,
+  inspectedRelevantConsumers: true,
+  domains: CHANGE_RISK_DOMAINS.map((domain) => ({
+    domain,
+    applicability: "applicable" as const,
+  })),
+};
+
+const validFinding = {
+  priority: "P3",
+  category: "runtime-proof",
+  location: { path: "packages/compiler/src/compiler.ts", line: 1 },
+  unsafeCondition: "missing runtime proof",
+  evidence: [
+    {
+      kind: "file",
+      path: "packages/compiler/src/compiler.ts",
+      summary: "The generated artifact omits the runtime sentinel.",
+    },
+  ],
+  affectedContractId: "runtime-proof",
+  unsafeConditionClass: "missing-runtime-proof",
+  safePath: "Add a focused runtime sentinel.",
+  resolution: "open",
+  disposition: "follow-up",
+  fingerprint:
+    "runtime-proof+runtime-proof+packages/compiler/src/compiler.ts:1+missing-runtime-proof",
+} as const;
 
 function manifest(...paths: string[]): ChangeRiskManifestEntry[] {
   return paths.map((path) => ({ path }));
@@ -101,6 +140,110 @@ test("change-risk categories match the taxonomy list exactly and in order", () =
     ],
   );
   assert.equal(CHANGE_RISK_CATEGORIES.length, 9);
+});
+
+test("cluster identity groups different-location and different-category findings by affected contract and defect mechanism", () => {
+  const affectedContractId: ChangeRiskContractId = "permission-model";
+  const findings: ReadonlyArray<
+    Readonly<{
+      category: ChangeRiskCategory;
+      location: string;
+      affectedContractId: ChangeRiskContractId;
+      unsafeConditionClass: ChangeRiskUnsafeConditionClass;
+    }>
+  > = [
+    {
+      category: "cross-consumer-integration",
+      location: "packages/compiler/src/compiler.ts",
+      affectedContractId,
+      unsafeConditionClass: "missing-validation",
+    },
+    {
+      category: "secret-output",
+      location: "apps/cli/src/index.ts",
+      affectedContractId,
+      unsafeConditionClass: "missing-validation",
+    },
+  ];
+
+  const first = deriveChangeRiskClusterKey(
+    findings[0]!.affectedContractId,
+    findings[0]!.unsafeConditionClass,
+  );
+  const second = deriveChangeRiskClusterKey(
+    findings[1]!.affectedContractId,
+    findings[1]!.unsafeConditionClass,
+  );
+
+  assert.equal(first, "permission-model+missing-validation");
+  assert.equal(second, first);
+  assert.notEqual(findings[0]!.category, findings[1]!.category);
+  assert.notEqual(findings[0]!.location, findings[1]!.location);
+  assert.ok(
+    CHANGE_RISK_CONTRACT_IDS.includes(affectedContractId),
+    "affected contract comes from the reviewer-supplied closed vocabulary",
+  );
+});
+
+test("cluster identity changes only with its unsafe-condition-class component", () => {
+  assert.notEqual(
+    deriveChangeRiskClusterKey("permission-model", "missing-validation"),
+    deriveChangeRiskClusterKey("permission-model", "unsafe-ordering"),
+  );
+});
+
+test("an uncertain cluster component never produces a cluster key", () => {
+  assert.equal(
+    deriveChangeRiskClusterKey("other", "missing-validation"),
+    undefined,
+  );
+  assert.equal(
+    deriveChangeRiskClusterKey("permission-model", "other"),
+    undefined,
+  );
+});
+
+test("cluster vocabularies are closed with explicit other fallbacks", () => {
+  assert.deepEqual(
+    [...CHANGE_RISK_CONTRACT_IDS],
+    [
+      "permission-model",
+      "secret-handling",
+      "atomic-write-ownership",
+      "release-workflow",
+      "network-process-boundary",
+      "generated-region-ownership",
+      "published-package-seam",
+      "state-transition",
+      "parsing-validation",
+      "compatibility-platform",
+      "runtime-proof",
+      "contract-completeness",
+      "other",
+    ],
+  );
+  assert.deepEqual(
+    [...CHANGE_RISK_UNSAFE_CONDITION_CLASSES],
+    [
+      "missing-validation",
+      "unsafe-ordering",
+      "ownership-violation",
+      "incomplete-propagation",
+      "compatibility-regression",
+      "boundary-violation",
+      "missing-runtime-proof",
+      "redaction-failure",
+      "other",
+    ],
+  );
+});
+
+test("pre-emission policy amendments retain change-risk/v1", () => {
+  assert.equal(CHANGE_RISK_POLICY_VERSION, "change-risk/v1");
+  assert.match(CHANGE_RISK_POLICY_VERSIONING_RULE, /only after/i);
+  assert.match(CHANGE_RISK_POLICY_VERSIONING_RULE, /emitted/i);
+  assert.match(CHANGE_RISK_POLICY_VERSIONING_RULE, /persisted/i);
+  assert.match(CHANGE_RISK_POLICY_VERSIONING_RULE, /pre-emission/i);
 });
 
 test("result statuses, priorities, dispositions, and resolutions are closed", () => {
@@ -675,6 +818,14 @@ test("the reviewer projection carries the rubric handles and the result interfac
     [...CHANGE_RISK_PRIORITIES],
   );
   assert.deepEqual(
+    [...reviewer.resultInterface.affectedContractIds],
+    [...CHANGE_RISK_CONTRACT_IDS],
+  );
+  assert.deepEqual(
+    [...reviewer.resultInterface.unsafeConditionClasses],
+    [...CHANGE_RISK_UNSAFE_CONDITION_CLASSES],
+  );
+  assert.deepEqual(
     [...reviewer.resultInterface.resolutions],
     [...CHANGE_RISK_RESOLUTIONS],
   );
@@ -691,6 +842,24 @@ test("the reviewer projection carries the rubric handles and the result interfac
   assert.ok(reviewer.safetyConstraints.length > 0);
 });
 
+test("the reviewer projection supplies vocabularies without cluster metadata", () => {
+  const resultInterface = changeRiskReviewerProjection().resultInterface;
+  const serialized = JSON.stringify(resultInterface);
+
+  for (const metadata of [
+    "clusterKey",
+    "clusterMembership",
+    "clusterCount",
+    "clusterHistory",
+  ]) {
+    assert.ok(
+      !Object.hasOwn(resultInterface, metadata),
+      `${metadata} is orchestration-owned data, not reviewer input`,
+    );
+    assert.ok(!serialized.includes(metadata));
+  }
+});
+
 test("the reviewer projection carries no orchestration, learning, or promotion content", () => {
   const foreign: ReadonlyArray<readonly [ProjectionName, string]> = [
     ["orchestration", "maxFixRounds"],
@@ -704,7 +873,6 @@ test("the reviewer projection carries no orchestration, learning, or promotion c
     ["learningRecord", "dispositionConfirmed"],
     ["learningRecord", "sourcePolicy"],
     ["learningRecord", "legacy-external"],
-    ["promotion", "recurrence"],
     ["promotion", "thirdOccurrence"],
     ["promotion", "promotedRuleRequirements"],
     ["learningRecord", CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
@@ -747,12 +915,10 @@ test("the orchestration projection owns budgets and transitions only", () => {
     ["learningRecord", "dispositionConfirmed"],
     ["learningRecord", "review-learning/v1"],
     ["learningRecord", "taxonomyVersion"],
-    ["promotion", "recurrence"],
     ["promotion", "thirdOccurrence"],
     ["promotion", "promotedRuleRequirements"],
     ["learningRecord", CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
     ["evaluation", "baselineFixture"],
-    ["promotion", "withinReviewedChange"],
     ["learningRecord", "dateBasis"],
   ];
 
@@ -1312,6 +1478,314 @@ test("orchestration carries workflow outcomes and the record keeps record status
     assert.ok(
       !learning.includes(outcome),
       `the learning record must use its own status vocabulary, not ${outcome}`,
+    );
+  }
+});
+
+test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or malformed clean results", () => {
+  const cases: ReadonlyArray<{
+    name: string;
+    value: unknown;
+    valid: boolean;
+  }> = [
+    {
+      name: "completed clean has no findings or missing input",
+      value: {
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "CLEAN",
+        scope: completeScope,
+        findings: [],
+        missingInputs: [],
+      },
+      valid: true,
+    },
+    {
+      name: "completed findings result has a fully dispositioned P3",
+      value: {
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [validFinding],
+        missingInputs: [],
+      },
+      valid: true,
+    },
+    {
+      name: "needs context is incomplete with a requested input",
+      value: {
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "NEEDS_CONTEXT",
+        scope: { ...completeScope, completed: false },
+        findings: [],
+        missingInputs: ["complete manifest"],
+      },
+      valid: true,
+    },
+    {
+      name: "clean cannot have incomplete scope",
+      value: {
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "CLEAN",
+        scope: { ...completeScope, inspectedRelevantConsumers: false },
+        findings: [],
+        missingInputs: [],
+      },
+      valid: false,
+    },
+    {
+      name: "findings found requires a finding",
+      value: {
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [],
+        missingInputs: [],
+      },
+      valid: false,
+    },
+    {
+      name: "needs context requires missing inputs and incomplete scope",
+      value: {
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "NEEDS_CONTEXT",
+        scope: completeScope,
+        findings: [],
+        missingInputs: [],
+      },
+      valid: false,
+    },
+    {
+      name: "P1 cannot carry a disposition",
+      value: {
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [{ ...validFinding, priority: "P1", disposition: "fixed" }],
+        missingInputs: [],
+      },
+      valid: false,
+    },
+    {
+      name: "evidence references require their discriminator locator",
+      value: {
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [
+          { ...validFinding, evidence: [{ kind: "symbol", summary: "bad" }] },
+        ],
+        missingInputs: [],
+      },
+      valid: false,
+    },
+  ];
+
+  for (const entry of cases) {
+    assert.equal(
+      validateChangeRiskResultV1(entry.value).ok,
+      entry.valid,
+      entry.name,
+    );
+  }
+});
+
+test("reviewer envelopes align with the rendered finding contract and reserve closure and orchestration fields", () => {
+  const base = {
+    policyVersion: "change-risk/v1",
+    snapshotId: "snapshot-1",
+    status: "FINDINGS_FOUND",
+    scope: completeScope,
+    missingInputs: [],
+  };
+  const cases: ReadonlyArray<{
+    name: string;
+    value: unknown;
+    options?: Parameters<typeof validateChangeRiskResultV1>[1];
+    valid: boolean;
+  }> = [
+    {
+      name: "a clean-room reviewer finding uses the exact rendered field names",
+      value: { ...base, findings: [validFinding] },
+      valid: true,
+    },
+    {
+      name: "clean-room reviewers cannot close a finding without prior context",
+      value: { ...base, findings: [{ ...validFinding, resolution: "fixed" }] },
+      valid: false,
+    },
+    {
+      name: "remediation accepts closure only for a supplied prior fingerprint",
+      value: { ...base, findings: [{ ...validFinding, resolution: "fixed" }] },
+      options: { mode: "remediation", priorFingerprints: [validFinding.fingerprint] },
+      valid: true,
+    },
+    {
+      name: "remediation rejects closure for an unknown fingerprint",
+      value: { ...base, findings: [{ ...validFinding, resolution: "obsolete" }] },
+      options: { mode: "remediation", priorFingerprints: ["different"] },
+      valid: false,
+    },
+    {
+      name: "reviewer output cannot claim external provenance",
+      value: { ...base, findings: [{ ...validFinding, source: "external", provider: "other" }] },
+      valid: false,
+    },
+    {
+      name: "reviewer output cannot enrich a finding with systemic ownership",
+      value: { ...base, findings: [{ ...validFinding, systemic: true, systemicReason: "owner only" }] },
+      valid: false,
+    },
+  ];
+
+  for (const entry of cases) {
+    assert.equal(
+      validateChangeRiskResultV1(entry.value, entry.options).ok,
+      entry.valid,
+      entry.name,
+    );
+  }
+});
+
+test("completed reviewer envelopes bind to the expected snapshot when supplied", () => {
+  const clean = {
+    policyVersion: "change-risk/v1",
+    snapshotId: "snapshot-current",
+    status: "CLEAN",
+    scope: completeScope,
+    findings: [],
+    missingInputs: [],
+  };
+  assert.equal(
+    validateChangeRiskResultV1(clean, { expectedSnapshotId: "snapshot-current" }).ok,
+    true,
+    "a completed envelope for the current snapshot remains valid",
+  );
+  assert.equal(
+    validateChangeRiskResultV1(clean, { expectedSnapshotId: "snapshot-other" }).ok,
+    false,
+    "a structurally valid CLEAN result cannot approve a different snapshot",
+  );
+});
+
+test("ChangeRiskResultV1 derives deterministic fingerprints from structured finding components", () => {
+  const expected = deriveChangeRiskFingerprint({
+    category: validFinding.category,
+    affectedContractId: validFinding.affectedContractId,
+    location: validFinding.location,
+    unsafeConditionClass: validFinding.unsafeConditionClass,
+  });
+  assert.equal(expected, validFinding.fingerprint);
+  assert.equal(
+    deriveChangeRiskFingerprint({
+      category: validFinding.category,
+      affectedContractId: validFinding.affectedContractId,
+      location: { path: "packages\\compiler/src/./compiler.ts", line: 1 },
+      unsafeConditionClass: validFinding.unsafeConditionClass,
+    }),
+    expected,
+    "path spelling cannot alter the fingerprint",
+  );
+  assert.equal(
+    validateChangeRiskResultV1({
+      policyVersion: "change-risk/v1",
+      snapshotId: "snapshot-1",
+      status: "FINDINGS_FOUND",
+      scope: completeScope,
+      findings: [{ ...validFinding, fingerprint: "reviewer-spoofed" }],
+      missingInputs: [],
+    }).ok,
+    false,
+    "the reviewer cannot choose a contradictory fingerprint",
+  );
+  assert.equal(
+    validateChangeRiskResultV1({
+      policyVersion: "change-risk/v1",
+      snapshotId: "snapshot-1",
+      status: "FINDINGS_FOUND",
+      scope: completeScope,
+      findings: [
+        {
+          ...validFinding,
+          location: { path: "packages/compiler/src/../compiler.ts", line: 1 },
+        },
+      ],
+      missingInputs: [],
+    }).ok,
+    false,
+    "traversal-shaped locations are rejected rather than normalized ambiguously",
+  );
+});
+
+test("ChangeRiskResultV1 rejects nonempty locations that normalize to no path component", () => {
+  for (const location of [
+    { path: "." },
+    { path: "/", symbol: "main" },
+    { path: "//", line: 1 },
+    { path: "\\\\", symbol: "main", line: 1 },
+  ] as const) {
+    assert.equal(
+      validateChangeRiskResultV1({
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [
+          {
+            ...validFinding,
+            location,
+            fingerprint: deriveChangeRiskFingerprint({
+              category: validFinding.category,
+              affectedContractId: validFinding.affectedContractId,
+              location,
+              unsafeConditionClass: validFinding.unsafeConditionClass,
+            }),
+          },
+        ],
+        missingInputs: [],
+      }).ok,
+      false,
+      location.path,
+    );
+  }
+});
+
+test("ChangeRiskResultV1 rejects malformed optional location symbol and line values", () => {
+  for (const location of [
+    { path: "packages/compiler/src/compiler.ts", symbol: "" },
+    { path: "packages/compiler/src/compiler.ts", symbol: 4 },
+    { path: "packages/compiler/src/compiler.ts", line: 0 },
+    { path: "packages/compiler/src/compiler.ts", line: 1.5 },
+    { path: "packages/compiler/src/compiler.ts", line: "1" },
+  ] as const) {
+    assert.doesNotThrow(() =>
+      validateChangeRiskResultV1({
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [{ ...validFinding, location }],
+        missingInputs: [],
+      }),
+    );
+    assert.equal(
+      validateChangeRiskResultV1({
+        policyVersion: "change-risk/v1",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [{ ...validFinding, location }],
+        missingInputs: [],
+      }).ok,
+      false,
+      JSON.stringify(location),
     );
   }
 });
