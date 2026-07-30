@@ -55,7 +55,7 @@ silently weakening the backfill.
 - Category definitions derived from the corpus remain provider-neutral and
   do not encode repository-specific historical wording.
 - Every record carries `sourcePolicy: legacy-external` with the historical
-  provenance encoding; no fabricated `change-risk/v1` execution data.
+  provenance encoding; no fabricated `change-risk/v2` execution data.
 - No GitHub mutation occurs.
 - The default path makes no network call. A live review-thread read occurs only
   after explicit user approval; refusal leaves the fixtures unchanged and

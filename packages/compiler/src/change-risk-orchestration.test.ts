@@ -24,6 +24,38 @@ function createChangeRiskOrchestrationState(
   );
 }
 
+/**
+ * A hand-built round history implies the active checkpoint its latest local
+ * round left open. Keeping that derivation in one helper stops the fixtures
+ * from asserting a state the transition function can never produce.
+ */
+function withCheckpoint<
+  State extends {
+    readonly completedRounds: readonly Readonly<{
+      unresolvedFingerprints: readonly string[];
+      external?: true;
+    }>[];
+  },
+>(state: State, fromRound?: number): State {
+  const from =
+    fromRound ??
+    state.completedRounds.reduce(
+      (index, round, position) => (round.external === true ? index : position),
+      0,
+    );
+  return {
+    ...state,
+    activeCheckpointFromRound: from,
+    activeUnresolvedFingerprints: [
+      ...new Set(
+        state.completedRounds
+          .slice(from)
+          .flatMap((round) => round.unresolvedFingerprints),
+      ),
+    ],
+  };
+}
+
 type RuntimeProofFinding = ChangeRiskBlockerFinding &
   Pick<ChangeRiskReviewFinding, "priority" | "resolution" | "disposition">;
 type TestReviewerFinding = ChangeRiskBlockerFinding &
@@ -36,6 +68,14 @@ const runtimeProofFinding = (fingerprint: string): RuntimeProofFinding => ({
   affectedContractId: "runtime-proof" as const,
   unsafeConditionClass: "missing-runtime-proof" as const,
 });
+const clusteredBlockers = (
+  affectedContractId: ChangeRiskBlockerFinding["affectedContractId"],
+  ...fingerprints: string[]
+): RuntimeProofFinding[] =>
+  fingerprints.map((fingerprint) => ({
+    ...runtimeProofFinding(fingerprint),
+    affectedContractId,
+  }));
 const runtimeProofBlockers = (...fingerprints: string[]) =>
   fingerprints.map(runtimeProofFinding);
 const runtimeProofFingerprint = (fingerprint: string) =>
@@ -210,7 +250,7 @@ test("package root preserves legacy state creation and exports external validati
 test("change-risk/v2 orchestration transition table is bounded and snapshot-bound", () => {
   const initial = createChangeRiskOrchestrationState("snapshot-a");
   const fourthRound = transitionChangeRiskOrchestration(
-    {
+    withCheckpoint({
       ...initial,
       fixRounds: 3,
       initialLocalReviewCompleted: true,
@@ -228,11 +268,11 @@ test("change-risk/v2 orchestration transition table is bounded and snapshot-boun
         },
         {
           blockerCount: 1,
-          unresolvedFingerprints: ["c"],
+          unresolvedFingerprints: [runtimeProofFingerprint("one")],
           remediatedClusterKeys: [],
         },
       ],
-    },
+    }),
     {
       kind: "blockers",
       snapshotId: "snapshot-a",
@@ -242,7 +282,7 @@ test("change-risk/v2 orchestration transition table is bounded and snapshot-boun
   assert.equal(fourthRound.status, "NEEDS_HUMAN_REVIEW");
 
   const recurrence = transitionChangeRiskOrchestration(
-    {
+    withCheckpoint({
       ...initial,
       fixRounds: 1,
       initialLocalReviewCompleted: true,
@@ -254,7 +294,7 @@ test("change-risk/v2 orchestration transition table is bounded and snapshot-boun
           remediatedClusterKeys: [],
         },
       ],
-    },
+    }),
     {
       kind: "blockers",
       snapshotId: "snapshot-a",
@@ -283,16 +323,13 @@ test("terminal escalation outcomes ignore later reviewer results", () => {
       ...createChangeRiskOrchestrationState(snapshotId),
       status,
     };
-    const external = transitionChangeRiskOrchestration(
-      terminalState,
-      {
-        kind: "review-result",
-        external: true,
-        result: reviewResult(snapshotId, "FINDINGS_FOUND", [
-          runtimeProofFinding(`late-${status}`),
-        ]),
-      },
-    );
+    const external = transitionChangeRiskOrchestration(terminalState, {
+      kind: "review-result",
+      external: true,
+      result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+        runtimeProofFinding(`late-${status}`),
+      ]),
+    });
     assert.deepEqual(external, terminalState, status);
   }
 });
@@ -344,40 +381,44 @@ test("a validated external review cannot replace the required initial local revi
 test("serialized handoffs account for every completed local review and blocker checkpoint", () => {
   const initial = createChangeRiskOrchestrationState("snapshot-count-proof");
   assert.equal(
-    validateChangeRiskOrchestrationStateV1({
-      ...initial,
-      initialLocalReviewCompleted: true,
-      logicalInvocations: 2,
-      cleanReviewInvocations: 2,
-      completedRounds: [
-        {
-          blockerCount: 1,
-          unresolvedFingerprints: ["first"],
-          remediatedClusterKeys: [],
-        },
-        {
-          blockerCount: 1,
-          unresolvedFingerprints: ["second"],
-          remediatedClusterKeys: [],
-        },
-      ],
-    }).ok,
+    validateChangeRiskOrchestrationStateV1(
+      withCheckpoint({
+        ...initial,
+        initialLocalReviewCompleted: true,
+        logicalInvocations: 2,
+        cleanReviewInvocations: 2,
+        completedRounds: [
+          {
+            blockerCount: 1,
+            unresolvedFingerprints: ["first"],
+            remediatedClusterKeys: [],
+          },
+          {
+            blockerCount: 1,
+            unresolvedFingerprints: ["second"],
+            remediatedClusterKeys: [],
+          },
+        ],
+      }),
+    ).ok,
     false,
     "local blocker rounds and clean reviews cannot reuse invocation budget",
   );
   assert.equal(
-    validateChangeRiskOrchestrationStateV1({
-      ...initial,
-      initialLocalReviewCompleted: true,
-      logicalInvocations: 1,
-      completedRounds: [
-        {
-          blockerCount: 2,
-          unresolvedFingerprints: ["only-one"],
-          remediatedClusterKeys: [],
-        },
-      ],
-    }).ok,
+    validateChangeRiskOrchestrationStateV1(
+      withCheckpoint({
+        ...initial,
+        initialLocalReviewCompleted: true,
+        logicalInvocations: 1,
+        completedRounds: [
+          {
+            blockerCount: 2,
+            unresolvedFingerprints: ["only-one"],
+            remediatedClusterKeys: [],
+          },
+        ],
+      }),
+    ).ok,
     false,
     "blocker count must equal its unique fingerprint checkpoint",
   );
@@ -574,8 +615,8 @@ test("cluster batching uses three members while a two-member pair remains ordina
 test("within-change recurrence requires its guard or a recorded impracticality", () => {
   const snapshotId = "snapshot-guard";
   const key = "runtime-proof+missing-runtime-proof";
-  const recurrence = transitionChangeRiskOrchestration(
-    {
+  const recurrence = transitionChangeRiskOrchestrationProduction(
+    withCheckpoint({
       ...createChangeRiskOrchestrationState(snapshotId),
       fixRounds: 1,
       initialLocalReviewCompleted: true,
@@ -583,15 +624,17 @@ test("within-change recurrence requires its guard or a recorded impracticality",
       completedRounds: [
         {
           blockerCount: 1,
-          unresolvedFingerprints: ["old"],
+          unresolvedFingerprints: [runtimeProofFingerprint("old")],
           remediatedClusterKeys: [key],
         },
       ],
-    },
+    }),
     {
-      kind: "blockers",
-      snapshotId,
-      findings: [runtimeProofFinding("new")],
+      kind: "review-result",
+      result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+        { ...runtimeProofFinding("old"), resolution: "fixed" },
+        runtimeProofFinding("new"),
+      ]),
     },
   );
   assert.deepEqual(recurrence.requiredMechanicalGuardClusterKeys, [key]);
@@ -628,18 +671,20 @@ test("within-change recurrence requires its guard or a recorded impracticality",
 
 test("serialized handoffs reject malformed, stale, reset, and contradictory state before resume", () => {
   const valid = JSON.parse(
-    JSON.stringify({
-      ...createChangeRiskOrchestrationState("snapshot-current"),
-      initialLocalReviewCompleted: true,
-      logicalInvocations: 1,
-      completedRounds: [
-        {
-          blockerCount: 1,
-          unresolvedFingerprints: ["prior"],
-          remediatedClusterKeys: ["runtime-proof+missing-runtime-proof"],
-        },
-      ],
-    }),
+    JSON.stringify(
+      withCheckpoint({
+        ...createChangeRiskOrchestrationState("snapshot-current"),
+        initialLocalReviewCompleted: true,
+        logicalInvocations: 1,
+        completedRounds: [
+          {
+            blockerCount: 1,
+            unresolvedFingerprints: ["prior"],
+            remediatedClusterKeys: ["runtime-proof+missing-runtime-proof"],
+          },
+        ],
+      }),
+    ),
   );
   assert.equal(
     validateChangeRiskOrchestrationStateV1(valid, {
@@ -822,8 +867,8 @@ test("confirmation is required for P1, high-risk, and two-round paths, including
   );
   assert.equal(highRisk.status, "ACTIVE");
   assert.equal(highRisk.confirmationRequired, true);
-  const afterTwoRounds = transitionChangeRiskOrchestration(
-    {
+  const afterTwoRounds = transitionChangeRiskOrchestrationProduction(
+    withCheckpoint({
       ...createChangeRiskOrchestrationState(snapshotId),
       fixRounds: 2,
       initialLocalReviewCompleted: true,
@@ -831,20 +876,22 @@ test("confirmation is required for P1, high-risk, and two-round paths, including
       completedRounds: [
         {
           blockerCount: 1,
-          unresolvedFingerprints: ["one"],
+          unresolvedFingerprints: [runtimeProofFingerprint("one")],
           remediatedClusterKeys: [],
         },
         {
           blockerCount: 1,
-          unresolvedFingerprints: ["two"],
+          unresolvedFingerprints: [runtimeProofFingerprint("two")],
           remediatedClusterKeys: [],
         },
       ],
-    },
+    }),
     {
-      kind: "blockers",
-      snapshotId,
-      findings: runtimeProofBlockers("round-three"),
+      kind: "review-result",
+      result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+        { ...runtimeProofFinding("two"), resolution: "fixed" },
+        runtimeProofFinding("round-three"),
+      ]),
     },
   );
   assert.equal(afterTwoRounds.confirmationRequired, true);
@@ -932,11 +979,11 @@ test("fixes before a blocker review escalate and budget exhaustion wins unchange
   });
   assert.equal(unchanged.status, "NEEDS_HUMAN_REVIEW");
   const overlapping = transitionChangeRiskOrchestration(
-    {
-    ...initial,
-    fixRounds: 3,
-    initialLocalReviewCompleted: true,
-    logicalInvocations: 3,
+    withCheckpoint({
+      ...initial,
+      fixRounds: 3,
+      initialLocalReviewCompleted: true,
+      logicalInvocations: 3,
       completedRounds: [
         {
           blockerCount: 1,
@@ -954,7 +1001,7 @@ test("fixes before a blocker review escalate and budget exhaustion wins unchange
           remediatedClusterKeys: [],
         },
       ],
-    },
+    }),
     {
       kind: "fix-applied",
       snapshotId: "snapshot-unchanged",
@@ -966,24 +1013,25 @@ test("fixes before a blocker review escalate and budget exhaustion wins unchange
 
 test("external blocker rounds do not participate in remediation stagnation", () => {
   const snapshotId = "snapshot-external-stagnation";
-  let state: ReturnType<typeof createChangeRiskOrchestrationState> = {
-    ...createChangeRiskOrchestrationState(snapshotId),
-    fixRounds: 2,
-    initialLocalReviewCompleted: true,
-    logicalInvocations: 2,
-    completedRounds: [
+  let state: ReturnType<typeof createChangeRiskOrchestrationState> =
+    withCheckpoint({
+      ...createChangeRiskOrchestrationState(snapshotId),
+      fixRounds: 2,
+      initialLocalReviewCompleted: true,
+      logicalInvocations: 2,
+      completedRounds: [
         {
           blockerCount: 3,
           unresolvedFingerprints: ["local-one-a", "local-one-b", "local-one-c"],
-        remediatedClusterKeys: [],
-      },
+          remediatedClusterKeys: [],
+        },
         {
           blockerCount: 2,
           unresolvedFingerprints: ["local-two-a", "local-two-b"],
-        remediatedClusterKeys: [],
-      },
-    ],
-  };
+          remediatedClusterKeys: [],
+        },
+      ],
+    });
 
   for (const fingerprint of [
     "external-one",
@@ -1270,7 +1318,7 @@ test("confirmation must be a distinct bounded invocation", () => {
 
 test("a clean remediation result after the second fix round requires confirmation", () => {
   const snapshotId = "snapshot-second-fix";
-  const state = {
+  const state = withCheckpoint({
     ...createChangeRiskOrchestrationState(snapshotId),
     fixRounds: 2,
     initialLocalReviewCompleted: true,
@@ -1278,19 +1326,23 @@ test("a clean remediation result after the second fix round requires confirmatio
     completedRounds: [
       {
         blockerCount: 1,
-        unresolvedFingerprints: ["first"],
+        unresolvedFingerprints: [runtimeProofFingerprint("first")],
         remediatedClusterKeys: [],
       },
       {
         blockerCount: 1,
-        unresolvedFingerprints: ["second"],
+        unresolvedFingerprints: [runtimeProofFingerprint("second")],
         remediatedClusterKeys: [],
       },
     ],
-  };
+  });
+  // A remediation review closes its checkpoint by resolving it, never by
+  // returning an empty envelope that accounts for nothing.
   const clean = transitionChangeRiskOrchestrationProduction(state, {
     kind: "review-result",
-    result: reviewResult(snapshotId, "CLEAN"),
+    result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+      { ...runtimeProofFinding("second"), resolution: "fixed" },
+    ]),
   });
   assert.equal(clean.status, "ACTIVE");
   assert.equal(clean.confirmationRequired, true);
@@ -1502,10 +1554,12 @@ test("stagnation requires two consecutive remediation reviews and human escalati
     }),
     {
       kind: "review-result",
+      // Each round reports a distinct cluster so stagnation is measured
+      // without the within-change recurrence trigger firing first.
       result: reviewResult("snapshot-1", "FINDINGS_FOUND", [
         { ...runtimeProofFinding("a"), resolution: "fixed" },
         { ...runtimeProofFinding("b"), resolution: "fixed" },
-        ...runtimeProofBlockers("c", "d"),
+        ...clusteredBlockers("state-transition", "c", "d"),
       ]),
     },
   );
@@ -1519,15 +1573,17 @@ test("stagnation requires two consecutive remediation reviews and human escalati
     {
       kind: "review-result",
       result: reviewResult("snapshot-2", "FINDINGS_FOUND", [
-        { ...runtimeProofFinding("c"), resolution: "fixed" },
-        { ...runtimeProofFinding("d"), resolution: "fixed" },
-        ...runtimeProofBlockers("e", "f"),
+        ...clusteredBlockers("state-transition", "c", "d").map((finding) => ({
+          ...finding,
+          resolution: "fixed" as const,
+        })),
+        ...clusteredBlockers("parsing-validation", "e", "f"),
       ]),
     },
   );
   assert.equal(secondRemediation.status, "NO_PROGRESS");
   const overlap = transitionChangeRiskOrchestration(
-    {
+    withCheckpoint({
       ...createChangeRiskOrchestrationState(snapshotId),
       fixRounds: 3,
       initialLocalReviewCompleted: true,
@@ -1545,14 +1601,168 @@ test("stagnation requires two consecutive remediation reviews and human escalati
         },
         {
           blockerCount: 1,
-          unresolvedFingerprints: ["same"],
+          unresolvedFingerprints: [runtimeProofFingerprint("same")],
           remediatedClusterKeys: [],
         },
       ],
-    },
+    }),
     { kind: "blockers", snapshotId, findings: runtimeProofBlockers("same") },
   );
   assert.equal(overlap.status, "NEEDS_HUMAN_REVIEW");
+});
+
+test("a serialized handoff cannot drop the active blocker checkpoint", () => {
+  const snapshotId = "snapshot-checkpoint-drop";
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: runtimeProofBlockers("open") },
+  );
+  assert.equal(validateChangeRiskOrchestrationStateV1(reviewed).ok, true);
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1({
+      ...reviewed,
+      activeUnresolvedFingerprints: [],
+    }).ok,
+    false,
+    "an ACTIVE handoff may not retain a blocker round with no active checkpoint",
+  );
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1({
+      ...reviewed,
+      activeUnresolvedFingerprints: [],
+      activeCheckpointFromRound: reviewed.completedRounds.length,
+    }).ok,
+    false,
+    "advancing the checkpoint past every round requires a completed clean review",
+  );
+
+  const fixed = transitionChangeRiskOrchestration(reviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    remediatedFindings: [],
+  });
+  const drifted = transitionChangeRiskOrchestration(fixed, {
+    kind: "code-changed",
+    snapshotId: `${snapshotId}-drifted`,
+  });
+  assert.deepEqual(
+    drifted.activeUnresolvedFingerprints,
+    reviewed.activeUnresolvedFingerprints,
+    "an out-of-band code change never resets the unresolved checkpoint",
+  );
+  assert.equal(validateChangeRiskOrchestrationStateV1(drifted).ok, true);
+
+  const clean = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState("snapshot-checkpoint-clean"),
+    { kind: "clean", snapshotId: "snapshot-checkpoint-clean" },
+  );
+  assert.equal(validateChangeRiskOrchestrationStateV1(clean).ok, true);
+});
+
+test("a validated external blocker is merged without local closure coverage", () => {
+  const snapshotId = "snapshot-external-remediation";
+  const fixedSnapshotId = `${snapshotId}-fixed`;
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: runtimeProofBlockers("local") },
+  );
+  const fixed = transitionChangeRiskOrchestration(reviewed, {
+    kind: "fix-applied",
+    snapshotId: fixedSnapshotId,
+    remediatedFindings: [],
+  });
+  const external = transitionChangeRiskOrchestrationProduction(
+    fixed,
+    createValidatedExternalChangeRiskReviewEvent(
+      reviewResult(fixedSnapshotId, "FINDINGS_FOUND", [
+        runtimeProofFinding("external-only"),
+      ]),
+      ["GitHub review thread"],
+    ),
+  );
+  assert.equal(external.status, "ACTIVE");
+  assert.equal(
+    external.transientAttempts,
+    0,
+    "an external review that reports only its own finding is not a malformed local attempt",
+  );
+  assert.equal(external.completedRounds.at(-1)?.external, true);
+  assert.equal(
+    external.activeUnresolvedFingerprints.length,
+    2,
+    "the external blocker merges into the active checkpoint",
+  );
+  assert.equal(external.logicalInvocations, fixed.logicalInvocations);
+  assert.equal(validateChangeRiskOrchestrationStateV1(external).ok, true);
+});
+
+test("a fix is refused once the final confirmation budget is exhausted", () => {
+  const snapshotId = "snapshot-confirmation-cap";
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: runtimeProofBlockers("open") },
+  );
+  const exhausted = {
+    ...reviewed,
+    confirmationRequired: true,
+    confirmationInvocations: 2,
+    cleanReviewInvocations: 3,
+    logicalInvocations: 4,
+  };
+  assert.equal(validateChangeRiskOrchestrationStateV1(exhausted).ok, true);
+  const refused = transitionChangeRiskOrchestration(exhausted, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    remediatedFindings: [],
+  });
+  assert.equal(
+    refused.status,
+    "NEEDS_HUMAN_REVIEW",
+    "a fix that inevitably needs a third confirmation must never start",
+  );
+});
+
+test("remediated cluster history is bound to the active blockers, not caller claims", () => {
+  const snapshotId = "snapshot-remediated-history";
+  const clusterKey = "runtime-proof+missing-runtime-proof";
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: runtimeProofBlockers("solo") },
+  );
+  const fixed = transitionChangeRiskOrchestration(reviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    remediatedFindings: [],
+  });
+  assert.deepEqual(
+    fixed.completedRounds.at(-1)?.remediatedClusterKeys,
+    [clusterKey],
+    "an omitted claim cannot erase the cluster a fix round addressed",
+  );
+  const recurred = transitionChangeRiskOrchestrationProduction(fixed, {
+    kind: "review-result",
+    result: reviewResult(`${snapshotId}-fixed`, "FINDINGS_FOUND", [
+      { ...runtimeProofFinding("solo"), resolution: "fixed" },
+      runtimeProofFinding("recurred"),
+    ]),
+  });
+  assert.deepEqual(recurred.requiredMechanicalGuardClusterKeys, [clusterKey]);
+
+  const unclaimable = transitionChangeRiskOrchestration(reviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-unclaimable`,
+    remediatedFindings: [
+      {
+        ...runtimeProofFinding("stranger"),
+        fingerprint: runtimeProofFingerprint("stranger"),
+      },
+    ],
+  });
+  assert.equal(
+    unclaimable.status,
+    "NEEDS_HUMAN_REVIEW",
+    "a remediation claim for an inactive fingerprint is not evidence",
+  );
 });
 
 test("impractical guard escalation retains its rationale and evidence", () => {

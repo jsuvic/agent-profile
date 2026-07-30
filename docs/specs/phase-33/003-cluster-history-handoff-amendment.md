@@ -55,6 +55,28 @@ mechanism the approved contract already uses for fingerprint checkpoints.
 - `implement-next` and `final-review` continue to validate the record without
   interpreting it; this field adds no new consumer obligation for them.
 
+### Checkpoint and remediation-claim integrity (added 2026-07-30)
+
+Added from PR #140's automated review, which found the carried history
+trustable only as far as the caller's own claims.
+
+- The remediated cluster keys a completed round carries are DERIVED from the
+  active blocker checkpoint that round remediated, never from an
+  unverifiable caller-supplied list. A remediation claim naming a fingerprint
+  or cluster key that is not active escalates to `NEEDS_HUMAN_REVIEW` instead
+  of being recorded.
+- The handoff record additionally carries the index of the first completed
+  round its active checkpoint accumulates from. The checkpoint MUST equal the
+  unresolved fingerprints of the rounds at and after that index - the latest
+  local round plus every external round merged after it - so a serialized
+  handoff cannot retain a blocker round while dropping its checkpoint.
+- That index advances past every recorded round only when a validated clean
+  review closed them, which a resumed owner checks against the record's own
+  clean-review count.
+- An out-of-band `code-changed` event moves the snapshot but closes nothing,
+  so it carries the unresolved checkpoint into the next review rather than
+  resetting it.
+
 ### Repeated recurrence after a guard (amends the retry and escalation contract)
 
 - When a cluster key recurs again after a within-change recurrence already
@@ -80,6 +102,10 @@ The workflow-policy version stays `change-risk/v1`. This changes the closed
 handoff record, which the versioning rule would ordinarily increment, but no
 `change-risk/v1` artifact has been emitted and no `review-learning/v1` record
 persisted, so ADR 0027's emission precondition absorbs it.
+
+Superseded 2026-07-30 for the version value only: PR #140 emitted the first
+artifacts, the pre-emission exception lapsed, and the workflow-policy version
+is now `change-risk/v2`. This amendment's contracts are unchanged.
 
 ## Ownership
 

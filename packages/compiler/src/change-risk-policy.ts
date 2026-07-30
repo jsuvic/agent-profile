@@ -412,6 +412,14 @@ function validateEvidence(
       value.invalidatesPriorFinding !== true)
   )
     return false;
+  // Optional locators are validated independently of the kind that requires
+  // them, so a present-but-malformed field can never reach a typed consumer.
+  if (
+    (value.path !== undefined && !nonEmptyString(value.path)) ||
+    (value.symbol !== undefined && !nonEmptyString(value.symbol)) ||
+    (value.commit !== undefined && !nonEmptyString(value.commit))
+  )
+    return false;
   if (
     (value.kind === "file" ||
       value.kind === "test" ||

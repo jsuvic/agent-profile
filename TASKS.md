@@ -2166,6 +2166,46 @@ keys on two named entry points, so a third atomic-write API must be added to
 `ATOMIC_WRITE_ENTRY_POINTS` - the same enumeration weakness one level up,
 though far narrower than enumerating call sites.
 
+PR #140 automated review, unresolved-findings round (2026-07-30): six findings
+closed, two of them one root cause. The shared cause of the two P1s is that
+state recording blocker CLOSURE was trusted rather than derived - a fix round
+recorded whatever `remediatedFindings` the caller passed (so fixing a
+clusterable blocker with an empty array left `remediatedClusterKeys` empty and
+the mechanical-guard transition never fired), and the validator checked only
+that active fingerprints appeared somewhere in history, so a serialized
+handoff could retain a completed blocker round while dropping the checkpoint
+entirely and then reach `CLEAN` with no prior fingerprints to account for.
+Both are now derived: remediated cluster keys come from the active checkpoint
+the round carried, a claim naming a non-active fingerprint or key escalates,
+and the record carries `activeCheckpointFromRound` with the checkpoint
+required to equal exactly the unresolved fingerprints at and after that index.
+The index advances past every round only when a validated clean review closed
+them, checked against the record's own clean-review count; `code-changed` now
+carries the checkpoint forward instead of resetting it, which is what makes
+that binding hold. Three independent defects: a branded external review was
+forced through remediation validation, so an external P1/P2 reporting only its
+own finding was treated as a malformed local attempt and consumed retries (it
+now validates independently and never spends a confirmation slot); the
+fix-round reservation checked the six-invocation budget but not the separate
+two-confirmation cap, so a fix could start that inevitably needed a third
+confirmation; and the evidence validator never checked `path`, `symbol`, or
+`commit` when the evidence kind did not require them, so `commit: {}` was
+accepted and returned as a typed `ChangeRiskResultV1`. The sixth was contract
+drift, not code: the implementation emits `change-risk/v2` (ADR 0027's first
+post-emission increment) while the parent spec, both amendments, and the
+sequenced I3 brief still required `change-risk/v1`, which would have made the
+next slice persist an incompatible policy value - the specs and briefs now
+name v2, with the pre-emission reasoning kept as history. Test-side
+consequence worth noting: several fixtures hand-built round histories with an
+empty checkpoint, which the transition function can never produce; they now
+derive it, and one fixture that asserted a bare `CLEAN` envelope closing a
+remediation round was corrected, because a remediation review closes its
+checkpoint by resolving it, never by returning an envelope accounting for
+nothing. Compiler suite 472 tests, 0 failures, 7 pre-existing win32 skips;
+root `npm run check` clean. The `scripts/release` Phase 31 journey test fails
+identically on a clean tree here (local `tar` cannot read the fixture path
+containing spaces), so it is environmental, not a regression.
+
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
 Draft 2026-07-27, pending grill approval; the spec itself is human-gated.

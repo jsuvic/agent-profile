@@ -33,6 +33,12 @@ export type ChangeRiskOrchestrationStateV1 = Readonly<{
   lastBlockerReviewSnapshotId?: string;
   lastLocalReviewSnapshotId?: string;
   activeUnresolvedFingerprints: readonly string[];
+  /**
+   * Index of the first completed round the active checkpoint accumulates from.
+   * It advances only when a validated clean review closes every prior round,
+   * so a handoff cannot silently drop an open blocker round.
+   */
+  activeCheckpointFromRound: number;
   completedRounds: readonly Readonly<{
     blockerCount: number;
     unresolvedFingerprints: readonly string[];
@@ -218,6 +224,7 @@ export function createChangeRiskOrchestrationState(
     highRisk,
     missingInputs: [],
     activeUnresolvedFingerprints: [],
+    activeCheckpointFromRound: 0,
     completedRounds: [],
     requiredMechanicalGuardClusterKeys: [],
     guardedClusterKeys: [],
@@ -319,6 +326,7 @@ export function validateChangeRiskOrchestrationStateV1(
     (value.lastLocalReviewSnapshotId !== undefined &&
       !isNonEmptyString(value.lastLocalReviewSnapshotId)) ||
     !hasUniqueNonEmptyStrings(value.activeUnresolvedFingerprints) ||
+    !isNonNegativeInteger(value.activeCheckpointFromRound) ||
     !Array.isArray(value.completedRounds) ||
     !hasCanonicalClusterKeys(value.requiredMechanicalGuardClusterKeys) ||
     !hasCanonicalClusterKeys(value.guardedClusterKeys) ||
@@ -342,8 +350,13 @@ export function validateChangeRiskOrchestrationStateV1(
     ).length +
       value.cleanReviewInvocations !==
       value.logicalInvocations ||
-    value.initialLocalReviewCompleted !== (value.logicalInvocations > 0) ||
+    value.initialLocalReviewCompleted !== value.logicalInvocations > 0 ||
     value.fixRounds > value.completedRounds.length ||
+    value.activeCheckpointFromRound > value.completedRounds.length ||
+    // Only a completed clean review can close every recorded round.
+    (value.activeCheckpointFromRound === value.completedRounds.length &&
+      value.completedRounds.length > 0 &&
+      value.cleanReviewInvocations === 0) ||
     (value.lastBlockerReviewSnapshotId !== undefined &&
       value.lastBlockerReviewSnapshotId !== value.snapshotId) ||
     (value.lastLocalReviewSnapshotId !== undefined &&
@@ -385,12 +398,19 @@ export function validateChangeRiskOrchestrationStateV1(
   )
     return { ok: false, reason: "invalid completed-round history" };
   const candidate = value as ChangeRiskOrchestrationStateV1;
-  const historicalFingerprints = new Set(
-    candidate.completedRounds.flatMap((round) => round.unresolvedFingerprints),
+  // The checkpoint is transition-consistent: it is exactly the unresolved
+  // fingerprints of the rounds it accumulates from - the latest local round
+  // plus every external round merged after it.
+  const checkpointFingerprints = new Set(
+    candidate.completedRounds
+      .slice(candidate.activeCheckpointFromRound)
+      .flatMap((round) => round.unresolvedFingerprints),
   );
   if (
+    candidate.activeUnresolvedFingerprints.length !==
+      checkpointFingerprints.size ||
     candidate.activeUnresolvedFingerprints.some(
-      (fingerprint) => !historicalFingerprints.has(fingerprint),
+      (fingerprint) => !checkpointFingerprints.has(fingerprint),
     )
   )
     return { ok: false, reason: "invalid active blocker checkpoint" };
@@ -533,13 +553,17 @@ function transitionChangeRiskOrchestrationInternal(
     }
     // Empty, malformed, truncated, NEEDS_CONTEXT, and snapshot-mismatched
     // output are attempts, never a path to clean.
-    const validationMode = state.awaitingFinalConfirmation
-      ? "final"
-      : !state.initialLocalReviewCompleted
-        ? "initial"
-        : state.fixRounds > 0
-        ? "remediation"
-        : "initial";
+    // A branded external review is validated independently: it never spends a
+    // confirmation slot and never owes closure coverage for local blockers.
+    const validationMode = isExternal
+      ? "initial"
+      : state.awaitingFinalConfirmation
+        ? "final"
+        : !state.initialLocalReviewCompleted
+          ? "initial"
+          : state.fixRounds > 0
+            ? "remediation"
+            : "initial";
     const priorFingerprints =
       validationMode === "remediation"
         ? state.activeUnresolvedFingerprints
@@ -664,12 +688,12 @@ function transitionChangeRiskOrchestrationInternal(
       reviewState.status === "CLEAN" &&
       (reviewState.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds ||
         reviewState.logicalInvocations +
-            1 +
-            (reviewState.confirmationRequired ||
-            reviewState.highRisk ||
-            reviewState.fixRounds + 1 >= 2
-              ? 1
-              : 0) >
+          1 +
+          (reviewState.confirmationRequired ||
+          reviewState.highRisk ||
+          reviewState.fixRounds + 1 >= 2
+            ? 1
+            : 0) >
           CHANGE_RISK_LIMITS.maxLogicalInvocations)
     ) {
       return terminal(reviewState, "NEEDS_HUMAN_REVIEW");
@@ -711,7 +735,8 @@ function transitionChangeRiskOrchestrationInternal(
       missingInputs: [],
       lastBlockerReviewSnapshotId: undefined,
       lastLocalReviewSnapshotId: undefined,
-      activeUnresolvedFingerprints: [],
+      // An out-of-band code change moves the snapshot but closes nothing, so
+      // the unresolved checkpoint carries into the next review.
       batchedClusterKeys: [],
       awaitingFinalConfirmation: false,
       confirmationSatisfied: false,
@@ -824,19 +849,40 @@ function transitionChangeRiskOrchestrationInternal(
       CHANGE_RISK_LIMITS.maxLogicalInvocations
     )
       return terminal(state, "NEEDS_HUMAN_REVIEW");
+    // The confirmation cap is a separate budget: a fix that will inevitably
+    // require a confirmation the change can no longer fund never starts.
+    if (
+      confirmationAfterFix &&
+      state.confirmationInvocations >=
+        CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations
+    )
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (event.snapshotId === state.snapshotId)
       return terminal(state, "NO_PROGRESS");
+    // Recurrence history is derived from the blockers this round actually
+    // carried, never from an unverifiable caller claim; a claim that names no
+    // active blocker is rejected rather than recorded.
+    const activeClusterKeys = unique(
+      activeClusterMembers.map((member) => member.clusterKey),
+    );
+    const claimedClusterKeys = deriveRemediatedClusterKeys(
+      event.remediatedFindings,
+    );
+    if (
+      event.remediatedFindings.some(
+        (finding) =>
+          finding.fingerprint !== undefined &&
+          !state.activeUnresolvedFingerprints.includes(finding.fingerprint),
+      ) ||
+      claimedClusterKeys.some((key) => !activeClusterKeys.includes(key))
+    )
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
     const completedRounds =
       state.completedRounds.length === 0
         ? state.completedRounds
         : state.completedRounds.map((round, index) =>
             index === state.completedRounds.length - 1
-              ? {
-                  ...round,
-                  remediatedClusterKeys: deriveRemediatedClusterKeys(
-                    event.remediatedFindings,
-                  ),
-                }
+              ? { ...round, remediatedClusterKeys: activeClusterKeys }
               : round,
           );
     return {
@@ -887,6 +933,7 @@ function transitionChangeRiskOrchestrationInternal(
       transientAttempts: 0,
       missingInputs: [],
       activeUnresolvedFingerprints: [],
+      activeCheckpointFromRound: state.completedRounds.length,
       batchedClusterKeys: [],
       confirmationSatisfied: true,
       status: "CLEAN",
@@ -979,6 +1026,10 @@ function transitionChangeRiskOrchestrationInternal(
             ...event.findings.map((finding) => finding.fingerprint),
           ])
         : unique(event.findings.map((finding) => finding.fingerprint)),
+    // A local round supersedes the checkpoint it just reported closure for;
+    // an external round merges into the one already open.
+    activeCheckpointFromRound:
+      event.external === true ? state.activeCheckpointFromRound : prior.length,
     batchedClusterKeys:
       event.external === true
         ? unique([...state.batchedClusterKeys, ...batchedClusterKeys])

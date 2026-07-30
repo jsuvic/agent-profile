@@ -1926,6 +1926,73 @@ test("all optional evidence line ranges use the closed positive ordered shape", 
   }
 });
 
+test("optional evidence locators are validated even when the kind ignores them", () => {
+  for (const evidence of [
+    {
+      kind: "command-output",
+      summary: "npm test passed",
+      commit: {},
+    },
+    {
+      kind: "command-output",
+      summary: "npm test passed",
+      commit: "  ",
+    },
+    {
+      kind: "command-output",
+      summary: "npm test passed",
+      path: 3,
+    },
+    {
+      kind: "command-output",
+      summary: "npm test passed",
+      symbol: "",
+    },
+    {
+      kind: "file",
+      path: "packages/compiler/src/compiler.ts",
+      summary: "a non-string symbol on a kind that does not require one",
+      symbol: ["compile"],
+    },
+  ]) {
+    assert.equal(
+      validateChangeRiskResultV1({
+        policyVersion: CHANGE_RISK_POLICY_VERSION,
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [{ ...validFinding, evidence: [evidence] }],
+        missingInputs: [],
+      }).ok,
+      false,
+      evidence.summary,
+    );
+  }
+  assert.equal(
+    validateChangeRiskResultV1({
+      policyVersion: CHANGE_RISK_POLICY_VERSION,
+      snapshotId: "snapshot-1",
+      status: "FINDINGS_FOUND",
+      scope: completeScope,
+      findings: [
+        {
+          ...validFinding,
+          evidence: [
+            {
+              kind: "command-output",
+              summary: "npm test passed",
+              commit: "9b3dd90",
+            },
+          ],
+        },
+      ],
+      missingInputs: [],
+    }).ok,
+    true,
+    "a well-formed optional locator stays acceptable",
+  );
+});
+
 test("change-risk fingerprints use an unambiguous structured encoding", () => {
   const common = {
     category: validFinding.category,

@@ -132,10 +132,15 @@ making the reviewer aware of cluster history.
   been emitted and no record persisted. See ADR 0027.
 - The rule is stated rather than left as precedent because this is the second
   amendment to rely on it.
+- Superseded 2026-07-30 for the version value only: PR #140 emitted the first
+  reviewer and orchestration artifacts, so the pre-emission exception lapsed
+  and the workflow-policy version is now `change-risk/v2`. This amendment's
+  contracts are unchanged; every other `change-risk/v1` in this amendment
+  names the version that was current when it was approved.
 
 ### Learning-record addition (amends the review-learning record contract)
 
-- A `change-risk/v1` record persists, per round, the cluster keys of any
+- A `change-risk/v2` record persists, per round, the cluster keys of any
   clusters formed and whether a within-change cluster recurrence fired,
   including the guard introduced or the recorded impracticality.
 - Records with `sourcePolicy: legacy-external` omit cluster data rather than
@@ -180,7 +185,7 @@ making the reviewer aware of cluster history.
    record with no cluster data.
 5. Budgets are unchanged: no test may show clustering granting an extra
    invocation or fix round.
-6. A test proves the emitted policy version is `change-risk/v1` and that the
+6. A test proves the emitted policy version is `change-risk/v2` and that the
    versioning rule's emission precondition is stated in the policy source.
 
 ## Known Risks
