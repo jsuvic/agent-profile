@@ -66,6 +66,39 @@ expected-pair table for no-entry rows (the markerless divergence is the
 phase-14 consent-gated adoption design, not a bug). No further behavior
 change authorized.
 
+Conformance fix 2026-07-30, no new spec: `compile --target <id> --write`
+rebuilt `ai-profile.lock` from the scoped compile result alone, dropping every
+other target's templates and outputs (observed on PR #140: 27 entries to 5,
+reported only as `[change] ai-profile.lock`). No new contract was written
+because an approved one already governs it. Phase-05/001 says compile "removes
+from the new lockfile" the outputs a previous compile produced that are "no
+longer in the current compile result" - a rule about paths the PROFILE stopped
+generating. A target the run never requested is not orphaned, and dropping it
+strands its files on disk with no recorded ownership, which phase-14/001's
+proof order ("lockfile v2 ownership" first), phase-05's first-write refusal,
+and phase-27's own parity table all read. Phase-27's binding amendment already
+states the principle for one case: "The rebuilt lockfile retains the
+`manual-owned` entry for the path - it is never dropped or reclassified by
+compile." The scoped run now carries untouched targets' entries forward; an
+unscoped run passes nothing and rebuilds in full, so genuine orphan pruning is
+unchanged. The implementation seam is `buildCompileWrites`'s new optional
+`scopedTargets`, wired only from `runCompile` where `--target` is parsed;
+this run's own entries always win, so a scoped compile can never resurrect a
+stale record for a path it just regenerated. One adjacent defect was fixed
+because the primary fix could not be correct without it: the lockfile patch
+block sorted outputs with `localeCompare` while `createLockfileFile` sorts by
+byte order, and the two disagree (ICU orders `change-risk-reviewer.md` after
+`code-quality-reviewer.md`; byte order puts it first). Any compile routed
+through that block therefore emitted a different row order than a plain
+compile - churn against phase-01/003's determinism contract, and drift the next
+unscoped compile would rewrite. Both now use byte order. Verified end to end: a
+real `compile --target claude-subagents --write` against this repository is now
+byte-identical to the full-compile lockfile. CLI suite 608 tests, compiler 482,
+0 failures; root `npm run check` clean; the release journey test still fails
+only on this machine's `tar`. Not done here: no formal spec amendment was
+filed, since amending an approved spec is human-gated - if the retention rule
+should be stated explicitly rather than derived, that is a grill decision.
+
 ## phase-28: Release Automation (`docs/specs/phase-28/001-release-automation.md`)
 
 Spec 001 approved 2026-07-09 (ADR 0012 accepted).

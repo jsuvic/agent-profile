@@ -3175,6 +3175,20 @@ async function runCompile(
     // can never disagree about a retained role/client resolution.
     ...(previousModelPolicy ? { previousModelPolicy } : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
+    // A scoped run generated only the requested targets, so this lockfile is
+    // built from a partial result. Carry the untouched targets' entries
+    // forward instead of dropping provenance for files the run never looked
+    // at. An unscoped run passes nothing and rebuilds in full, which is what
+    // prunes genuinely orphaned entries.
+    ...(parsed.targets.length > 0 && previousLockForCompile
+      ? {
+          scopedTargets: {
+            requested: parsed.targets,
+            previousTemplates: previousLockForCompile.templates,
+            previousOutputs: previousLockForCompile.outputs,
+          },
+        }
+      : {}),
   });
 
   if (parsed.write && !parsed.force) {
