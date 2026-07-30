@@ -59,6 +59,16 @@ Reviewers of future amendments must check emission status before assuming a
 version bump is or is not required, which is a small additional step at
 amendment time.
 
+## First post-emission increment
+
+On 2026-07-30, Phase 33's first reviewer and orchestration artifacts had been
+generated on PR #140. The subsequent ambiguity repair changed the finding
+fingerprint wire encoding from delimiter concatenation to a structured JSON
+tuple. Because `change-risk/v1` artifacts now existed, the pre-emission
+exception no longer applied. The workflow-policy version therefore advances
+to `change-risk/v2`; the category taxonomy and learning-record schema remain
+independently versioned at `v1`.
+
 ## Alternatives Considered
 
 - **Increment to `change-risk/v2`.** Rejected: applies the rule literally and

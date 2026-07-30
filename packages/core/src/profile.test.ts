@@ -696,6 +696,16 @@ describe("subagents schema", () => {
     assert.equal(result.ok, false);
   });
 
+  it("reserves the generated change-risk reviewer name", () => {
+    const result = validateProfileValue(
+      profileWithSubagents({
+        enabled: true,
+        agents: [{ ...validSubagent(), name: "change-risk-reviewer" }],
+      }),
+    );
+    assert.equal(result.ok, false);
+  });
+
   it("rejects enabled: true with empty agents", () => {
     const result = validateProfileValue(
       profileWithSubagents({ enabled: true, agents: [] }),
@@ -1332,7 +1342,11 @@ describe("renderProfileYaml", () => {
   });
 
   it("round-trips: parseProfileYaml(renderProfileYaml(p)).profile deep-equals p", () => {
-    for (const profile of [MINIMAL_PROFILE, FULL_PROFILE, SUBAGENT_POLICY_PROFILE]) {
+    for (const profile of [
+      MINIMAL_PROFILE,
+      FULL_PROFILE,
+      SUBAGENT_POLICY_PROFILE,
+    ]) {
       const yaml = renderProfileYaml(profile);
       const result = parseProfileYaml(yaml);
       if (!result.ok)
@@ -1476,7 +1490,10 @@ describe("renderProfileYaml", () => {
 
   it("emits subagentPolicy.preset in the rendered YAML", () => {
     const yaml = renderProfileYaml(SUBAGENT_POLICY_PROFILE);
-    assert.match(yaml, /subagentPolicy:\n\s+enabled: true\n\s+preset: quality-first/u);
+    assert.match(
+      yaml,
+      /subagentPolicy:\n\s+enabled: true\n\s+preset: quality-first/u,
+    );
   });
 });
 

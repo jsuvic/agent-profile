@@ -1,0 +1,656 @@
+{
+  "id": "change-risk-v1-unprojected-policy-baseline",
+  "version": "v1",
+  "shipped": false,
+  "policyVersion": "change-risk/v1",
+  "policyVersioningRule": "Increment the workflow-policy version only after a change-risk artifact has been emitted or a review-learning record has been persisted; approved pre-emission amendments remain on the current version.",
+  "categoryTaxonomyVersion": "change-risk-categories/v1",
+  "learningSchemaVersion": "review-learning/v1",
+  "closedVocabularies": {
+    "domains": [
+      "unchanged-consumers",
+      "state-transitions",
+      "ownership-write-safety",
+      "compatibility-platform",
+      "parsing-validation-order",
+      "network-process-boundaries",
+      "generated-ownership",
+      "published-seams",
+      "runtime-proof",
+      "redaction",
+      "contract-completeness"
+    ],
+    "categories": [
+      "cross-consumer-integration",
+      "preview-before-write-ordering",
+      "ownership-atomicity",
+      "network-process-boundary",
+      "parser-version-contract",
+      "published-package-seam",
+      "runtime-proof",
+      "state-classification",
+      "secret-output"
+    ],
+    "categoryAliases": {},
+    "affectedContractIds": [
+      "permission-model",
+      "secret-handling",
+      "atomic-write-ownership",
+      "release-workflow",
+      "network-process-boundary",
+      "generated-region-ownership",
+      "published-package-seam",
+      "state-transition",
+      "parsing-validation",
+      "compatibility-platform",
+      "runtime-proof",
+      "contract-completeness",
+      "other"
+    ],
+    "unsafeConditionClasses": [
+      "missing-validation",
+      "unsafe-ordering",
+      "ownership-violation",
+      "incomplete-propagation",
+      "compatibility-regression",
+      "boundary-violation",
+      "missing-runtime-proof",
+      "redaction-failure",
+      "other"
+    ],
+    "resultStatuses": [
+      "CLEAN",
+      "FINDINGS_FOUND",
+      "NEEDS_CONTEXT"
+    ],
+    "priorities": [
+      "P1",
+      "P2",
+      "P3"
+    ],
+    "dispositions": [
+      "fixed",
+      "accepted-debt",
+      "follow-up",
+      "false-positive",
+      "obsolete"
+    ],
+    "resolutions": [
+      "open",
+      "fixed",
+      "false-positive",
+      "obsolete"
+    ],
+    "evidenceKinds": [
+      "file",
+      "diff-hunk",
+      "symbol",
+      "test",
+      "contract",
+      "command-output"
+    ],
+    "pipelineOrder": [
+      "implementer",
+      "spec-reviewer",
+      "code-quality-reviewer",
+      "change-risk-reviewer",
+      "final-review"
+    ],
+    "confirmationTriggers": [
+      "after-any-p1",
+      "after-two-or-more-fix-rounds",
+      "high-risk-surface-touched"
+    ],
+    "terminalStatuses": [
+      "clean",
+      "no-progress",
+      "needs-human-review"
+    ],
+    "workflowOutcomes": [
+      "NO_PROGRESS",
+      "NEEDS_HUMAN_REVIEW"
+    ],
+    "sourcePolicies": [
+      "change-risk/v1",
+      "legacy-external"
+    ]
+  },
+  "limits": {
+    "maxFixRounds": 3,
+    "maxLogicalInvocations": 6,
+    "maxTransientRetriesPerInvocation": 2,
+    "maxFinalCleanRoomConfirmations": 2
+  },
+  "highRiskSurfaces": [
+    {
+      "id": "permissions",
+      "globs": [
+        "packages/*/src/permission-*.ts",
+        "apps/*/src/permission-*.ts",
+        ".claude/settings.json",
+        ".codex/config.toml"
+      ],
+      "contracts": [
+        "permission-model"
+      ]
+    },
+    {
+      "id": "secrets",
+      "globs": [
+        "packages/*/src/security.ts",
+        "**/.env",
+        "**/.env.*"
+      ],
+      "contracts": [
+        "secret-handling"
+      ]
+    },
+    {
+      "id": "atomic-writes",
+      "globs": [
+        "packages/compiler/src/write-plan.ts",
+        "apps/*/src/compile-plan.ts",
+        "apps/*/src/configure.ts",
+        "apps/*/src/index.ts",
+        "apps/*/src/routes/api/**/apply/+server.ts"
+      ],
+      "contracts": [
+        "atomic-write-ownership"
+      ]
+    },
+    {
+      "id": "release-workflows",
+      "globs": [
+        ".github/workflows/**",
+        "scripts/release/**"
+      ],
+      "contracts": [
+        "release-workflow"
+      ]
+    },
+    {
+      "id": "network-process-execution",
+      "globs": [
+        "apps/*/src/index.ts",
+        "apps/*/src/model-probe.ts",
+        "apps/*/src/personal-activation.ts",
+        "apps/*/src/update-check.ts",
+        "scripts/release/**",
+        "scripts/verify-pack-files.mjs",
+        "apps/*/scripts/build-*.mjs"
+      ],
+      "contracts": [
+        "network-process-boundary"
+      ]
+    },
+    {
+      "id": "generated-ownership",
+      "globs": [
+        "packages/compiler/src/regions.ts",
+        "packages/compiler/src/golden.ts",
+        "fixtures/*/expected/**",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "ai-profile.lock",
+        ".mcp.json",
+        ".agents/**",
+        ".claude/**",
+        ".codex/**",
+        ".tabnine/**"
+      ],
+      "contracts": [
+        "generated-region-ownership"
+      ]
+    },
+    {
+      "id": "published-packages",
+      "globs": [
+        "**/package.json",
+        "scripts/verify-pack-files.mjs",
+        "scripts/verify-package-metadata.mjs"
+      ],
+      "contracts": [
+        "published-package-seam"
+      ]
+    }
+  ],
+  "reviewer": {
+    "policyVersion": "change-risk/v1",
+    "objective": {
+      "statement": "Independently find product-risk gaps across the complete accumulated change and its reachable consumers.",
+      "authorityBoundary": [
+        "Review only: never edit, stage, commit, or push the change.",
+        "Challenge an incomplete contract instead of assuming it is correct.",
+        "Never approve on the basis of an implementer claim or prior praise.",
+        "Report exactly one result envelope; do not act on your own result."
+      ]
+    },
+    "snapshotAccess": {
+      "completeness": "No changed, staged, unstaged, or relevant untracked file is hidden from you; every exclusion is listed with its reason.",
+      "initialContext": [
+        "snapshot identifier",
+        "base and head identifiers",
+        "deterministic changed-file manifest",
+        "staged, unstaged, and relevant-untracked classifications",
+        "governing contracts and applicable repository-rule references",
+        "instructions for reading the complete diff and reachable consumers"
+      ],
+      "inspectionRights": [
+        "Read every component of the snapshot before completing the review.",
+        "Read unchanged consumers and call paths required to judge the change.",
+        "Retrieve context locally only; never upload repository content.",
+        "Request missing input instead of completing a partial review."
+      ]
+    },
+    "domainRubric": [
+      {
+        "domain": "unchanged-consumers",
+        "name": "Unchanged callers and consumers of the change",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "state-transitions",
+        "name": "State classification and transition correctness",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "ownership-write-safety",
+        "name": "Write ownership, ordering, and atomicity",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "compatibility-platform",
+        "name": "Compatibility, versioning, and platform behavior",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "parsing-validation-order",
+        "name": "Parsing, decoding, and validation order",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "network-process-boundaries",
+        "name": "Network and process execution boundaries",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "generated-ownership",
+        "name": "Generated versus manual ownership boundaries",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "published-seams",
+        "name": "Published package and distribution seams",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "runtime-proof",
+        "name": "Runtime proof for claimed behavior",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "redaction",
+        "name": "Redaction of secret-shaped and sensitive output",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      },
+      {
+        "domain": "contract-completeness",
+        "name": "Completeness of the stated contract itself",
+        "applicability": "Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist."
+      }
+    ],
+    "resultInterface": {
+      "policyVersion": "change-risk/v1",
+      "statuses": [
+        "CLEAN",
+        "FINDINGS_FOUND",
+        "NEEDS_CONTEXT"
+      ],
+      "priorities": [
+        "P1",
+        "P2",
+        "P3"
+      ],
+      "categories": [
+        "cross-consumer-integration",
+        "preview-before-write-ordering",
+        "ownership-atomicity",
+        "network-process-boundary",
+        "parser-version-contract",
+        "published-package-seam",
+        "runtime-proof",
+        "state-classification",
+        "secret-output"
+      ],
+      "affectedContractIds": [
+        "permission-model",
+        "secret-handling",
+        "atomic-write-ownership",
+        "release-workflow",
+        "network-process-boundary",
+        "generated-region-ownership",
+        "published-package-seam",
+        "state-transition",
+        "parsing-validation",
+        "compatibility-platform",
+        "runtime-proof",
+        "contract-completeness",
+        "other"
+      ],
+      "unsafeConditionClasses": [
+        "missing-validation",
+        "unsafe-ordering",
+        "ownership-violation",
+        "incomplete-propagation",
+        "compatibility-regression",
+        "boundary-violation",
+        "missing-runtime-proof",
+        "redaction-failure",
+        "other"
+      ],
+      "resolutions": [
+        "open",
+        "fixed",
+        "false-positive",
+        "obsolete"
+      ],
+      "p3Dispositions": [
+        "fixed",
+        "accepted-debt",
+        "follow-up",
+        "false-positive",
+        "obsolete"
+      ],
+      "evidenceKinds": [
+        "file",
+        "diff-hunk",
+        "symbol",
+        "test",
+        "contract",
+        "command-output"
+      ],
+      "requiredFindingFields": [
+        "priority",
+        "category",
+        "location",
+        "unsafeCondition",
+        "evidence",
+        "affectedContractId",
+        "unsafeConditionClass",
+        "safePath",
+        "resolution",
+        "fingerprint"
+      ],
+      "fingerprintComponents": [
+        "category",
+        "affected contract",
+        "normalized location",
+        "unsafe-condition class"
+      ],
+      "invalidAttemptRules": [
+        "A completed status requires a covered manifest and every domain marked.",
+        "missingInputs is empty except for NEEDS_CONTEXT.",
+        "P1 and P2 carry no disposition; every P3 carries exactly one.",
+        "A newly discovered finding is always resolution open.",
+        "Empty, truncated, unparseable, or mismatched output is never clean."
+      ]
+    },
+    "safetyConstraints": [
+      "Read-only: no writes, installs, network calls, or production access.",
+      "Never read or reproduce secrets; describe secret-shaped values by shape.",
+      "Quote the minimum source needed to locate the defect.",
+      "Never broaden the permissions the surrounding profile grants."
+    ]
+  },
+  "orchestration": {
+    "policyVersion": "change-risk/v1",
+    "pipelineOrder": [
+      "implementer",
+      "spec-reviewer",
+      "code-quality-reviewer",
+      "change-risk-reviewer",
+      "final-review"
+    ],
+    "budgets": {
+      "maxFixRounds": 3,
+      "maxLogicalInvocations": 6,
+      "maxTransientRetriesPerInvocation": 2,
+      "maxFinalCleanRoomConfirmations": 2
+    },
+    "transitions": {
+      "retry": [
+        "The initial review is not a fix round.",
+        "One logical invocation may retry a transient failure, an invalid envelope, or a NEEDS_CONTEXT result at most 2 times.",
+        "Failed or incomplete attempts are recorded separately and never become findings or fix rounds.",
+        "Before starting a fix round, reserve a remediation review plus any required final confirmation in the remaining invocation budget."
+      ],
+      "invalidation": [
+        "Any code change invalidates the preceding clean result.",
+        "Files under docs/review-learning/ are excluded from snapshot identity and do not invalidate a terminal result.",
+        "An initial or remediation review is never repeated against an unchanged snapshot; a required final confirmation is the exception."
+      ],
+      "nonProgress": [
+        "The same unresolved fingerprint appearing twice without progress.",
+        "Failure to reduce the blocking-finding count across two consecutive remediation reviews.",
+        "A fix round that leaves the reviewed snapshot unchanged while open blockers remain consumes no invocation and reports no progress."
+      ],
+      "clustering": [
+        "Three or more open findings sharing a cluster key are remediated as one shared cause in one fix round.",
+        "For a within-change cluster recurrence, add a mechanical guard or record impracticality with rationale and evidence before escalating to NEEDS_HUMAN_REVIEW."
+      ],
+      "noOpenBlockerTerminal": [
+        "A completed FINDINGS_FOUND result whose P1 and P2 findings are all verified fixed, obsolete, or evidenced false-positive, and whose every P3 carries a valid disposition, contains no blocker.",
+        "It reaches terminal clean exactly as a CLEAN result would, without relabeling the reviewer envelope.",
+        "There is no additional review of the unchanged snapshot; the same required-confirmation triggers still apply."
+      ],
+      "validatedExternalBlocker": [
+        "A validated external P1 or P2 reopens the local loop when fix-round and logical-invocation budget remains.",
+        "When that budget is exhausted the workflow escalates to NEEDS_HUMAN_REVIEW rather than retaining a clean terminal state.",
+        "External findings enter only through the orchestration owner's validation handoff; an unreproduced report is never trusted automatically and never silently discarded."
+      ],
+      "confirmationTriggers": [
+        "after-any-p1",
+        "after-two-or-more-fix-rounds",
+        "high-risk-surface-touched"
+      ],
+      "escalation": [
+        "Remaining open P1 or P2 findings after the last allowed fix round.",
+        "Open blockers remain but the invocation budget cannot cover another fix round's remediation review plus the confirmation that would then be required.",
+        "Exhausted attempt retries; they are never converted to a clean result.",
+        "An unsatisfiable missing input escalates immediately.",
+        "NEEDS_HUMAN_REVIEW takes precedence over NO_PROGRESS when both apply."
+      ],
+      "workflowOutcomes": [
+        "NO_PROGRESS",
+        "NEEDS_HUMAN_REVIEW"
+      ]
+    }
+  },
+  "learningRecord": {
+    "policyVersion": "change-risk/v1",
+    "recordSchema": {
+      "schemaVersion": "review-learning/v1",
+      "taxonomyVersion": "change-risk-categories/v1",
+      "sourcePolicies": [
+        "change-risk/v1",
+        "legacy-external"
+      ],
+      "terminalStatuses": [
+        "clean",
+        "no-progress",
+        "needs-human-review"
+      ],
+      "legacyTerminalStatus": "external-only",
+      "dateFormat": "YYYY-MM-DD",
+      "dateBasis": "UTC ISO 8601 calendar date; timestamps, offsets, and locale-dependent or local-timezone forms are malformed",
+      "requiredFields": [
+        "date",
+        "sourcePolicy",
+        "baseId",
+        "headId",
+        "roundOutcomes",
+        "roundOutcomes[].source (local | external)",
+        "findings[].source (local | external)",
+        "fingerprint",
+        "category",
+        "categoryTaxonomyVersion",
+        "priority",
+        "evidence",
+        "affectedContract",
+        "safePath",
+        "resolution",
+        "terminalStatus"
+      ],
+      "conditionalFields": [
+        "productVersion when known",
+        "worktreeSnapshotId when uncommitted content participated",
+        "reviewerSurfaceVersion when known, otherwise unknown",
+        "systemic and systemicReason on every validated P1",
+        "disposition and dispositionConfirmed on every P3",
+        "dispositionEvidence carrying the owner's decision evidence for every open P3",
+        "provider on every external-sourced finding",
+        "logicalInvocationCount and transientAttemptCount on every change-risk/v1 record, whatever the per-finding provenance, and omitted only on a legacy-external record"
+      ]
+    },
+    "redaction": [
+      "Raw prompts, transcripts, hidden reasoning, and unfiltered tool output stay in a local ignored location and are never committed.",
+      "Secret-shaped values are described by shape and never copied verbatim.",
+      "Reference commits, paths, symbols, contracts, and tests instead of reproducing source or full reviewer explanations.",
+      "Unknown provider or model versions are recorded as unknown, never guessed."
+    ],
+    "persistence": {
+      "committedPathPrefix": "docs/review-learning/",
+      "proposalPathPrefix": "docs/review-learning/proposals/",
+      "rawTranscripts": "local ignored location only",
+      "owner": "subagent-driven-change"
+    }
+  },
+  "promotion": {
+    "policyVersion": "change-risk/v1",
+    "recurrenceClassification": {
+      "taxonomyVersion": "change-risk-categories/v1",
+      "occurrenceUnit": "one reviewed change; repeated rounds and fingerprints inside the same change collapse to at most one occurrence per canonical category",
+      "countedResolutions": [
+        "fixed"
+      ],
+      "countedOpenRequires": "an open finding counts only when the persisted record carries dispositionConfirmed: true together with the owner's decision evidence in dispositionEvidence",
+      "excludedResolutions": [
+        "false-positive",
+        "obsolete"
+      ],
+      "excludedCategories": [
+        "uncategorized"
+      ],
+      "systemicPredicate": [
+        "The affected contract is a hard safety, permission, ownership, redaction, or no-upload contract.",
+        "Or the unsafe condition demonstrably reaches two or more independent consumers or surfaces beyond the single reviewed path.",
+        "When the predicate is uncertain the finding is non-systemic and the recorded reason says why."
+      ]
+    },
+    "actions": {
+      "firstSystemicP1": "Immediately add a regression test and a scoped review rule where practical.",
+      "firstNonSystemicP1": "Record and categorize like a first ordinary finding and add a regression test where practical.",
+      "firstOrdinaryP2OrP3": "Record and categorize the finding.",
+      "secondOccurrence": "Add a reviewer regression case plus a scoped Code Review Rules rule, unless an existing mechanical guard already provides equivalent or stronger protection, in which case cite the guard instead.",
+      "thirdOccurrence": "Add a test, lint, validator, or shared helper where practical; the prompt rule alone has proven insufficient.",
+      "guardPreference": [
+        "Before adding a prose rule, determine whether the failure can be prevented by a schema, interface, type, test, validator, lint rule, ownership check, or shared helper.",
+        "A mechanical or interface-level guard may be introduced before the third occurrence when it is clearly practical and proportionate.",
+        "A prompt rule is added only when model judgement remains part of the safe decision."
+      ],
+      "promotedRuleRequirements": [
+        "Concise.",
+        "Consequential.",
+        "Scoped to the narrowest applicable path.",
+        "States the unsafe condition.",
+        "States the safe path or a counterexample."
+      ]
+    },
+    "ownership": {
+      "generatedRegions": "Never silently modify a compiler-generated instruction region.",
+      "proposalPathPrefix": "docs/review-learning/proposals/",
+      "withinReviewedChange": "Within the reviewed change, promotion writes only a proposed-patch artifact under docs/review-learning/proposals/ and never edits a human-owned rule surface.",
+      "applyingProposal": "Applying a proposal to AGENTS.md or another human-owned rule surface is a separate later change through the normal write boundary, reviewed and invalidating as usual.",
+      "ruleRecordFields": [
+        "ruleId",
+        "sourceCategory",
+        "scope",
+        "evidenceRecordReferences",
+        "dateIntroduced",
+        "mechanicalGuard",
+        "lifecycleStatus"
+      ],
+      "ruleLifecycleStatuses": [
+        "active",
+        "superseded",
+        "retired"
+      ],
+      "retirement": "When a deterministic guard gives equivalent or stronger protection the redundant prompt rule is removed, retired, or reduced to navigation guidance, and a retired rule is never rendered into generated context."
+    }
+  },
+  "evaluation": {
+    "policyVersion": "change-risk/v1",
+    "caseSelection": {
+      "blinded": true,
+      "rules": [
+        "Select cases from normalized historical records, then strip expected findings and category labels from reviewer input.",
+        "Reviewers receive raw change artifacts only, with no expected answers.",
+        "Codex and Claude are measured independently."
+      ]
+    },
+    "metrics": [
+      {
+        "id": "recovery",
+        "numerator": "seeded P1 categories recovered by at least one allowed run",
+        "denominator": "seeded P1 categories present in the case",
+        "aggregation": "per case, then reported per client without averaging away a miss",
+        "unit": "ratio in [0, 1]"
+      },
+      {
+        "id": "false-positives",
+        "numerator": "reported findings the owner validated as false-positive with invalidating evidence",
+        "denominator": "reported findings in the run",
+        "aggregation": "per run, then median across runs",
+        "unit": "ratio in [0, 1]"
+      },
+      {
+        "id": "needs-context-rate",
+        "numerator": "invocation attempts returning NEEDS_CONTEXT",
+        "denominator": "invocation attempts in the run, including retried attempts",
+        "aggregation": "per run, then median across runs",
+        "unit": "ratio in [0, 1]"
+      },
+      {
+        "id": "malformed-result-rate",
+        "numerator": "invocation attempts whose result envelope was invalid",
+        "denominator": "invocation attempts in the run, including retried attempts",
+        "aggregation": "per run, then median across runs",
+        "unit": "ratio in [0, 1]"
+      },
+      {
+        "id": "invocation-count",
+        "numerator": "completed logical invocations",
+        "denominator": "reviewed cases",
+        "aggregation": "mean per case, reported with the observed maximum",
+        "unit": "logical invocations"
+      },
+      {
+        "id": "context-footprint",
+        "numerator": "rendered projection text supplied as reviewer context for one invocation",
+        "denominator": "one logical reviewer invocation",
+        "aggregation": "maximum across runs",
+        "unit": "UTF-8 bytes"
+      }
+    ],
+    "runLimits": {
+      "maxCleanRoomRuns": 2,
+      "requiredRecovery": "Every seeded P1 category is recovered in at least one of the 2 allowed clean-room runs; misses and variability are recorded, never hidden."
+    },
+    "baselineFixture": {
+      "id": "change-risk-v1-unprojected-policy-baseline",
+      "version": "v1",
+      "shipped": false,
+      "description": "Pinned pre-simplification rendering of the complete un-projected policy, checked in as evaluation material only."
+    }
+  }
+}

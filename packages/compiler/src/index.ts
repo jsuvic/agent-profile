@@ -54,6 +54,7 @@ export {
   renderClaudeMd,
 } from "./compiler.js";
 export {
+  createValidatedExternalChangeRiskReviewEvent,
   createChangeRiskOrchestrationState,
   deriveRemediatedClusterKeys,
   transitionChangeRiskOrchestration,
@@ -66,6 +67,7 @@ export type {
   ChangeRiskOrchestrationStateValidation,
   ChangeRiskReviewFinding,
   ChangeRiskReviewResultEvent,
+  ValidatedExternalChangeRiskReviewEvent,
 } from "./change-risk-orchestration.js";
 export {
   buildClientMappingReport,

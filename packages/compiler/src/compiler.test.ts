@@ -41,7 +41,10 @@ import type {
   LockfileValidationResult,
   SkillId,
 } from "./index.js";
-import { validateChangeRiskResultV1 } from "./change-risk-policy.js";
+import {
+  changeRiskOrchestrationProjection,
+  validateChangeRiskResultV1,
+} from "./change-risk-policy.js";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const minimalFixtureDir = new URL(
@@ -3786,7 +3789,9 @@ test("phase-12 MCP recommendations pack emits advisory-only skills", () => {
     ".agents/skills/mcp-fit-check/SKILL.md",
     ".claude/skills/mcp-fit-check/SKILL.md",
   ]) {
-    const workflowFile = result.files.find((candidate) => candidate.path === path);
+    const workflowFile = result.files.find(
+      (candidate) => candidate.path === path,
+    );
     assert.ok(workflowFile, path);
     if (workflowFile === undefined) continue;
     const body = Buffer.from(workflowFile.bytes).toString("utf8");
@@ -3902,7 +3907,7 @@ test("phase-33 I1 emits the policy-backed change-risk reviewer only for qualifyi
   ]);
   for (const file of reviewerFiles) {
     const body = Buffer.from(file.bytes).toString("utf8");
-    assert.match(body, /change-risk\/v1/u, file.path);
+    assert.match(body, /change-risk\/v2/u, file.path);
     assert.match(
       body,
       /complete accumulated change and its reachable consumers/u,
@@ -4063,46 +4068,134 @@ test("phase-33 I1 resolves change-risk-reviewer through critical-reviewer for ma
 test("phase-33 I1 Codex and Claude reviewer artifacts instruct a validator-compatible envelope", () => {
   const profile: AiProfile = {
     ...phase12Profile({ packs: [] }),
-    clients: { tabnine: { enabled: false }, codex: { enabled: true }, claude: { enabled: true } },
-    workflow: { ...phase12Profile({ packs: [] }).workflow, sdd: true, subagentDrivenDevelopment: true },
-    capabilities: { delegation: { subagents: { enabled: true, agents: [
-      { useTemplate: "implementer" }, { useTemplate: "spec-reviewer" }, { useTemplate: "code-quality-reviewer" },
-    ] } } },
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      sdd: true,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
   };
   const result = compileProfile({ profile });
   assert.equal(result.ok, true);
   if (!result.ok) return;
   const envelope = {
-    policyVersion: "change-risk/v1",
+    policyVersion: "change-risk/v2",
     snapshotId: "snapshot-1",
     status: "FINDINGS_FOUND",
-    scope: { completed: true, inspectedChangeManifest: true, inspectedRelevantConsumers: true, domains: [
-      "unchanged-consumers", "state-transitions", "ownership-write-safety", "compatibility-platform", "parsing-validation-order", "network-process-boundaries", "generated-ownership", "published-seams", "runtime-proof", "redaction", "contract-completeness",
-    ].map((domain) => ({ domain, applicability: "applicable" as const })) },
-    findings: [{ priority: "P2", category: "runtime-proof", location: { path: "packages/compiler/src/compiler.ts" }, unsafeCondition: "missing proof", evidence: [{ kind: "file", path: "packages/compiler/src/compiler.ts", summary: "missing proof" }], affectedContractId: "runtime-proof", unsafeConditionClass: "missing-runtime-proof", safePath: "add proof", resolution: "open", fingerprint: "runtime-proof+runtime-proof+packages/compiler/src/compiler.ts+missing-runtime-proof" }],
+    scope: {
+      completed: true,
+      inspectedChangeManifest: true,
+      inspectedRelevantConsumers: true,
+      domains: [
+        "unchanged-consumers",
+        "state-transitions",
+        "ownership-write-safety",
+        "compatibility-platform",
+        "parsing-validation-order",
+        "network-process-boundaries",
+        "generated-ownership",
+        "published-seams",
+        "runtime-proof",
+        "redaction",
+        "contract-completeness",
+      ].map((domain) => ({ domain, applicability: "applicable" as const })),
+    },
+    findings: [
+      {
+        priority: "P2",
+        category: "runtime-proof",
+        location: { path: "packages/compiler/src/compiler.ts" },
+        unsafeCondition: "missing proof",
+        evidence: [
+          {
+            kind: "file",
+            path: "packages/compiler/src/compiler.ts",
+            summary: "missing proof",
+          },
+        ],
+        affectedContractId: "runtime-proof",
+        unsafeConditionClass: "missing-runtime-proof",
+        safePath: "add proof",
+        resolution: "open",
+        fingerprint:
+          '["runtime-proof","runtime-proof",{"path":"packages/compiler/src/compiler.ts","symbol":null,"line":null},"missing-runtime-proof"]',
+      },
+    ],
     missingInputs: [],
   };
   assert.equal(validateChangeRiskResultV1(envelope).ok, true);
-  for (const file of result.files.filter((file) => file.path.includes("change-risk-reviewer"))) {
+  for (const file of result.files.filter((file) =>
+    file.path.includes("change-risk-reviewer"),
+  )) {
     const body = Buffer.from(file.bytes).toString("utf8");
     assert.match(body, /affectedContractId, unsafeConditionClass/u, file.path);
     assert.match(body, /permission-model \| secret-handling/u, file.path);
     assert.match(body, /missing-validation \| unsafe-ordering/u, file.path);
     assert.match(body, /fixed \| accepted-debt \| follow-up/u, file.path);
-    assert.match(body, /category, affected contract, normalized location, unsafe-condition class/u, file.path);
-    assert.match(body, /Initial and final clean-room reviews receive no prior fingerprints/u, file.path);
-    assert.match(body, /Remediation receives only supplied prior fingerprints/u, file.path);
+    assert.match(
+      body,
+      /category, affected contract, normalized location, unsafe-condition class/u,
+      file.path,
+    );
+    assert.match(
+      body,
+      /Initial and final clean-room reviews receive no prior fingerprints/u,
+      file.path,
+    );
+    assert.match(
+      body,
+      /Remediation receives only supplied prior fingerprints/u,
+      file.path,
+    );
+    assert.match(
+      body,
+      /When the supplied mode is initial or final, do not use a prior finding list/u,
+      file.path,
+    );
   }
 });
 
 test("phase-33 I1 qualifying orchestration artifacts invoke change-risk-reviewer after code-quality-reviewer", () => {
   const profile: AiProfile = {
     ...phase12Profile({ packs: [] }),
-    clients: { tabnine: { enabled: false }, codex: { enabled: true }, claude: { enabled: true } },
-    workflow: { ...phase12Profile({ packs: [] }).workflow, sdd: true, subagentDrivenDevelopment: true },
-    capabilities: { delegation: { subagents: { enabled: true, agents: [
-      { useTemplate: "implementer" }, { useTemplate: "spec-reviewer" }, { useTemplate: "code-quality-reviewer" },
-    ] } } },
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      sdd: true,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
   };
   const result = compileProfile({ profile });
   assert.equal(result.ok, true);
@@ -4131,14 +4224,76 @@ test("phase-33 I1 qualifying orchestration artifacts invoke change-risk-reviewer
   }
 });
 
+test("phase-33 orchestration is enabled for either supported reviewer target", () => {
+  for (const [client, expectedPath] of [
+    ["codex", ".agents/skills/subagent-driven-change/SKILL.md"],
+    ["claude", ".claude/skills/subagent-driven-change/SKILL.md"],
+  ] as const) {
+    const profile: AiProfile = {
+      ...phase12Profile({ packs: [] }),
+      clients: {
+        tabnine: { enabled: false },
+        codex: { enabled: client === "codex" },
+        claude: { enabled: client === "claude" },
+      },
+      workflow: {
+        ...phase12Profile({ packs: [] }).workflow,
+        sdd: true,
+        subagentDrivenDevelopment: true,
+      },
+      capabilities: {
+        delegation: {
+          subagents: {
+            enabled: true,
+            agents: [
+              { useTemplate: "implementer" },
+              { useTemplate: "spec-reviewer" },
+              { useTemplate: "code-quality-reviewer" },
+            ],
+          },
+        },
+      },
+    };
+    const result = compileProfile({ profile });
+    assert.equal(result.ok, true, client);
+    if (!result.ok) continue;
+    const file = result.files.find(
+      (candidate) => candidate.path === expectedPath,
+    );
+    assert.ok(file, expectedPath);
+    assert.match(
+      Buffer.from(file.bytes).toString("utf8"),
+      /change-risk-reviewer/u,
+      client,
+    );
+  }
+});
+
 test("phase-33 I2 renders complete bounded change-risk owner rules from the projection", () => {
   const profile: AiProfile = {
     ...phase12Profile({ packs: [] }),
-    clients: { tabnine: { enabled: false }, codex: { enabled: true }, claude: { enabled: true } },
-    workflow: { ...phase12Profile({ packs: [] }).workflow, sdd: true, subagentDrivenDevelopment: true },
-    capabilities: { delegation: { subagents: { enabled: true, agents: [
-      { useTemplate: "implementer" }, { useTemplate: "spec-reviewer" }, { useTemplate: "code-quality-reviewer" },
-    ] } } },
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      sdd: true,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
   };
   const result = compileProfile({ profile });
   assert.equal(result.ok, true);
@@ -4153,20 +4308,54 @@ test("phase-33 I2 renders complete bounded change-risk owner rules from the proj
       "NEEDS_HUMAN_REVIEW takes precedence over NO_PROGRESS",
       "three or more open findings sharing a cluster key",
       "mechanical guard or record impracticality with rationale and evidence",
+      `at most ${
+        changeRiskOrchestrationProjection().budgets
+          .maxFinalCleanRoomConfirmations
+      } confirmation invocations`,
+      "unavailable or forbidden context",
+      "only a validated external blocker",
+      "reset transient retries before final confirmation",
+      "after-any-p1",
+      "after-two-or-more-fix-rounds",
+      "high-risk-surface-touched",
+      "no blocker",
+      "validation handoff",
       "NEEDS_HUMAN_REVIEW",
-    ]) assert.match(body, new RegExp(required, "iu"), file.path);
-    assert.equal(body.includes("Apply the authoritative orchestration projection"), false, file.path);
+    ])
+      assert.match(body, new RegExp(required, "iu"), file.path);
+    assert.equal(
+      body.includes("Apply the authoritative orchestration projection"),
+      false,
+      file.path,
+    );
   }
 });
 
 test("phase-33 I2 implement-next requires a validated terminal CLEAN handoff for the current snapshot", () => {
   const profile: AiProfile = {
     ...phase12Profile({ packs: [] }),
-    clients: { tabnine: { enabled: false }, codex: { enabled: true }, claude: { enabled: true } },
-    workflow: { ...phase12Profile({ packs: [] }).workflow, sdd: true, subagentDrivenDevelopment: true },
-    capabilities: { delegation: { subagents: { enabled: true, agents: [
-      { useTemplate: "implementer" }, { useTemplate: "spec-reviewer" }, { useTemplate: "code-quality-reviewer" },
-    ] } } },
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      sdd: true,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
   };
   const result = compileProfile({ profile });
   assert.equal(result.ok, true);
@@ -4185,7 +4374,11 @@ test("phase-33 I2 implement-next requires a validated terminal CLEAN handoff for
       true,
       file.path,
     );
-    assert.equal(body.includes("`NO_PROGRESS` or `NEEDS_HUMAN_REVIEW`"), true, file.path);
+    assert.equal(
+      body.includes("`NO_PROGRESS` or `NEEDS_HUMAN_REVIEW`"),
+      true,
+      file.path,
+    );
     assert.equal(body.includes("do not mark the task `done`"), true, file.path);
   }
 });
@@ -5524,10 +5717,7 @@ test("phase-24 I4 emits implement-next body for Claude and Codex with the entry-
     );
     // State transitions.
     assert.equal(text.includes("Mark the selected task `in-progress`"), true);
-    assert.equal(
-      text.includes("validated terminal `CLEAN` handoff"),
-      true,
-    );
+    assert.equal(text.includes("validated terminal `CLEAN` handoff"), true);
     // Runs subagent-driven-change with the brief as Fresh Context (no dangling).
     assert.equal(
       text.includes(

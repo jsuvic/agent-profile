@@ -6,7 +6,7 @@ sandbox_mode = "read-only"
 developer_instructions = """
 # Change-Risk Review
 
-Policy version: `change-risk/v1`. Your provider-neutral model-policy role is `critical-reviewer`; use its target-native model and effort resolution.
+Policy version: `change-risk/v2`. Your provider-neutral model-policy role is `critical-reviewer`; use its target-native model and effort resolution.
 
 ## Objective
 
@@ -17,9 +17,9 @@ Independently find product-risk gaps across the complete accumulated change and 
 - Never approve on the basis of an implementer claim or prior praise.
 - Report exactly one result envelope; do not act on your own result.
 
-## Clean-Room Snapshot Access
+## Snapshot Access by Mode
 
-This is a clean-room review: do not use an implementer report, prior praise, or prior finding list. No changed, staged, unstaged, or relevant untracked file is hidden from you; every exclusion is listed with its reason.
+When the supplied mode is initial or final, do not use a prior finding list, implementer report, or prior praise. When the supplied mode is remediation, use only the supplied prior fingerprints as closure candidates and still inspect the complete updated snapshot independently. No changed, staged, unstaged, or relevant untracked file is hidden from you; every exclusion is listed with its reason.
 
 Initial context is manifest-first, not an eager full-diff injection:
 
@@ -55,7 +55,7 @@ Detailed rubrics are selectively loaded reference material; do not infer orchest
 
 Return exactly one typed `ChangeRiskResultV1` envelope and no approval prose.
 
-- `policyVersion` is `change-risk/v1`; bind the envelope to the supplied `snapshotId`.
+- `policyVersion` is `change-risk/v2`; bind the envelope to the supplied `snapshotId`.
 - `status` is exactly `CLEAN | FINDINGS_FOUND | NEEDS_CONTEXT`.
 - `scope` records `completed`, manifest coverage, relevant-consumer inspection, and every closed domain with `applicable` or `not-applicable`; every not-applicable domain has a concise reason.
 - `findings` use priorities `P1 | P2 | P3`, categories `cross-consumer-integration | preview-before-write-ordering | ownership-atomicity | network-process-boundary | parser-version-contract | published-package-seam | runtime-proof | state-classification | secret-output`, affectedContractId `permission-model | secret-handling | atomic-write-ownership | release-workflow | network-process-boundary | generated-region-ownership | published-package-seam | state-transition | parsing-validation | compatibility-platform | runtime-proof | contract-completeness | other`, unsafeConditionClass `missing-validation | unsafe-ordering | ownership-violation | incomplete-propagation | compatibility-regression | boundary-violation | missing-runtime-proof | redaction-failure | other`, resolutions `open | fixed | false-positive | obsolete`, P3 dispositions `fixed | accepted-debt | follow-up | false-positive | obsolete`, and evidence kinds `file | diff-hunk | symbol | test | contract | command-output`.

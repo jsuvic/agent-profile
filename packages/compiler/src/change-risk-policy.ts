@@ -38,13 +38,13 @@ function deepFreeze<T>(value: T): T {
 // Versions
 // ---------------------------------------------------------------------------
 
-export type ChangeRiskPolicyVersion = "change-risk/v1";
+export type ChangeRiskPolicyVersion = "change-risk/v2";
 export type ChangeRiskCategoryTaxonomyVersion = "change-risk-categories/v1";
 export type ReviewLearningSchemaVersion = "review-learning/v1";
 
 /** Workflow-policy version emitted by every artifact this policy governs. */
 export const CHANGE_RISK_POLICY_VERSION: ChangeRiskPolicyVersion =
-  "change-risk/v1";
+  "change-risk/v2";
 
 /**
  * A policy amendment advances the emitted version only after this policy has
@@ -54,7 +54,7 @@ export const CHANGE_RISK_POLICY_VERSION: ChangeRiskPolicyVersion =
 export const CHANGE_RISK_POLICY_VERSIONING_RULE =
   "Increment the workflow-policy version only after a change-risk artifact " +
   "has been emitted or a review-learning record has been persisted; approved " +
-  "pre-emission amendments remain change-risk/v1.";
+  "pre-emission amendments remain on the current version.";
 
 /** Category taxonomy version recorded on every categorized finding. */
 export const CHANGE_RISK_CATEGORY_TAXONOMY_VERSION: ChangeRiskCategoryTaxonomyVersion =
@@ -255,11 +255,11 @@ export type ChangeRiskSourcePolicy =
   ChangeRiskPolicyVersion | "legacy-external";
 
 export const CHANGE_RISK_SOURCE_POLICIES: readonly ChangeRiskSourcePolicy[] =
-  Object.freeze(["change-risk/v1", "legacy-external"] as const);
+  Object.freeze(["change-risk/v2", "legacy-external"] as const);
 
 /**
  * Terminal status used by `legacy-external` records. They never executed the
- * local state machine, so a `change-risk/v1` terminal status is never guessed.
+ * local state machine, so a `change-risk/v2` terminal status is never guessed.
  */
 export const CHANGE_RISK_LEGACY_TERMINAL_STATUS = "external-only" as const;
 
@@ -337,12 +337,7 @@ export type ChangeRiskResultValidation =
 export function normalizeChangeRiskFindingLocation(
   location: Pick<ChangeRiskFindingV1["location"], "path" | "symbol" | "line">,
 ): string {
-  const normalizedPath = location.path
-    .trim()
-    .replaceAll("\\", "/")
-    .split("/")
-    .filter((segment) => segment.length > 0 && segment !== ".")
-    .join("/");
+  const normalizedPath = normalizeChangeRiskFindingPath(location.path);
   const symbol = location.symbol?.trim();
   const suffix = [
     symbol === undefined || symbol.length === 0 ? undefined : `#${symbol}`,
@@ -353,6 +348,15 @@ export function normalizeChangeRiskFindingLocation(
   return `${normalizedPath}${suffix}`;
 }
 
+function normalizeChangeRiskFindingPath(path: string): string {
+  return path
+    .trim()
+    .replaceAll("\\", "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+}
+
 /** Shared stable identity: structured fields, never reviewer prose, own it. */
 export function deriveChangeRiskFingerprint(
   finding: Pick<
@@ -360,12 +364,16 @@ export function deriveChangeRiskFingerprint(
     "category" | "affectedContractId" | "location" | "unsafeConditionClass"
   >,
 ): string {
-  return [
+  return JSON.stringify([
     finding.category,
     finding.affectedContractId,
-    normalizeChangeRiskFindingLocation(finding.location),
+    {
+      path: normalizeChangeRiskFindingPath(finding.location.path),
+      symbol: finding.location.symbol?.trim() || null,
+      line: finding.location.line ?? null,
+    },
     finding.unsafeConditionClass,
-  ].join("+");
+  ]);
 }
 
 export type ChangeRiskReviewerValidationOptions = Readonly<{
@@ -472,6 +480,11 @@ function validateFinding(
   if (value.priority === "P3") {
     if (!isClosedValue(value.disposition, CHANGE_RISK_DISPOSITIONS))
       return false;
+    const dispositionMatchesResolution =
+      value.disposition === "accepted-debt" || value.disposition === "follow-up"
+        ? value.resolution === "open"
+        : value.resolution === value.disposition;
+    if (!dispositionMatchesResolution) return false;
   } else if (value.disposition !== undefined) return false;
   if (
     value.source !== undefined ||
@@ -511,10 +524,7 @@ export function validateChangeRiskResultV1(
     priorFingerprints: input.priorFingerprints ?? [],
     expectedSnapshotId: input.expectedSnapshotId ?? "",
   };
-  if (
-    options.mode !== "remediation" &&
-    options.priorFingerprints.length > 0
-  )
+  if (options.mode !== "remediation" && options.priorFingerprints.length > 0)
     return { ok: false, reason: "prior fingerprints require remediation" };
   if (
     !isRecord(value) ||
@@ -1159,7 +1169,7 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
       "Failure to reduce the blocking-finding count across two consecutive " +
         "remediation reviews.",
       "A fix round that leaves the reviewed snapshot unchanged while open " +
-      "blockers remain consumes no invocation and reports no progress.",
+        "blockers remain consumes no invocation and reports no progress.",
     ],
     clustering: [
       "Three or more open findings sharing a cluster key are remediated as one shared cause in one fix round.",

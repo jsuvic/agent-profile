@@ -5,13 +5,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  createChangeRiskOrchestrationState,
+  createValidatedExternalChangeRiskReviewEvent,
+  createChangeRiskOrchestrationState as createChangeRiskOrchestrationStateProduction,
   deriveRemediatedClusterKeys,
   transitionChangeRiskOrchestration as transitionChangeRiskOrchestrationProduction,
   validateChangeRiskOrchestrationStateV1,
   type ChangeRiskBlockerFinding,
   type ChangeRiskReviewFinding,
 } from "./change-risk-orchestration.js";
+
+function createChangeRiskOrchestrationState(
+  snapshotId: string,
+  options: Readonly<{ highRisk?: boolean }> = {},
+) {
+  return createChangeRiskOrchestrationStateProduction(
+    snapshotId,
+    options.highRisk ? [{ path: "package.json" }] : [],
+  );
+}
 
 type RuntimeProofFinding = ChangeRiskBlockerFinding &
   Pick<ChangeRiskReviewFinding, "priority" | "resolution" | "disposition">;
@@ -28,7 +39,16 @@ const runtimeProofFinding = (fingerprint: string): RuntimeProofFinding => ({
 const runtimeProofBlockers = (...fingerprints: string[]) =>
   fingerprints.map(runtimeProofFinding);
 const runtimeProofFingerprint = (fingerprint: string) =>
-  `runtime-proof+runtime-proof+packages/compiler/src/change-risk-orchestration.ts#${fingerprint}+missing-runtime-proof`;
+  JSON.stringify([
+    "runtime-proof",
+    "runtime-proof",
+    {
+      path: "packages/compiler/src/change-risk-orchestration.ts",
+      symbol: fingerprint,
+      line: null,
+    },
+    "missing-runtime-proof",
+  ]);
 
 function reviewResult(
   snapshotId: string,
@@ -36,7 +56,7 @@ function reviewResult(
   findings: readonly TestReviewerFinding[] = [],
 ) {
   return {
-    policyVersion: "change-risk/v1" as const,
+    policyVersion: "change-risk/v2" as const,
     snapshotId,
     status,
     scope: {
@@ -79,7 +99,16 @@ function reviewResult(
         },
       ],
       safePath: "Add the focused transition test.",
-      fingerprint: `runtime-proof+${finding.affectedContractId}+packages/compiler/src/change-risk-orchestration.ts#${finding.fingerprint}+${finding.unsafeConditionClass}`,
+      fingerprint: JSON.stringify([
+        "runtime-proof",
+        finding.affectedContractId,
+        {
+          path: "packages/compiler/src/change-risk-orchestration.ts",
+          symbol: finding.fingerprint,
+          line: null,
+        },
+        finding.unsafeConditionClass,
+      ]),
     })),
     missingInputs: status === "NEEDS_CONTEXT" ? ["reviewer-output"] : [],
   };
@@ -98,6 +127,7 @@ function transitionChangeRiskOrchestration(
   state: Parameters<typeof transitionChangeRiskOrchestrationProduction>[0],
   event:
     | Parameters<typeof transitionChangeRiskOrchestrationProduction>[1]
+    | Readonly<{ kind: "review-result"; result: unknown; external: true }>
     | TestReviewerEvent,
 ) {
   if (event.kind === "clean") {
@@ -113,10 +143,27 @@ function transitionChangeRiskOrchestration(
       result: reviewResult(event.snapshotId, "FINDINGS_FOUND", event.findings),
     });
   }
+  if (event.kind === "review-result" && "external" in event && event.external) {
+    return transitionChangeRiskOrchestrationProduction(
+      state,
+      createValidatedExternalChangeRiskReviewEvent(event.result, [
+        "validated GitHub review thread",
+      ]),
+    );
+  }
+  if (
+    (event.kind === "code-changed" || event.kind === "fix-applied") &&
+    !("manifest" in event)
+  ) {
+    return transitionChangeRiskOrchestrationProduction(state, {
+      ...event,
+      manifest: [],
+    });
+  }
   return transitionChangeRiskOrchestrationProduction(state, event);
 }
 
-test("change-risk/v1 rejects invalid snapshot IDs at public state boundaries", () => {
+test("change-risk/v2 rejects invalid snapshot IDs at public state boundaries", () => {
   for (const snapshotId of ["", " \t\n "]) {
     assert.throws(
       () => createChangeRiskOrchestrationState(snapshotId),
@@ -134,7 +181,32 @@ test("change-risk/v1 rejects invalid snapshot IDs at public state boundaries", (
   }
 });
 
-test("change-risk/v1 orchestration transition table is bounded and snapshot-bound", () => {
+test("package root preserves legacy state creation and exports external validation", async () => {
+  const compilerApi = await import("./index.js");
+  assert.equal(
+    compilerApi.createChangeRiskOrchestrationState("legacy-safe").highRisk,
+    true,
+    "an omitted historical classification fails safe",
+  );
+  assert.equal(
+    compilerApi.createChangeRiskOrchestrationState("legacy-explicit", {
+      highRisk: false,
+    }).highRisk,
+    false,
+  );
+  assert.equal(
+    compilerApi.createChangeRiskOrchestrationState("manifest-derived", [
+      { path: "package.json" },
+    ]).highRisk,
+    true,
+  );
+  assert.equal(
+    typeof compilerApi.createValidatedExternalChangeRiskReviewEvent,
+    "function",
+  );
+});
+
+test("change-risk/v2 orchestration transition table is bounded and snapshot-bound", () => {
   const initial = createChangeRiskOrchestrationState("snapshot-a");
   const fourthRound = transitionChangeRiskOrchestration(
     {
@@ -371,9 +443,10 @@ test("cluster batching uses three members while a two-member pair remains ordina
         transitionChangeRiskOrchestration(next, {
           kind: "fix-applied",
           snapshotId: `${snapshotId}-batched`,
-          remediatedFindings: entry.expected.map(() => ({
+          remediatedFindings: entry.clusterKeys.map((_, index) => ({
             affectedContractId: "runtime-proof" as const,
             unsafeConditionClass: "missing-runtime-proof" as const,
+            fingerprint: runtimeProofFingerprint(`finding-${index}`),
           })),
         }).fixRounds,
         1,
@@ -532,20 +605,19 @@ test("orchestration derives cluster identity from validated finding components",
     },
   );
   assert.equal(malformed.transientAttempts, 1);
-  assert.throws(
-    () =>
-      transitionChangeRiskOrchestration(state, {
-        kind: "fix-applied",
-        snapshotId: `${snapshotId}-after`,
-        remediatedFindings: [
-          {
-            affectedContractId: "other",
-            unsafeConditionClass: "other",
-            clusterKey: "runtime-proof+missing-runtime-proof",
-          },
-        ],
-      } as never),
-    /invalid change-risk blockers/u,
+  assert.equal(
+    transitionChangeRiskOrchestration(state, {
+      kind: "fix-applied",
+      snapshotId: `${snapshotId}-after`,
+      remediatedFindings: [
+        {
+          affectedContractId: "other",
+          unsafeConditionClass: "other",
+          clusterKey: "runtime-proof+missing-runtime-proof",
+        },
+      ],
+    } as never).status,
+    "NEEDS_HUMAN_REVIEW",
   );
 });
 
@@ -601,7 +673,9 @@ test("confirmation is required for P1, high-risk, and two-round paths, including
     status: "CLEAN" as const,
     confirmationRequired: true,
     confirmationSatisfied: true,
-    logicalInvocations: 1,
+    confirmationInvocations: 1,
+    logicalInvocations: 2,
+    cleanReviewInvocations: 2,
   };
   const reopened = transitionChangeRiskOrchestration(
     confirmationFoundBlockers,
@@ -653,19 +727,29 @@ test("remediation history is attached to its completed review without synthetic 
         runtimeProofFingerprint("one"),
         runtimeProofFingerprint("two"),
       ],
+      clusterMembers: [
+        {
+          fingerprint: runtimeProofFingerprint("one"),
+          clusterKey: "runtime-proof+missing-runtime-proof",
+        },
+        {
+          fingerprint: runtimeProofFingerprint("two"),
+          clusterKey: "runtime-proof+missing-runtime-proof",
+        },
+      ],
       remediatedClusterKeys: ["runtime-proof+missing-runtime-proof"],
     },
   ]);
 });
 
-test("unchanged remediation is immediately no-progress unless human escalation also applies", () => {
+test("fixes before a blocker review escalate and budget exhaustion wins unchanged remediation", () => {
   const initial = createChangeRiskOrchestrationState("snapshot-unchanged");
   const unchanged = transitionChangeRiskOrchestration(initial, {
     kind: "fix-applied",
     snapshotId: "snapshot-unchanged",
     remediatedFindings: [],
   });
-  assert.equal(unchanged.status, "NO_PROGRESS");
+  assert.equal(unchanged.status, "NEEDS_HUMAN_REVIEW");
   const overlapping = transitionChangeRiskOrchestration(
     {
       ...initial,
@@ -722,6 +806,236 @@ test("fix application carries a distinct new snapshot and preserves its identity
     }).status,
     "NO_PROGRESS",
   );
+});
+
+test("terminal clean handoffs prove a completed review invocation", () => {
+  const fabricated = {
+    ...createChangeRiskOrchestrationState("snapshot-clean-proof"),
+    status: "CLEAN" as const,
+    confirmationSatisfied: true,
+  };
+  assert.equal(validateChangeRiskOrchestrationStateV1(fabricated).ok, false);
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1({
+      ...fabricated,
+      logicalInvocations: 1,
+      cleanReviewInvocations: 1,
+      transientAttempts: 1,
+      missingInputs: ["still missing"],
+    }).ok,
+    false,
+  );
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1({
+      ...fabricated,
+      logicalInvocations: 1,
+      cleanReviewInvocations: 1,
+      confirmationRequired: true,
+      confirmationInvocations: 1,
+      highRisk: true,
+    }).ok,
+    false,
+  );
+});
+
+test("remediation review validates closure candidates against the prior fingerprint checkpoint", () => {
+  const snapshotId = "snapshot-remediation-mode";
+  const finding = {
+    ...runtimeProofFinding("closed-after-fix"),
+    priority: "P1" as const,
+  };
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: [finding] },
+  );
+  const fixed = transitionChangeRiskOrchestration(reviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    remediatedFindings: [
+      {
+        ...finding,
+        fingerprint: runtimeProofFingerprint(finding.fingerprint),
+      },
+    ],
+  } as never);
+  const closed = transitionChangeRiskOrchestrationProduction(fixed, {
+    kind: "review-result",
+    result: reviewResult(`${snapshotId}-fixed`, "FINDINGS_FOUND", [
+      { ...finding, resolution: "fixed" },
+    ]),
+  });
+  assert.equal(closed.transientAttempts, 0);
+  assert.equal(closed.logicalInvocations, 2);
+  assert.equal(closed.awaitingFinalConfirmation, true);
+  const invalidFinalClosure = transitionChangeRiskOrchestrationProduction(
+    closed,
+    {
+      kind: "review-result",
+      result: reviewResult(`${snapshotId}-fixed`, "FINDINGS_FOUND", [
+        { ...finding, resolution: "fixed" },
+      ]),
+    },
+  );
+  assert.equal(invalidFinalClosure.transientAttempts, 1);
+});
+
+test("confirmation must be a distinct bounded invocation", () => {
+  const snapshotId = "snapshot-distinct-confirmation";
+  const initial = createChangeRiskOrchestrationState(snapshotId, {
+    highRisk: true,
+  });
+  const claimedInitialConfirmation = transitionChangeRiskOrchestration(
+    initial,
+    { kind: "clean", snapshotId, confirmation: true },
+  );
+  assert.equal(claimedInitialConfirmation.status, "ACTIVE");
+  assert.equal(claimedInitialConfirmation.confirmationSatisfied, false);
+  assert.equal(claimedInitialConfirmation.logicalInvocations, 1);
+
+  const confirmed = transitionChangeRiskOrchestration(
+    claimedInitialConfirmation,
+    { kind: "clean", snapshotId, confirmation: true },
+  );
+  assert.equal(confirmed.status, "CLEAN");
+  assert.equal(confirmed.logicalInvocations, 2);
+
+  const exhausted = transitionChangeRiskOrchestrationProduction(
+    {
+      ...claimedInitialConfirmation,
+      confirmationInvocations: 2,
+      awaitingFinalConfirmation: true,
+    },
+    {
+      kind: "review-result",
+      result: reviewResult(snapshotId, "CLEAN"),
+    },
+  );
+  assert.equal(exhausted.status, "NEEDS_HUMAN_REVIEW");
+});
+
+test("clean handoffs reopen only for validated external blockers", () => {
+  const snapshotId = "snapshot-external-reopen";
+  const clean = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "clean", snapshotId },
+  );
+  const local = transitionChangeRiskOrchestration(clean, {
+    kind: "review-result",
+    result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+      runtimeProofFinding("late-local"),
+    ]),
+  });
+  assert.equal(local.status, "CLEAN");
+  assert.equal(local.transientAttempts, clean.transientAttempts);
+  const repeatedLocalClean = transitionChangeRiskOrchestrationProduction(
+    clean,
+    {
+      kind: "review-result",
+      result: reviewResult(snapshotId, "CLEAN"),
+    },
+  );
+  assert.deepEqual(repeatedLocalClean, clean);
+  const spoofed = transitionChangeRiskOrchestrationProduction(clean, {
+    kind: "review-result",
+    external: true,
+    evidence: ["caller assertion"],
+    result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+      runtimeProofFinding("spoofed-external"),
+    ]),
+  } as never);
+  assert.equal(spoofed.status, "CLEAN");
+});
+
+test("updated manifests recompute high-risk state before remediation confirmation", () => {
+  const initial = createChangeRiskOrchestrationStateProduction(
+    "snapshot-low-risk",
+    [],
+  );
+  const changed = transitionChangeRiskOrchestrationProduction(initial, {
+    kind: "code-changed",
+    snapshotId: "snapshot-high-risk",
+    manifest: [{ path: "package.json" }],
+  });
+  assert.equal(changed.highRisk, true);
+  const clean = transitionChangeRiskOrchestration(changed, {
+    kind: "clean",
+    snapshotId: "snapshot-high-risk",
+  });
+  assert.equal(clean.awaitingFinalConfirmation, true);
+});
+
+test("batched remediation binds every fingerprint to the shared cluster", () => {
+  const snapshotId = "snapshot-bound-batch";
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    {
+      kind: "blockers",
+      snapshotId,
+      findings: runtimeProofBlockers("one", "two", "three"),
+    },
+  );
+  const spoofed = transitionChangeRiskOrchestrationProduction(reviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    manifest: [],
+    remediatedFindings: [
+      {
+        ...runtimeProofFinding("one"),
+        fingerprint: runtimeProofFingerprint("one"),
+      },
+      {
+        affectedContractId: "state-transition",
+        unsafeConditionClass: "missing-validation",
+        fingerprint: runtimeProofFingerprint("two"),
+      },
+      {
+        affectedContractId: "state-transition",
+        unsafeConditionClass: "missing-validation",
+        fingerprint: runtimeProofFingerprint("three"),
+      },
+    ],
+  });
+  assert.equal(spoofed.status, "NEEDS_HUMAN_REVIEW");
+
+  const first = reviewed.completedRounds.at(-1)!.clusterMembers![0]!;
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1({
+      ...reviewed,
+      completedRounds: [
+        {
+          ...reviewed.completedRounds.at(-1)!,
+          clusterMembers: [first, first, first],
+        },
+      ],
+    }).ok,
+    false,
+  );
+});
+
+test("unavailable requested context and invalid fix ordering escalate immediately", () => {
+  const snapshotId = "snapshot-context-unavailable";
+  const contextBlocked = transitionChangeRiskOrchestrationProduction(
+    createChangeRiskOrchestrationState(snapshotId),
+    {
+      kind: "review-result",
+      result: {
+        ...reviewResult(snapshotId, "NEEDS_CONTEXT"),
+        missingInputs: ["forbidden production secret"],
+      },
+      contextAvailable: false,
+    } as never,
+  );
+  assert.equal(contextBlocked.status, "NEEDS_HUMAN_REVIEW");
+
+  const prematureFix = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    {
+      kind: "fix-applied",
+      snapshotId: `${snapshotId}-changed`,
+      remediatedFindings: [],
+    },
+  );
+  assert.equal(prematureFix.status, "NEEDS_HUMAN_REVIEW");
 });
 
 test("stagnation requires two consecutive remediation reviews and human escalation wins overlap", () => {

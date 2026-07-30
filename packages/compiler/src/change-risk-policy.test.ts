@@ -2,6 +2,9 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
@@ -80,7 +83,7 @@ const validFinding = {
   resolution: "open",
   disposition: "follow-up",
   fingerprint:
-    "runtime-proof+runtime-proof+packages/compiler/src/compiler.ts:1+missing-runtime-proof",
+    '["runtime-proof","runtime-proof",{"path":"packages/compiler/src/compiler.ts","symbol":null,"line":1},"missing-runtime-proof"]',
 } as const;
 
 function manifest(...paths: string[]): ChangeRiskManifestEntry[] {
@@ -92,7 +95,7 @@ function manifest(...paths: string[]): ChangeRiskManifestEntry[] {
 // ---------------------------------------------------------------------------
 
 test("change-risk policy exposes the three closed version identifiers", () => {
-  assert.equal(CHANGE_RISK_POLICY_VERSION, "change-risk/v1");
+  assert.equal(CHANGE_RISK_POLICY_VERSION, "change-risk/v2");
   assert.equal(
     CHANGE_RISK_CATEGORY_TAXONOMY_VERSION,
     "change-risk-categories/v1",
@@ -238,8 +241,8 @@ test("cluster vocabularies are closed with explicit other fallbacks", () => {
   );
 });
 
-test("pre-emission policy amendments retain change-risk/v1", () => {
-  assert.equal(CHANGE_RISK_POLICY_VERSION, "change-risk/v1");
+test("pre-emission policy amendments retain change-risk/v2", () => {
+  assert.equal(CHANGE_RISK_POLICY_VERSION, "change-risk/v2");
   assert.match(CHANGE_RISK_POLICY_VERSIONING_RULE, /only after/i);
   assert.match(CHANGE_RISK_POLICY_VERSIONING_RULE, /emitted/i);
   assert.match(CHANGE_RISK_POLICY_VERSIONING_RULE, /persisted/i);
@@ -269,14 +272,14 @@ test("terminal statuses, source policies, and the legacy terminal status are clo
   );
   assert.deepEqual(
     [...CHANGE_RISK_SOURCE_POLICIES],
-    ["change-risk/v1", "legacy-external"],
+    ["change-risk/v2", "legacy-external"],
   );
   assert.equal(CHANGE_RISK_LEGACY_TERMINAL_STATUS, "external-only");
   assert.ok(
     !CHANGE_RISK_TERMINAL_STATUSES.includes(
       CHANGE_RISK_LEGACY_TERMINAL_STATUS as never,
     ),
-    "external-only is not a change-risk/v1 terminal status",
+    "external-only is not a change-risk/v2 terminal status",
   );
 });
 
@@ -1491,7 +1494,7 @@ test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or mal
     {
       name: "completed clean has no findings or missing input",
       value: {
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "CLEAN",
         scope: completeScope,
@@ -1503,7 +1506,7 @@ test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or mal
     {
       name: "completed findings result has a fully dispositioned P3",
       value: {
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "FINDINGS_FOUND",
         scope: completeScope,
@@ -1515,7 +1518,7 @@ test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or mal
     {
       name: "needs context is incomplete with a requested input",
       value: {
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "NEEDS_CONTEXT",
         scope: { ...completeScope, completed: false },
@@ -1527,7 +1530,7 @@ test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or mal
     {
       name: "clean cannot have incomplete scope",
       value: {
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "CLEAN",
         scope: { ...completeScope, inspectedRelevantConsumers: false },
@@ -1539,7 +1542,7 @@ test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or mal
     {
       name: "findings found requires a finding",
       value: {
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "FINDINGS_FOUND",
         scope: completeScope,
@@ -1551,7 +1554,7 @@ test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or mal
     {
       name: "needs context requires missing inputs and incomplete scope",
       value: {
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "NEEDS_CONTEXT",
         scope: completeScope,
@@ -1563,7 +1566,7 @@ test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or mal
     {
       name: "P1 cannot carry a disposition",
       value: {
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "FINDINGS_FOUND",
         scope: completeScope,
@@ -1575,7 +1578,7 @@ test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or mal
     {
       name: "evidence references require their discriminator locator",
       value: {
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "FINDINGS_FOUND",
         scope: completeScope,
@@ -1599,7 +1602,7 @@ test("ChangeRiskResultV1 validates closed statuses and rejects incomplete or mal
 
 test("reviewer envelopes align with the rendered finding contract and reserve closure and orchestration fields", () => {
   const base = {
-    policyVersion: "change-risk/v1",
+    policyVersion: "change-risk/v2",
     snapshotId: "snapshot-1",
     status: "FINDINGS_FOUND",
     scope: completeScope,
@@ -1618,29 +1621,55 @@ test("reviewer envelopes align with the rendered finding contract and reserve cl
     },
     {
       name: "clean-room reviewers cannot close a finding without prior context",
-      value: { ...base, findings: [{ ...validFinding, resolution: "fixed" }] },
+      value: {
+        ...base,
+        findings: [
+          { ...validFinding, resolution: "fixed", disposition: "fixed" },
+        ],
+      },
       valid: false,
     },
     {
       name: "remediation accepts closure only for a supplied prior fingerprint",
-      value: { ...base, findings: [{ ...validFinding, resolution: "fixed" }] },
-      options: { mode: "remediation", priorFingerprints: [validFinding.fingerprint] },
+      value: {
+        ...base,
+        findings: [
+          { ...validFinding, resolution: "fixed", disposition: "fixed" },
+        ],
+      },
+      options: {
+        mode: "remediation",
+        priorFingerprints: [validFinding.fingerprint],
+      },
       valid: true,
     },
     {
       name: "remediation rejects closure for an unknown fingerprint",
-      value: { ...base, findings: [{ ...validFinding, resolution: "obsolete" }] },
+      value: {
+        ...base,
+        findings: [
+          { ...validFinding, resolution: "obsolete", disposition: "obsolete" },
+        ],
+      },
       options: { mode: "remediation", priorFingerprints: ["different"] },
       valid: false,
     },
     {
       name: "reviewer output cannot claim external provenance",
-      value: { ...base, findings: [{ ...validFinding, source: "external", provider: "other" }] },
+      value: {
+        ...base,
+        findings: [{ ...validFinding, source: "external", provider: "other" }],
+      },
       valid: false,
     },
     {
       name: "reviewer output cannot enrich a finding with systemic ownership",
-      value: { ...base, findings: [{ ...validFinding, systemic: true, systemicReason: "owner only" }] },
+      value: {
+        ...base,
+        findings: [
+          { ...validFinding, systemic: true, systemicReason: "owner only" },
+        ],
+      },
       valid: false,
     },
   ];
@@ -1656,7 +1685,7 @@ test("reviewer envelopes align with the rendered finding contract and reserve cl
 
 test("completed reviewer envelopes bind to the expected snapshot when supplied", () => {
   const clean = {
-    policyVersion: "change-risk/v1",
+    policyVersion: "change-risk/v2",
     snapshotId: "snapshot-current",
     status: "CLEAN",
     scope: completeScope,
@@ -1664,12 +1693,15 @@ test("completed reviewer envelopes bind to the expected snapshot when supplied",
     missingInputs: [],
   };
   assert.equal(
-    validateChangeRiskResultV1(clean, { expectedSnapshotId: "snapshot-current" }).ok,
+    validateChangeRiskResultV1(clean, {
+      expectedSnapshotId: "snapshot-current",
+    }).ok,
     true,
     "a completed envelope for the current snapshot remains valid",
   );
   assert.equal(
-    validateChangeRiskResultV1(clean, { expectedSnapshotId: "snapshot-other" }).ok,
+    validateChangeRiskResultV1(clean, { expectedSnapshotId: "snapshot-other" })
+      .ok,
     false,
     "a structurally valid CLEAN result cannot approve a different snapshot",
   );
@@ -1695,7 +1727,7 @@ test("ChangeRiskResultV1 derives deterministic fingerprints from structured find
   );
   assert.equal(
     validateChangeRiskResultV1({
-      policyVersion: "change-risk/v1",
+      policyVersion: "change-risk/v2",
       snapshotId: "snapshot-1",
       status: "FINDINGS_FOUND",
       scope: completeScope,
@@ -1707,7 +1739,7 @@ test("ChangeRiskResultV1 derives deterministic fingerprints from structured find
   );
   assert.equal(
     validateChangeRiskResultV1({
-      policyVersion: "change-risk/v1",
+      policyVersion: "change-risk/v2",
       snapshotId: "snapshot-1",
       status: "FINDINGS_FOUND",
       scope: completeScope,
@@ -1724,6 +1756,95 @@ test("ChangeRiskResultV1 derives deterministic fingerprints from structured find
   );
 });
 
+test("change-risk fingerprints use an unambiguous structured encoding", () => {
+  const common = {
+    category: validFinding.category,
+    affectedContractId: validFinding.affectedContractId,
+    unsafeConditionClass: validFinding.unsafeConditionClass,
+  };
+  assert.notEqual(
+    deriveChangeRiskFingerprint({
+      ...common,
+      location: { path: "packages/a#b", symbol: "c" },
+    }),
+    deriveChangeRiskFingerprint({
+      ...common,
+      location: { path: "packages/a", symbol: "b#c" },
+    }),
+  );
+});
+
+test("P3 dispositions agree with their resolution state", () => {
+  const cases = [
+    ["fixed", "fixed", true],
+    ["false-positive", "false-positive", true],
+    ["obsolete", "obsolete", true],
+    ["accepted-debt", "open", true],
+    ["follow-up", "open", true],
+    ["fixed", "open", false],
+    ["accepted-debt", "fixed", false],
+  ] as const;
+  for (const [disposition, resolution, expected] of cases) {
+    const finding = {
+      ...validFinding,
+      priority: "P3" as const,
+      disposition,
+      resolution,
+    };
+    const result = validateChangeRiskResultV1(
+      {
+        policyVersion: "change-risk/v2",
+        snapshotId: "snapshot-p3",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [finding],
+        missingInputs: [],
+      },
+      {
+        mode: "remediation",
+        priorFingerprints: [finding.fingerprint],
+      },
+    );
+    assert.equal(result.ok, expected, `${disposition}/${resolution}`);
+  }
+});
+
+test("I1 checks in the non-shipping unprojected ablation baseline", () => {
+  const path = fileURLToPath(
+    new URL(
+      "../../../fixtures/change-risk-v1-unprojected-policy-baseline/baseline.json",
+      import.meta.url,
+    ),
+  );
+  const baseline = readFileSync(path, "utf8");
+  assert.equal(
+    createHash("sha256").update(baseline).digest("hex"),
+    "45fe3e6b0a06e67ebc9cf9a4ec288b3812bfbc5e4690e0405b8743105fd4e0cd",
+    "the historical v1 baseline is immutable evaluation evidence",
+  );
+  const parsed = JSON.parse(baseline) as {
+    id: string;
+    shipped: boolean;
+    policyVersion: string;
+    reviewer: unknown;
+    orchestration: unknown;
+    learningRecord: unknown;
+    promotion: unknown;
+    evaluation: unknown;
+  };
+  assert.equal(parsed.id, "change-risk-v1-unprojected-policy-baseline");
+  assert.equal(parsed.shipped, false);
+  assert.equal(parsed.policyVersion, "change-risk/v1");
+  for (const section of [
+    parsed.reviewer,
+    parsed.orchestration,
+    parsed.learningRecord,
+    parsed.promotion,
+    parsed.evaluation,
+  ])
+    assert.notEqual(section, undefined);
+});
+
 test("ChangeRiskResultV1 rejects nonempty locations that normalize to no path component", () => {
   for (const location of [
     { path: "." },
@@ -1733,7 +1854,7 @@ test("ChangeRiskResultV1 rejects nonempty locations that normalize to no path co
   ] as const) {
     assert.equal(
       validateChangeRiskResultV1({
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "FINDINGS_FOUND",
         scope: completeScope,
@@ -1767,7 +1888,7 @@ test("ChangeRiskResultV1 rejects malformed optional location symbol and line val
   ] as const) {
     assert.doesNotThrow(() =>
       validateChangeRiskResultV1({
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "FINDINGS_FOUND",
         scope: completeScope,
@@ -1777,7 +1898,7 @@ test("ChangeRiskResultV1 rejects malformed optional location symbol and line val
     );
     assert.equal(
       validateChangeRiskResultV1({
-        policyVersion: "change-risk/v1",
+        policyVersion: "change-risk/v2",
         snapshotId: "snapshot-1",
         status: "FINDINGS_FOUND",
         scope: completeScope,

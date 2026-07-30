@@ -1017,8 +1017,8 @@ function renderWorkflowSkillFiles(
   const changeRiskEnabled =
     profile.workflow.subagentDrivenDevelopment === true &&
     profile.capabilities?.delegation?.subagents?.enabled === true &&
-    profile.clients.codex.enabled === true &&
-    profile.clients.claude.enabled === true;
+    (profile.clients.codex.enabled === true ||
+      profile.clients.claude.enabled === true);
   const loggingOn = profile.workflow.loggingGuidance === true;
   return selected.map((skill) =>
     createGeneratedTextFile(
@@ -1466,9 +1466,18 @@ function renderSubagentDrivenChangeSkill(): string {
   const orchestration = changeRiskOrchestrationProjection();
   const ownerRules = [
     `at most ${orchestration.budgets.maxFixRounds} fix rounds, ${orchestration.budgets.maxLogicalInvocations} completed logical reviews, and ${orchestration.budgets.maxTransientRetriesPerInvocation} transient retries per logical invocation.`,
+    `Run at most ${orchestration.budgets.maxFinalCleanRoomConfirmations} confirmation invocations; a confirmation must be a distinct later clean-room review and cannot be claimed by the initial review.`,
+    "Preserve missingInputs from NEEDS_CONTEXT; unavailable or forbidden context escalates immediately instead of consuming retries.",
+    "After CLEAN, only a validated external blocker or a changed snapshot may reopen orchestration.",
+    "Reset transient retries before final confirmation so prior malformed attempts do not consume its retry allowance.",
     ...orchestration.transitions.retry,
     ...orchestration.transitions.nonProgress,
     ...orchestration.transitions.clustering,
+    ...orchestration.transitions.noOpenBlockerTerminal,
+    ...orchestration.transitions.validatedExternalBlocker,
+    ...orchestration.transitions.confirmationTriggers.map(
+      (trigger) => `Require final clean-room confirmation: ${trigger}.`,
+    ),
     ...orchestration.transitions.escalation,
   ];
   return `---
@@ -2147,7 +2156,7 @@ function createChangeRiskReviewer(): AiProfileSubagent {
       "Independently review the complete accumulated change and reachable consumers for product-risk gaps.",
     purpose:
       "Perform the independent change-risk review using the critical-reviewer model-policy role.",
-    prompt: `# Change-Risk Review\n\nPolicy version: \`${policy.policyVersion}\`. Your provider-neutral model-policy role is \`critical-reviewer\`; use its target-native model and effort resolution.\n\n## Objective\n\n${policy.objective.statement}\n\n${bullets(policy.objective.authorityBoundary)}\n\n## Clean-Room Snapshot Access\n\nThis is a clean-room review: do not use an implementer report, prior praise, or prior finding list. ${policy.snapshotAccess.completeness}\n\nInitial context is manifest-first, not an eager full-diff injection:\n\n${bullets(policy.snapshotAccess.initialContext)}\n\n${bullets(policy.snapshotAccess.inspectionRights)}\n\n## Closed Risk Domains\n\n${domains}\n\nDetailed rubrics are selectively loaded reference material; do not infer orchestration state, fix rounds, promotion rules, or learning-record requirements.\n\n## Result Contract\n\nReturn exactly one typed \`ChangeRiskResultV1\` envelope and no approval prose.\n\n- \`policyVersion\` is \`${result.policyVersion}\`; bind the envelope to the supplied \`snapshotId\`.\n- \`status\` is exactly \`${result.statuses.join(" | ")}\`.\n- \`scope\` records \`completed\`, manifest coverage, relevant-consumer inspection, and every closed domain with \`applicable\` or \`not-applicable\`; every not-applicable domain has a concise reason.\n- \`findings\` use priorities \`${result.priorities.join(" | ")}\`, categories \`${result.categories.join(" | ")}\`, affectedContractId \`${result.affectedContractIds.join(" | ")}\`, unsafeConditionClass \`${result.unsafeConditionClasses.join(" | ")}\`, resolutions \`${result.resolutions.join(" | ")}\`, P3 dispositions \`${result.p3Dispositions.join(" | ")}\`, and evidence kinds \`${result.evidenceKinds.join(" | ")}\`.\n- Each finding contains ${result.requiredFindingFields.join(", ")}, concrete evidence, affected contract, safe path, and a component-derived normalized fingerprint from ${result.fingerprintComponents.join(", ")}.\n- Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution \`open\`. Remediation receives only supplied prior fingerprints; it may verify \`fixed\`, \`false-positive\`, or \`obsolete\` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.\n- \`missingInputs\` is empty except for \`NEEDS_CONTEXT\`.\n- ${result.invalidAttemptRules.join(" ")}\n\n## Safety\n\n${bullets(policy.safetyConstraints)}`,
+    prompt: `# Change-Risk Review\n\nPolicy version: \`${policy.policyVersion}\`. Your provider-neutral model-policy role is \`critical-reviewer\`; use its target-native model and effort resolution.\n\n## Objective\n\n${policy.objective.statement}\n\n${bullets(policy.objective.authorityBoundary)}\n\n## Snapshot Access by Mode\n\nWhen the supplied mode is initial or final, do not use a prior finding list, implementer report, or prior praise. When the supplied mode is remediation, use only the supplied prior fingerprints as closure candidates and still inspect the complete updated snapshot independently. ${policy.snapshotAccess.completeness}\n\nInitial context is manifest-first, not an eager full-diff injection:\n\n${bullets(policy.snapshotAccess.initialContext)}\n\n${bullets(policy.snapshotAccess.inspectionRights)}\n\n## Closed Risk Domains\n\n${domains}\n\nDetailed rubrics are selectively loaded reference material; do not infer orchestration state, fix rounds, promotion rules, or learning-record requirements.\n\n## Result Contract\n\nReturn exactly one typed \`ChangeRiskResultV1\` envelope and no approval prose.\n\n- \`policyVersion\` is \`${result.policyVersion}\`; bind the envelope to the supplied \`snapshotId\`.\n- \`status\` is exactly \`${result.statuses.join(" | ")}\`.\n- \`scope\` records \`completed\`, manifest coverage, relevant-consumer inspection, and every closed domain with \`applicable\` or \`not-applicable\`; every not-applicable domain has a concise reason.\n- \`findings\` use priorities \`${result.priorities.join(" | ")}\`, categories \`${result.categories.join(" | ")}\`, affectedContractId \`${result.affectedContractIds.join(" | ")}\`, unsafeConditionClass \`${result.unsafeConditionClasses.join(" | ")}\`, resolutions \`${result.resolutions.join(" | ")}\`, P3 dispositions \`${result.p3Dispositions.join(" | ")}\`, and evidence kinds \`${result.evidenceKinds.join(" | ")}\`.\n- Each finding contains ${result.requiredFindingFields.join(", ")}, concrete evidence, affected contract, safe path, and a component-derived normalized fingerprint from ${result.fingerprintComponents.join(", ")}.\n- Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution \`open\`. Remediation receives only supplied prior fingerprints; it may verify \`fixed\`, \`false-positive\`, or \`obsolete\` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.\n- \`missingInputs\` is empty except for \`NEEDS_CONTEXT\`.\n- ${result.invalidAttemptRules.join(" ")}\n\n## Safety\n\n${bullets(policy.safetyConstraints)}`,
     toolScope: "read-only",
     modelPreference: "capable",
     maxTurns: 10,

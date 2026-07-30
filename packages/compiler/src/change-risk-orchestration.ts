@@ -7,8 +7,10 @@ import {
   CHANGE_RISK_CONTRACT_IDS,
   CHANGE_RISK_UNSAFE_CONDITION_CLASSES,
   deriveChangeRiskClusterKey,
+  isHighRiskChange,
   validateChangeRiskResultV1,
   type ChangeRiskContractId,
+  type ChangeRiskManifestEntry,
   type ChangeRiskUnsafeConditionClass,
 } from "./change-risk-policy.js";
 
@@ -20,12 +22,20 @@ export type ChangeRiskOrchestrationStateV1 = Readonly<{
   logicalInvocations: number;
   fixRounds: number;
   transientAttempts: number;
+  confirmationInvocations: number;
+  awaitingFinalConfirmation: boolean;
+  cleanReviewInvocations: number;
   confirmationRequired: boolean;
   confirmationSatisfied: boolean;
   highRisk: boolean;
+  missingInputs: readonly string[];
   completedRounds: readonly Readonly<{
     blockerCount: number;
     unresolvedFingerprints: readonly string[];
+    clusterMembers?: readonly Readonly<{
+      fingerprint: string;
+      clusterKey: string;
+    }>[];
     remediatedClusterKeys: readonly string[];
   }>[];
   requiredMechanicalGuardClusterKeys: readonly string[];
@@ -41,7 +51,11 @@ export type ChangeRiskOrchestrationStateV1 = Readonly<{
 
 export type ChangeRiskOrchestrationEvent =
   | Readonly<{ kind: "invalid-attempt" | "needs-context"; snapshotId: string }>
-  | Readonly<{ kind: "code-changed"; snapshotId: string }>
+  | Readonly<{
+      kind: "code-changed";
+      snapshotId: string;
+      manifest?: readonly ChangeRiskManifestEntry[];
+    }>
   | Readonly<{ kind: "guard-added"; snapshotId: string; clusterKey: string }>
   | Readonly<{
       kind: "guard-impractical";
@@ -54,7 +68,8 @@ export type ChangeRiskOrchestrationEvent =
       kind: "fix-applied";
       /** The actual snapshot produced by the applied fix. */
       snapshotId: string;
-      remediatedFindings: readonly ChangeRiskClusterFinding[];
+      manifest?: readonly ChangeRiskManifestEntry[];
+      remediatedFindings: readonly ChangeRiskRemediatedFinding[];
     }>;
 
 /** The only input from which the owner derives a cluster identity. */
@@ -62,6 +77,10 @@ export type ChangeRiskClusterFinding = Readonly<{
   affectedContractId: ChangeRiskContractId;
   unsafeConditionClass: ChangeRiskUnsafeConditionClass;
 }>;
+
+export type ChangeRiskRemediatedFinding = Readonly<
+  ChangeRiskClusterFinding & { fingerprint?: string }
+>;
 
 export type ChangeRiskBlockerFinding = Readonly<
   ChangeRiskClusterFinding & { fingerprint: string }
@@ -82,8 +101,51 @@ export type ChangeRiskReviewResultEvent = Readonly<{
   /** The untrusted reviewer envelope; validity is derived, never asserted. */
   result: unknown;
   confirmation?: boolean;
-  external?: boolean;
+  /** False when requested context is unavailable or forbidden to disclose. */
+  contextAvailable?: boolean;
 }>;
+
+const validatedExternalReviewEvent = Symbol(
+  "validatedExternalChangeRiskReviewEvent",
+);
+
+export type ValidatedExternalChangeRiskReviewEvent = Readonly<
+  ChangeRiskReviewResultEvent & {
+    external: true;
+    evidence: readonly string[];
+    readonly [validatedExternalReviewEvent]: true;
+  }
+>;
+
+export function createValidatedExternalChangeRiskReviewEvent(
+  result: unknown,
+  evidence: readonly string[],
+): ValidatedExternalChangeRiskReviewEvent {
+  if (
+    !Array.isArray(evidence) ||
+    evidence.length === 0 ||
+    evidence.some((item) => !isNonEmptyString(item))
+  )
+    throw new TypeError("invalid external change-risk evidence");
+  const validated = validateChangeRiskResultV1(result);
+  if (
+    !validated.ok ||
+    validated.value.status !== "FINDINGS_FOUND" ||
+    !validated.value.findings.some(
+      (finding) =>
+        (finding.priority === "P1" || finding.priority === "P2") &&
+        finding.resolution === "open",
+    )
+  )
+    throw new TypeError("invalid external change-risk result");
+  return {
+    kind: "review-result",
+    result,
+    external: true,
+    evidence: unique(evidence),
+    [validatedExternalReviewEvent]: true,
+  };
+}
 
 /**
  * A terminal/blocker transition can be created only after the closed reviewer
@@ -107,12 +169,38 @@ type ValidatedChangeRiskReviewEvent =
       readonly [validatedReviewEvent]: true;
     }>;
 
+function isManifestInput(
+  value:
+    | readonly ChangeRiskManifestEntry[]
+    | Readonly<{ highRisk?: boolean }>,
+): value is readonly ChangeRiskManifestEntry[] {
+  return Array.isArray(value);
+}
+
 export function createChangeRiskOrchestrationState(
   snapshotId: string,
-  options: Readonly<{ highRisk?: boolean }> = {},
+): ChangeRiskOrchestrationStateV1;
+export function createChangeRiskOrchestrationState(
+  snapshotId: string,
+  legacyOptions: Readonly<{ highRisk?: boolean }>,
+): ChangeRiskOrchestrationStateV1;
+export function createChangeRiskOrchestrationState(
+  snapshotId: string,
+  manifest: readonly ChangeRiskManifestEntry[],
+): ChangeRiskOrchestrationStateV1;
+export function createChangeRiskOrchestrationState(
+  snapshotId: string,
+  classification:
+    | readonly ChangeRiskManifestEntry[]
+    | Readonly<{ highRisk?: boolean }> = {},
 ): ChangeRiskOrchestrationStateV1 {
   if (!isNonEmptyString(snapshotId))
     throw new TypeError("invalid change-risk snapshot ID");
+  const highRisk = isManifestInput(classification)
+    ? isHighRiskChange(classification)
+    : typeof classification.highRisk === "boolean"
+      ? classification.highRisk
+      : true;
   return {
     policyVersion: CHANGE_RISK_POLICY_VERSION,
     snapshotId,
@@ -120,9 +208,13 @@ export function createChangeRiskOrchestrationState(
     logicalInvocations: 0,
     fixRounds: 0,
     transientAttempts: 0,
+    confirmationInvocations: 0,
+    awaitingFinalConfirmation: false,
+    cleanReviewInvocations: 0,
     confirmationRequired: false,
     confirmationSatisfied: false,
-    highRisk: options.highRisk === true,
+    highRisk,
+    missingInputs: [],
     completedRounds: [],
     requiredMechanicalGuardClusterKeys: [],
     guardedClusterKeys: [],
@@ -211,9 +303,13 @@ export function validateChangeRiskOrchestrationStateV1(
     !isNonNegativeInteger(value.logicalInvocations) ||
     !isNonNegativeInteger(value.fixRounds) ||
     !isNonNegativeInteger(value.transientAttempts) ||
+    !isNonNegativeInteger(value.confirmationInvocations) ||
+    typeof value.awaitingFinalConfirmation !== "boolean" ||
+    !isNonNegativeInteger(value.cleanReviewInvocations) ||
     typeof value.confirmationRequired !== "boolean" ||
     typeof value.confirmationSatisfied !== "boolean" ||
     typeof value.highRisk !== "boolean" ||
+    !hasUniqueNonEmptyStrings(value.missingInputs) ||
     !Array.isArray(value.completedRounds) ||
     !hasCanonicalClusterKeys(value.requiredMechanicalGuardClusterKeys) ||
     !hasCanonicalClusterKeys(value.guardedClusterKeys) ||
@@ -227,18 +323,43 @@ export function validateChangeRiskOrchestrationStateV1(
     value.fixRounds > CHANGE_RISK_LIMITS.maxFixRounds ||
     value.transientAttempts >
       CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation + 1 ||
+    value.confirmationInvocations >
+      CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations ||
+    value.cleanReviewInvocations > value.logicalInvocations ||
     value.fixRounds > value.completedRounds.length ||
     value.completedRounds.length > value.logicalInvocations
   )
     return { ok: false, reason: "invalid counters" };
   if (
-    value.completedRounds.some(
-      (round) =>
+    value.completedRounds.some((round) => {
+      if (
         !isRecord(round) ||
         !isNonNegativeInteger(round.blockerCount) ||
         !hasUniqueNonEmptyStrings(round.unresolvedFingerprints) ||
-        !hasCanonicalClusterKeys(round.remediatedClusterKeys),
-    )
+        !hasCanonicalClusterKeys(round.remediatedClusterKeys)
+      )
+        return true;
+      if (round.clusterMembers === undefined) return false;
+      if (!Array.isArray(round.clusterMembers)) return true;
+      const unresolvedFingerprints =
+        round.unresolvedFingerprints as readonly string[];
+      const fingerprints = round.clusterMembers.flatMap((member) =>
+        isRecord(member) && isNonEmptyString(member.fingerprint)
+          ? [member.fingerprint]
+          : [],
+      );
+      return (
+        fingerprints.length !== round.clusterMembers.length ||
+        new Set(fingerprints).size !== fingerprints.length ||
+        round.clusterMembers.some(
+          (member) =>
+            !isRecord(member) ||
+            !isNonEmptyString(member.fingerprint) ||
+            !unresolvedFingerprints.includes(member.fingerprint) ||
+            !CANONICAL_CLUSTER_KEYS.has(member.clusterKey as string),
+        )
+      );
+    })
   )
     return { ok: false, reason: "invalid completed-round history" };
   const candidate = value as ChangeRiskOrchestrationStateV1;
@@ -261,9 +382,28 @@ export function validateChangeRiskOrchestrationStateV1(
     )
   )
     return { ok: false, reason: "contradictory guard history" };
+  const latestRound = candidate.completedRounds.at(-1);
+  if (
+    candidate.batchedClusterKeys.some(
+      (key) =>
+        (latestRound?.clusterMembers?.filter(
+          (member) => member.clusterKey === key,
+        ).length ?? 0) < 3,
+    )
+  )
+    return { ok: false, reason: "invalid batched cluster history" };
   if (
     (value.status === "ACTIVE" && value.confirmationSatisfied) ||
-    (value.status === "CLEAN" && !value.confirmationSatisfied)
+    (value.status === "CLEAN" &&
+      (!value.confirmationSatisfied ||
+        value.logicalInvocations === 0 ||
+        value.cleanReviewInvocations === 0 ||
+        (value.confirmationRequired && value.confirmationInvocations === 0) ||
+        (value.confirmationRequired &&
+          value.cleanReviewInvocations <= value.confirmationInvocations) ||
+        value.awaitingFinalConfirmation ||
+        value.transientAttempts !== 0 ||
+        value.missingInputs.length !== 0))
   )
     return { ok: false, reason: "invalid terminal confirmation" };
   return { ok: true, value: candidate };
@@ -321,6 +461,7 @@ function transitionChangeRiskOrchestrationInternal(
   event:
     | ChangeRiskOrchestrationEvent
     | ChangeRiskReviewResultEvent
+    | ValidatedExternalChangeRiskReviewEvent
     | ValidatedChangeRiskReviewEvent,
 ): ChangeRiskOrchestrationStateV1 {
   const state = requireValidState(serializedState);
@@ -334,43 +475,81 @@ function transitionChangeRiskOrchestrationInternal(
     });
   }
   if (event.kind === "review-result") {
+    const isExternal =
+      "external" in event &&
+      event.external === true &&
+      event[validatedExternalReviewEvent] === true;
+    if (state.status === "CLEAN" && !isExternal) return state;
     // Empty, malformed, truncated, NEEDS_CONTEXT, and snapshot-mismatched
     // output are attempts, never a path to clean.
+    const priorFingerprints =
+      state.fixRounds > 0
+        ? (state.completedRounds.at(-1)?.unresolvedFingerprints ?? [])
+        : [];
+    const validationMode = state.awaitingFinalConfirmation
+      ? "final"
+      : state.fixRounds > 0
+        ? "remediation"
+        : "initial";
     const validatedResult = validateChangeRiskResultV1(event.result, {
       expectedSnapshotId: state.snapshotId,
+      mode: validationMode,
+      priorFingerprints:
+        validationMode === "remediation" ? priorFingerprints : [],
     });
-    if (
-      !validatedResult.ok ||
-      validatedResult.value.status === "NEEDS_CONTEXT"
-    ) {
+    if (!validatedResult.ok) {
       return transitionChangeRiskOrchestrationInternal(state, {
         kind: "invalid-attempt",
         snapshotId: state.snapshotId,
       });
     }
+    if (validatedResult.value.status === "NEEDS_CONTEXT") {
+      const contextState = {
+        ...state,
+        missingInputs: unique(validatedResult.value.missingInputs),
+      };
+      return event.contextAvailable === false
+        ? terminal(contextState, "NEEDS_HUMAN_REVIEW")
+        : transitionChangeRiskOrchestrationInternal(contextState, {
+            kind: "needs-context",
+            snapshotId: state.snapshotId,
+          });
+    }
     const result = validatedResult.value;
+    const confirmationInvocations =
+      state.confirmationInvocations + (validationMode === "final" ? 1 : 0);
+    if (
+      confirmationInvocations >
+      CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations
+    )
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    const reviewState = {
+      ...state,
+      confirmationInvocations,
+      awaitingFinalConfirmation: false,
+    };
     const confirmationRequired =
-      state.confirmationRequired ||
-      state.highRisk ||
+      reviewState.confirmationRequired ||
+      reviewState.highRisk ||
       result.findings.some((finding) => finding.priority === "P1");
-    const confirmationState = { ...state, confirmationRequired };
+    const confirmationState = { ...reviewState, confirmationRequired };
     if (result.status === "CLEAN") {
       if (result.findings.length !== 0)
         return transitionChangeRiskOrchestrationInternal(state, {
           kind: "invalid-attempt",
-          snapshotId: state.snapshotId,
+          snapshotId: reviewState.snapshotId,
         });
       return transitionChangeRiskOrchestrationInternal(confirmationState, {
         kind: "clean",
-        snapshotId: state.snapshotId,
-        confirmation: event.confirmation,
+        snapshotId: reviewState.snapshotId,
+        confirmation: validationMode === "final",
         [validatedReviewEvent]: true,
       });
     }
     if (result.findings.length === 0)
       return transitionChangeRiskOrchestrationInternal(state, {
         kind: "invalid-attempt",
-        snapshotId: state.snapshotId,
+        snapshotId: reviewState.snapshotId,
       });
     if (
       result.findings.some(
@@ -380,7 +559,7 @@ function transitionChangeRiskOrchestrationInternal(
     ) {
       return transitionChangeRiskOrchestrationInternal(state, {
         kind: "invalid-attempt",
-        snapshotId: state.snapshotId,
+        snapshotId: reviewState.snapshotId,
       });
     }
     const openBlockers = result.findings.filter(
@@ -397,31 +576,39 @@ function transitionChangeRiskOrchestrationInternal(
     )
       return transitionChangeRiskOrchestrationInternal(state, {
         kind: "invalid-attempt",
-        snapshotId: state.snapshotId,
+        snapshotId: reviewState.snapshotId,
       });
     if (openBlockers.length === 0) {
       return transitionChangeRiskOrchestrationInternal(confirmationState, {
         kind: "clean",
-        snapshotId: state.snapshotId,
-        confirmation: event.confirmation,
+        snapshotId: reviewState.snapshotId,
+        confirmation: validationMode === "final",
         [validatedReviewEvent]: true,
       });
     }
     // A validated external blocker may reopen a clean state only while the
     // same closed local budgets can still fund remediation.
+    if (reviewState.status === "CLEAN" && !isExternal) {
+      return reviewState;
+    }
     if (
-      event.external &&
-      state.status === "CLEAN" &&
-      (state.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds ||
-        state.logicalInvocations + 2 > CHANGE_RISK_LIMITS.maxLogicalInvocations)
+      isExternal &&
+      reviewState.status === "CLEAN" &&
+      (reviewState.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds ||
+        reviewState.logicalInvocations + 2 >
+          CHANGE_RISK_LIMITS.maxLogicalInvocations)
     ) {
-      return terminal(state, "NEEDS_HUMAN_REVIEW");
+      return terminal(reviewState, "NEEDS_HUMAN_REVIEW");
     }
     return transitionChangeRiskOrchestrationInternal(
-      { ...confirmationState, status: "ACTIVE", confirmationSatisfied: false },
+      {
+        ...confirmationState,
+        status: "ACTIVE",
+        confirmationSatisfied: false,
+      },
       {
         kind: "blockers",
-        snapshotId: state.snapshotId,
+        snapshotId: reviewState.snapshotId,
         findings: openBlockers.map((finding) => ({
           fingerprint: finding.fingerprint,
           affectedContractId: finding.affectedContractId!,
@@ -432,14 +619,17 @@ function transitionChangeRiskOrchestrationInternal(
     );
   }
   if (event.kind === "code-changed") {
-    if (!isNonEmptyString(event.snapshotId))
+    if (!isNonEmptyString(event.snapshotId) || event.manifest === undefined)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (event.snapshotId === state.snapshotId) return state;
     return {
       ...state,
       snapshotId: event.snapshotId,
+      highRisk: isHighRiskChange(event.manifest),
       status: "ACTIVE",
       transientAttempts: 0,
+      missingInputs: [],
+      awaitingFinalConfirmation: false,
       confirmationSatisfied: false,
     };
   }
@@ -502,25 +692,46 @@ function transitionChangeRiskOrchestrationInternal(
     );
   }
   if (event.kind === "fix-applied") {
+    if (event.manifest === undefined)
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    if (state.completedRounds.length === 0)
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (state.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (state.requiredMechanicalGuardClusterKeys.length > 0)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
+    const latestRound = state.completedRounds.at(-1);
     if (
-      state.batchedClusterKeys.some(
-        (key) =>
-          !deriveRemediatedClusterKeys(event.remediatedFindings).includes(key),
-      )
+      state.batchedClusterKeys.some((key) => {
+        const members =
+          latestRound?.clusterMembers?.filter(
+            (member) => member.clusterKey === key,
+          ) ?? [];
+        return (
+          members.length < 3 ||
+          members.some(
+            (member) =>
+              !event.remediatedFindings.some(
+                (finding) =>
+                  finding.fingerprint === member.fingerprint &&
+                  deriveChangeRiskClusterKey(
+                    finding.affectedContractId,
+                    finding.unsafeConditionClass,
+                  ) === key,
+              ),
+          )
+        );
+      })
     ) {
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     }
     if (event.snapshotId.trim().length === 0)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
-    if (event.snapshotId === state.snapshotId)
-      return terminal(state, "NO_PROGRESS");
     // Reserve remediation plus a possible final confirmation before starting.
     if (state.logicalInvocations + 2 > CHANGE_RISK_LIMITS.maxLogicalInvocations)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
+    if (event.snapshotId === state.snapshotId)
+      return terminal(state, "NO_PROGRESS");
     const completedRounds =
       state.completedRounds.length === 0
         ? state.completedRounds
@@ -537,10 +748,13 @@ function transitionChangeRiskOrchestrationInternal(
     return {
       ...state,
       snapshotId: event.snapshotId,
+      highRisk: isHighRiskChange(event.manifest),
       fixRounds: state.fixRounds + 1,
       completedRounds,
       batchedClusterKeys: [],
       transientAttempts: 0,
+      missingInputs: [],
+      awaitingFinalConfirmation: false,
       confirmationSatisfied: false,
     };
   }
@@ -549,19 +763,30 @@ function transitionChangeRiskOrchestrationInternal(
     if (logicalInvocations > CHANGE_RISK_LIMITS.maxLogicalInvocations)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     const confirmationRequired = state.confirmationRequired || state.highRisk;
-    if (confirmationRequired && !event.confirmation) {
+    const distinctConfirmation =
+      confirmationRequired &&
+      state.logicalInvocations > 0 &&
+      event.confirmation === true;
+    if (confirmationRequired && !distinctConfirmation) {
       return {
         ...state,
         confirmationRequired,
+        awaitingFinalConfirmation: true,
         logicalInvocations,
+        cleanReviewInvocations: state.cleanReviewInvocations + 1,
+        transientAttempts: 0,
+        missingInputs: [],
         confirmationSatisfied: false,
       };
     }
     return {
       ...state,
       confirmationRequired,
+      awaitingFinalConfirmation: false,
       logicalInvocations,
+      cleanReviewInvocations: state.cleanReviewInvocations + 1,
       transientAttempts: 0,
+      missingInputs: [],
       confirmationSatisfied: true,
       status: "CLEAN",
     };
@@ -619,6 +844,15 @@ function transitionChangeRiskOrchestrationInternal(
         unresolvedFingerprints: unique(
           event.findings.map((finding) => finding.fingerprint),
         ),
+        clusterMembers: event.findings.flatMap((finding) => {
+          const clusterKey = deriveChangeRiskClusterKey(
+            finding.affectedContractId,
+            finding.unsafeConditionClass,
+          );
+          return clusterKey === undefined
+            ? []
+            : [{ fingerprint: finding.fingerprint, clusterKey }];
+        }),
         remediatedClusterKeys: [],
       },
     ],
@@ -646,7 +880,10 @@ function transitionChangeRiskOrchestrationInternal(
  */
 export function transitionChangeRiskOrchestration(
   serializedState: ChangeRiskOrchestrationStateV1,
-  event: ChangeRiskOrchestrationEvent | ChangeRiskReviewResultEvent,
+  event:
+    | ChangeRiskOrchestrationEvent
+    | ChangeRiskReviewResultEvent
+    | ValidatedExternalChangeRiskReviewEvent,
 ): ChangeRiskOrchestrationStateV1 {
   return transitionChangeRiskOrchestrationInternal(serializedState, event);
 }
