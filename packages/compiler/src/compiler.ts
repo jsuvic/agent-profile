@@ -555,27 +555,43 @@ export function getSubagentTemplates(profile: AiProfile): TemplateDescriptor[] {
 
   if (profile.clients.claude.enabled) {
     for (const agent of agents) {
+      const renderedAgent = withChangeRiskReviewerReference(
+        agent,
+        ".claude/references/change-risk-reviewer.md",
+      );
       templates.push({
         id: `targets/claude-subagents/${agent.name}@1`,
         target: "claude-subagents",
         version: "1",
         sha256: sha256Hex(
-          normalizeGeneratedText(renderClaudeSubagent(agent, effective)),
+          normalizeGeneratedText(
+            renderClaudeSubagent(renderedAgent, effective),
+          ),
         ),
       });
+    }
+    if (agents.some((agent) => agent.name === "change-risk-reviewer")) {
+      templates.push(changeRiskReviewerReferenceTemplate("claude-subagents"));
     }
   }
 
   if (profile.clients.codex.enabled) {
     for (const agent of agents) {
+      const renderedAgent = withChangeRiskReviewerReference(
+        agent,
+        ".codex/references/change-risk-reviewer.md",
+      );
       templates.push({
         id: `targets/codex-subagents/${agent.name}@1`,
         target: "codex-subagents",
         version: "1",
         sha256: sha256Hex(
-          normalizeGeneratedText(renderCodexSubagent(agent, effective)),
+          normalizeGeneratedText(renderCodexSubagent(renderedAgent, effective)),
         ),
       });
+    }
+    if (agents.some((agent) => agent.name === "change-risk-reviewer")) {
+      templates.push(changeRiskReviewerReferenceTemplate("codex-subagents"));
     }
   }
 
@@ -2049,13 +2065,19 @@ function renderClaudeSubagentFiles(
     previousModelPolicy,
   );
 
-  return agents.map((agent) =>
+  const files = agents.map((agent) =>
     createGeneratedTextFile(
       `.claude/agents/${agent.name}.md`,
       "claude-subagents",
       `targets/claude-subagents/${agent.name}@1`,
       renderClaudeSubagent(
-        withLoggingEnforcement(agent, loggingOn),
+        withLoggingEnforcement(
+          withChangeRiskReviewerReference(
+            agent,
+            ".claude/references/change-risk-reviewer.md",
+          ),
+          loggingOn,
+        ),
         effective,
         agent.name === "change-risk-reviewer"
           ? reviewerModel?.claude
@@ -2063,6 +2085,17 @@ function renderClaudeSubagentFiles(
       ),
     ),
   );
+  if (agents.some((agent) => agent.name === "change-risk-reviewer")) {
+    files.push(
+      createGeneratedTextFile(
+        ".claude/references/change-risk-reviewer.md",
+        "claude-subagents",
+        "targets/claude-subagents/change-risk-reviewer-reference@1",
+        renderChangeRiskReviewerReference(),
+      ),
+    );
+  }
+  return files;
 }
 
 function renderCodexSubagentFiles(
@@ -2077,13 +2110,19 @@ function renderCodexSubagentFiles(
     previousModelPolicy,
   );
 
-  return agents.map((agent) =>
+  const files = agents.map((agent) =>
     createGeneratedTextFile(
       `.codex/agents/${agent.name}.toml`,
       "codex-subagents",
       `targets/codex-subagents/${agent.name}@1`,
       renderCodexSubagent(
-        withLoggingEnforcement(agent, loggingOn),
+        withLoggingEnforcement(
+          withChangeRiskReviewerReference(
+            agent,
+            ".codex/references/change-risk-reviewer.md",
+          ),
+          loggingOn,
+        ),
         effective,
         agent.name === "change-risk-reviewer"
           ? reviewerModel?.codex
@@ -2091,6 +2130,17 @@ function renderCodexSubagentFiles(
       ),
     ),
   );
+  if (agents.some((agent) => agent.name === "change-risk-reviewer")) {
+    files.push(
+      createGeneratedTextFile(
+        ".codex/references/change-risk-reviewer.md",
+        "codex-subagents",
+        "targets/codex-subagents/change-risk-reviewer-reference@1",
+        renderChangeRiskReviewerReference(),
+      ),
+    );
+  }
+  return files;
 }
 
 type ChangeRiskReviewerTargetModel = Readonly<{
@@ -2177,6 +2227,53 @@ function createChangeRiskReviewer(): AiProfileSubagent {
     maxTurns: 10,
     timeoutMinutes: 8,
     mcpServers: [],
+  };
+}
+
+function withChangeRiskReviewerReference(
+  agent: AiProfileSubagent,
+  path: string,
+): AiProfileSubagent {
+  if (agent.name !== "change-risk-reviewer") return agent;
+  return {
+    ...agent,
+    prompt:
+      `${agent.prompt}\n\n## Detailed Domain Reference\n\n` +
+      `Before completing the review, load \`${path}\` and apply its known ` +
+      "failure patterns and evidence expectations for every applicable domain.",
+  };
+}
+
+function renderChangeRiskReviewerReference(): string {
+  const policy = changeRiskReviewerProjection();
+  const sections = policy.domainRubric.map(
+    (entry) =>
+      `## \`${entry.domain}\`: ${entry.name}\n\n` +
+      `${entry.applicability}\n\n` +
+      "### Known failure patterns\n\n" +
+      entry.failurePatterns.map((pattern) => `- ${pattern}`).join("\n") +
+      "\n\n### Evidence expectations\n\n" +
+      entry.evidenceExpectations
+        .map((expectation) => `- ${expectation}`)
+        .join("\n"),
+  );
+  return (
+    `# Change-Risk Reviewer Domain Reference\n\n` +
+    `Policy version: \`${policy.policyVersion}\`.\n\n` +
+    sections.join("\n\n")
+  );
+}
+
+function changeRiskReviewerReferenceTemplate(
+  target: "claude-subagents" | "codex-subagents",
+): TemplateDescriptor {
+  return {
+    id: `targets/${target}/change-risk-reviewer-reference@1`,
+    target,
+    version: "1",
+    sha256: sha256Hex(
+      normalizeGeneratedText(renderChangeRiskReviewerReference()),
+    ),
   };
 }
 
@@ -2806,13 +2903,27 @@ function getRequiredTemplateIds(
         "claude-workflow-skills",
       );
     case "claude-subagents":
-      return getSubagentsForRiskReviewerTarget(profile).map(
-        (agent) => `targets/claude-subagents/${agent.name}@1`,
-      );
+      return [
+        ...getSubagentsForRiskReviewerTarget(profile).map(
+          (agent) => `targets/claude-subagents/${agent.name}@1`,
+        ),
+        ...(getSubagentsForRiskReviewerTarget(profile).some(
+          (agent) => agent.name === "change-risk-reviewer",
+        )
+          ? ["targets/claude-subagents/change-risk-reviewer-reference@1"]
+          : []),
+      ];
     case "codex-subagents":
-      return getSubagentsForRiskReviewerTarget(profile).map(
-        (agent) => `targets/codex-subagents/${agent.name}@1`,
-      );
+      return [
+        ...getSubagentsForRiskReviewerTarget(profile).map(
+          (agent) => `targets/codex-subagents/${agent.name}@1`,
+        ),
+        ...(getSubagentsForRiskReviewerTarget(profile).some(
+          (agent) => agent.name === "change-risk-reviewer",
+        )
+          ? ["targets/codex-subagents/change-risk-reviewer-reference@1"]
+          : []),
+      ];
     case "tabnine-subagents":
       return getTabnineSubagents(profile)
         .filter((agent) => agent.toolScope === "read-only")

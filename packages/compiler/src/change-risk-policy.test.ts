@@ -806,6 +806,8 @@ test("the reviewer projection carries the rubric handles and the result interfac
   for (const entry of reviewer.domainRubric) {
     assert.ok(entry.name.length > 0);
     assert.ok(entry.applicability.length > 0);
+    assert.ok(entry.failurePatterns.length > 0);
+    assert.ok(entry.evidenceExpectations.length > 0);
   }
 
   assert.equal(
@@ -1736,6 +1738,32 @@ test("false-positive closure requires explicitly invalidating evidence", () => {
     ).ok,
     true,
     "a prior blocker may close only with evidence explicitly marked as invalidating",
+  );
+  assert.equal(
+    validateChangeRiskResultV1({
+      policyVersion: "change-risk/v2",
+      snapshotId: "snapshot-1",
+      status: "FINDINGS_FOUND",
+      scope: completeScope,
+      findings: [
+        {
+          ...validFinding,
+          priority: "P2",
+          disposition: undefined,
+          evidence: [
+            {
+              kind: "contract",
+              path: "docs/specs/phase-33/001-change-risk-review-assurance.md",
+              summary: "The governing contract excludes the reported path.",
+              invalidatesPriorFinding: true,
+            },
+          ],
+        },
+      ],
+      missingInputs: [],
+    }).ok,
+    false,
+    "an open finding cannot carry evidence that claims to invalidate it",
   );
 });
 

@@ -43,6 +43,7 @@ import type {
   SkillId,
 } from "./index.js";
 import {
+  CHANGE_RISK_DOMAINS,
   changeRiskOrchestrationProjection,
   validateChangeRiskResultV1,
 } from "./change-risk-policy.js";
@@ -3899,8 +3900,10 @@ test("phase-33 I1 emits the policy-backed change-risk reviewer only for qualifyi
   assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result.issues));
   if (!result.ok) return;
 
-  const reviewerFiles = result.files.filter((file) =>
-    file.path.includes("change-risk-reviewer"),
+  const reviewerFiles = result.files.filter(
+    (file) =>
+      file.path.includes("/agents/change-risk-reviewer") ||
+      file.path.includes("\\agents\\change-risk-reviewer"),
   );
   assert.deepEqual(reviewerFiles.map((file) => file.path).sort(), [
     ".claude/agents/change-risk-reviewer.md",
@@ -3935,13 +3938,42 @@ test("phase-33 I1 emits the policy-backed change-risk reviewer only for qualifyi
       file.path,
     );
   }
+  const reviewerReferences = result.files.filter((file) =>
+    file.path.includes("/references/change-risk-reviewer"),
+  );
+  assert.deepEqual(reviewerReferences.map((file) => file.path).sort(), [
+    ".claude/references/change-risk-reviewer.md",
+    ".codex/references/change-risk-reviewer.md",
+  ]);
+  for (const file of reviewerReferences) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    for (const domain of CHANGE_RISK_DOMAINS) {
+      assert.ok(body.includes(`\`${domain}\``), file.path);
+    }
+    assert.match(body, /Known failure patterns/u, file.path);
+    assert.match(body, /Evidence expectations/u, file.path);
+  }
+  assert.match(
+    Buffer.from(
+      reviewerFiles.find((file) => file.path.startsWith(".claude/"))!.bytes,
+    ).toString("utf8"),
+    /\.claude\/references\/change-risk-reviewer\.md/u,
+  );
+  assert.match(
+    Buffer.from(
+      reviewerFiles.find((file) => file.path.startsWith(".codex/"))!.bytes,
+    ).toString("utf8"),
+    /\.codex\/references\/change-risk-reviewer\.md/u,
+  );
   assert.deepEqual(
     result.templates
       .filter((template) => template.id.includes("change-risk-reviewer"))
       .map((template) => template.id)
       .sort(),
     [
+      "targets/claude-subagents/change-risk-reviewer-reference@1",
       "targets/claude-subagents/change-risk-reviewer@1",
+      "targets/codex-subagents/change-risk-reviewer-reference@1",
       "targets/codex-subagents/change-risk-reviewer@1",
     ],
     "emitted reviewer outputs retain their template descriptors",
@@ -4256,8 +4288,10 @@ test("phase-33 I1 Codex and Claude reviewer artifacts instruct a validator-compa
     missingInputs: [],
   };
   assert.equal(validateChangeRiskResultV1(envelope).ok, true);
-  for (const file of result.files.filter((file) =>
-    file.path.includes("change-risk-reviewer"),
+  for (const file of result.files.filter(
+    (file) =>
+      file.path.includes("/agents/change-risk-reviewer") ||
+      file.path.includes("\\agents\\change-risk-reviewer"),
   )) {
     const body = Buffer.from(file.bytes).toString("utf8");
     assert.match(body, /affectedContractId, unsafeConditionClass/u, file.path);

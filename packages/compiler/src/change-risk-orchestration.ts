@@ -31,6 +31,7 @@ export type ChangeRiskOrchestrationStateV1 = Readonly<{
   missingInputs: readonly string[];
   lastBlockerReviewSnapshotId?: string;
   lastLocalReviewSnapshotId?: string;
+  activeUnresolvedFingerprints: readonly string[];
   completedRounds: readonly Readonly<{
     blockerCount: number;
     unresolvedFingerprints: readonly string[];
@@ -216,6 +217,7 @@ export function createChangeRiskOrchestrationState(
     confirmationSatisfied: false,
     highRisk,
     missingInputs: [],
+    activeUnresolvedFingerprints: [],
     completedRounds: [],
     requiredMechanicalGuardClusterKeys: [],
     guardedClusterKeys: [],
@@ -315,6 +317,7 @@ export function validateChangeRiskOrchestrationStateV1(
       !isNonEmptyString(value.lastBlockerReviewSnapshotId)) ||
     (value.lastLocalReviewSnapshotId !== undefined &&
       !isNonEmptyString(value.lastLocalReviewSnapshotId)) ||
+    !hasUniqueNonEmptyStrings(value.activeUnresolvedFingerprints) ||
     !Array.isArray(value.completedRounds) ||
     !hasCanonicalClusterKeys(value.requiredMechanicalGuardClusterKeys) ||
     !hasCanonicalClusterKeys(value.guardedClusterKeys) ||
@@ -378,6 +381,15 @@ export function validateChangeRiskOrchestrationStateV1(
   )
     return { ok: false, reason: "invalid completed-round history" };
   const candidate = value as ChangeRiskOrchestrationStateV1;
+  const historicalFingerprints = new Set(
+    candidate.completedRounds.flatMap((round) => round.unresolvedFingerprints),
+  );
+  if (
+    candidate.activeUnresolvedFingerprints.some(
+      (fingerprint) => !historicalFingerprints.has(fingerprint),
+    )
+  )
+    return { ok: false, reason: "invalid active blocker checkpoint" };
   if (
     candidate.requiredMechanicalGuardClusterKeys.some((key) =>
       candidate.guardedClusterKeys.includes(key),
@@ -397,13 +409,17 @@ export function validateChangeRiskOrchestrationStateV1(
     )
   )
     return { ok: false, reason: "contradictory guard history" };
-  const latestRound = candidate.completedRounds.at(-1);
+  const activeClusterMembers = candidate.completedRounds.flatMap(
+    (round) =>
+      round.clusterMembers?.filter((member) =>
+        candidate.activeUnresolvedFingerprints.includes(member.fingerprint),
+      ) ?? [],
+  );
   if (
     candidate.batchedClusterKeys.some(
       (key) =>
-        (latestRound?.clusterMembers?.filter(
-          (member) => member.clusterKey === key,
-        ).length ?? 0) < 3,
+        activeClusterMembers.filter((member) => member.clusterKey === key)
+          .length < 3,
     )
   )
     return { ok: false, reason: "invalid batched cluster history" };
@@ -416,6 +432,9 @@ export function validateChangeRiskOrchestrationStateV1(
         (value.confirmationRequired && value.confirmationInvocations === 0) ||
         (value.confirmationRequired &&
           value.cleanReviewInvocations <= value.confirmationInvocations) ||
+        ((value.highRisk || value.fixRounds >= 2) &&
+          !value.confirmationRequired) ||
+        value.activeUnresolvedFingerprints.length !== 0 ||
         value.awaitingFinalConfirmation ||
         value.transientAttempts !== 0 ||
         value.missingInputs.length !== 0))
@@ -509,9 +528,7 @@ function transitionChangeRiskOrchestrationInternal(
     // Empty, malformed, truncated, NEEDS_CONTEXT, and snapshot-mismatched
     // output are attempts, never a path to clean.
     const priorFingerprints =
-      state.fixRounds > 0
-        ? (state.completedRounds.at(-1)?.unresolvedFingerprints ?? [])
-        : [];
+      state.fixRounds > 0 ? state.activeUnresolvedFingerprints : [];
     const validationMode = state.awaitingFinalConfirmation
       ? "final"
       : state.fixRounds > 0
@@ -542,6 +559,20 @@ function transitionChangeRiskOrchestrationInternal(
           });
     }
     const result = validatedResult.value;
+    if (
+      validationMode === "remediation" &&
+      priorFingerprints.some(
+        (fingerprint) =>
+          !result.findings.some(
+            (finding) => finding.fingerprint === fingerprint,
+          ),
+      )
+    ) {
+      return transitionChangeRiskOrchestrationInternal(state, {
+        kind: "invalid-attempt",
+        snapshotId: state.snapshotId,
+      });
+    }
     const confirmationInvocations =
       state.confirmationInvocations + (validationMode === "final" ? 1 : 0);
     if (
@@ -664,6 +695,8 @@ function transitionChangeRiskOrchestrationInternal(
       missingInputs: [],
       lastBlockerReviewSnapshotId: undefined,
       lastLocalReviewSnapshotId: undefined,
+      activeUnresolvedFingerprints: [],
+      batchedClusterKeys: [],
       awaitingFinalConfirmation: false,
       confirmationSatisfied: false,
     };
@@ -727,6 +760,7 @@ function transitionChangeRiskOrchestrationInternal(
     );
   }
   if (event.kind === "fix-applied") {
+    if (state.status === "CLEAN") return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (event.manifest === undefined)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (state.completedRounds.length === 0)
@@ -735,13 +769,17 @@ function transitionChangeRiskOrchestrationInternal(
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (state.requiredMechanicalGuardClusterKeys.length > 0)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
-    const latestRound = state.completedRounds.at(-1);
+    const activeClusterMembers = state.completedRounds.flatMap(
+      (round) =>
+        round.clusterMembers?.filter((member) =>
+          state.activeUnresolvedFingerprints.includes(member.fingerprint),
+        ) ?? [],
+    );
     if (
       state.batchedClusterKeys.some((key) => {
-        const members =
-          latestRound?.clusterMembers?.filter(
-            (member) => member.clusterKey === key,
-          ) ?? [];
+        const members = activeClusterMembers.filter(
+          (member) => member.clusterKey === key,
+        );
         return (
           members.length < 3 ||
           members.some(
@@ -825,6 +863,8 @@ function transitionChangeRiskOrchestrationInternal(
       cleanReviewInvocations: state.cleanReviewInvocations + 1,
       transientAttempts: 0,
       missingInputs: [],
+      activeUnresolvedFingerprints: [],
+      batchedClusterKeys: [],
       confirmationSatisfied: true,
       status: "CLEAN",
     };
@@ -907,7 +947,17 @@ function transitionChangeRiskOrchestrationInternal(
       ...state.requiredMechanicalGuardClusterKeys,
       ...recurredKeys,
     ]),
-    batchedClusterKeys,
+    activeUnresolvedFingerprints:
+      event.external === true
+        ? unique([
+            ...state.activeUnresolvedFingerprints,
+            ...event.findings.map((finding) => finding.fingerprint),
+          ])
+        : unique(event.findings.map((finding) => finding.fingerprint)),
+    batchedClusterKeys:
+      event.external === true
+        ? unique([...state.batchedClusterKeys, ...batchedClusterKeys])
+        : batchedClusterKeys,
   };
   // Human escalation wins whenever the no-progress condition overlaps it.
   if (next.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds)

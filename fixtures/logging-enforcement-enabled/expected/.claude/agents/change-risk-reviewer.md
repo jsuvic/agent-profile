@@ -88,3 +88,7 @@ Return exactly one typed `ChangeRiskResultV1` envelope and no approval prose.
 - Never read or reproduce secrets; describe secret-shaped values by shape.
 - Quote the minimum source needed to locate the defect.
 - Never broaden the permissions the surrounding profile grants.
+
+## Detailed Domain Reference
+
+Before completing the review, load `.claude/references/change-risk-reviewer.md` and apply its known failure patterns and evidence expectations for every applicable domain.

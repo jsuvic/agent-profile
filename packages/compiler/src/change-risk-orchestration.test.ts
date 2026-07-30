@@ -621,13 +621,10 @@ test("code-changed cannot bypass fix-round accounting after blockers were review
       ]),
     },
   );
-  const externalBypass = transitionChangeRiskOrchestration(
-    externallyReviewed,
-    {
-      kind: "code-changed",
-      snapshotId: "snapshot-external-bypass",
-    },
-  );
+  const externalBypass = transitionChangeRiskOrchestration(externallyReviewed, {
+    kind: "code-changed",
+    snapshotId: "snapshot-external-bypass",
+  });
   assert.equal(externalBypass.status, "NEEDS_HUMAN_REVIEW");
   assert.equal(externalBypass.snapshotId, "snapshot-external-reviewed");
 });
@@ -913,6 +910,40 @@ test("fix application carries a distinct new snapshot and preserves its identity
   );
 });
 
+test("fix application cannot corrupt an already clean handoff", () => {
+  const snapshotId = "snapshot-clean-before-extra-fix";
+  const finding = runtimeProofFinding("already-closed");
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: [finding] },
+  );
+  const fixed = transitionChangeRiskOrchestration(reviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    remediatedFindings: [
+      {
+        ...finding,
+        fingerprint: runtimeProofFingerprint(finding.fingerprint),
+      },
+    ],
+  });
+  const clean = transitionChangeRiskOrchestrationProduction(fixed, {
+    kind: "review-result",
+    result: reviewResult(`${snapshotId}-fixed`, "FINDINGS_FOUND", [
+      { ...finding, resolution: "fixed" },
+    ]),
+  });
+  assert.equal(clean.status, "CLEAN");
+
+  const outOfOrderFix = transitionChangeRiskOrchestration(clean, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-unexpected`,
+    remediatedFindings: [],
+  });
+  assert.equal(outOfOrderFix.status, "NEEDS_HUMAN_REVIEW");
+  assert.equal(validateChangeRiskOrchestrationStateV1(outOfOrderFix).ok, true);
+});
+
 test("terminal clean handoffs prove a completed review invocation", () => {
   const fabricated = {
     ...createChangeRiskOrchestrationState("snapshot-clean-proof"),
@@ -940,6 +971,40 @@ test("terminal clean handoffs prove a completed review invocation", () => {
       highRisk: true,
     }).ok,
     false,
+  );
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1({
+      ...fabricated,
+      logicalInvocations: 1,
+      cleanReviewInvocations: 1,
+      highRisk: true,
+      confirmationRequired: false,
+    }).ok,
+    false,
+    "high-risk clean handoffs cannot suppress required confirmation",
+  );
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1({
+      ...fabricated,
+      logicalInvocations: 2,
+      cleanReviewInvocations: 2,
+      fixRounds: 2,
+      confirmationRequired: false,
+      completedRounds: [
+        {
+          blockerCount: 1,
+          unresolvedFingerprints: ["first"],
+          remediatedClusterKeys: [],
+        },
+        {
+          blockerCount: 1,
+          unresolvedFingerprints: ["second"],
+          remediatedClusterKeys: [],
+        },
+      ],
+    }).ok,
+    false,
+    "clean handoffs after two fix rounds cannot suppress required confirmation",
   );
 });
 
@@ -982,6 +1047,47 @@ test("remediation review validates closure candidates against the prior fingerpr
     },
   );
   assert.equal(invalidFinalClosure.transientAttempts, 1);
+});
+
+test("external findings cannot erase interleaved local closure candidates", () => {
+  const snapshotId = "snapshot-interleaved-closure";
+  const local = runtimeProofFinding("local-blocker");
+  const external = runtimeProofFinding("external-blocker");
+  const locallyReviewed = transitionChangeRiskOrchestrationProduction(
+    createChangeRiskOrchestrationState(snapshotId),
+    {
+      kind: "review-result",
+      result: reviewResult(snapshotId, "FINDINGS_FOUND", [local]),
+    },
+  );
+  const externallyReviewed = transitionChangeRiskOrchestration(
+    locallyReviewed,
+    {
+      kind: "review-result",
+      external: true,
+      result: reviewResult(snapshotId, "FINDINGS_FOUND", [external]),
+    },
+  );
+  const fixed = transitionChangeRiskOrchestration(externallyReviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    remediatedFindings: [
+      { ...local, fingerprint: runtimeProofFingerprint(local.fingerprint) },
+      {
+        ...external,
+        fingerprint: runtimeProofFingerprint(external.fingerprint),
+      },
+    ],
+  });
+  const omittedLocal = transitionChangeRiskOrchestrationProduction(fixed, {
+    kind: "review-result",
+    result: reviewResult(`${snapshotId}-fixed`, "FINDINGS_FOUND", [
+      { ...external, resolution: "fixed" },
+    ]),
+  });
+
+  assert.equal(omittedLocal.status, "ACTIVE");
+  assert.equal(omittedLocal.transientAttempts, 1);
 });
 
 test("confirmation must be a distinct bounded invocation", () => {
@@ -1136,6 +1242,7 @@ test("a completed local blocker review cannot repeat before a changed snapshot",
     {
       kind: "review-result",
       result: reviewResult(`${snapshotId}-changed`, "FINDINGS_FOUND", [
+        { ...runtimeProofFinding("first"), resolution: "fixed" },
         runtimeProofFinding("changed"),
       ]),
     },
@@ -1242,29 +1349,35 @@ test("stagnation requires two consecutive remediation reviews and human escalati
     createChangeRiskOrchestrationState(snapshotId),
     { kind: "blockers", snapshotId, findings: runtimeProofBlockers("a", "b") },
   );
-  const firstRemediation = transitionChangeRiskOrchestration(
+  const firstRemediation = transitionChangeRiskOrchestrationProduction(
     transitionChangeRiskOrchestration(initial, {
       kind: "fix-applied",
       snapshotId: "snapshot-1",
       remediatedFindings: [],
     }),
     {
-      kind: "blockers",
-      snapshotId: "snapshot-1",
-      findings: runtimeProofBlockers("c", "d"),
+      kind: "review-result",
+      result: reviewResult("snapshot-1", "FINDINGS_FOUND", [
+        { ...runtimeProofFinding("a"), resolution: "fixed" },
+        { ...runtimeProofFinding("b"), resolution: "fixed" },
+        ...runtimeProofBlockers("c", "d"),
+      ]),
     },
   );
   assert.equal(firstRemediation.status, "ACTIVE");
-  const secondRemediation = transitionChangeRiskOrchestration(
+  const secondRemediation = transitionChangeRiskOrchestrationProduction(
     transitionChangeRiskOrchestration(firstRemediation, {
       kind: "fix-applied",
       snapshotId: "snapshot-2",
       remediatedFindings: [],
     }),
     {
-      kind: "blockers",
-      snapshotId: "snapshot-2",
-      findings: runtimeProofBlockers("e", "f"),
+      kind: "review-result",
+      result: reviewResult("snapshot-2", "FINDINGS_FOUND", [
+        { ...runtimeProofFinding("c"), resolution: "fixed" },
+        { ...runtimeProofFinding("d"), resolution: "fixed" },
+        ...runtimeProofBlockers("e", "f"),
+      ]),
     },
   );
   assert.equal(secondRemediation.status, "NO_PROGRESS");
