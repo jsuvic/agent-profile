@@ -83,7 +83,7 @@ const validFinding = {
   resolution: "open",
   disposition: "follow-up",
   fingerprint:
-    '["runtime-proof","runtime-proof",{"path":"packages/compiler/src/compiler.ts","symbol":null,"line":1},"missing-runtime-proof"]',
+    '["runtime-proof","runtime-proof",{"path":"packages/compiler/src/compiler.ts","symbol":null,"line":null},"missing-runtime-proof"]',
 } as const;
 
 function manifest(...paths: string[]): ChangeRiskManifestEntry[] {
@@ -1826,6 +1826,19 @@ test("ChangeRiskResultV1 derives and normalizes deterministic fingerprints from 
     }),
     expected,
     "path spelling cannot alter the fingerprint",
+  );
+  assert.equal(
+    deriveChangeRiskFingerprint({
+      category: validFinding.category,
+      affectedContractId: validFinding.affectedContractId,
+      location: {
+        path: validFinding.location.path,
+        line: validFinding.location.line + 50,
+      },
+      unsafeConditionClass: validFinding.unsafeConditionClass,
+    }),
+    expected,
+    "line shifts cannot alter a stable finding fingerprint",
   );
   const normalized = validateChangeRiskResultV1({
     policyVersion: "change-risk/v2",

@@ -192,7 +192,8 @@ test("package root preserves legacy state creation and exports external validati
     compilerApi.createChangeRiskOrchestrationState("legacy-explicit", {
       highRisk: false,
     }).highRisk,
-    false,
+    true,
+    "legacy caller assertions cannot suppress manifest-based high-risk classification",
   );
   assert.equal(
     compilerApi.createChangeRiskOrchestrationState("manifest-derived", [
@@ -212,7 +213,8 @@ test("change-risk/v2 orchestration transition table is bounded and snapshot-boun
     {
       ...initial,
       fixRounds: 3,
-      logicalInvocations: 4,
+      initialLocalReviewCompleted: true,
+      logicalInvocations: 3,
       completedRounds: [
         {
           blockerCount: 1,
@@ -243,6 +245,7 @@ test("change-risk/v2 orchestration transition table is bounded and snapshot-boun
     {
       ...initial,
       fixRounds: 1,
+      initialLocalReviewCompleted: true,
       logicalInvocations: 1,
       completedRounds: [
         {
@@ -271,6 +274,113 @@ test("change-risk/v2 orchestration transition table is bounded and snapshot-boun
   });
   assert.equal(codeAfterClean.status, "ACTIVE");
   assert.equal(codeAfterClean.snapshotId, "snapshot-b");
+});
+
+test("terminal escalation outcomes ignore later reviewer results", () => {
+  const snapshotId = "snapshot-terminal-review";
+  for (const status of ["NO_PROGRESS", "NEEDS_HUMAN_REVIEW"] as const) {
+    const terminalState = {
+      ...createChangeRiskOrchestrationState(snapshotId),
+      status,
+    };
+    const external = transitionChangeRiskOrchestration(
+      terminalState,
+      {
+        kind: "review-result",
+        external: true,
+        result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+          runtimeProofFinding(`late-${status}`),
+        ]),
+      },
+    );
+    assert.deepEqual(external, terminalState, status);
+  }
+});
+
+test("a validated external review cannot replace the required initial local review", () => {
+  const snapshotId = "snapshot-external-before-initial";
+  const finding = runtimeProofFinding("external-first");
+  const external = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    {
+      kind: "review-result",
+      external: true,
+      result: reviewResult(snapshotId, "FINDINGS_FOUND", [finding]),
+    },
+  );
+  assert.equal(
+    (
+      external as unknown as {
+        initialLocalReviewCompleted: boolean;
+      }
+    ).initialLocalReviewCompleted,
+    false,
+  );
+  const fixed = transitionChangeRiskOrchestration(external, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    remediatedFindings: [
+      { ...finding, fingerprint: runtimeProofFingerprint(finding.fingerprint) },
+    ],
+  });
+  const prematureClosure = transitionChangeRiskOrchestrationProduction(fixed, {
+    kind: "review-result",
+    result: reviewResult(`${snapshotId}-fixed`, "FINDINGS_FOUND", [
+      { ...finding, resolution: "fixed" },
+    ]),
+  });
+  assert.equal(prematureClosure.status, "ACTIVE");
+  assert.equal(prematureClosure.transientAttempts, 1);
+  assert.equal(
+    (
+      prematureClosure as unknown as {
+        initialLocalReviewCompleted: boolean;
+      }
+    ).initialLocalReviewCompleted,
+    false,
+  );
+});
+
+test("serialized handoffs account for every completed local review and blocker checkpoint", () => {
+  const initial = createChangeRiskOrchestrationState("snapshot-count-proof");
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1({
+      ...initial,
+      initialLocalReviewCompleted: true,
+      logicalInvocations: 2,
+      cleanReviewInvocations: 2,
+      completedRounds: [
+        {
+          blockerCount: 1,
+          unresolvedFingerprints: ["first"],
+          remediatedClusterKeys: [],
+        },
+        {
+          blockerCount: 1,
+          unresolvedFingerprints: ["second"],
+          remediatedClusterKeys: [],
+        },
+      ],
+    }).ok,
+    false,
+    "local blocker rounds and clean reviews cannot reuse invocation budget",
+  );
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1({
+      ...initial,
+      initialLocalReviewCompleted: true,
+      logicalInvocations: 1,
+      completedRounds: [
+        {
+          blockerCount: 2,
+          unresolvedFingerprints: ["only-one"],
+          remediatedClusterKeys: [],
+        },
+      ],
+    }).ok,
+    false,
+    "blocker count must equal its unique fingerprint checkpoint",
+  );
 });
 
 test("invalid envelopes retry, including free-form output marked valid, while valid clean closes", () => {
@@ -345,6 +455,7 @@ test("external blockers, recurrence guards, and other keys obey bounded escalati
     {
       ...createChangeRiskOrchestrationState("snapshot-d"),
       fixRounds: 1,
+      initialLocalReviewCompleted: true,
       logicalInvocations: 1,
       guardedClusterKeys: ["state-transition+missing-validation"],
       completedRounds: [
@@ -384,6 +495,7 @@ test("a serialized handoff carries remediated cluster keys across resume", () =>
     JSON.stringify({
       ...createChangeRiskOrchestrationState("snapshot-b"),
       fixRounds: 1,
+      initialLocalReviewCompleted: true,
       logicalInvocations: 1,
       completedRounds: [
         {
@@ -466,6 +578,7 @@ test("within-change recurrence requires its guard or a recorded impracticality",
     {
       ...createChangeRiskOrchestrationState(snapshotId),
       fixRounds: 1,
+      initialLocalReviewCompleted: true,
       logicalInvocations: 1,
       completedRounds: [
         {
@@ -517,6 +630,7 @@ test("serialized handoffs reject malformed, stale, reset, and contradictory stat
   const valid = JSON.parse(
     JSON.stringify({
       ...createChangeRiskOrchestrationState("snapshot-current"),
+      initialLocalReviewCompleted: true,
       logicalInvocations: 1,
       completedRounds: [
         {
@@ -712,6 +826,7 @@ test("confirmation is required for P1, high-risk, and two-round paths, including
     {
       ...createChangeRiskOrchestrationState(snapshotId),
       fixRounds: 2,
+      initialLocalReviewCompleted: true,
       logicalInvocations: 2,
       completedRounds: [
         {
@@ -739,6 +854,7 @@ test("confirmation is required for P1, high-risk, and two-round paths, including
     confirmationRequired: true,
     confirmationSatisfied: true,
     confirmationInvocations: 1,
+    initialLocalReviewCompleted: true,
     logicalInvocations: 2,
     cleanReviewInvocations: 2,
   };
@@ -817,9 +933,10 @@ test("fixes before a blocker review escalate and budget exhaustion wins unchange
   assert.equal(unchanged.status, "NEEDS_HUMAN_REVIEW");
   const overlapping = transitionChangeRiskOrchestration(
     {
-      ...initial,
-      fixRounds: 3,
-      logicalInvocations: 3,
+    ...initial,
+    fixRounds: 3,
+    initialLocalReviewCompleted: true,
+    logicalInvocations: 3,
       completedRounds: [
         {
           blockerCount: 1,
@@ -852,16 +969,17 @@ test("external blocker rounds do not participate in remediation stagnation", () 
   let state: ReturnType<typeof createChangeRiskOrchestrationState> = {
     ...createChangeRiskOrchestrationState(snapshotId),
     fixRounds: 2,
+    initialLocalReviewCompleted: true,
     logicalInvocations: 2,
     completedRounds: [
-      {
-        blockerCount: 3,
-        unresolvedFingerprints: ["local-one"],
+        {
+          blockerCount: 3,
+          unresolvedFingerprints: ["local-one-a", "local-one-b", "local-one-c"],
         remediatedClusterKeys: [],
       },
-      {
-        blockerCount: 2,
-        unresolvedFingerprints: ["local-two"],
+        {
+          blockerCount: 2,
+          unresolvedFingerprints: ["local-two-a", "local-two-b"],
         remediatedClusterKeys: [],
       },
     ],
@@ -908,6 +1026,32 @@ test("fix application carries a distinct new snapshot and preserves its identity
     }).status,
     "NO_PROGRESS",
   );
+});
+
+test("a low-risk first fix reserves only its required remediation review", () => {
+  const snapshotId = "snapshot-one-slot-left";
+  const stateAfterFourCleanReviews = {
+    ...createChangeRiskOrchestrationState(snapshotId),
+    initialLocalReviewCompleted: true,
+    logicalInvocations: 4,
+    cleanReviewInvocations: 4,
+  };
+  const reviewed = transitionChangeRiskOrchestration(
+    stateAfterFourCleanReviews,
+    {
+      kind: "blockers",
+      snapshotId,
+      findings: runtimeProofBlockers("last-budgeted-blocker"),
+    },
+  );
+  assert.equal(reviewed.logicalInvocations, 5);
+  const fixed = transitionChangeRiskOrchestration(reviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    remediatedFindings: [],
+  });
+  assert.equal(fixed.status, "ACTIVE");
+  assert.equal(fixed.fixRounds, 1);
 });
 
 test("fix application cannot corrupt an already clean handoff", () => {
@@ -1129,6 +1273,7 @@ test("a clean remediation result after the second fix round requires confirmatio
   const state = {
     ...createChangeRiskOrchestrationState(snapshotId),
     fixRounds: 2,
+    initialLocalReviewCompleted: true,
     logicalInvocations: 2,
     completedRounds: [
       {
@@ -1385,6 +1530,7 @@ test("stagnation requires two consecutive remediation reviews and human escalati
     {
       ...createChangeRiskOrchestrationState(snapshotId),
       fixRounds: 3,
+      initialLocalReviewCompleted: true,
       logicalInvocations: 3,
       completedRounds: [
         {

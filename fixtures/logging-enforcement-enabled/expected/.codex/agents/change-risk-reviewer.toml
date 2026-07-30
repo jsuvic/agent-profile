@@ -35,7 +35,7 @@ Initial context is manifest-first, not an eager full-diff injection:
 - Retrieve context locally only; never upload repository content.
 - Request missing input instead of completing a partial review.
 
-When Bash is available, use it only for read-only `git diff` and related Git inspection needed to recover the complete snapshot, including deleted or base-side content. Never use Bash to mutate files or repository state.
+When Bash is available, use it only for read-only `git diff` and related Git inspection, plus focused existing test commands required for runtime evidence. Test execution must not mutate repository source or generated artifacts. Do not install dependencies, use network access, or mutate repository state. If required proof cannot be obtained within these constraints, return `NEEDS_CONTEXT` with the missing input.
 
 ## Closed Risk Domains
 
@@ -73,7 +73,7 @@ Return exactly one typed `ChangeRiskResultV1` envelope and no approval prose.
 - `command-output` requires the command in `summary` alongside the observation.
 - `lines` requires `1 <= start <= end`.
 - Evidence closing a prior finding as `false-positive` requires `invalidatesPriorFinding: true` and a summary explaining how the evidence invalidates the reported unsafe condition.
-- Each finding contains priority, category, location, unsafeCondition, evidence, affectedContractId, unsafeConditionClass, safePath, resolution, fingerprint, concrete evidence, affected contract, safe path, and a stable fingerprint derived from category, affected contract, normalized location, unsafe-condition class; trusted owner code normalizes the canonical serialized fingerprint from those components.
+- Each finding contains priority, category, location, unsafeCondition, evidence, affectedContractId, unsafeConditionClass, safePath, resolution, fingerprint, concrete evidence, affected contract, safe path, and a stable fingerprint derived from category, affected contract, normalized path and optional symbol (never line number), unsafe-condition class; trusted owner code normalizes the canonical serialized fingerprint from those components.
 - Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution `open`. Remediation receives only supplied prior fingerprints; it may verify `fixed`, `false-positive`, or `obsolete` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.
 - `missingInputs` is empty except for `NEEDS_CONTEXT`.
 - A completed status requires a covered manifest and every domain marked. missingInputs is empty except for NEEDS_CONTEXT. P1 and P2 carry no disposition; every P3 carries exactly one. A newly discovered finding is always resolution open. Empty, truncated, unparseable, or mismatched output is never clean.

@@ -44,7 +44,7 @@
       "id": "targets/claude-subagents/change-risk-reviewer@1",
       "target": "claude-subagents",
       "version": "1",
-      "sha256": "b94eab2e09f1485ff9e030d3b455bc0ff7e84965ae288289bae3ce6cbf1e3160"
+      "sha256": "fb5e9848cd09cdea92262631ae019d6c78fa51041a1e71aeb33df8b4cc8d6f7b"
     },
     {
       "id": "targets/claude-subagents/code-quality-reviewer@1",
@@ -122,7 +122,7 @@
       "id": "targets/codex-subagents/change-risk-reviewer@1",
       "target": "codex-subagents",
       "version": "1",
-      "sha256": "3ea15eeb17e221661341ad8080b646161582af0208c448f5816d1fe7ce445005"
+      "sha256": "1f0c8bb6131c81d2ce25d424444535f3e88fade76fe2fac92f44e64bcd272161"
     },
     {
       "id": "targets/codex-subagents/code-quality-reviewer@1",
@@ -226,7 +226,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/subagent-driven-change@1",
       "ownership": "generated-owned",
-      "sha256": "68d076889e9ac2908a348caa756302521eb876f73f1c18b1f596bc8adbf0e658"
+      "sha256": "53c93659bdec5562cfdcf3c42728b0fb0d3c2fe80025bbd76925f6041e0dd926"
     },
     {
       "path": ".agents/skills/tdd-change/SKILL.md",
@@ -240,7 +240,7 @@
       "target": "claude-subagents",
       "templateId": "targets/claude-subagents/change-risk-reviewer@1",
       "ownership": "generated-owned",
-      "sha256": "b94eab2e09f1485ff9e030d3b455bc0ff7e84965ae288289bae3ce6cbf1e3160"
+      "sha256": "fb5e9848cd09cdea92262631ae019d6c78fa51041a1e71aeb33df8b4cc8d6f7b"
     },
     {
       "path": ".claude/agents/code-quality-reviewer.md",
@@ -317,7 +317,7 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/subagent-driven-change@1",
       "ownership": "generated-owned",
-      "sha256": "68d076889e9ac2908a348caa756302521eb876f73f1c18b1f596bc8adbf0e658"
+      "sha256": "53c93659bdec5562cfdcf3c42728b0fb0d3c2fe80025bbd76925f6041e0dd926"
     },
     {
       "path": ".claude/skills/tdd-change/SKILL.md",
@@ -331,7 +331,7 @@
       "target": "codex-subagents",
       "templateId": "targets/codex-subagents/change-risk-reviewer@1",
       "ownership": "generated-owned",
-      "sha256": "3ea15eeb17e221661341ad8080b646161582af0208c448f5816d1fe7ce445005"
+      "sha256": "1f0c8bb6131c81d2ce25d424444535f3e88fade76fe2fac92f44e64bcd272161"
     },
     {
       "path": ".codex/agents/code-quality-reviewer.toml",

@@ -4310,7 +4310,7 @@ test("phase-33 I1 Codex and Claude reviewer artifacts instruct a validator-compa
     );
     assert.match(
       body,
-      /category, affected contract, normalized location, unsafe-condition class/u,
+      /category, affected contract, normalized path and optional symbol \(never line number\), unsafe-condition class/u,
       file.path,
     );
     assert.match(
@@ -4481,6 +4481,7 @@ test("phase-33 I2 renders complete bounded change-risk owner rules from the proj
       "no blocker",
       "validation handoff",
       "NEEDS_HUMAN_REVIEW",
+      "transitions to `NO_PROGRESS`",
     ])
       assert.match(body, new RegExp(required, "iu"), file.path);
     assert.equal(
@@ -4488,6 +4489,67 @@ test("phase-33 I2 renders complete bounded change-risk owner rules from the proj
       false,
       file.path,
     );
+  }
+});
+
+test("phase-33 qualifying workflows run final-review after risk review and expose bounded runtime proof", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      sdd: true,
+      finalReview: false,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  for (const root of [".agents/skills", ".claude/skills"]) {
+    const finalReview = result.files.find(
+      (file) => file.path === `${root}/final-review/SKILL.md`,
+    );
+    const owner = result.files.find(
+      (file) => file.path === `${root}/subagent-driven-change/SKILL.md`,
+    );
+    assert.ok(finalReview, `${root} final-review`);
+    assert.ok(owner, `${root} owner`);
+    const body = Buffer.from(owner.bytes).toString("utf8");
+    assert.ok(
+      body.indexOf("`change-risk-reviewer`") <
+        body.indexOf("invoke `final-review`"),
+      root,
+    );
+  }
+
+  for (const path of [
+    ".claude/agents/change-risk-reviewer.md",
+    ".codex/agents/change-risk-reviewer.toml",
+  ]) {
+    const reviewer = result.files.find((file) => file.path === path);
+    assert.ok(reviewer, path);
+    const body = Buffer.from(reviewer.bytes).toString("utf8");
+    assert.match(body, /focused existing test commands/u, path);
+    assert.match(body, /NEEDS_CONTEXT/u, path);
+    assert.match(body, /Do not install dependencies/u, path);
   }
 });
 

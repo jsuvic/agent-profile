@@ -25,6 +25,7 @@ export type ChangeRiskOrchestrationStateV1 = Readonly<{
   confirmationInvocations: number;
   awaitingFinalConfirmation: boolean;
   cleanReviewInvocations: number;
+  initialLocalReviewCompleted: boolean;
   confirmationRequired: boolean;
   confirmationSatisfied: boolean;
   highRisk: boolean;
@@ -200,9 +201,7 @@ export function createChangeRiskOrchestrationState(
     throw new TypeError("invalid change-risk snapshot ID");
   const highRisk = isManifestInput(classification)
     ? isHighRiskChange(classification)
-    : typeof classification.highRisk === "boolean"
-      ? classification.highRisk
-      : true;
+    : true;
   return {
     policyVersion: CHANGE_RISK_POLICY_VERSION,
     snapshotId,
@@ -213,6 +212,7 @@ export function createChangeRiskOrchestrationState(
     confirmationInvocations: 0,
     awaitingFinalConfirmation: false,
     cleanReviewInvocations: 0,
+    initialLocalReviewCompleted: false,
     confirmationRequired: false,
     confirmationSatisfied: false,
     highRisk,
@@ -309,6 +309,7 @@ export function validateChangeRiskOrchestrationStateV1(
     !isNonNegativeInteger(value.confirmationInvocations) ||
     typeof value.awaitingFinalConfirmation !== "boolean" ||
     !isNonNegativeInteger(value.cleanReviewInvocations) ||
+    typeof value.initialLocalReviewCompleted !== "boolean" ||
     typeof value.confirmationRequired !== "boolean" ||
     typeof value.confirmationSatisfied !== "boolean" ||
     typeof value.highRisk !== "boolean" ||
@@ -336,15 +337,17 @@ export function validateChangeRiskOrchestrationStateV1(
       value.status !== "NEEDS_HUMAN_REVIEW") ||
     value.confirmationInvocations >
       CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations ||
-    value.cleanReviewInvocations > value.logicalInvocations ||
+    value.completedRounds.filter(
+      (round) => isRecord(round) && round.external !== true,
+    ).length +
+      value.cleanReviewInvocations !==
+      value.logicalInvocations ||
+    value.initialLocalReviewCompleted !== (value.logicalInvocations > 0) ||
     value.fixRounds > value.completedRounds.length ||
     (value.lastBlockerReviewSnapshotId !== undefined &&
       value.lastBlockerReviewSnapshotId !== value.snapshotId) ||
     (value.lastLocalReviewSnapshotId !== undefined &&
-      value.lastLocalReviewSnapshotId !== value.lastBlockerReviewSnapshotId) ||
-    value.completedRounds.filter(
-      (round) => isRecord(round) && round.external !== true,
-    ).length > value.logicalInvocations
+      value.lastLocalReviewSnapshotId !== value.lastBlockerReviewSnapshotId)
   )
     return { ok: false, reason: "invalid counters" };
   if (
@@ -353,6 +356,7 @@ export function validateChangeRiskOrchestrationStateV1(
         !isRecord(round) ||
         !isNonNegativeInteger(round.blockerCount) ||
         !hasUniqueNonEmptyStrings(round.unresolvedFingerprints) ||
+        round.blockerCount !== round.unresolvedFingerprints.length ||
         !hasCanonicalClusterKeys(round.remediatedClusterKeys) ||
         (round.external !== undefined && round.external !== true)
       )
@@ -499,6 +503,8 @@ function transitionChangeRiskOrchestrationInternal(
     | ValidatedChangeRiskReviewEvent,
 ): ChangeRiskOrchestrationStateV1 {
   const state = requireValidState(serializedState);
+  if (state.status === "NO_PROGRESS" || state.status === "NEEDS_HUMAN_REVIEW")
+    return state;
   if (
     (event.kind === "clean" || event.kind === "blockers") &&
     event[validatedReviewEvent] !== true
@@ -527,13 +533,17 @@ function transitionChangeRiskOrchestrationInternal(
     }
     // Empty, malformed, truncated, NEEDS_CONTEXT, and snapshot-mismatched
     // output are attempts, never a path to clean.
-    const priorFingerprints =
-      state.fixRounds > 0 ? state.activeUnresolvedFingerprints : [];
     const validationMode = state.awaitingFinalConfirmation
       ? "final"
-      : state.fixRounds > 0
+      : !state.initialLocalReviewCompleted
+        ? "initial"
+        : state.fixRounds > 0
         ? "remediation"
         : "initial";
+    const priorFingerprints =
+      validationMode === "remediation"
+        ? state.activeUnresolvedFingerprints
+        : [];
     const validatedResult = validateChangeRiskResultV1(event.result, {
       expectedSnapshotId: state.snapshotId,
       mode: validationMode,
@@ -653,7 +663,13 @@ function transitionChangeRiskOrchestrationInternal(
       isExternal &&
       reviewState.status === "CLEAN" &&
       (reviewState.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds ||
-        reviewState.logicalInvocations + 2 >
+        reviewState.logicalInvocations +
+            1 +
+            (reviewState.confirmationRequired ||
+            reviewState.highRisk ||
+            reviewState.fixRounds + 1 >= 2
+              ? 1
+              : 0) >
           CHANGE_RISK_LIMITS.maxLogicalInvocations)
     ) {
       return terminal(reviewState, "NEEDS_HUMAN_REVIEW");
@@ -704,9 +720,6 @@ function transitionChangeRiskOrchestrationInternal(
   if (event.kind !== "fix-applied" && event.snapshotId !== state.snapshotId) {
     return terminal(state, "NEEDS_HUMAN_REVIEW");
   }
-  if (state.status === "NO_PROGRESS" || state.status === "NEEDS_HUMAN_REVIEW")
-    return state;
-
   if (event.kind === "invalid-attempt" || event.kind === "needs-context") {
     const attempts = state.transientAttempts + 1;
     return attempts > CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation
@@ -800,8 +813,16 @@ function transitionChangeRiskOrchestrationInternal(
     }
     if (event.snapshotId.trim().length === 0)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
-    // Reserve remediation plus a possible final confirmation before starting.
-    if (state.logicalInvocations + 2 > CHANGE_RISK_LIMITS.maxLogicalInvocations)
+    const nextHighRisk = isHighRiskChange(event.manifest);
+    const nextFixRounds = state.fixRounds + 1;
+    const confirmationAfterFix =
+      state.confirmationRequired || nextHighRisk || nextFixRounds >= 2;
+    const requiredReviewSlots = 1 + (confirmationAfterFix ? 1 : 0);
+    // Reserve remediation plus a final confirmation only when one is required.
+    if (
+      state.logicalInvocations + requiredReviewSlots >
+      CHANGE_RISK_LIMITS.maxLogicalInvocations
+    )
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (event.snapshotId === state.snapshotId)
       return terminal(state, "NO_PROGRESS");
@@ -821,8 +842,8 @@ function transitionChangeRiskOrchestrationInternal(
     return {
       ...state,
       snapshotId: event.snapshotId,
-      highRisk: isHighRiskChange(event.manifest),
-      fixRounds: state.fixRounds + 1,
+      highRisk: nextHighRisk,
+      fixRounds: nextFixRounds,
       completedRounds,
       batchedClusterKeys: [],
       transientAttempts: 0,
@@ -850,6 +871,7 @@ function transitionChangeRiskOrchestrationInternal(
         awaitingFinalConfirmation: true,
         logicalInvocations,
         cleanReviewInvocations: state.cleanReviewInvocations + 1,
+        initialLocalReviewCompleted: true,
         transientAttempts: 0,
         missingInputs: [],
         confirmationSatisfied: false,
@@ -861,6 +883,7 @@ function transitionChangeRiskOrchestrationInternal(
       awaitingFinalConfirmation: false,
       logicalInvocations,
       cleanReviewInvocations: state.cleanReviewInvocations + 1,
+      initialLocalReviewCompleted: true,
       transientAttempts: 0,
       missingInputs: [],
       activeUnresolvedFingerprints: [],
@@ -916,6 +939,8 @@ function transitionChangeRiskOrchestrationInternal(
   const next = {
     ...state,
     logicalInvocations,
+    initialLocalReviewCompleted:
+      state.initialLocalReviewCompleted || event.external !== true,
     transientAttempts: 0,
     confirmationRequired,
     completedRounds: [

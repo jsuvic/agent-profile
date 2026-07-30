@@ -372,7 +372,7 @@ export function deriveChangeRiskFingerprint(
     {
       path: normalizeChangeRiskFindingPath(finding.location.path),
       symbol: finding.location.symbol?.trim() || null,
-      line: finding.location.line ?? null,
+      line: null,
     },
     finding.unsafeConditionClass,
   ]);
@@ -1269,7 +1269,7 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
     fingerprintComponents: [
       "category",
       "affected contract",
-      "normalized location",
+      "normalized path and optional symbol (never line number)",
       "unsafe-condition class",
     ],
     invalidAttemptRules: [
@@ -1330,11 +1330,11 @@ const ORCHESTRATION_PROJECTION: ChangeRiskOrchestrationProjection = deepFreeze({
         "unchanged snapshot; a required final confirmation is the exception.",
     ],
     nonProgress: [
-      "The same unresolved fingerprint appearing twice without progress.",
+      "The same unresolved fingerprint appearing twice without progress transitions to `NO_PROGRESS`.",
       "Failure to reduce the blocking-finding count across two consecutive " +
-        "remediation reviews.",
+        "remediation reviews transitions to `NO_PROGRESS`.",
       "A fix round that leaves the reviewed snapshot unchanged while open " +
-        "blockers remain consumes no invocation and reports no progress.",
+        "blockers remain consumes no invocation and transitions to `NO_PROGRESS`.",
     ],
     clustering: [
       "Three or more open findings sharing a cluster key are remediated as one shared cause in one fix round.",

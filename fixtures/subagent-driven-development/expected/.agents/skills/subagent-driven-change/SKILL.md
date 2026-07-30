@@ -39,9 +39,9 @@ Each subagent prompt must include the full task text, relevant spec excerpts, no
 - One logical invocation may retry a transient failure, an invalid envelope, or a NEEDS_CONTEXT result at most 2 times.
 - Failed or incomplete attempts are recorded separately and never become findings or fix rounds.
 - Before starting a fix round, reserve a remediation review plus any required final confirmation in the remaining invocation budget.
-- The same unresolved fingerprint appearing twice without progress.
-- Failure to reduce the blocking-finding count across two consecutive remediation reviews.
-- A fix round that leaves the reviewed snapshot unchanged while open blockers remain consumes no invocation and reports no progress.
+- The same unresolved fingerprint appearing twice without progress transitions to `NO_PROGRESS`.
+- Failure to reduce the blocking-finding count across two consecutive remediation reviews transitions to `NO_PROGRESS`.
+- A fix round that leaves the reviewed snapshot unchanged while open blockers remain consumes no invocation and transitions to `NO_PROGRESS`.
 - Three or more open findings sharing a cluster key are remediated as one shared cause in one fix round.
 - For a within-change cluster recurrence, add a mechanical guard or record impracticality with rationale and evidence before escalating to NEEDS_HUMAN_REVIEW.
 - A completed FINDINGS_FOUND result whose P1 and P2 findings are all verified fixed, obsolete, or evidenced false-positive, and whose every P3 carries a valid disposition, contains no blocker.
@@ -60,6 +60,7 @@ Each subagent prompt must include the full task text, relevant spec excerpts, no
 - NEEDS_HUMAN_REVIEW takes precedence over NO_PROGRESS when both apply.
 
 11. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
+12. After change-risk orchestration reaches terminal `CLEAN` and the required tests complete, invoke `final-review` against the validated handoff and current snapshot. Fix or escalate its findings before handoff.
 
 ## Status Values
 

@@ -215,12 +215,21 @@ export function hasDelegationCapableClient(clients: {
  * step.
  */
 export function resolveEmittedSkills(profile: AiProfile): SkillId[] {
-  const skills = resolveSelectedSkills(profile);
+  const selected = new Set(resolveSelectedSkills(profile));
+  const delegationCapable = hasDelegationCapableClient({
+    codex: profile.clients.codex.enabled,
+    claude: profile.clients.claude.enabled,
+  });
   if (
-    hasDelegationCapableClient({
-      codex: profile.clients.codex.enabled,
-      claude: profile.clients.claude.enabled,
-    })
+    delegationCapable &&
+    profile.workflow.subagentDrivenDevelopment === true &&
+    profile.capabilities?.delegation?.subagents?.enabled === true
+  ) {
+    selected.add("final-review");
+  }
+  const skills = SKILL_ORDER.filter((skill) => selected.has(skill));
+  if (
+    delegationCapable
   ) {
     return skills;
   }
