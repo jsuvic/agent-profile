@@ -2262,6 +2262,45 @@ anyway. Compiler suite 480 tests, 0 failures, 7 pre-existing win32 skips; root
 `npm run check` clean; the release journey test still fails only on this
 machine's `tar`.
 
+PR #140 fourth review round (2026-07-30), run by the phase's OWN generated
+`change-risk-reviewer` rather than the external bot, which had exhausted its
+quota. The reviewer was already implemented and emitted by the compiler for any
+qualifying subagent-driven profile; this repo had simply never recompiled its
+own profile since I1 landed, so `agent-profile compile --target
+claude-subagents --write` created `.claude/agents/change-risk-reviewer.md` and
+its reference. First dogfooded run, clean-room initial mode against the
+accumulated change: three findings, all verified independently before acting,
+two of them reproduced by driving the exported state machine. P1: the
+same-fingerprint non-progress guard was evaluated for validated EXTERNAL rounds
+as well as local ones, so an independent reviewer reproducing a still-open
+local blocker ended the whole workflow as `NO_PROGRESS` with every fix round
+and invocation unspent - directly contradicting the external-review contract
+("a validated external P1/P2 reopens the local loop when budget remains"). The
+guard is now gated on `event.external !== true`, exactly as stagnation already
+was; the external fingerprints merge into the checkpoint instead. Pre-existing,
+not introduced by the third round: the previous `prior.some(...)` form matched
+the same case. P2: `guard-added` threw a `TypeError` out of the public boundary
+for a cluster key no recurrence had demanded, while every sibling condition -
+including `guard-impractical` for the identical case - returns a terminal
+handoff; an owner making an out-of-order claim crashed instead of receiving the
+escalation it must persist. P2: `resolveEmittedSkills` force-added
+`final-review` for a qualifying subagent-driven profile, but the instruction
+renderer still read the raw `workflow.finalReview` flag, so a profile with
+`finalReview: false` emitted the skill and a `subagent-driven-change` body
+mandating it while AGENTS.md stated "Not required". All three surfaces now read
+one `emitsFinalReview(profile)` predicate. The reviewer's Tabnine sub-claim
+(same profile emitting the shared skill without the Tabnine checklist it
+cross-references) is real in the code but UNREACHABLE: a subagent-driven
+profile requires the `implementer` template, which Tabnine may not emit while
+its subagents are read-only, so that profile cannot compile. The gate is
+aligned anyway; no golden fixture was added for the qualifying +
+`finalReview: false` combination, which remains covered by a focused compiler
+test only. Compiler suite 482 tests, 0 failures, 7 pre-existing win32 skips;
+root `npm run check` clean. Method note: the previous round's "check clean"
+claim was wrong - it was read from `npm run check | tail -3 && ...`, whose exit
+status comes from `tail`, so a real `tsc` failure in the test project reached
+CI. Verify with the exit code, never through a pipe.
+
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
 Draft 2026-07-27, pending grill approval; the spec itself is human-gated.

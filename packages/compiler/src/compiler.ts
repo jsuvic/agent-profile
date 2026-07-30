@@ -78,6 +78,7 @@ import {
 } from "./hooks.js";
 import {
   disablesModelInvocation,
+  emitsFinalReview,
   excludedDelegationSkills,
   resolveEmittedSkills,
   resolveSelectedSkills,
@@ -675,7 +676,7 @@ ${enabledClients}
 
 - SDD: ${renderRequired(profile.workflow.sdd)}
 - TDD: ${renderRequired(profile.workflow.tdd)}
-- Final implementation review: ${renderRequired(profile.workflow.finalReview)}
+- Final implementation review: ${renderRequired(emitsFinalReview(profile))}
 ${codeReviewSection}${refactoringSection}${documentationSection}${memoryGuidanceSection}${loggingGuidanceSection}${subagentPolicySection}
 ## Permissions
 
@@ -1009,7 +1010,7 @@ function renderTabnineGuidelines(
     );
   }
 
-  if (profile.workflow.finalReview) {
+  if (emitsFinalReview(profile)) {
     files.push(
       createGeneratedTextFile(
         ".tabnine/guidelines/90-final-review.md",
@@ -3028,7 +3029,7 @@ function getRequiredTabnineGuidelineTemplateIds(profile: AiProfile): string[] {
   if (profile.subagentPolicy?.enabled === true) {
     ids.push("targets/tabnine-guidelines/87-subagent-task-capsules@1");
   }
-  if (profile.workflow.finalReview) {
+  if (emitsFinalReview(profile)) {
     ids.push("targets/tabnine-guidelines/90-final-review@1");
   }
 

@@ -888,8 +888,11 @@ function transitionChangeRiskOrchestrationInternal(
       : { ...state, transientAttempts: attempts };
   }
   if (event.kind === "guard-added") {
+    // An unverifiable guard claim escalates like every other one, rather than
+    // throwing out of the public boundary: the owner must be left holding a
+    // persistable terminal handoff, not an exception it cannot record.
     if (!state.requiredMechanicalGuardClusterKeys.includes(event.clusterKey))
-      throw new TypeError("invalid change-risk mechanical guard");
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
     // A guard is only real once it exists in reviewed bytes, so it arrives as
     // a snapshot-changing event carrying its manifest and evidence. An
     // assertion over unchanged bytes proves nothing and never discharges the
@@ -1052,13 +1055,19 @@ function transitionChangeRiskOrchestrationInternal(
     return terminal(state, "NEEDS_HUMAN_REVIEW");
   const prior = state.completedRounds;
   const priorLocalRounds = prior.filter((round) => round.external !== true);
-  // No progress means a blocker that is STILL open, so this compares against
-  // the live checkpoint. A fingerprint an earlier round closed - verified by
-  // remediation coverage, or cleared by a terminal clean review - may legally
-  // reappear on later bytes without stopping the loop.
-  const sameFingerprint = event.findings.some((finding) =>
-    state.activeUnresolvedFingerprints.includes(finding.fingerprint),
-  );
+  // No progress means a blocker that is STILL open after a local remediation
+  // round, so this compares against the live checkpoint. A fingerprint an
+  // earlier round closed - verified by remediation coverage, or cleared by a
+  // terminal clean review - may legally reappear on later bytes without
+  // stopping the loop. External rounds are excluded exactly as they are from
+  // stagnation: an independent reviewer confirming a blocker the local loop
+  // has not yet had a round to fix is corroboration, not stalled progress, and
+  // its fingerprints merge into the checkpoint instead.
+  const sameFingerprint =
+    event.external !== true &&
+    event.findings.some((finding) =>
+      state.activeUnresolvedFingerprints.includes(finding.fingerprint),
+    );
   const recurredKeys = unique(
     blockerClusterKeys.filter((key) =>
       prior.some((round) => round.remediatedClusterKeys.includes(key)),

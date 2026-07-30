@@ -962,6 +962,63 @@ test("a guarded recurrence records its round before escalating", () => {
   );
 });
 
+test("an external review confirming an open blocker corroborates, not stalls", () => {
+  const snapshotId = "snapshot-external-duplicate";
+  const local = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: runtimeProofBlockers("shared") },
+  );
+  assert.equal(local.status, "ACTIVE");
+  const corroborated = transitionChangeRiskOrchestrationProduction(
+    local,
+    createValidatedExternalChangeRiskReviewEvent(
+      reviewResult(snapshotId, "FINDINGS_FOUND", [
+        runtimeProofFinding("shared"),
+      ]),
+      ["GitHub review thread"],
+    ),
+  );
+  assert.equal(
+    corroborated.status,
+    "ACTIVE",
+    "an independent reviewer reproducing a still-open blocker never ends the loop",
+  );
+  assert.deepEqual(
+    corroborated.activeUnresolvedFingerprints,
+    local.activeUnresolvedFingerprints,
+    "the duplicate merges into the checkpoint rather than growing it",
+  );
+  assert.equal(corroborated.fixRounds, 0);
+  assert.equal(corroborated.logicalInvocations, local.logicalInvocations);
+  assert.equal(validateChangeRiskOrchestrationStateV1(corroborated).ok, true);
+});
+
+test("an unverifiable guard claim escalates instead of throwing", () => {
+  const snapshotId = "snapshot-unrequired-guard";
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: runtimeProofBlockers("open") },
+  );
+  assert.deepEqual(reviewed.requiredMechanicalGuardClusterKeys, []);
+  const claimed = transitionChangeRiskOrchestration(reviewed, {
+    kind: "guard-added",
+    snapshotId: `${snapshotId}-guard`,
+    clusterKey: "runtime-proof+missing-runtime-proof",
+    manifest: [],
+    evidence: ["packages/compiler/src/change-risk-guard.test.ts"],
+  });
+  assert.equal(
+    claimed.status,
+    "NEEDS_HUMAN_REVIEW",
+    "a guard for a cluster no recurrence demanded is not evidence",
+  );
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1(claimed).ok,
+    true,
+    "the owner is left a persistable handoff, not an exception",
+  );
+});
+
 test("a fingerprint an earlier round closed may reappear without stopping", () => {
   const snapshotId = "snapshot-reappearing";
   const reviewed = transitionChangeRiskOrchestration(

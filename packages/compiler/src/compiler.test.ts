@@ -4551,6 +4551,23 @@ test("phase-33 qualifying workflows run final-review after risk review and expos
     assert.match(body, /NEEDS_CONTEXT/u, path);
     assert.match(body, /Do not install dependencies/u, path);
   }
+
+  // The declared flag is false, but a qualifying subagent-driven workflow
+  // mandates the review. Every surface that states or cross-references it must
+  // agree with the surface that emits it.
+  const instructions = result.files.find((file) => file.path === "AGENTS.md");
+  assert.ok(instructions);
+  assert.match(
+    Buffer.from(instructions.bytes).toString("utf8"),
+    /Final implementation review: Required/u,
+    "the shared instruction file may not deny a review the workflow emits",
+  );
+
+  // The Tabnine guideline gate reads the same predicate, but a
+  // subagent-driven profile cannot enable Tabnine at all: it requires the
+  // `implementer` template, which Tabnine may not emit while its subagents are
+  // restricted to read-only. The gate is aligned for correctness, not because
+  // this combination is reachable today.
 });
 
 test("phase-33 I2 implement-next requires a validated terminal CLEAN handoff for the current snapshot", () => {
