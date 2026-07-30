@@ -284,6 +284,8 @@ export type ChangeRiskEvidenceReferenceV1 = Readonly<{
   lines?: Readonly<{ start: number; end: number }>;
   commit?: string;
   summary: string;
+  /** Required on evidence that invalidates a prior false-positive finding. */
+  invalidatesPriorFinding?: true;
 }>;
 
 export type ChangeRiskFindingV1 = Readonly<{
@@ -405,7 +407,9 @@ function validateEvidence(
   if (
     !isRecord(value) ||
     !isClosedValue(value.kind, CHANGE_RISK_EVIDENCE_KINDS) ||
-    !nonEmptyString(value.summary)
+    !nonEmptyString(value.summary) ||
+    (value.invalidatesPriorFinding !== undefined &&
+      value.invalidatesPriorFinding !== true)
   )
     return false;
   if (
@@ -501,6 +505,14 @@ function validateFinding(
     unsafeConditionClass: value.unsafeConditionClass,
   });
   if (value.resolution === "open") return true;
+  const hasInvalidatingEvidence = value.evidence.some(
+    (evidence) => evidence.invalidatesPriorFinding === true,
+  );
+  if (
+    (value.resolution === "false-positive" && !hasInvalidatingEvidence) ||
+    (value.resolution !== "false-positive" && hasInvalidatingEvidence)
+  )
+    return false;
   return (
     options.mode === "remediation" &&
     options.priorFingerprints.includes(canonicalFingerprint)
@@ -1026,6 +1038,7 @@ export type ChangeRiskReviewerProjection = Readonly<{
     resolutions: readonly ChangeRiskResolution[];
     p3Dispositions: readonly ChangeRiskDisposition[];
     evidenceKinds: readonly ChangeRiskEvidenceKind[];
+    evidenceLocatorRules: readonly string[];
     requiredFindingFields: readonly string[];
     fingerprintComponents: readonly string[];
     invalidAttemptRules: readonly string[];
@@ -1100,6 +1113,18 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
     resolutions: CHANGE_RISK_RESOLUTIONS,
     p3Dispositions: CHANGE_RISK_DISPOSITIONS,
     evidenceKinds: CHANGE_RISK_EVIDENCE_KINDS,
+    evidenceLocatorRules: [
+      "`file` requires `path`.",
+      "`diff-hunk` requires `path` and `lines`.",
+      "`symbol` requires `path` and `symbol`.",
+      "`test` requires `path`.",
+      "`contract` requires `path` naming the contract or document.",
+      "`command-output` requires the command in `summary` alongside the observation.",
+      "`lines` requires `1 <= start <= end`.",
+      "Evidence closing a prior finding as `false-positive` requires " +
+        "`invalidatesPriorFinding: true` and a summary explaining how the " +
+        "evidence invalidates the reported unsafe condition.",
+    ],
     requiredFindingFields: [
       "priority",
       "category",

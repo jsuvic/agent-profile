@@ -29,6 +29,7 @@ export type ChangeRiskOrchestrationStateV1 = Readonly<{
   confirmationSatisfied: boolean;
   highRisk: boolean;
   missingInputs: readonly string[];
+  lastBlockerReviewSnapshotId?: string;
   lastLocalReviewSnapshotId?: string;
   completedRounds: readonly Readonly<{
     blockerCount: number;
@@ -310,6 +311,8 @@ export function validateChangeRiskOrchestrationStateV1(
     typeof value.confirmationSatisfied !== "boolean" ||
     typeof value.highRisk !== "boolean" ||
     !hasUniqueNonEmptyStrings(value.missingInputs) ||
+    (value.lastBlockerReviewSnapshotId !== undefined &&
+      !isNonEmptyString(value.lastBlockerReviewSnapshotId)) ||
     (value.lastLocalReviewSnapshotId !== undefined &&
       !isNonEmptyString(value.lastLocalReviewSnapshotId)) ||
     !Array.isArray(value.completedRounds) ||
@@ -325,10 +328,17 @@ export function validateChangeRiskOrchestrationStateV1(
     value.fixRounds > CHANGE_RISK_LIMITS.maxFixRounds ||
     value.transientAttempts >
       CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation + 1 ||
+    (value.transientAttempts >
+      CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation &&
+      value.status !== "NEEDS_HUMAN_REVIEW") ||
     value.confirmationInvocations >
       CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations ||
     value.cleanReviewInvocations > value.logicalInvocations ||
     value.fixRounds > value.completedRounds.length ||
+    (value.lastBlockerReviewSnapshotId !== undefined &&
+      value.lastBlockerReviewSnapshotId !== value.snapshotId) ||
+    (value.lastLocalReviewSnapshotId !== undefined &&
+      value.lastLocalReviewSnapshotId !== value.lastBlockerReviewSnapshotId) ||
     value.completedRounds.filter(
       (round) => isRecord(round) && round.external !== true,
     ).length > value.logicalInvocations
@@ -640,6 +650,11 @@ function transitionChangeRiskOrchestrationInternal(
     if (!isNonEmptyString(event.snapshotId) || event.manifest === undefined)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (event.snapshotId === state.snapshotId) return state;
+    if (
+      state.status !== "CLEAN" &&
+      state.lastBlockerReviewSnapshotId === state.snapshotId
+    )
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
     return {
       ...state,
       snapshotId: event.snapshotId,
@@ -647,6 +662,7 @@ function transitionChangeRiskOrchestrationInternal(
       status: "ACTIVE",
       transientAttempts: 0,
       missingInputs: [],
+      lastBlockerReviewSnapshotId: undefined,
       lastLocalReviewSnapshotId: undefined,
       awaitingFinalConfirmation: false,
       confirmationSatisfied: false,
@@ -773,6 +789,7 @@ function transitionChangeRiskOrchestrationInternal(
       batchedClusterKeys: [],
       transientAttempts: 0,
       missingInputs: [],
+      lastBlockerReviewSnapshotId: undefined,
       lastLocalReviewSnapshotId: undefined,
       awaitingFinalConfirmation: false,
       confirmationSatisfied: false,
@@ -820,6 +837,7 @@ function transitionChangeRiskOrchestrationInternal(
   if (logicalInvocations > CHANGE_RISK_LIMITS.maxLogicalInvocations)
     return terminal(state, "NEEDS_HUMAN_REVIEW");
   const prior = state.completedRounds;
+  const priorLocalRounds = prior.filter((round) => round.external !== true);
   const sameFingerprint = prior.some((round) =>
     event.findings.some((finding) =>
       round.unresolvedFingerprints.includes(finding.fingerprint),
@@ -832,11 +850,12 @@ function transitionChangeRiskOrchestrationInternal(
   );
   if (recurredKeys.some((key) => state.guardedClusterKeys.includes(key)))
     return terminal({ ...state, logicalInvocations }, "NEEDS_HUMAN_REVIEW");
-  const previousBlockers = prior.at(-1)?.blockerCount;
-  const previousRemediationBlockers = prior.at(-2)?.blockerCount;
+  const previousBlockers = priorLocalRounds.at(-1)?.blockerCount;
+  const previousRemediationBlockers = priorLocalRounds.at(-2)?.blockerCount;
   // The initial review establishes the baseline. Stagnation needs two
   // consecutive *remediation* reviews that each fail to reduce it.
   const stagnant =
+    event.external !== true &&
     state.fixRounds >= 2 &&
     previousBlockers !== undefined &&
     previousRemediationBlockers !== undefined &&
@@ -879,6 +898,7 @@ function transitionChangeRiskOrchestrationInternal(
         remediatedClusterKeys: [],
       },
     ],
+    lastBlockerReviewSnapshotId: state.snapshotId,
     lastLocalReviewSnapshotId:
       event.external === true
         ? state.lastLocalReviewSnapshotId

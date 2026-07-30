@@ -1683,6 +1683,62 @@ test("reviewer envelopes align with the rendered finding contract and reserve cl
   }
 });
 
+test("false-positive closure requires explicitly invalidating evidence", () => {
+  const falsePositive = {
+    ...validFinding,
+    priority: "P2",
+    disposition: undefined,
+    resolution: "false-positive",
+  };
+  const options = {
+    mode: "remediation" as const,
+    priorFingerprints: [validFinding.fingerprint],
+  };
+
+  assert.equal(
+    validateChangeRiskResultV1(
+      {
+        policyVersion: "change-risk/v2",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [falsePositive],
+        missingInputs: [],
+      },
+      options,
+    ).ok,
+    false,
+    "ordinary supporting evidence cannot close a prior blocker as false-positive",
+  );
+  assert.equal(
+    validateChangeRiskResultV1(
+      {
+        policyVersion: "change-risk/v2",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [
+          {
+            ...falsePositive,
+            evidence: [
+              {
+                kind: "contract",
+                path: "docs/specs/phase-33/001-change-risk-review-assurance.md",
+                summary: "The governing contract excludes the reported path.",
+                invalidatesPriorFinding: true,
+              },
+            ],
+          },
+        ],
+        missingInputs: [],
+      },
+      options,
+    ).ok,
+    true,
+    "a prior blocker may close only with evidence explicitly marked as invalidating",
+  );
+});
+
 test("every reviewer status binds to the expected snapshot when supplied", () => {
   const clean = {
     policyVersion: "change-risk/v2",
@@ -1859,6 +1915,13 @@ test("P3 dispositions agree with their resolution state", () => {
       priority: "P3" as const,
       disposition,
       resolution,
+      evidence:
+        resolution === "false-positive"
+          ? validFinding.evidence.map((evidence) => ({
+              ...evidence,
+              invalidatesPriorFinding: true as const,
+            }))
+          : validFinding.evidence,
     };
     const result = validateChangeRiskResultV1(
       {

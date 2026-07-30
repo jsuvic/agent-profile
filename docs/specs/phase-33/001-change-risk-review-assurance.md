@@ -286,6 +286,7 @@ type EvidenceReference = {
   lines?: { start: number; end: number };
   commit?: string;
   summary: string;
+  invalidatesPriorFinding?: true;
 };
 
 type ChangeRiskFindingV1 = {
@@ -347,6 +348,10 @@ type ChangeRiskResultV1 = {
   describes secret-shaped values by shape only and MUST NOT reproduce
   secrets, raw transcripts, or source beyond the minimum needed to locate
   the defect.
+- A `false-positive` closure requires at least one evidence reference with
+  `invalidatesPriorFinding: true`; that reference's summary explains how the
+  located evidence invalidates the prior unsafe condition. The marker MUST be
+  absent for `open`, `fixed`, and `obsolete` findings.
 - `EvidenceReference` is discriminated by `kind` with per-kind required
   locators: `file` requires `path`; `diff-hunk` requires `path` and `lines`;
   `symbol` requires `path` and `symbol`; `test` requires `path`; `contract`

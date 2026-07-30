@@ -68,6 +68,15 @@ Return exactly one typed `ChangeRiskResultV1` envelope and no approval prose.
 - `status` is exactly `CLEAN | FINDINGS_FOUND | NEEDS_CONTEXT`.
 - `scope` records `completed`, manifest coverage, relevant-consumer inspection, and every closed domain with `applicable` or `not-applicable`; every not-applicable domain has a concise reason.
 - `findings` use priorities `P1 | P2 | P3`, categories `cross-consumer-integration | preview-before-write-ordering | ownership-atomicity | network-process-boundary | parser-version-contract | published-package-seam | runtime-proof | state-classification | secret-output`, affectedContractId `permission-model | secret-handling | atomic-write-ownership | release-workflow | network-process-boundary | generated-region-ownership | published-package-seam | state-transition | parsing-validation | compatibility-platform | runtime-proof | contract-completeness | other`, unsafeConditionClass `missing-validation | unsafe-ordering | ownership-violation | incomplete-propagation | compatibility-regression | boundary-violation | missing-runtime-proof | redaction-failure | other`, resolutions `open | fixed | false-positive | obsolete`, P3 dispositions `fixed | accepted-debt | follow-up | false-positive | obsolete`, and evidence kinds `file | diff-hunk | symbol | test | contract | command-output`.
+- Evidence locators are closed by kind:
+- `file` requires `path`.
+- `diff-hunk` requires `path` and `lines`.
+- `symbol` requires `path` and `symbol`.
+- `test` requires `path`.
+- `contract` requires `path` naming the contract or document.
+- `command-output` requires the command in `summary` alongside the observation.
+- `lines` requires `1 <= start <= end`.
+- Evidence closing a prior finding as `false-positive` requires `invalidatesPriorFinding: true` and a summary explaining how the evidence invalidates the reported unsafe condition.
 - Each finding contains priority, category, location, unsafeCondition, evidence, affectedContractId, unsafeConditionClass, safePath, resolution, fingerprint, concrete evidence, affected contract, safe path, and a stable fingerprint derived from category, affected contract, normalized location, unsafe-condition class; trusted owner code normalizes the canonical serialized fingerprint from those components.
 - Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution `open`. Remediation receives only supplied prior fingerprints; it may verify `fixed`, `false-positive`, or `obsolete` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.
 - `missingInputs` is empty except for `NEEDS_CONTEXT`.

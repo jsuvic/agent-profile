@@ -572,6 +572,66 @@ test("serialized handoffs reject malformed, stale, reset, and contradictory stat
   );
 });
 
+test("serialized active handoffs cannot carry an exhausted transient-attempt count", () => {
+  const active = {
+    ...createChangeRiskOrchestrationState("snapshot-active-retries"),
+    transientAttempts: 3,
+  };
+  assert.equal(validateChangeRiskOrchestrationStateV1(active).ok, false);
+
+  let exhausted = createChangeRiskOrchestrationState(
+    "snapshot-terminal-retries",
+  );
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    exhausted = transitionChangeRiskOrchestration(exhausted, {
+      kind: "invalid-attempt",
+      snapshotId: exhausted.snapshotId,
+    });
+  }
+  assert.equal(exhausted.status, "NEEDS_HUMAN_REVIEW");
+  assert.equal(exhausted.transientAttempts, 3);
+  assert.equal(validateChangeRiskOrchestrationStateV1(exhausted).ok, true);
+});
+
+test("code-changed cannot bypass fix-round accounting after blockers were reviewed", () => {
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState("snapshot-reviewed"),
+    {
+      kind: "blockers",
+      snapshotId: "snapshot-reviewed",
+      findings: runtimeProofBlockers("reviewed"),
+    },
+  );
+  const bypass = transitionChangeRiskOrchestration(reviewed, {
+    kind: "code-changed",
+    snapshotId: "snapshot-bypass",
+  });
+
+  assert.equal(bypass.status, "NEEDS_HUMAN_REVIEW");
+  assert.equal(bypass.fixRounds, 0);
+  assert.equal(bypass.snapshotId, "snapshot-reviewed");
+
+  const externallyReviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState("snapshot-external-reviewed"),
+    {
+      kind: "review-result",
+      external: true,
+      result: reviewResult("snapshot-external-reviewed", "FINDINGS_FOUND", [
+        runtimeProofFinding("external-reviewed"),
+      ]),
+    },
+  );
+  const externalBypass = transitionChangeRiskOrchestration(
+    externallyReviewed,
+    {
+      kind: "code-changed",
+      snapshotId: "snapshot-external-bypass",
+    },
+  );
+  assert.equal(externalBypass.status, "NEEDS_HUMAN_REVIEW");
+  assert.equal(externalBypass.snapshotId, "snapshot-external-reviewed");
+});
+
 test("orchestration derives cluster identity from validated finding components", () => {
   const snapshotId = "snapshot-derived-cluster";
   const state = transitionChangeRiskOrchestration(
@@ -788,6 +848,43 @@ test("fixes before a blocker review escalate and budget exhaustion wins unchange
     },
   );
   assert.equal(overlapping.status, "NEEDS_HUMAN_REVIEW");
+});
+
+test("external blocker rounds do not participate in remediation stagnation", () => {
+  const snapshotId = "snapshot-external-stagnation";
+  let state: ReturnType<typeof createChangeRiskOrchestrationState> = {
+    ...createChangeRiskOrchestrationState(snapshotId),
+    fixRounds: 2,
+    logicalInvocations: 2,
+    completedRounds: [
+      {
+        blockerCount: 3,
+        unresolvedFingerprints: ["local-one"],
+        remediatedClusterKeys: [],
+      },
+      {
+        blockerCount: 2,
+        unresolvedFingerprints: ["local-two"],
+        remediatedClusterKeys: [],
+      },
+    ],
+  };
+
+  for (const fingerprint of [
+    "external-one",
+    "external-two",
+    "external-three",
+  ]) {
+    state = transitionChangeRiskOrchestration(state, {
+      kind: "review-result",
+      external: true,
+      result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+        runtimeProofFinding(fingerprint),
+      ]),
+    });
+    assert.equal(state.status, "ACTIVE", fingerprint);
+  }
+  assert.equal(state.logicalInvocations, 2);
 });
 
 test("fix application carries a distinct new snapshot and preserves its identity", () => {
@@ -1029,9 +1126,10 @@ test("a completed local blocker review cannot repeat before a changed snapshot",
   assert.equal(repeated.transientAttempts, 1);
 
   const changed = transitionChangeRiskOrchestrationProduction(first, {
-    kind: "code-changed",
+    kind: "fix-applied",
     snapshotId: `${snapshotId}-changed`,
     manifest: [],
+    remediatedFindings: [],
   });
   const reviewedChangedSnapshot = transitionChangeRiskOrchestrationProduction(
     changed,

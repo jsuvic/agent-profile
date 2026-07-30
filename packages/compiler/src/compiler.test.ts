@@ -3917,6 +3917,17 @@ test("phase-33 I1 emits the policy-backed change-risk reviewer only for qualifyi
     assert.match(body, /manifest/u, file.path);
     assert.match(body, /CLEAN \| FINDINGS_FOUND \| NEEDS_CONTEXT/u, file.path);
     assert.match(body, /trusted owner code normalizes/u, file.path);
+    assert.match(body, /`file` requires `path`/u, file.path);
+    assert.match(body, /`diff-hunk` requires `path` and `lines`/u, file.path);
+    assert.match(body, /`symbol` requires `path` and `symbol`/u, file.path);
+    assert.match(body, /`test` requires `path`/u, file.path);
+    assert.match(body, /`contract` requires `path`/u, file.path);
+    assert.match(
+      body,
+      /`command-output` requires the command in `summary`/u,
+      file.path,
+    );
+    assert.match(body, /`lines` requires `1 <= start <= end`/u, file.path);
     assert.match(body, /never edit/u, file.path);
     assert.doesNotMatch(
       body,
