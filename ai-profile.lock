@@ -113,6 +113,18 @@
       "sha256": "bc56f102dbd5552e5932703e7dd722c70ca8f6435d82302fc9f7139e0168361a"
     },
     {
+      "id": "targets/codex-subagents/change-risk-reviewer-reference@1",
+      "target": "codex-subagents",
+      "version": "1",
+      "sha256": "ca81bc8568d89314a67bf1155b867ad9ac6684206d6c009bd93532f36cb4d7df"
+    },
+    {
+      "id": "targets/codex-subagents/change-risk-reviewer@1",
+      "target": "codex-subagents",
+      "version": "1",
+      "sha256": "1f0c8bb6131c81d2ce25d424444535f3e88fade76fe2fac92f44e64bcd272161"
+    },
+    {
       "id": "targets/codex-subagents/code-quality-reviewer@1",
       "target": "codex-subagents",
       "version": "1",
@@ -179,7 +191,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/final-review@1",
       "ownership": "generated-owned",
-      "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
+      "sha256": "29194da97e8258bf9d3084825dd3afa88fcc6ae8eb904d59f2cd06b80225afc7"
     },
     {
       "path": ".agents/skills/grill-change/SKILL.md",
@@ -193,7 +205,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/implement-next@1",
       "ownership": "generated-owned",
-      "sha256": "3f0b274bdd8e05f01a8f5d3402a2097fc950463bcabda18319627f350c19bfed"
+      "sha256": "0bcc35047cdb7d8162f77457107b5098ec6988a920036964426b80314d092a4e"
     },
     {
       "path": ".agents/skills/request-to-spec-issues/SKILL.md",
@@ -214,7 +226,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/subagent-driven-change@1",
       "ownership": "generated-owned",
-      "sha256": "46464260fd55da468417635fe848fa593a69b2642a5fa8bb4f9b8853812d8418"
+      "sha256": "53c93659bdec5562cfdcf3c42728b0fb0d3c2fe80025bbd76925f6041e0dd926"
     },
     {
       "path": ".agents/skills/tdd-change/SKILL.md",
@@ -270,7 +282,7 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/final-review@1",
       "ownership": "generated-owned",
-      "sha256": "1096fe236c623cae5c6b4bb473198815f129cc4524850705d3a1740ce03c3a58"
+      "sha256": "29194da97e8258bf9d3084825dd3afa88fcc6ae8eb904d59f2cd06b80225afc7"
     },
     {
       "path": ".claude/skills/grill-change/SKILL.md",
@@ -284,7 +296,7 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/implement-next@1",
       "ownership": "generated-owned",
-      "sha256": "c1790e14b86ab7dd28c84fbeda7f5c93998bc87592f21b683646fc0ef26ffa3c"
+      "sha256": "55943a4df56909d522e99c77a5a7ab5ad32d1b672517e01c6ce81af3bd15e5dc"
     },
     {
       "path": ".claude/skills/request-to-spec-issues/SKILL.md",
@@ -305,7 +317,7 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/subagent-driven-change@1",
       "ownership": "generated-owned",
-      "sha256": "46464260fd55da468417635fe848fa593a69b2642a5fa8bb4f9b8853812d8418"
+      "sha256": "53c93659bdec5562cfdcf3c42728b0fb0d3c2fe80025bbd76925f6041e0dd926"
     },
     {
       "path": ".claude/skills/tdd-change/SKILL.md",
@@ -313,6 +325,13 @@
       "templateId": "targets/claude-workflow-skills/tdd-change@2",
       "ownership": "generated-owned",
       "sha256": "871dce54837187461c16132ed8681dc547b2d7e3d5fb9f4947f5cc55d90d08fe"
+    },
+    {
+      "path": ".codex/agents/change-risk-reviewer.toml",
+      "target": "codex-subagents",
+      "templateId": "targets/codex-subagents/change-risk-reviewer@1",
+      "ownership": "generated-owned",
+      "sha256": "1f0c8bb6131c81d2ce25d424444535f3e88fade76fe2fac92f44e64bcd272161"
     },
     {
       "path": ".codex/agents/code-quality-reviewer.toml",
@@ -341,6 +360,13 @@
       "templateId": "targets/codex-config@1",
       "ownership": "generated-owned",
       "sha256": "8dc0b7b0bd953c75dc37f165061e3f5369d370540870a5496a53e45b7d77186b"
+    },
+    {
+      "path": ".codex/references/change-risk-reviewer.md",
+      "target": "codex-subagents",
+      "templateId": "targets/codex-subagents/change-risk-reviewer-reference@1",
+      "ownership": "generated-owned",
+      "sha256": "ca81bc8568d89314a67bf1155b867ad9ac6684206d6c009bd93532f36cb4d7df"
     },
     {
       "path": ".mcp.json",

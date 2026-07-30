@@ -11,7 +11,7 @@ description: Use when a scoped implementation can be delegated to an implementat
 
 Use this workflow only when the task has a clear spec, acceptance criteria, and file ownership. Keep tightly coupled or architectural decisions in the parent session unless the user explicitly asks for delegation.
 
-Required subagents: `implementer`, `spec-reviewer`, and `code-quality-reviewer`.
+Required subagents: `implementer`, `spec-reviewer`, `code-quality-reviewer`, and `change-risk-reviewer`.
 
 ## Fresh Context
 
@@ -26,7 +26,41 @@ Each subagent prompt must include the full task text, relevant spec excerpts, no
 5. Fix or escalate every spec-review issue before requesting code-quality review.
 6. Dispatch `code-quality-reviewer` only after spec review reports compliance.
 7. Fix Critical and Important code-quality issues before handoff, or document why a finding is intentionally deferred.
-8. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
+8. This surface alone owns the `change-risk/v2` state machine. Invoke `change-risk-reviewer` only after code-quality review, keep its closed `ChangeRiskOrchestrationStateV1` handoff snapshot-bound, and never let a nested surface invoke it again for an unchanged snapshot.
+9. Initial review is clean-room; remediation supplies prior fingerprints and searches the complete updated snapshot; required final confirmation is clean-room again. Any code change invalidates the preceding clean result. Files under docs/review-learning/ are excluded from snapshot identity and do not invalidate a terminal result. An initial or remediation review is never repeated against an unchanged snapshot; a required final confirmation is the exception.
+10. Apply these bounded owner rules and preserve counters, actual snapshot IDs, and completed-round fingerprint and remediated-cluster-key history across resume:
+
+- at most 3 fix rounds, 6 completed logical reviews, and 2 transient retries per logical invocation.
+- Run at most 2 confirmation invocations; a confirmation must be a distinct later clean-room review and cannot be claimed by the initial review.
+- Preserve missingInputs from NEEDS_CONTEXT; unavailable or forbidden context escalates immediately instead of consuming retries.
+- After CLEAN, only a validated external blocker or a changed snapshot may reopen orchestration.
+- Reset transient retries before final confirmation so prior malformed attempts do not consume its retry allowance.
+- The initial review is not a fix round.
+- One logical invocation may retry a transient failure, an invalid envelope, or a NEEDS_CONTEXT result at most 2 times.
+- Failed or incomplete attempts are recorded separately and never become findings or fix rounds.
+- Before starting a fix round, reserve a remediation review plus any required final confirmation in the remaining invocation budget.
+- The same unresolved fingerprint appearing twice without progress transitions to `NO_PROGRESS`.
+- Failure to reduce the blocking-finding count across two consecutive remediation reviews transitions to `NO_PROGRESS`.
+- A fix round that leaves the reviewed snapshot unchanged while open blockers remain consumes no invocation and transitions to `NO_PROGRESS`.
+- Three or more open findings sharing a cluster key are remediated as one shared cause in one fix round.
+- For a within-change cluster recurrence, add a mechanical guard or record impracticality with rationale and evidence before escalating to NEEDS_HUMAN_REVIEW.
+- A completed FINDINGS_FOUND result whose P1 and P2 findings are all verified fixed, obsolete, or evidenced false-positive, and whose every P3 carries a valid disposition, contains no blocker.
+- It reaches terminal clean exactly as a CLEAN result would, without relabeling the reviewer envelope.
+- There is no additional review of the unchanged snapshot; the same required-confirmation triggers still apply.
+- A validated external P1 or P2 reopens the local loop when fix-round and logical-invocation budget remains.
+- When that budget is exhausted the workflow escalates to NEEDS_HUMAN_REVIEW rather than retaining a clean terminal state.
+- External findings enter only through the orchestration owner's validation handoff; an unreproduced report is never trusted automatically and never silently discarded.
+- Require final clean-room confirmation: after-any-p1.
+- Require final clean-room confirmation: after-two-or-more-fix-rounds.
+- Require final clean-room confirmation: high-risk-surface-touched.
+- Remaining open P1 or P2 findings after the last allowed fix round.
+- Open blockers remain but the invocation budget cannot cover another fix round's remediation review plus the confirmation that would then be required.
+- Exhausted attempt retries; they are never converted to a clean result.
+- An unsatisfiable missing input escalates immediately.
+- NEEDS_HUMAN_REVIEW takes precedence over NO_PROGRESS when both apply.
+
+11. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
+12. After change-risk orchestration reaches terminal `CLEAN` and the required tests complete, invoke `final-review` against the validated handoff and current snapshot. Fix or escalate its findings before handoff.
 
 ## Status Values
 

@@ -2301,6 +2301,39 @@ claim was wrong - it was read from `npm run check | tail -3 && ...`, whose exit
 status comes from `tail`, so a real `tsc` failure in the test project reached
 CI. Verify with the exit code, never through a pipe.
 
+PR #140 fifth review round (2026-07-30), the first `remediation`-mode run of
+the self-hosted reviewer. All three prior fingerprints verified `fixed` on the
+reviewer's own evidence, not on any implementer claim - for the external-blocker
+P1 it additionally proved the LOCAL same-fingerprint guard still fires, which is
+the check that mattered, since the fix could have disabled non-progress
+detection outright. Two new P2s. First: this repository's own generated
+artifacts were half-emitted. The scoped `--target claude-subagents` write had
+created the Claude reviewer while leaving `.codex/agents/change-risk-reviewer.toml`
+absent and the committed `.claude/skills/` bodies at their pre-change templates,
+so the repo shipped a reviewer agent none of its own skills invoked
+(`subagent-driven-change/SKILL.md` contained zero occurrences of `change-risk`
+against three in the current template) and a `final-review` skill missing the
+handoff-validation clause, meaning this repo's own final review would have
+accepted prose state. Closed with a full `compile --write --force`; drift is now
+zero creates and zero changes apart from two deliberately local files
+(`.claude/settings.json`, whose committed copy is already canonical and whose
+working copy carries the owner's permission override, and the gitignored
+`.mcp.json` holding the local Code Context Engine server config). Both were
+backed up and restored around the compile; `--force` was required only because
+the hand-written `.mcp.json` is marked `generated-owned` in the lock, which is
+the ownership guard working as designed. Second: the scoped write itself
+truncated `ai-profile.lock` from 27 templates and outputs to 5, silently
+dropping every other target's provenance - repaired by hand in ec03e35 after
+confirming no surviving entry differed. The reviewer located the cause the
+hand investigation had missed: `apps/cli/src/compile-plan.ts` `buildCompileWrites`
+builds `createLockfileFile` purely from the scoped subset, while
+`resolveTabnineModelSettings` in the same file already re-reads the prior lock
+to preserve one output on exactly that path - so the truncation was known and
+handled for one case and unhandled generally. That CLI defect is tracked
+separately and is NOT fixed on this branch; phase-27's lockfile-conformance
+contract is the governing spec. Compiler suite 482 tests, 0 failures, 7
+pre-existing win32 skips; root `npm run check` clean (exit code, not a pipe).
+
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
 Draft 2026-07-27, pending grill approval; the spec itself is human-gated.

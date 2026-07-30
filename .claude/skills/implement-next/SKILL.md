@@ -24,8 +24,9 @@ Advance exactly one ready task from the `TASKS.md` ledger through a single imple
    - Skip `blocked` and `sequenced` tasks; they are not ready.
    - If no `ready` task exists, stop and report.
 2. Mark the selected task `in-progress` in `TASKS.md` through the client's write-approval flow.
-3. Load the linked issue brief and run `subagent-driven-change` with the brief as Fresh Context: `implementer`, then `spec-reviewer`, then `code-quality-reviewer`.
-4. When reviews pass and the required tests run green, mark the task `done` and stop. The next task requires a new invocation.
+3. Load the linked issue brief and run `subagent-driven-change` with the brief as Fresh Context. Its owner runs `code-quality-reviewer` before `change-risk-reviewer`; initiate or resume the closed change-risk handoff and report its current state, but do not independently invoke another review, redefine budgets, or reset counters.
+4. Mark the task `done` only after the owner returns a validated terminal `CLEAN` handoff and required tests run green. Validate the closed `ChangeRiskOrchestrationStateV1` record; its snapshot matches the current snapshot (modulo `docs/review-learning/`) and its terminal status is `CLEAN`. Do not infer completion from free-form prose or an unvalidated status. The next task requires a new invocation.
+5. If the validated handoff reports `NO_PROGRESS` or `NEEDS_HUMAN_REVIEW`, report that outcome and its required escalation; do not mark the task `done` or start another review. Keep the task out of `done` until a human resolves the escalation.
 
 ## Failure Path
 
@@ -39,7 +40,7 @@ On failure, mark the task `blocked` in `TASKS.md` with a one-line reason; if the
 
 ## Output
 
-Report the selected task, the state transitions applied, the subagent results, the tests run, and the final state (`done` or `blocked` with its one-line reason).
+Report the selected task, the state transitions applied, the subagent results, the tests run, the change-risk handoff status when applicable, and the final state (`done` or `blocked` with its one-line reason).
 
 ## Safety
 
