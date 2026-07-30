@@ -1683,7 +1683,7 @@ test("reviewer envelopes align with the rendered finding contract and reserve cl
   }
 });
 
-test("completed reviewer envelopes bind to the expected snapshot when supplied", () => {
+test("every reviewer status binds to the expected snapshot when supplied", () => {
   const clean = {
     policyVersion: "change-risk/v2",
     snapshotId: "snapshot-current",
@@ -1705,9 +1705,23 @@ test("completed reviewer envelopes bind to the expected snapshot when supplied",
     false,
     "a structurally valid CLEAN result cannot approve a different snapshot",
   );
+  const needsContext = {
+    ...clean,
+    snapshotId: "snapshot-stale",
+    status: "NEEDS_CONTEXT",
+    scope: { ...completeScope, completed: false },
+    missingInputs: ["complete manifest"],
+  };
+  assert.equal(
+    validateChangeRiskResultV1(needsContext, {
+      expectedSnapshotId: "snapshot-current",
+    }).ok,
+    false,
+    "a stale NEEDS_CONTEXT result cannot consume retries for the current snapshot",
+  );
 });
 
-test("ChangeRiskResultV1 derives deterministic fingerprints from structured finding components", () => {
+test("ChangeRiskResultV1 derives and normalizes deterministic fingerprints from structured finding components", () => {
   const expected = deriveChangeRiskFingerprint({
     category: validFinding.category,
     affectedContractId: validFinding.affectedContractId,
@@ -1725,17 +1739,36 @@ test("ChangeRiskResultV1 derives deterministic fingerprints from structured find
     expected,
     "path spelling cannot alter the fingerprint",
   );
+  const normalized = validateChangeRiskResultV1({
+    policyVersion: "change-risk/v2",
+    snapshotId: "snapshot-1",
+    status: "FINDINGS_FOUND",
+    scope: completeScope,
+    findings: [{ ...validFinding, fingerprint: "reviewer-stable-id" }],
+    missingInputs: [],
+  });
+  assert.equal(normalized.ok, true);
+  if (normalized.ok) {
+    assert.equal(
+      normalized.value.findings[0]?.fingerprint,
+      expected,
+      "trusted validation owns canonical fingerprint serialization",
+    );
+  }
   assert.equal(
     validateChangeRiskResultV1({
       policyVersion: "change-risk/v2",
       snapshotId: "snapshot-1",
       status: "FINDINGS_FOUND",
       scope: completeScope,
-      findings: [{ ...validFinding, fingerprint: "reviewer-spoofed" }],
+      findings: [
+        { ...validFinding, fingerprint: "reviewer-id-one" },
+        { ...validFinding, fingerprint: "reviewer-id-two" },
+      ],
       missingInputs: [],
     }).ok,
     false,
-    "the reviewer cannot choose a contradictory fingerprint",
+    "duplicate canonical findings are rejected even when reviewer ids differ",
   );
   assert.equal(
     validateChangeRiskResultV1({
@@ -1754,6 +1787,42 @@ test("ChangeRiskResultV1 derives deterministic fingerprints from structured find
     false,
     "traversal-shaped locations are rejected rather than normalized ambiguously",
   );
+});
+
+test("all optional evidence line ranges use the closed positive ordered shape", () => {
+  for (const evidence of [
+    {
+      kind: "file",
+      path: "packages/compiler/src/compiler.ts",
+      summary: "invalid negative range",
+      lines: { start: -1, end: 0 },
+    },
+    {
+      kind: "test",
+      path: "packages/compiler/src/compiler.test.ts",
+      summary: "invalid reversed range",
+      lines: { start: 4, end: 3 },
+    },
+    {
+      kind: "contract",
+      path: "docs/specs/phase-33/001-change-risk-review-assurance.md",
+      summary: "invalid fractional range",
+      lines: { start: 1.5, end: 2 },
+    },
+  ]) {
+    assert.equal(
+      validateChangeRiskResultV1({
+        policyVersion: "change-risk/v2",
+        snapshotId: "snapshot-1",
+        status: "FINDINGS_FOUND",
+        scope: completeScope,
+        findings: [{ ...validFinding, evidence: [evidence] }],
+        missingInputs: [],
+      }).ok,
+      false,
+      evidence.summary,
+    );
+  }
 });
 
 test("change-risk fingerprints use an unambiguous structured encoding", () => {

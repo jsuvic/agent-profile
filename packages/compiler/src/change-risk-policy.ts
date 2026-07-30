@@ -415,16 +415,17 @@ function validateEvidence(
     !nonEmptyString(value.path)
   )
     return false;
-  if (value.kind === "diff-hunk") {
-    if (
-      !nonEmptyString(value.path) ||
-      !isRecord(value.lines) ||
+  if (
+    value.lines !== undefined &&
+    (!isRecord(value.lines) ||
       !Number.isInteger(value.lines.start) ||
       !Number.isInteger(value.lines.end) ||
       (value.lines.start as number) < 1 ||
-      (value.lines.start as number) > (value.lines.end as number)
-    )
-      return false;
+      (value.lines.start as number) > (value.lines.end as number))
+  )
+    return false;
+  if (value.kind === "diff-hunk") {
+    if (!nonEmptyString(value.path) || value.lines === undefined) return false;
   }
   if (
     value.kind === "symbol" &&
@@ -493,20 +494,16 @@ function validateFinding(
     value.systemicReason !== undefined
   )
     return false;
-  if (
-    value.fingerprint !==
-    deriveChangeRiskFingerprint({
-      category: value.category,
-      affectedContractId: value.affectedContractId,
-      location: value.location as ChangeRiskFindingV1["location"],
-      unsafeConditionClass: value.unsafeConditionClass,
-    })
-  )
-    return false;
+  const canonicalFingerprint = deriveChangeRiskFingerprint({
+    category: value.category,
+    affectedContractId: value.affectedContractId,
+    location: value.location as ChangeRiskFindingV1["location"],
+    unsafeConditionClass: value.unsafeConditionClass,
+  });
   if (value.resolution === "open") return true;
   return (
     options.mode === "remediation" &&
-    options.priorFingerprints.includes(value.fingerprint)
+    options.priorFingerprints.includes(canonicalFingerprint)
   );
 }
 
@@ -538,6 +535,11 @@ export function validateChangeRiskResultV1(
     return { ok: false, reason: "malformed envelope" };
   const { scope } = value;
   if (
+    options.expectedSnapshotId.length > 0 &&
+    value.snapshotId !== options.expectedSnapshotId
+  )
+    return { ok: false, reason: "snapshot mismatch" };
+  if (
     typeof scope.completed !== "boolean" ||
     typeof scope.inspectedChangeManifest !== "boolean" ||
     typeof scope.inspectedRelevantConsumers !== "boolean" ||
@@ -546,6 +548,21 @@ export function validateChangeRiskResultV1(
     !value.findings.every((finding) => validateFinding(finding, options))
   )
     return { ok: false, reason: "malformed fields" };
+  const normalizedFindings = (
+    value.findings as readonly ChangeRiskFindingV1[]
+  ).map((finding) => ({
+    ...finding,
+    fingerprint: deriveChangeRiskFingerprint(finding),
+  }));
+  if (
+    new Set(normalizedFindings.map((finding) => finding.fingerprint)).size !==
+    normalizedFindings.length
+  )
+    return { ok: false, reason: "duplicate finding fingerprint" };
+  const normalizedValue = {
+    ...value,
+    findings: normalizedFindings,
+  } as unknown as ChangeRiskResultV1;
   const seenDomains = new Set<string>();
   for (const domain of scope.domains) {
     if (
@@ -569,28 +586,22 @@ export function validateChangeRiskResultV1(
     scope.inspectedChangeManifest &&
     scope.inspectedRelevantConsumers &&
     seenDomains.size === CHANGE_RISK_DOMAINS.length;
-  if (
-    completeScope &&
-    options.expectedSnapshotId.length > 0 &&
-    value.snapshotId !== options.expectedSnapshotId
-  )
-    return { ok: false, reason: "snapshot mismatch" };
   if (value.status === "CLEAN") {
     return completeScope &&
       value.findings.length === 0 &&
       value.missingInputs.length === 0
-      ? { ok: true, value: value as ChangeRiskResultV1 }
+      ? { ok: true, value: normalizedValue }
       : { ok: false, reason: "invalid clean result" };
   }
   if (value.status === "FINDINGS_FOUND") {
     return completeScope &&
       value.findings.length > 0 &&
       value.missingInputs.length === 0
-      ? { ok: true, value: value as ChangeRiskResultV1 }
+      ? { ok: true, value: normalizedValue }
       : { ok: false, reason: "invalid findings result" };
   }
   return !scope.completed && value.missingInputs.length > 0
-    ? { ok: true, value: value as ChangeRiskResultV1 }
+    ? { ok: true, value: normalizedValue }
     : { ok: false, reason: "invalid needs-context result" };
 }
 

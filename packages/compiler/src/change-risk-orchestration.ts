@@ -29,9 +29,11 @@ export type ChangeRiskOrchestrationStateV1 = Readonly<{
   confirmationSatisfied: boolean;
   highRisk: boolean;
   missingInputs: readonly string[];
+  lastLocalReviewSnapshotId?: string;
   completedRounds: readonly Readonly<{
     blockerCount: number;
     unresolvedFingerprints: readonly string[];
+    external?: true;
     clusterMembers?: readonly Readonly<{
       fingerprint: string;
       clusterKey: string;
@@ -166,13 +168,12 @@ type ValidatedChangeRiskReviewEvent =
       kind: "blockers";
       snapshotId: string;
       findings: readonly ChangeRiskBlockerFinding[];
+      external?: true;
       readonly [validatedReviewEvent]: true;
     }>;
 
 function isManifestInput(
-  value:
-    | readonly ChangeRiskManifestEntry[]
-    | Readonly<{ highRisk?: boolean }>,
+  value: readonly ChangeRiskManifestEntry[] | Readonly<{ highRisk?: boolean }>,
 ): value is readonly ChangeRiskManifestEntry[] {
   return Array.isArray(value);
 }
@@ -191,8 +192,7 @@ export function createChangeRiskOrchestrationState(
 export function createChangeRiskOrchestrationState(
   snapshotId: string,
   classification:
-    | readonly ChangeRiskManifestEntry[]
-    | Readonly<{ highRisk?: boolean }> = {},
+    readonly ChangeRiskManifestEntry[] | Readonly<{ highRisk?: boolean }> = {},
 ): ChangeRiskOrchestrationStateV1 {
   if (!isNonEmptyString(snapshotId))
     throw new TypeError("invalid change-risk snapshot ID");
@@ -310,6 +310,8 @@ export function validateChangeRiskOrchestrationStateV1(
     typeof value.confirmationSatisfied !== "boolean" ||
     typeof value.highRisk !== "boolean" ||
     !hasUniqueNonEmptyStrings(value.missingInputs) ||
+    (value.lastLocalReviewSnapshotId !== undefined &&
+      !isNonEmptyString(value.lastLocalReviewSnapshotId)) ||
     !Array.isArray(value.completedRounds) ||
     !hasCanonicalClusterKeys(value.requiredMechanicalGuardClusterKeys) ||
     !hasCanonicalClusterKeys(value.guardedClusterKeys) ||
@@ -327,7 +329,9 @@ export function validateChangeRiskOrchestrationStateV1(
       CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations ||
     value.cleanReviewInvocations > value.logicalInvocations ||
     value.fixRounds > value.completedRounds.length ||
-    value.completedRounds.length > value.logicalInvocations
+    value.completedRounds.filter(
+      (round) => isRecord(round) && round.external !== true,
+    ).length > value.logicalInvocations
   )
     return { ok: false, reason: "invalid counters" };
   if (
@@ -336,7 +340,8 @@ export function validateChangeRiskOrchestrationStateV1(
         !isRecord(round) ||
         !isNonNegativeInteger(round.blockerCount) ||
         !hasUniqueNonEmptyStrings(round.unresolvedFingerprints) ||
-        !hasCanonicalClusterKeys(round.remediatedClusterKeys)
+        !hasCanonicalClusterKeys(round.remediatedClusterKeys) ||
+        (round.external !== undefined && round.external !== true)
       )
         return true;
       if (round.clusterMembers === undefined) return false;
@@ -480,6 +485,17 @@ function transitionChangeRiskOrchestrationInternal(
       event.external === true &&
       event[validatedExternalReviewEvent] === true;
     if (state.status === "CLEAN" && !isExternal) return state;
+    if (
+      !isExternal &&
+      state.status === "ACTIVE" &&
+      !state.awaitingFinalConfirmation &&
+      state.lastLocalReviewSnapshotId === state.snapshotId
+    ) {
+      return transitionChangeRiskOrchestrationInternal(state, {
+        kind: "invalid-attempt",
+        snapshotId: state.snapshotId,
+      });
+    }
     // Empty, malformed, truncated, NEEDS_CONTEXT, and snapshot-mismatched
     // output are attempts, never a path to clean.
     const priorFingerprints =
@@ -531,6 +547,7 @@ function transitionChangeRiskOrchestrationInternal(
     const confirmationRequired =
       reviewState.confirmationRequired ||
       reviewState.highRisk ||
+      reviewState.fixRounds >= 2 ||
       result.findings.some((finding) => finding.priority === "P1");
     const confirmationState = { ...reviewState, confirmationRequired };
     if (result.status === "CLEAN") {
@@ -614,6 +631,7 @@ function transitionChangeRiskOrchestrationInternal(
           affectedContractId: finding.affectedContractId!,
           unsafeConditionClass: finding.unsafeConditionClass!,
         })),
+        external: isExternal ? true : undefined,
         [validatedReviewEvent]: true,
       },
     );
@@ -629,6 +647,7 @@ function transitionChangeRiskOrchestrationInternal(
       status: "ACTIVE",
       transientAttempts: 0,
       missingInputs: [],
+      lastLocalReviewSnapshotId: undefined,
       awaitingFinalConfirmation: false,
       confirmationSatisfied: false,
     };
@@ -754,6 +773,7 @@ function transitionChangeRiskOrchestrationInternal(
       batchedClusterKeys: [],
       transientAttempts: 0,
       missingInputs: [],
+      lastLocalReviewSnapshotId: undefined,
       awaitingFinalConfirmation: false,
       confirmationSatisfied: false,
     };
@@ -762,7 +782,8 @@ function transitionChangeRiskOrchestrationInternal(
     const logicalInvocations = state.logicalInvocations + 1;
     if (logicalInvocations > CHANGE_RISK_LIMITS.maxLogicalInvocations)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
-    const confirmationRequired = state.confirmationRequired || state.highRisk;
+    const confirmationRequired =
+      state.confirmationRequired || state.highRisk || state.fixRounds >= 2;
     const distinctConfirmation =
       confirmationRequired &&
       state.logicalInvocations > 0 &&
@@ -794,7 +815,8 @@ function transitionChangeRiskOrchestrationInternal(
   if (event.kind !== "blockers") return state;
 
   const blockerClusterKeys = deriveBlockerClusterKeys(event.findings);
-  const logicalInvocations = state.logicalInvocations + 1;
+  const logicalInvocations =
+    state.logicalInvocations + (event.external === true ? 0 : 1);
   if (logicalInvocations > CHANGE_RISK_LIMITS.maxLogicalInvocations)
     return terminal(state, "NEEDS_HUMAN_REVIEW");
   const prior = state.completedRounds;
@@ -841,6 +863,7 @@ function transitionChangeRiskOrchestrationInternal(
       ...prior,
       {
         blockerCount: event.findings.length,
+        ...(event.external === true ? { external: true as const } : {}),
         unresolvedFingerprints: unique(
           event.findings.map((finding) => finding.fingerprint),
         ),
@@ -856,6 +879,10 @@ function transitionChangeRiskOrchestrationInternal(
         remediatedClusterKeys: [],
       },
     ],
+    lastLocalReviewSnapshotId:
+      event.external === true
+        ? state.lastLocalReviewSnapshotId
+        : state.snapshotId,
     requiredMechanicalGuardClusterKeys: unique([
       ...state.requiredMechanicalGuardClusterKeys,
       ...recurredKeys,

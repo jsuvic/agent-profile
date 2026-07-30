@@ -28,6 +28,7 @@ import {
   expectedPathToOutputPath,
   getDefaultTemplates,
   isModelInvocationEntryPoint,
+  resolveModelPolicyLockfile,
   safeOutputPath,
   sha256Hex,
   validateLockfileText,
@@ -3915,7 +3916,7 @@ test("phase-33 I1 emits the policy-backed change-risk reviewer only for qualifyi
     );
     assert.match(body, /manifest/u, file.path);
     assert.match(body, /CLEAN \| FINDINGS_FOUND \| NEEDS_CONTEXT/u, file.path);
-    assert.match(body, /component-derived normalized fingerprint/u, file.path);
+    assert.match(body, /trusted owner code normalizes/u, file.path);
     assert.match(body, /never edit/u, file.path);
     assert.doesNotMatch(
       body,
@@ -3923,6 +3924,17 @@ test("phase-33 I1 emits the policy-backed change-risk reviewer only for qualifyi
       file.path,
     );
   }
+  assert.deepEqual(
+    result.templates
+      .filter((template) => template.id.includes("change-risk-reviewer"))
+      .map((template) => template.id)
+      .sort(),
+    [
+      "targets/claude-subagents/change-risk-reviewer@1",
+      "targets/codex-subagents/change-risk-reviewer@1",
+    ],
+    "emitted reviewer outputs retain their template descriptors",
+  );
   assert.equal(
     result.files.some((file) =>
       file.path.includes(".tabnine/agent/agents/change-risk-reviewer"),
@@ -4063,6 +4075,99 @@ test("phase-33 I1 resolves change-risk-reviewer through critical-reviewer for ma
     assert.match(claude, new RegExp(`model: ${entry.claudeModel}`, "u"));
     assert.match(claude, new RegExp(`effort: ${entry.claudeEffort}`, "u"));
   }
+
+  const presetProfile: AiProfile = {
+    ...base,
+    subagentPolicy: { enabled: true, preset: "role-aware" },
+  };
+  const resolved = resolveModelPolicyLockfile(presetProfile);
+  assert.ok(resolved);
+  const previousModelPolicy = {
+    ...resolved,
+    resolutions: resolved.resolutions.map((row) =>
+      row.role === "critical-reviewer" && row.client !== "tabnine"
+        ? {
+            ...row,
+            model:
+              row.client === "codex"
+                ? "locked-codex-reviewer"
+                : "locked-claude-reviewer",
+          }
+        : row,
+    ),
+  };
+  const reused = compileProfile({
+    profile: presetProfile,
+    previousModelPolicy,
+  });
+  assert.equal(reused.ok, true);
+  if (reused.ok) {
+    const byPath = new Map(
+      reused.files.map((file) => [
+        file.path,
+        Buffer.from(file.bytes).toString("utf8"),
+      ]),
+    );
+    assert.match(
+      byPath.get(".codex/agents/change-risk-reviewer.toml") ?? "",
+      /model = "locked-codex-reviewer"/u,
+    );
+    assert.match(
+      byPath.get(".claude/agents/change-risk-reviewer.md") ?? "",
+      /model: locked-claude-reviewer/u,
+    );
+  }
+});
+
+test("phase-33 Claude reviewer has read-only diff access and YAML-safe exact model output", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: false },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
+    subagentPolicy: {
+      enabled: true,
+      preset: "role-aware",
+      roles: {
+        "critical-reviewer": {
+          capability: "strongest",
+          effort: "high",
+          overrides: {
+            claude: { model: "private-model #canary", effort: "medium" },
+          },
+        },
+      },
+    },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result.issues));
+  if (!result.ok) return;
+  const reviewer = result.files.find(
+    (file) => file.path === ".claude/agents/change-risk-reviewer.md",
+  );
+  assert.ok(reviewer);
+  const body = Buffer.from(reviewer.bytes).toString("utf8");
+  assert.match(body, /tools: Read, Glob, Grep, Bash/u);
+  assert.match(body, /model: "private-model #canary"/u);
+  assert.match(body, /read-only `git diff`/u);
 });
 
 test("phase-33 I1 Codex and Claude reviewer artifacts instruct a validator-compatible envelope", () => {

@@ -780,9 +780,9 @@ function renderTarget(
       ];
     }
     case "codex-subagents":
-      return renderCodexSubagentFiles(profile);
+      return renderCodexSubagentFiles(profile, previousModelPolicy);
     case "claude-subagents":
-      return renderClaudeSubagentFiles(profile);
+      return renderClaudeSubagentFiles(profile, previousModelPolicy);
     case "tabnine-subagents":
       return renderTabnineSubagentFiles(profile);
     case "codex-workflow-skills":
@@ -2037,11 +2037,17 @@ model_reasoning_effort = "${escapeTomlString(primaryRow.codex.targetEffort)}"
 `;
 }
 
-function renderClaudeSubagentFiles(profile: AiProfile): GeneratedFile[] {
+function renderClaudeSubagentFiles(
+  profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
+): GeneratedFile[] {
   const agents = getSubagentsForRiskReviewerTarget(profile);
   const effective = deriveEffectivePermissions(profile);
   const loggingOn = profile.workflow.loggingGuidance === true;
-  const reviewerModel = resolveChangeRiskReviewerModel(profile);
+  const reviewerModel = resolveChangeRiskReviewerModel(
+    profile,
+    previousModelPolicy,
+  );
 
   return agents.map((agent) =>
     createGeneratedTextFile(
@@ -2059,11 +2065,17 @@ function renderClaudeSubagentFiles(profile: AiProfile): GeneratedFile[] {
   );
 }
 
-function renderCodexSubagentFiles(profile: AiProfile): GeneratedFile[] {
+function renderCodexSubagentFiles(
+  profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
+): GeneratedFile[] {
   const agents = getSubagentsForRiskReviewerTarget(profile);
   const effective = deriveEffectivePermissions(profile);
   const loggingOn = profile.workflow.loggingGuidance === true;
-  const reviewerModel = resolveChangeRiskReviewerModel(profile);
+  const reviewerModel = resolveChangeRiskReviewerModel(
+    profile,
+    previousModelPolicy,
+  );
 
   return agents.map((agent) =>
     createGeneratedTextFile(
@@ -2089,15 +2101,18 @@ type ChangeRiskReviewerTargetModel = Readonly<{
 /** Resolve the generated reviewer through the existing critical-reviewer role. */
 function resolveChangeRiskReviewerModel(
   profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
 ): ChangeRiskReviewerTargetModel | undefined {
   const policy = profile.subagentPolicy;
   if (policy?.enabled !== true) return undefined;
 
   if (policy.preset !== undefined) {
     const roleOverrides = deriveModelPolicyRoleOverrides(policy.roles);
-    const row = buildModelPolicyTargetTable(policy.preset, roleOverrides).find(
-      (candidate) => candidate.role === "critical-reviewer",
-    );
+    const row = buildModelPolicyTargetTable(
+      policy.preset,
+      roleOverrides,
+      previousModelPolicy,
+    ).find((candidate) => candidate.role === "critical-reviewer");
     if (row?.codex.model === undefined || row.claude.model === undefined) {
       return undefined;
     }
@@ -2156,7 +2171,7 @@ function createChangeRiskReviewer(): AiProfileSubagent {
       "Independently review the complete accumulated change and reachable consumers for product-risk gaps.",
     purpose:
       "Perform the independent change-risk review using the critical-reviewer model-policy role.",
-    prompt: `# Change-Risk Review\n\nPolicy version: \`${policy.policyVersion}\`. Your provider-neutral model-policy role is \`critical-reviewer\`; use its target-native model and effort resolution.\n\n## Objective\n\n${policy.objective.statement}\n\n${bullets(policy.objective.authorityBoundary)}\n\n## Snapshot Access by Mode\n\nWhen the supplied mode is initial or final, do not use a prior finding list, implementer report, or prior praise. When the supplied mode is remediation, use only the supplied prior fingerprints as closure candidates and still inspect the complete updated snapshot independently. ${policy.snapshotAccess.completeness}\n\nInitial context is manifest-first, not an eager full-diff injection:\n\n${bullets(policy.snapshotAccess.initialContext)}\n\n${bullets(policy.snapshotAccess.inspectionRights)}\n\n## Closed Risk Domains\n\n${domains}\n\nDetailed rubrics are selectively loaded reference material; do not infer orchestration state, fix rounds, promotion rules, or learning-record requirements.\n\n## Result Contract\n\nReturn exactly one typed \`ChangeRiskResultV1\` envelope and no approval prose.\n\n- \`policyVersion\` is \`${result.policyVersion}\`; bind the envelope to the supplied \`snapshotId\`.\n- \`status\` is exactly \`${result.statuses.join(" | ")}\`.\n- \`scope\` records \`completed\`, manifest coverage, relevant-consumer inspection, and every closed domain with \`applicable\` or \`not-applicable\`; every not-applicable domain has a concise reason.\n- \`findings\` use priorities \`${result.priorities.join(" | ")}\`, categories \`${result.categories.join(" | ")}\`, affectedContractId \`${result.affectedContractIds.join(" | ")}\`, unsafeConditionClass \`${result.unsafeConditionClasses.join(" | ")}\`, resolutions \`${result.resolutions.join(" | ")}\`, P3 dispositions \`${result.p3Dispositions.join(" | ")}\`, and evidence kinds \`${result.evidenceKinds.join(" | ")}\`.\n- Each finding contains ${result.requiredFindingFields.join(", ")}, concrete evidence, affected contract, safe path, and a component-derived normalized fingerprint from ${result.fingerprintComponents.join(", ")}.\n- Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution \`open\`. Remediation receives only supplied prior fingerprints; it may verify \`fixed\`, \`false-positive\`, or \`obsolete\` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.\n- \`missingInputs\` is empty except for \`NEEDS_CONTEXT\`.\n- ${result.invalidAttemptRules.join(" ")}\n\n## Safety\n\n${bullets(policy.safetyConstraints)}`,
+    prompt: `# Change-Risk Review\n\nPolicy version: \`${policy.policyVersion}\`. Your provider-neutral model-policy role is \`critical-reviewer\`; use its target-native model and effort resolution.\n\n## Objective\n\n${policy.objective.statement}\n\n${bullets(policy.objective.authorityBoundary)}\n\n## Snapshot Access by Mode\n\nWhen the supplied mode is initial or final, do not use a prior finding list, implementer report, or prior praise. When the supplied mode is remediation, use only the supplied prior fingerprints as closure candidates and still inspect the complete updated snapshot independently. ${policy.snapshotAccess.completeness}\n\nInitial context is manifest-first, not an eager full-diff injection:\n\n${bullets(policy.snapshotAccess.initialContext)}\n\n${bullets(policy.snapshotAccess.inspectionRights)}\n\nWhen Bash is available, use it only for read-only \`git diff\` and related Git inspection needed to recover the complete snapshot, including deleted or base-side content. Never use Bash to mutate files or repository state.\n\n## Closed Risk Domains\n\n${domains}\n\nDetailed rubrics are selectively loaded reference material; do not infer orchestration state, fix rounds, promotion rules, or learning-record requirements.\n\n## Result Contract\n\nReturn exactly one typed \`ChangeRiskResultV1\` envelope and no approval prose.\n\n- \`policyVersion\` is \`${result.policyVersion}\`; bind the envelope to the supplied \`snapshotId\`.\n- \`status\` is exactly \`${result.statuses.join(" | ")}\`.\n- \`scope\` records \`completed\`, manifest coverage, relevant-consumer inspection, and every closed domain with \`applicable\` or \`not-applicable\`; every not-applicable domain has a concise reason.\n- \`findings\` use priorities \`${result.priorities.join(" | ")}\`, categories \`${result.categories.join(" | ")}\`, affectedContractId \`${result.affectedContractIds.join(" | ")}\`, unsafeConditionClass \`${result.unsafeConditionClasses.join(" | ")}\`, resolutions \`${result.resolutions.join(" | ")}\`, P3 dispositions \`${result.p3Dispositions.join(" | ")}\`, and evidence kinds \`${result.evidenceKinds.join(" | ")}\`.\n- Each finding contains ${result.requiredFindingFields.join(", ")}, concrete evidence, affected contract, safe path, and a stable fingerprint derived from ${result.fingerprintComponents.join(", ")}; trusted owner code normalizes the canonical serialized fingerprint from those components.\n- Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution \`open\`. Remediation receives only supplied prior fingerprints; it may verify \`fixed\`, \`false-positive\`, or \`obsolete\` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.\n- \`missingInputs\` is empty except for \`NEEDS_CONTEXT\`.\n- ${result.invalidAttemptRules.join(" ")}\n\n## Safety\n\n${bullets(policy.safetyConstraints)}`,
     toolScope: "read-only",
     modelPreference: "capable",
     maxTurns: 10,
@@ -2237,7 +2252,14 @@ function renderClaudeSubagent(
   lines.push(`description: ${yamlScalarSafe(agent.description)}`);
 
   if (agent.toolScope === "read-only") {
-    lines.push("tools: Read, Glob, Grep");
+    const tools = ["Read", "Glob", "Grep"];
+    if (
+      agent.name === "change-risk-reviewer" &&
+      effective.shell.run !== "deny"
+    ) {
+      tools.push("Bash");
+    }
+    lines.push(`tools: ${tools.join(", ")}`);
   } else {
     // Workspace-write subagents need the tools required to do their work.
     // The Phase 13 contract aligns the tool allowlist with the Codex
@@ -2258,7 +2280,7 @@ function renderClaudeSubagent(
     lines.push(`tools: ${tools.join(", ")}`);
   }
 
-  lines.push(`model: ${targetModel?.model ?? "inherit"}`);
+  lines.push(`model: ${yamlScalarSafe(targetModel?.model ?? "inherit")}`);
   if (targetModel !== undefined) {
     lines.push(`effort: ${targetModel.effort}`);
   }
@@ -2784,11 +2806,11 @@ function getRequiredTemplateIds(
         "claude-workflow-skills",
       );
     case "claude-subagents":
-      return getEnabledSubagents(profile).map(
+      return getSubagentsForRiskReviewerTarget(profile).map(
         (agent) => `targets/claude-subagents/${agent.name}@1`,
       );
     case "codex-subagents":
-      return getEnabledSubagents(profile).map(
+      return getSubagentsForRiskReviewerTarget(profile).map(
         (agent) => `targets/codex-subagents/${agent.name}@1`,
       );
     case "tabnine-subagents":

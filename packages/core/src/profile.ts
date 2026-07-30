@@ -1020,7 +1020,11 @@ function validateSubagentSemantics(
         ),
       )
     : new Set<string>();
-  const generatedNames = new Set(["change-risk-reviewer"]);
+  const generatedNames =
+    profile.workflow.subagentDrivenDevelopment === true &&
+    (profile.clients.codex.enabled || profile.clients.claude.enabled)
+      ? new Set(["change-risk-reviewer"])
+      : new Set<string>();
 
   entries.forEach((entry, index) => {
     const expanded = expandSubagentEntry(entry);

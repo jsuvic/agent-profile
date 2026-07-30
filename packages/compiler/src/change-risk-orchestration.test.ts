@@ -242,6 +242,7 @@ test("change-risk/v2 orchestration transition table is bounded and snapshot-boun
   const recurrence = transitionChangeRiskOrchestration(
     {
       ...initial,
+      fixRounds: 1,
       logicalInvocations: 1,
       completedRounds: [
         {
@@ -343,6 +344,7 @@ test("external blockers, recurrence guards, and other keys obey bounded escalati
   const repeatedGuard = transitionChangeRiskOrchestration(
     {
       ...createChangeRiskOrchestrationState("snapshot-d"),
+      fixRounds: 1,
       logicalInvocations: 1,
       guardedClusterKeys: ["state-transition+missing-validation"],
       completedRounds: [
@@ -381,6 +383,7 @@ test("a serialized handoff carries remediated cluster keys across resume", () =>
   const resumed = JSON.parse(
     JSON.stringify({
       ...createChangeRiskOrchestrationState("snapshot-b"),
+      fixRounds: 1,
       logicalInvocations: 1,
       completedRounds: [
         {
@@ -462,6 +465,7 @@ test("within-change recurrence requires its guard or a recorded impracticality",
   const recurrence = transitionChangeRiskOrchestration(
     {
       ...createChangeRiskOrchestrationState(snapshotId),
+      fixRounds: 1,
       logicalInvocations: 1,
       completedRounds: [
         {
@@ -604,7 +608,11 @@ test("orchestration derives cluster identity from validated finding components",
       },
     },
   );
-  assert.equal(malformed.transientAttempts, 1);
+  assert.equal(
+    malformed.completedRounds.length,
+    1,
+    "trusted validation normalizes the reviewer-provided fingerprint",
+  );
   assert.equal(
     transitionChangeRiskOrchestration(state, {
       kind: "fix-applied",
@@ -913,6 +921,34 @@ test("confirmation must be a distinct bounded invocation", () => {
   assert.equal(exhausted.status, "NEEDS_HUMAN_REVIEW");
 });
 
+test("a clean remediation result after the second fix round requires confirmation", () => {
+  const snapshotId = "snapshot-second-fix";
+  const state = {
+    ...createChangeRiskOrchestrationState(snapshotId),
+    fixRounds: 2,
+    logicalInvocations: 2,
+    completedRounds: [
+      {
+        blockerCount: 1,
+        unresolvedFingerprints: ["first"],
+        remediatedClusterKeys: [],
+      },
+      {
+        blockerCount: 1,
+        unresolvedFingerprints: ["second"],
+        remediatedClusterKeys: [],
+      },
+    ],
+  };
+  const clean = transitionChangeRiskOrchestrationProduction(state, {
+    kind: "review-result",
+    result: reviewResult(snapshotId, "CLEAN"),
+  });
+  assert.equal(clean.status, "ACTIVE");
+  assert.equal(clean.confirmationRequired, true);
+  assert.equal(clean.awaitingFinalConfirmation, true);
+});
+
 test("clean handoffs reopen only for validated external blockers", () => {
   const snapshotId = "snapshot-external-reopen";
   const clean = transitionChangeRiskOrchestration(
@@ -944,6 +980,70 @@ test("clean handoffs reopen only for validated external blockers", () => {
     ]),
   } as never);
   assert.equal(spoofed.status, "CLEAN");
+});
+
+test("validated external blockers do not consume local reviewer invocations", () => {
+  const snapshotId = "snapshot-external-budget";
+  const clean = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "clean", snapshotId },
+  );
+  const external = transitionChangeRiskOrchestrationProduction(
+    clean,
+    createValidatedExternalChangeRiskReviewEvent(
+      reviewResult(snapshotId, "FINDINGS_FOUND", [
+        runtimeProofFinding("external"),
+      ]),
+      ["GitHub review thread"],
+    ),
+  );
+  assert.equal(external.status, "ACTIVE");
+  assert.equal(external.logicalInvocations, clean.logicalInvocations);
+  assert.equal(
+    external.completedRounds.at(-1)?.external,
+    true,
+    "external provenance is retained without fabricating a local invocation",
+  );
+  assert.equal(validateChangeRiskOrchestrationStateV1(external).ok, true);
+});
+
+test("a completed local blocker review cannot repeat before a changed snapshot", () => {
+  const snapshotId = "snapshot-one-local-review";
+  const first = transitionChangeRiskOrchestrationProduction(
+    createChangeRiskOrchestrationState(snapshotId),
+    {
+      kind: "review-result",
+      result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+        runtimeProofFinding("first"),
+      ]),
+    },
+  );
+  const repeated = transitionChangeRiskOrchestrationProduction(first, {
+    kind: "review-result",
+    result: reviewResult(snapshotId, "FINDINGS_FOUND", [
+      runtimeProofFinding("different"),
+    ]),
+  });
+  assert.equal(repeated.completedRounds.length, 1);
+  assert.equal(repeated.logicalInvocations, 1);
+  assert.equal(repeated.transientAttempts, 1);
+
+  const changed = transitionChangeRiskOrchestrationProduction(first, {
+    kind: "code-changed",
+    snapshotId: `${snapshotId}-changed`,
+    manifest: [],
+  });
+  const reviewedChangedSnapshot = transitionChangeRiskOrchestrationProduction(
+    changed,
+    {
+      kind: "review-result",
+      result: reviewResult(`${snapshotId}-changed`, "FINDINGS_FOUND", [
+        runtimeProofFinding("changed"),
+      ]),
+    },
+  );
+  assert.equal(reviewedChangedSnapshot.completedRounds.length, 2);
+  assert.equal(reviewedChangedSnapshot.logicalInvocations, 2);
 });
 
 test("updated manifests recompute high-risk state before remediation confirmation", () => {

@@ -697,13 +697,45 @@ describe("subagents schema", () => {
   });
 
   it("reserves the generated change-risk reviewer name", () => {
-    const result = validateProfileValue(
-      profileWithSubagents({
-        enabled: true,
-        agents: [{ ...validSubagent(), name: "change-risk-reviewer" }],
-      }),
-    );
+    const profile = profileWithSubagents({
+      enabled: true,
+      agents: [{ ...validSubagent(), name: "change-risk-reviewer" }],
+    });
+    (profile["workflow"] as Record<string, unknown>)[
+      "subagentDrivenDevelopment"
+    ] = true;
+    const result = validateProfileValue(profile);
     assert.equal(result.ok, false);
+  });
+
+  it("allows the change-risk reviewer name when generation does not qualify", () => {
+    const workflowOff = profileWithSubagents({
+      enabled: true,
+      agents: [{ ...validSubagent(), name: "change-risk-reviewer" }],
+    });
+    (workflowOff["workflow"] as Record<string, unknown>)[
+      "subagentDrivenDevelopment"
+    ] = false;
+    const workflowOffResult = validateProfileValue(workflowOff);
+    assert.equal(
+      workflowOffResult.ok,
+      true,
+      workflowOffResult.ok ? "" : JSON.stringify(workflowOffResult.issues),
+    );
+
+    const tabnineOnly = profileWithSubagents({
+      enabled: true,
+      agents: [{ ...validSubagent(), name: "change-risk-reviewer" }],
+    });
+    (tabnineOnly["workflow"] as Record<string, unknown>)[
+      "subagentDrivenDevelopment"
+    ] = true;
+    tabnineOnly["clients"] = {
+      tabnine: { enabled: true },
+      codex: { enabled: false },
+      claude: { enabled: false },
+    };
+    assert.equal(validateProfileValue(tabnineOnly).ok, true);
   });
 
   it("rejects enabled: true with empty agents", () => {
