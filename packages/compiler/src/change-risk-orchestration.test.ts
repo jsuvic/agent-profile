@@ -11,6 +11,7 @@ import {
   transitionChangeRiskOrchestration as transitionChangeRiskOrchestrationProduction,
   validateChangeRiskOrchestrationStateV1,
   type ChangeRiskBlockerFinding,
+  type ChangeRiskOrchestrationStateV1,
   type ChangeRiskReviewFinding,
 } from "./change-risk-orchestration.js";
 
@@ -29,14 +30,25 @@ function createChangeRiskOrchestrationState(
  * round left open. Keeping that derivation in one helper stops the fixtures
  * from asserting a state the transition function can never produce.
  */
-function withCheckpoint<
-  State extends {
-    readonly completedRounds: readonly Readonly<{
-      unresolvedFingerprints: readonly string[];
-      external?: true;
-    }>[];
-  },
->(state: State, fromRound?: number): State {
+type FixtureRound = Readonly<{
+  blockerCount: number;
+  p1BlockerCount?: number;
+  unresolvedFingerprints: readonly string[];
+  external?: true;
+  clusterMembers?: readonly Readonly<{
+    fingerprint: string;
+    clusterKey: string;
+  }>[];
+  remediatedClusterKeys: readonly string[];
+}>;
+
+type FixtureState = Omit<ChangeRiskOrchestrationStateV1, "completedRounds"> &
+  Readonly<{ completedRounds: readonly FixtureRound[] }>;
+
+function withCheckpoint(
+  state: FixtureState,
+  fromRound?: number,
+): ChangeRiskOrchestrationStateV1 {
   const from =
     fromRound ??
     state.completedRounds.reduce(
