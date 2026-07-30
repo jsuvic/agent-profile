@@ -4300,6 +4300,16 @@ test("phase-33 I1 Codex and Claude reviewer artifacts instruct a validator-compa
     assert.match(body, /fixed \| accepted-debt \| follow-up/u, file.path);
     assert.match(
       body,
+      /accepted-debt.*follow-up.*resolution `open`/u,
+      file.path,
+    );
+    assert.match(
+      body,
+      /fixed.*false-positive.*obsolete.*matching resolution/u,
+      file.path,
+    );
+    assert.match(
+      body,
       /category, affected contract, normalized location, unsafe-condition class/u,
       file.path,
     );

@@ -1039,6 +1039,7 @@ export type ChangeRiskReviewerProjection = Readonly<{
     unsafeConditionClasses: readonly ChangeRiskUnsafeConditionClass[];
     resolutions: readonly ChangeRiskResolution[];
     p3Dispositions: readonly ChangeRiskDisposition[];
+    p3ResolutionRules: readonly string[];
     evidenceKinds: readonly ChangeRiskEvidenceKind[];
     evidenceLocatorRules: readonly string[];
     requiredFindingFields: readonly string[];
@@ -1236,6 +1237,10 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
     unsafeConditionClasses: CHANGE_RISK_UNSAFE_CONDITION_CLASSES,
     resolutions: CHANGE_RISK_RESOLUTIONS,
     p3Dispositions: CHANGE_RISK_DISPOSITIONS,
+    p3ResolutionRules: [
+      "`accepted-debt` and `follow-up` dispositions require resolution `open`.",
+      "`fixed`, `false-positive`, and `obsolete` dispositions require the matching resolution.",
+    ],
     evidenceKinds: CHANGE_RISK_EVIDENCE_KINDS,
     evidenceLocatorRules: [
       "`file` requires `path`.",

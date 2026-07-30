@@ -838,6 +838,10 @@ test("the reviewer projection carries the rubric handles and the result interfac
     [...reviewer.resultInterface.p3Dispositions],
     [...CHANGE_RISK_DISPOSITIONS],
   );
+  assert.deepEqual(reviewer.resultInterface.p3ResolutionRules, [
+    "`accepted-debt` and `follow-up` dispositions require resolution `open`.",
+    "`fixed`, `false-positive`, and `obsolete` dispositions require the matching resolution.",
+  ]);
   assert.deepEqual(
     [...reviewer.resultInterface.evidenceKinds],
     [...CHANGE_RISK_EVIDENCE_KINDS],
