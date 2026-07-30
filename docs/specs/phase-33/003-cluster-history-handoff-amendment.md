@@ -76,6 +76,20 @@ trustable only as far as the caller's own claims.
 - An out-of-band `code-changed` event moves the snapshot but closes nothing,
   so it carries the unresolved checkpoint into the next review rather than
   resetting it.
+- Closure coverage is owed by any local review taken while the checkpoint is
+  non-empty, not only by reviews that follow a fix round. Whether the snapshot
+  moved through remediation or out of band, a review cannot close a change
+  while a recorded blocker is unaccounted for.
+- Each fix round answers exactly one completed blocker review. A second
+  `fix-applied` with no review between them escalates to `NEEDS_HUMAN_REVIEW`
+  rather than returning a handoff the validator rejects.
+- A required mechanical guard is discharged only by a snapshot-changing
+  `guard-added` carrying the resulting manifest and non-empty evidence, and
+  the record keeps that evidence. Asserting a guard over unchanged bytes
+  escalates: the guard must exist in the bytes the next review sees.
+- Same-fingerprint non-progress is evaluated against the live checkpoint, not
+  all recorded rounds. A fingerprint an earlier round verifiably closed may
+  reappear on later bytes without stopping the loop.
 
 ### Repeated recurrence after a guard (amends the retry and escalation contract)
 

@@ -661,12 +661,134 @@ test("within-change recurrence requires its guard or a recorded impracticality",
   });
   assert.equal(impractical.status, "NEEDS_HUMAN_REVIEW");
   assert.deepEqual(impractical.impracticalMechanicalGuardClusterKeys, [key]);
+  assert.equal(
+    transitionChangeRiskOrchestration(recurrence, {
+      kind: "guard-added",
+      snapshotId,
+      clusterKey: key,
+      manifest: [],
+      evidence: ["packages/compiler/src/change-risk-guard.test.ts"],
+    }).status,
+    "NEEDS_HUMAN_REVIEW",
+    "a guard asserted over unchanged bytes proves nothing",
+  );
+  assert.equal(
+    transitionChangeRiskOrchestration(recurrence, {
+      kind: "guard-added",
+      snapshotId: `${snapshotId}-guard`,
+      clusterKey: key,
+      manifest: [],
+    }).status,
+    "NEEDS_HUMAN_REVIEW",
+    "a guard without evidence is an assertion, not a guard",
+  );
   const guarded = transitionChangeRiskOrchestration(recurrence, {
     kind: "guard-added",
-    snapshotId,
+    snapshotId: `${snapshotId}-guard`,
     clusterKey: key,
+    manifest: [],
+    evidence: ["packages/compiler/src/change-risk-guard.test.ts"],
   });
   assert.deepEqual(guarded.requiredMechanicalGuardClusterKeys, []);
+  assert.equal(guarded.snapshotId, `${snapshotId}-guard`);
+  assert.deepEqual(guarded.mechanicalGuards, [
+    {
+      clusterKey: key,
+      snapshotId: `${snapshotId}-guard`,
+      evidence: ["packages/compiler/src/change-risk-guard.test.ts"],
+    },
+  ]);
+  assert.equal(validateChangeRiskOrchestrationStateV1(guarded).ok, true);
+});
+
+test("a review taken while blockers stay open owes closure coverage", () => {
+  const snapshotId = "snapshot-marker-strip";
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: runtimeProofBlockers("open") },
+  );
+  // Both review-snapshot markers are optional, so a forged handoff can drop
+  // them and slip past the code-changed blocker guard.
+  const stripped = {
+    ...reviewed,
+    lastBlockerReviewSnapshotId: undefined,
+    lastLocalReviewSnapshotId: undefined,
+  };
+  assert.equal(validateChangeRiskOrchestrationStateV1(stripped).ok, true);
+  const drifted = transitionChangeRiskOrchestration(stripped, {
+    kind: "code-changed",
+    snapshotId: `${snapshotId}-drifted`,
+  });
+  assert.equal(drifted.fixRounds, 0);
+  const attempted = transitionChangeRiskOrchestrationProduction(drifted, {
+    kind: "review-result",
+    result: reviewResult(`${snapshotId}-drifted`, "CLEAN"),
+  });
+  assert.notEqual(
+    attempted.status,
+    "CLEAN",
+    "no review closes a change while a recorded blocker is unaccounted for",
+  );
+  assert.equal(attempted.transientAttempts, 1);
+});
+
+test("consecutive fixes without an intervening review escalate", () => {
+  const snapshotId = "snapshot-double-fix";
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: runtimeProofBlockers("open") },
+  );
+  const first = transitionChangeRiskOrchestration(reviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-1`,
+    remediatedFindings: [],
+  });
+  assert.equal(first.status, "ACTIVE");
+  const second = transitionChangeRiskOrchestration(first, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-2`,
+    remediatedFindings: [],
+  });
+  assert.equal(second.status, "NEEDS_HUMAN_REVIEW");
+  assert.equal(
+    validateChangeRiskOrchestrationStateV1(second).ok,
+    true,
+    "an out-of-order fix escalates instead of handing back unusable state",
+  );
+});
+
+test("a fingerprint an earlier round closed may reappear without stopping", () => {
+  const snapshotId = "snapshot-reappearing";
+  const reviewed = transitionChangeRiskOrchestration(
+    createChangeRiskOrchestrationState(snapshotId),
+    { kind: "blockers", snapshotId, findings: runtimeProofBlockers("recur") },
+  );
+  const fixed = transitionChangeRiskOrchestration(reviewed, {
+    kind: "fix-applied",
+    snapshotId: `${snapshotId}-fixed`,
+    remediatedFindings: [],
+  });
+  const closed = transitionChangeRiskOrchestrationProduction(fixed, {
+    kind: "review-result",
+    result: reviewResult(`${snapshotId}-fixed`, "FINDINGS_FOUND", [
+      { ...runtimeProofFinding("recur"), resolution: "fixed" },
+    ]),
+  });
+  assert.equal(closed.status, "CLEAN");
+  const later = transitionChangeRiskOrchestration(closed, {
+    kind: "code-changed",
+    snapshotId: `${snapshotId}-later`,
+  });
+  const reintroduced = transitionChangeRiskOrchestration(later, {
+    kind: "blockers",
+    snapshotId: `${snapshotId}-later`,
+    findings: runtimeProofBlockers("recur"),
+  });
+  assert.equal(
+    reintroduced.status,
+    "ACTIVE",
+    "a verified-closed finding reappearing on new bytes is not stagnation",
+  );
 });
 
 test("serialized handoffs reject malformed, stale, reset, and contradictory state before resume", () => {

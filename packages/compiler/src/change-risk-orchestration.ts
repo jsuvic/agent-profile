@@ -57,6 +57,12 @@ export type ChangeRiskOrchestrationStateV1 = Readonly<{
     rationale: string;
     evidence: readonly string[];
   }>[];
+  /** The evidence each introduced guard was accepted on, kept auditable. */
+  mechanicalGuards: readonly Readonly<{
+    clusterKey: string;
+    snapshotId: string;
+    evidence: readonly string[];
+  }>[];
   batchedClusterKeys: readonly string[];
 }>;
 
@@ -67,7 +73,14 @@ export type ChangeRiskOrchestrationEvent =
       snapshotId: string;
       manifest?: readonly ChangeRiskManifestEntry[];
     }>
-  | Readonly<{ kind: "guard-added"; snapshotId: string; clusterKey: string }>
+  | Readonly<{
+      kind: "guard-added";
+      /** The snapshot that contains the guard; asserting one changes nothing. */
+      snapshotId: string;
+      clusterKey: string;
+      manifest?: readonly ChangeRiskManifestEntry[];
+      evidence?: readonly string[];
+    }>
   | Readonly<{
       kind: "guard-impractical";
       snapshotId: string;
@@ -230,6 +243,7 @@ export function createChangeRiskOrchestrationState(
     guardedClusterKeys: [],
     impracticalMechanicalGuardClusterKeys: [],
     impracticalMechanicalGuards: [],
+    mechanicalGuards: [],
     batchedClusterKeys: [],
   };
 }
@@ -332,7 +346,8 @@ export function validateChangeRiskOrchestrationStateV1(
     !hasCanonicalClusterKeys(value.guardedClusterKeys) ||
     !hasCanonicalClusterKeys(value.impracticalMechanicalGuardClusterKeys) ||
     !hasCanonicalClusterKeys(value.batchedClusterKeys) ||
-    !Array.isArray(value.impracticalMechanicalGuards)
+    !Array.isArray(value.impracticalMechanicalGuards) ||
+    !Array.isArray(value.mechanicalGuards)
   )
     return { ok: false, reason: "malformed state" };
   if (
@@ -430,6 +445,15 @@ export function validateChangeRiskOrchestrationStateV1(
         !candidate.impracticalMechanicalGuardClusterKeys.includes(
           guard.clusterKey as string,
         ),
+    ) ||
+    candidate.mechanicalGuards.some(
+      (guard) =>
+        !isRecord(guard) ||
+        !CANONICAL_CLUSTER_KEYS.has(guard.clusterKey as string) ||
+        !isNonEmptyString(guard.snapshotId) ||
+        !hasUniqueNonEmptyStrings(guard.evidence) ||
+        guard.evidence.length === 0 ||
+        !candidate.guardedClusterKeys.includes(guard.clusterKey as string),
     )
   )
     return { ok: false, reason: "contradictory guard history" };
@@ -555,13 +579,15 @@ function transitionChangeRiskOrchestrationInternal(
     // output are attempts, never a path to clean.
     // A branded external review is validated independently: it never spends a
     // confirmation slot and never owes closure coverage for local blockers.
+    // Any other review taken while blockers are still open owes that coverage,
+    // whether the snapshot moved through a fix round or out of band.
     const validationMode = isExternal
       ? "initial"
       : state.awaitingFinalConfirmation
         ? "final"
         : !state.initialLocalReviewCompleted
           ? "initial"
-          : state.fixRounds > 0
+          : state.activeUnresolvedFingerprints.length > 0
             ? "remediation"
             : "initial";
     const priorFingerprints =
@@ -742,7 +768,11 @@ function transitionChangeRiskOrchestrationInternal(
       confirmationSatisfied: false,
     };
   }
-  if (event.kind !== "fix-applied" && event.snapshotId !== state.snapshotId) {
+  if (
+    event.kind !== "fix-applied" &&
+    event.kind !== "guard-added" &&
+    event.snapshotId !== state.snapshotId
+  ) {
     return terminal(state, "NEEDS_HUMAN_REVIEW");
   }
   if (event.kind === "invalid-attempt" || event.kind === "needs-context") {
@@ -757,8 +787,23 @@ function transitionChangeRiskOrchestrationInternal(
   if (event.kind === "guard-added") {
     if (!state.requiredMechanicalGuardClusterKeys.includes(event.clusterKey))
       throw new TypeError("invalid change-risk mechanical guard");
+    // A guard is only real once it exists in reviewed bytes, so it arrives as
+    // a snapshot-changing event carrying its manifest and evidence. An
+    // assertion over unchanged bytes proves nothing and never discharges the
+    // requirement.
+    if (
+      !isNonEmptyString(event.snapshotId) ||
+      event.snapshotId === state.snapshotId ||
+      event.manifest === undefined ||
+      event.evidence === undefined ||
+      event.evidence.length === 0 ||
+      event.evidence.some((item) => !isNonEmptyString(item))
+    )
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
     return {
       ...state,
+      snapshotId: event.snapshotId,
+      highRisk: isHighRiskChange(event.manifest),
       requiredMechanicalGuardClusterKeys:
         state.requiredMechanicalGuardClusterKeys.filter(
           (key) => key !== event.clusterKey,
@@ -767,6 +812,20 @@ function transitionChangeRiskOrchestrationInternal(
         ...state.guardedClusterKeys,
         event.clusterKey,
       ]),
+      mechanicalGuards: [
+        ...state.mechanicalGuards,
+        {
+          clusterKey: event.clusterKey,
+          snapshotId: event.snapshotId,
+          evidence: unique(event.evidence),
+        },
+      ],
+      transientAttempts: 0,
+      missingInputs: [],
+      lastBlockerReviewSnapshotId: undefined,
+      lastLocalReviewSnapshotId: undefined,
+      awaitingFinalConfirmation: false,
+      confirmationSatisfied: false,
     };
   }
   if (event.kind === "guard-impractical") {
@@ -802,6 +861,11 @@ function transitionChangeRiskOrchestrationInternal(
     if (event.manifest === undefined)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (state.completedRounds.length === 0)
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    // Each fix round answers one completed blocker review. Two fixes in a row
+    // would push `fixRounds` past the recorded history and hand back a state
+    // this module's own validator rejects.
+    if (state.fixRounds >= state.completedRounds.length)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (state.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
@@ -948,10 +1012,12 @@ function transitionChangeRiskOrchestrationInternal(
     return terminal(state, "NEEDS_HUMAN_REVIEW");
   const prior = state.completedRounds;
   const priorLocalRounds = prior.filter((round) => round.external !== true);
-  const sameFingerprint = prior.some((round) =>
-    event.findings.some((finding) =>
-      round.unresolvedFingerprints.includes(finding.fingerprint),
-    ),
+  // No progress means a blocker that is STILL open, so this compares against
+  // the live checkpoint. A fingerprint an earlier round closed - verified by
+  // remediation coverage, or cleared by a terminal clean review - may legally
+  // reappear on later bytes without stopping the loop.
+  const sameFingerprint = event.findings.some((finding) =>
+    state.activeUnresolvedFingerprints.includes(finding.fingerprint),
   );
   const recurredKeys = unique(
     blockerClusterKeys.filter((key) =>

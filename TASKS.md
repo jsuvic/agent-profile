@@ -2206,6 +2206,30 @@ root `npm run check` clean. The `scripts/release` Phase 31 journey test fails
 identically on a clean tree here (local `tar` cannot read the fixture path
 containing spaces), so it is environmental, not a regression.
 
+PR #140 automated review, second round on the fixes above (2026-07-30): four
+more findings, all real, all in the same theme - the transition function
+trusted assertions it could not verify. The P1s: closure coverage was gated on
+`fixRounds > 0`, so a handoff with its two optional review-snapshot markers
+deleted could take `code-changed` past the blocker guard and then close with a
+bare `CLEAN` while a recorded blocker went unaccounted for (coverage is now
+owed by any local review taken while the checkpoint is non-empty, which makes
+the marker strip worthless rather than requiring the validator to reconstruct
+markers that a legitimate post-fix state does not carry); and `guard-added`
+discharged a required mechanical guard on the already-reviewed snapshot with
+no manifest and no evidence, so the caller could assert the guard on unchanged
+bytes and then patch as usual - it is now a snapshot-changing event carrying
+its manifest and evidence, both persisted. The P2s: a second `fix-applied`
+with no review between them incremented `fixRounds` past `completedRounds` and
+returned a handoff this module's own validator rejects, which made the NEXT
+transition throw rather than escalate (a fix now requires the completed review
+it answers); and same-fingerprint non-progress searched every historical
+round, so a finding an earlier round verifiably closed, reappearing after a
+terminal clean review on new bytes, stopped the first fresh review as
+`NO_PROGRESS` - it now compares against the live checkpoint, which is the set
+that actually means "still open". Note the guard change implies a two-step
+flow: the guard lands as its own snapshot, then the fix. Compiler suite 475
+tests, 0 failures, 7 pre-existing win32 skips; root `npm run check` clean.
+
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
 Draft 2026-07-27, pending grill approval; the spec itself is human-gated.
