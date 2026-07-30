@@ -2230,6 +2230,38 @@ that actually means "still open". Note the guard change implies a two-step
 flow: the guard lands as its own snapshot, then the fix. Compiler suite 475
 tests, 0 failures, 7 pre-existing win32 skips; root `npm run check` clean.
 
+PR #140 automated review, third round (2026-07-30): five findings, all real.
+Three P1s. The confirmation trigger "after any P1" was not derivable from the
+record - completed rounds carried no priority - so a resumed low-risk handoff
+could clear `confirmationRequired` and close without the mandatory
+confirmation; rounds now carry `p1BlockerCount`, the record carries a sticky
+`p1Observed`, and a history containing a P1 round cannot present itself as
+un-observed. `clusterMembers` was optional on a serialized round, and an
+omitted array is indistinguishable from "nothing clusters here", so a resumed
+`fix-applied` derived no cluster keys and the guard trigger never fired; the
+field is now required, empty only for genuinely non-clusterable findings.
+`guard-added` changed the snapshot without incrementing `fixRounds`, making
+the guard a free remediation change that bypassed the two-fix confirmation
+trigger and fix-round accounting - it now goes through the same admission and
+accounting path as `fix-applied` (extracted as `admitFixRound`), which also
+resolves the two-commit awkwardness the previous round introduced: the guard
+IS that review's fix round, and its snapshot carries the guard and the
+remediation together. The P2s: the guarded-recurrence escalation incremented
+`logicalInvocations` without appending its completed round, so the terminal
+handoff violated the accounting invariant its own validator enforces and could
+be neither resumed nor reported - every escalation now records its round
+first, and a key that already has a guard is no longer demanded a second time;
+and the public envelope validator had no count or length bounds before
+traversing and normalizing untrusted reviewer output, so closed
+`CHANGE_RISK_ENVELOPE_LIMITS` (findings, evidence per finding, missing inputs,
+scope domains, any single string) are checked at the boundary before anything
+walks the contents, with the string bound enforced at the single
+`nonEmptyString` choke point. Limits are set far above any actionable review;
+a round exceeding them could not be remediated inside the fix-round budget
+anyway. Compiler suite 480 tests, 0 failures, 7 pre-existing win32 skips; root
+`npm run check` clean; the release journey test still fails only on this
+machine's `tar`.
+
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
 Draft 2026-07-27, pending grill approval; the spec itself is human-gated.

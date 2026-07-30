@@ -23,6 +23,7 @@ import {
   CHANGE_RISK_LEGACY_TERMINAL_STATUS,
   CHANGE_RISK_LIMITS,
   CHANGE_RISK_PIPELINE_ORDER,
+  CHANGE_RISK_ENVELOPE_LIMITS,
   CHANGE_RISK_POLICY_VERSION,
   CHANGE_RISK_PRIORITIES,
   CHANGE_RISK_PROPOSAL_PATH_PREFIX,
@@ -1924,6 +1925,88 @@ test("all optional evidence line ranges use the closed positive ordered shape", 
       evidence.summary,
     );
   }
+});
+
+test("the untrusted reviewer envelope is bounded before it is traversed", () => {
+  const envelope = (overrides: Record<string, unknown>) => ({
+    policyVersion: CHANGE_RISK_POLICY_VERSION,
+    snapshotId: "snapshot-1",
+    status: "FINDINGS_FOUND",
+    scope: completeScope,
+    findings: [validFinding],
+    missingInputs: [],
+    ...overrides,
+  });
+  const oversized = [
+    {
+      name: "too many findings",
+      value: envelope({
+        findings: Array.from(
+          { length: CHANGE_RISK_ENVELOPE_LIMITS.maxFindings + 1 },
+          () => validFinding,
+        ),
+      }),
+    },
+    {
+      name: "too many evidence references on one finding",
+      value: envelope({
+        findings: [
+          {
+            ...validFinding,
+            evidence: Array.from(
+              {
+                length: CHANGE_RISK_ENVELOPE_LIMITS.maxEvidencePerFinding + 1,
+              },
+              () => validFinding.evidence[0],
+            ),
+          },
+        ],
+      }),
+    },
+    {
+      name: "too many missing inputs",
+      value: envelope({
+        status: "NEEDS_CONTEXT",
+        findings: [],
+        missingInputs: Array.from(
+          { length: CHANGE_RISK_ENVELOPE_LIMITS.maxMissingInputs + 1 },
+          (_unused, index) => `missing-${index}`,
+        ),
+      }),
+    },
+    {
+      name: "an unbounded string",
+      value: envelope({
+        findings: [
+          {
+            ...validFinding,
+            unsafeCondition: "x".repeat(
+              CHANGE_RISK_ENVELOPE_LIMITS.maxStringLength + 1,
+            ),
+          },
+        ],
+      }),
+    },
+  ];
+  for (const entry of oversized) {
+    assert.equal(validateChangeRiskResultV1(entry.value).ok, false, entry.name);
+  }
+  assert.equal(
+    validateChangeRiskResultV1(
+      envelope({
+        findings: Array.from(
+          { length: CHANGE_RISK_ENVELOPE_LIMITS.maxFindings },
+          (_unused, index) => ({
+            ...validFinding,
+            location: { path: `packages/compiler/src/file-${index}.ts` },
+            fingerprint: `unused-${index}`,
+          }),
+        ),
+      }),
+    ).ok,
+    true,
+    "an envelope at the bound is still accepted",
+  );
 });
 
 test("optional evidence locators are validated even when the kind ignores them", () => {

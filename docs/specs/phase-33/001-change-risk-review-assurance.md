@@ -343,6 +343,13 @@ type ChangeRiskResultV1 = {
 };
 ```
 
+- The envelope is untrusted input, so closed size limits (finding count,
+  evidence references per finding, `missingInputs` count, scope-domain count,
+  and the length of any single string) are enforced at the validation boundary
+  before anything traverses or normalizes the contents. An envelope exceeding
+  them is an invalid attempt like any other malformed result. The limits are
+  set far above any actionable review: a round carrying more findings than the
+  bound could not be remediated inside the closed fix-round budget anyway.
 - `source` defaults to `local` when absent. `provider` is required (using
   `unknown` when unidentifiable) when `source` is `external` and MUST be
   absent otherwise. A reviewer invocation itself only emits `local`

@@ -91,6 +91,31 @@ trustable only as far as the caller's own claims.
   all recorded rounds. A fingerprint an earlier round verifiably closed may
   reappear on later bytes without stopping the loop.
 
+### Derivable triggers and uniform fix-round accounting (added 2026-07-30)
+
+Added from the third automated review round on the same PR.
+
+- Every completed round records how many of its blockers were P1, and the
+  record carries a sticky P1 observation. A handoff whose history contains a
+  P1 round cannot present itself as un-observed, and the after-any-P1
+  confirmation trigger is therefore derivable on resume rather than resting on
+  a flag a resumed owner could drop.
+- Cluster membership is a required field on every completed round, empty only
+  for genuinely non-clusterable findings. An omitted array is indistinguishable
+  from "nothing clusters here" and would silently erase the remediated history
+  the guard trigger reads.
+- A `guard-added` event IS the fix round for the review that demanded it: it
+  is admitted and accounted through the same path as `fix-applied` (fix-round
+  cap, one round per completed review, budget reservation, confirmation cap,
+  remediated-cluster recording). The snapshot it names carries the guard and
+  the remediation together, and a further `fix-applied` answering the same
+  review is out of order. Without this a guard would be a free remediation
+  change that bypasses the two-fix confirmation trigger.
+- Every escalation records the round that produced it. A terminal handoff that
+  counted a logical invocation without appending its completed round would
+  contradict the invocation accounting the validator enforces, so the required
+  escalation could be neither resumed nor reported.
+
 ### Repeated recurrence after a guard (amends the retry and escalation contract)
 
 - When a cluster key recurs again after a within-change recurrence already

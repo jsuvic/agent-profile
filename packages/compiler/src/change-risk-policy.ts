@@ -391,7 +391,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function nonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    // Single choke point for every validated string in the envelope, so an
+    // unbounded blob is rejected rather than normalized and re-traversed.
+    value.length <= CHANGE_RISK_ENVELOPE_LIMITS.maxStringLength
+  );
 }
 
 function isClosedValue<T extends string>(
@@ -553,6 +559,25 @@ export function validateChangeRiskResultV1(
     !Array.isArray(value.missingInputs)
   )
     return { ok: false, reason: "malformed envelope" };
+  // Bound the untrusted envelope before anything traverses or normalizes it.
+  const scopeDomains = Array.isArray(
+    (value.scope as Record<string, unknown>).domains,
+  )
+    ? ((value.scope as Record<string, unknown>).domains as unknown[])
+    : [];
+  if (
+    value.findings.length > CHANGE_RISK_ENVELOPE_LIMITS.maxFindings ||
+    value.missingInputs.length > CHANGE_RISK_ENVELOPE_LIMITS.maxMissingInputs ||
+    scopeDomains.length > CHANGE_RISK_ENVELOPE_LIMITS.maxScopeDomains ||
+    value.findings.some(
+      (finding) =>
+        isRecord(finding) &&
+        Array.isArray(finding.evidence) &&
+        finding.evidence.length >
+          CHANGE_RISK_ENVELOPE_LIMITS.maxEvidencePerFinding,
+    )
+  )
+    return { ok: false, reason: "oversized envelope" };
   const { scope } = value;
   if (
     options.expectedSnapshotId.length > 0 &&
@@ -675,6 +700,31 @@ export const CHANGE_RISK_LIMITS: ChangeRiskLimits = Object.freeze({
   maxTransientRetriesPerInvocation: 2,
   maxFinalCleanRoomConfirmations: 2,
 });
+
+/**
+ * Closed size limits for the untrusted reviewer envelope. They exist to bound
+ * the work a malformed or runaway producer can force before the orchestration
+ * classifies the envelope as an invalid attempt, so they are checked before
+ * anything traverses the contents. They are deliberately far above any
+ * actionable review: a round with more findings than these bounds cannot be
+ * remediated within the closed fix-round budget anyway.
+ */
+export type ChangeRiskEnvelopeLimits = Readonly<{
+  maxFindings: number;
+  maxEvidencePerFinding: number;
+  maxMissingInputs: number;
+  maxScopeDomains: number;
+  maxStringLength: number;
+}>;
+
+export const CHANGE_RISK_ENVELOPE_LIMITS: ChangeRiskEnvelopeLimits =
+  Object.freeze({
+    maxFindings: 200,
+    maxEvidencePerFinding: 20,
+    maxMissingInputs: 50,
+    maxScopeDomains: 64,
+    maxStringLength: 4096,
+  });
 
 export type ChangeRiskConfirmationTrigger =
   "after-any-p1" | "after-two-or-more-fix-rounds" | "high-risk-surface-touched";

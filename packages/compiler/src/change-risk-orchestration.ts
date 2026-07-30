@@ -41,14 +41,19 @@ export type ChangeRiskOrchestrationStateV1 = Readonly<{
   activeCheckpointFromRound: number;
   completedRounds: readonly Readonly<{
     blockerCount: number;
+    /** How many of this round's blockers were P1, so the confirmation
+     * trigger stays derivable from the record after a resume. */
+    p1BlockerCount: number;
     unresolvedFingerprints: readonly string[];
     external?: true;
-    clusterMembers?: readonly Readonly<{
+    clusterMembers: readonly Readonly<{
       fingerprint: string;
       clusterKey: string;
     }>[];
     remediatedClusterKeys: readonly string[];
   }>[];
+  /** Sticky: a P1 anywhere in this change forces a final confirmation. */
+  p1Observed: boolean;
   requiredMechanicalGuardClusterKeys: readonly string[];
   guardedClusterKeys: readonly string[];
   impracticalMechanicalGuardClusterKeys: readonly string[];
@@ -189,7 +194,9 @@ type ValidatedChangeRiskReviewEvent =
   | Readonly<{
       kind: "blockers";
       snapshotId: string;
-      findings: readonly ChangeRiskBlockerFinding[];
+      findings: readonly Readonly<
+        ChangeRiskBlockerFinding & { priority: "P1" | "P2" }
+      >[];
       external?: true;
       readonly [validatedReviewEvent]: true;
     }>;
@@ -239,6 +246,7 @@ export function createChangeRiskOrchestrationState(
     activeUnresolvedFingerprints: [],
     activeCheckpointFromRound: 0,
     completedRounds: [],
+    p1Observed: false,
     requiredMechanicalGuardClusterKeys: [],
     guardedClusterKeys: [],
     impracticalMechanicalGuardClusterKeys: [],
@@ -334,6 +342,7 @@ export function validateChangeRiskOrchestrationStateV1(
     typeof value.confirmationRequired !== "boolean" ||
     typeof value.confirmationSatisfied !== "boolean" ||
     typeof value.highRisk !== "boolean" ||
+    typeof value.p1Observed !== "boolean" ||
     !hasUniqueNonEmptyStrings(value.missingInputs) ||
     (value.lastBlockerReviewSnapshotId !== undefined &&
       !isNonEmptyString(value.lastBlockerReviewSnapshotId)) ||
@@ -386,10 +395,14 @@ export function validateChangeRiskOrchestrationStateV1(
         !hasUniqueNonEmptyStrings(round.unresolvedFingerprints) ||
         round.blockerCount !== round.unresolvedFingerprints.length ||
         !hasCanonicalClusterKeys(round.remediatedClusterKeys) ||
+        !isNonNegativeInteger(round.p1BlockerCount) ||
+        round.p1BlockerCount > round.blockerCount ||
         (round.external !== undefined && round.external !== true)
       )
         return true;
-      if (round.clusterMembers === undefined) return false;
+      // Cluster membership is required, not optional: an omitted array is
+      // indistinguishable from "nothing clusters here" and would silently
+      // erase the remediated history the guard trigger reads.
       if (!Array.isArray(round.clusterMembers)) return true;
       const unresolvedFingerprints =
         round.unresolvedFingerprints as readonly string[];
@@ -429,6 +442,12 @@ export function validateChangeRiskOrchestrationStateV1(
     )
   )
     return { ok: false, reason: "invalid active blocker checkpoint" };
+  // A P1 recorded in the round history can never be un-observed on resume.
+  if (
+    !candidate.p1Observed &&
+    candidate.completedRounds.some((round) => round.p1BlockerCount > 0)
+  )
+    return { ok: false, reason: "invalid P1 history" };
   if (
     candidate.requiredMechanicalGuardClusterKeys.some((key) =>
       candidate.guardedClusterKeys.includes(key),
@@ -457,11 +476,10 @@ export function validateChangeRiskOrchestrationStateV1(
     )
   )
     return { ok: false, reason: "contradictory guard history" };
-  const activeClusterMembers = candidate.completedRounds.flatMap(
-    (round) =>
-      round.clusterMembers?.filter((member) =>
-        candidate.activeUnresolvedFingerprints.includes(member.fingerprint),
-      ) ?? [],
+  const activeClusterMembers = candidate.completedRounds.flatMap((round) =>
+    round.clusterMembers.filter((member) =>
+      candidate.activeUnresolvedFingerprints.includes(member.fingerprint),
+    ),
   );
   if (
     candidate.batchedClusterKeys.some(
@@ -480,7 +498,7 @@ export function validateChangeRiskOrchestrationStateV1(
         (value.confirmationRequired && value.confirmationInvocations === 0) ||
         (value.confirmationRequired &&
           value.cleanReviewInvocations <= value.confirmationInvocations) ||
-        ((value.highRisk || value.fixRounds >= 2) &&
+        ((value.highRisk || value.fixRounds >= 2 || value.p1Observed) &&
           !value.confirmationRequired) ||
         value.activeUnresolvedFingerprints.length !== 0 ||
         value.awaitingFinalConfirmation ||
@@ -532,6 +550,86 @@ function terminal(
   status: "NO_PROGRESS" | "NEEDS_HUMAN_REVIEW",
 ): ChangeRiskOrchestrationStateV1 {
   return { ...state, status };
+}
+
+function activeClusterMembersOf(state: ChangeRiskOrchestrationStateV1) {
+  return state.completedRounds.flatMap((round) =>
+    round.clusterMembers.filter((member) =>
+      state.activeUnresolvedFingerprints.includes(member.fingerprint),
+    ),
+  );
+}
+
+/**
+ * Every snapshot-changing remediation event - an ordinary fix or the
+ * mechanical guard a recurrence demands - is one fix round and is admitted and
+ * accounted identically. A guard that skipped this would be a free remediation
+ * change: it would bypass the fix-round cap, the budget reservation, and the
+ * two-fix confirmation trigger. A terminal status in the result means the
+ * round was refused.
+ */
+function admitFixRound(
+  state: ChangeRiskOrchestrationStateV1,
+  snapshotId: string,
+  manifest: readonly ChangeRiskManifestEntry[] | undefined,
+): ChangeRiskOrchestrationStateV1 {
+  if (state.status === "CLEAN") return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (manifest === undefined) return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (state.completedRounds.length === 0)
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  // Each fix round answers one completed blocker review. Two in a row would
+  // push `fixRounds` past the recorded history and hand back a state this
+  // module's own validator rejects.
+  if (state.fixRounds >= state.completedRounds.length)
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (state.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds)
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (!isNonEmptyString(snapshotId))
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  const nextHighRisk = isHighRiskChange(manifest);
+  const nextFixRounds = state.fixRounds + 1;
+  const confirmationAfterFix =
+    state.confirmationRequired ||
+    state.p1Observed ||
+    nextHighRisk ||
+    nextFixRounds >= 2;
+  const requiredReviewSlots = 1 + (confirmationAfterFix ? 1 : 0);
+  // Reserve remediation plus a final confirmation only when one is required.
+  if (
+    state.logicalInvocations + requiredReviewSlots >
+    CHANGE_RISK_LIMITS.maxLogicalInvocations
+  )
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  // The confirmation cap is a separate budget: a round that will inevitably
+  // require a confirmation the change can no longer fund never starts.
+  if (
+    confirmationAfterFix &&
+    state.confirmationInvocations >=
+      CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations
+  )
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (snapshotId === state.snapshotId) return terminal(state, "NO_PROGRESS");
+  const activeClusterKeys = unique(
+    activeClusterMembersOf(state).map((member) => member.clusterKey),
+  );
+  return {
+    ...state,
+    snapshotId,
+    highRisk: nextHighRisk,
+    fixRounds: nextFixRounds,
+    completedRounds: state.completedRounds.map((round, index) =>
+      index === state.completedRounds.length - 1
+        ? { ...round, remediatedClusterKeys: activeClusterKeys }
+        : round,
+    ),
+    batchedClusterKeys: [],
+    transientAttempts: 0,
+    missingInputs: [],
+    lastBlockerReviewSnapshotId: undefined,
+    lastLocalReviewSnapshotId: undefined,
+    awaitingFinalConfirmation: false,
+    confirmationSatisfied: false,
+  };
 }
 
 /**
@@ -640,16 +738,20 @@ function transitionChangeRiskOrchestrationInternal(
       CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations
     )
       return terminal(state, "NEEDS_HUMAN_REVIEW");
+    const p1Observed =
+      state.p1Observed ||
+      result.findings.some((finding) => finding.priority === "P1");
     const reviewState = {
       ...state,
       confirmationInvocations,
       awaitingFinalConfirmation: false,
+      p1Observed,
     };
     const confirmationRequired =
       reviewState.confirmationRequired ||
       reviewState.highRisk ||
       reviewState.fixRounds >= 2 ||
-      result.findings.some((finding) => finding.priority === "P1");
+      p1Observed;
     const confirmationState = { ...reviewState, confirmationRequired };
     if (result.status === "CLEAN") {
       if (result.findings.length !== 0)
@@ -737,6 +839,7 @@ function transitionChangeRiskOrchestrationInternal(
           fingerprint: finding.fingerprint,
           affectedContractId: finding.affectedContractId!,
           unsafeConditionClass: finding.unsafeConditionClass!,
+          priority: finding.priority as "P1" | "P2",
         })),
         external: isExternal ? true : undefined,
         [validatedReviewEvent]: true,
@@ -800,32 +903,29 @@ function transitionChangeRiskOrchestrationInternal(
       event.evidence.some((item) => !isNonEmptyString(item))
     )
       return terminal(state, "NEEDS_HUMAN_REVIEW");
+    // The guard IS this review's fix round, so it is admitted and accounted
+    // exactly like one. The snapshot it names carries the guard and the
+    // remediation together.
+    const admitted = admitFixRound(state, event.snapshotId, event.manifest);
+    if (admitted.status !== "ACTIVE") return admitted;
     return {
-      ...state,
-      snapshotId: event.snapshotId,
-      highRisk: isHighRiskChange(event.manifest),
+      ...admitted,
       requiredMechanicalGuardClusterKeys:
-        state.requiredMechanicalGuardClusterKeys.filter(
+        admitted.requiredMechanicalGuardClusterKeys.filter(
           (key) => key !== event.clusterKey,
         ),
       guardedClusterKeys: unique([
-        ...state.guardedClusterKeys,
+        ...admitted.guardedClusterKeys,
         event.clusterKey,
       ]),
       mechanicalGuards: [
-        ...state.mechanicalGuards,
+        ...admitted.mechanicalGuards,
         {
           clusterKey: event.clusterKey,
           snapshotId: event.snapshotId,
           evidence: unique(event.evidence),
         },
       ],
-      transientAttempts: 0,
-      missingInputs: [],
-      lastBlockerReviewSnapshotId: undefined,
-      lastLocalReviewSnapshotId: undefined,
-      awaitingFinalConfirmation: false,
-      confirmationSatisfied: false,
     };
   }
   if (event.kind === "guard-impractical") {
@@ -858,25 +958,9 @@ function transitionChangeRiskOrchestrationInternal(
   }
   if (event.kind === "fix-applied") {
     if (state.status === "CLEAN") return terminal(state, "NEEDS_HUMAN_REVIEW");
-    if (event.manifest === undefined)
-      return terminal(state, "NEEDS_HUMAN_REVIEW");
-    if (state.completedRounds.length === 0)
-      return terminal(state, "NEEDS_HUMAN_REVIEW");
-    // Each fix round answers one completed blocker review. Two fixes in a row
-    // would push `fixRounds` past the recorded history and hand back a state
-    // this module's own validator rejects.
-    if (state.fixRounds >= state.completedRounds.length)
-      return terminal(state, "NEEDS_HUMAN_REVIEW");
-    if (state.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds)
-      return terminal(state, "NEEDS_HUMAN_REVIEW");
     if (state.requiredMechanicalGuardClusterKeys.length > 0)
       return terminal(state, "NEEDS_HUMAN_REVIEW");
-    const activeClusterMembers = state.completedRounds.flatMap(
-      (round) =>
-        round.clusterMembers?.filter((member) =>
-          state.activeUnresolvedFingerprints.includes(member.fingerprint),
-        ) ?? [],
-    );
+    const activeClusterMembers = activeClusterMembersOf(state);
     if (
       state.batchedClusterKeys.some((key) => {
         const members = activeClusterMembers.filter(
@@ -900,29 +984,6 @@ function transitionChangeRiskOrchestrationInternal(
     ) {
       return terminal(state, "NEEDS_HUMAN_REVIEW");
     }
-    if (event.snapshotId.trim().length === 0)
-      return terminal(state, "NEEDS_HUMAN_REVIEW");
-    const nextHighRisk = isHighRiskChange(event.manifest);
-    const nextFixRounds = state.fixRounds + 1;
-    const confirmationAfterFix =
-      state.confirmationRequired || nextHighRisk || nextFixRounds >= 2;
-    const requiredReviewSlots = 1 + (confirmationAfterFix ? 1 : 0);
-    // Reserve remediation plus a final confirmation only when one is required.
-    if (
-      state.logicalInvocations + requiredReviewSlots >
-      CHANGE_RISK_LIMITS.maxLogicalInvocations
-    )
-      return terminal(state, "NEEDS_HUMAN_REVIEW");
-    // The confirmation cap is a separate budget: a fix that will inevitably
-    // require a confirmation the change can no longer fund never starts.
-    if (
-      confirmationAfterFix &&
-      state.confirmationInvocations >=
-        CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations
-    )
-      return terminal(state, "NEEDS_HUMAN_REVIEW");
-    if (event.snapshotId === state.snapshotId)
-      return terminal(state, "NO_PROGRESS");
     // Recurrence history is derived from the blockers this round actually
     // carried, never from an unverifiable caller claim; a claim that names no
     // active blocker is rejected rather than recorded.
@@ -941,28 +1002,7 @@ function transitionChangeRiskOrchestrationInternal(
       claimedClusterKeys.some((key) => !activeClusterKeys.includes(key))
     )
       return terminal(state, "NEEDS_HUMAN_REVIEW");
-    const completedRounds =
-      state.completedRounds.length === 0
-        ? state.completedRounds
-        : state.completedRounds.map((round, index) =>
-            index === state.completedRounds.length - 1
-              ? { ...round, remediatedClusterKeys: activeClusterKeys }
-              : round,
-          );
-    return {
-      ...state,
-      snapshotId: event.snapshotId,
-      highRisk: nextHighRisk,
-      fixRounds: nextFixRounds,
-      completedRounds,
-      batchedClusterKeys: [],
-      transientAttempts: 0,
-      missingInputs: [],
-      lastBlockerReviewSnapshotId: undefined,
-      lastLocalReviewSnapshotId: undefined,
-      awaitingFinalConfirmation: false,
-      confirmationSatisfied: false,
-    };
+    return admitFixRound(state, event.snapshotId, event.manifest);
   }
   if (event.kind === "clean") {
     const logicalInvocations = state.logicalInvocations + 1;
@@ -1024,8 +1064,9 @@ function transitionChangeRiskOrchestrationInternal(
       prior.some((round) => round.remediatedClusterKeys.includes(key)),
     ),
   );
-  if (recurredKeys.some((key) => state.guardedClusterKeys.includes(key)))
-    return terminal({ ...state, logicalInvocations }, "NEEDS_HUMAN_REVIEW");
+  const guardedRecurrence = recurredKeys.some((key) =>
+    state.guardedClusterKeys.includes(key),
+  );
   const previousBlockers = priorLocalRounds.at(-1)?.blockerCount;
   const previousRemediationBlockers = priorLocalRounds.at(-2)?.blockerCount;
   // The initial review establishes the baseline. Stagnation needs two
@@ -1060,6 +1101,9 @@ function transitionChangeRiskOrchestrationInternal(
       ...prior,
       {
         blockerCount: event.findings.length,
+        p1BlockerCount: event.findings.filter(
+          (finding) => finding.priority === "P1",
+        ).length,
         ...(event.external === true ? { external: true as const } : {}),
         unresolvedFingerprints: unique(
           event.findings.map((finding) => finding.fingerprint),
@@ -1081,9 +1125,11 @@ function transitionChangeRiskOrchestrationInternal(
       event.external === true
         ? state.lastLocalReviewSnapshotId
         : state.snapshotId,
+    // A key that already has a guard is not demanded again; that recurrence
+    // escalates below instead.
     requiredMechanicalGuardClusterKeys: unique([
       ...state.requiredMechanicalGuardClusterKeys,
-      ...recurredKeys,
+      ...recurredKeys.filter((key) => !state.guardedClusterKeys.includes(key)),
     ]),
     activeUnresolvedFingerprints:
       event.external === true
@@ -1102,8 +1148,12 @@ function transitionChangeRiskOrchestrationInternal(
         : batchedClusterKeys,
   };
   // Human escalation wins whenever the no-progress condition overlaps it.
+  // Every escalation still records the round it completed, or the handoff it
+  // returns would contradict the invocation accounting its own validator
+  // enforces and the required escalation could not be resumed or reported.
   if (next.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds)
     return terminal(next, "NEEDS_HUMAN_REVIEW");
+  if (guardedRecurrence) return terminal(next, "NEEDS_HUMAN_REVIEW");
   if (sameFingerprint) return terminal(next, "NO_PROGRESS");
   return recurredKeys.length > 0
     ? next
