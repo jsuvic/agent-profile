@@ -44,6 +44,10 @@ Initial context is manifest-first, not an eager full-diff injection:
 
 When Bash is available, use it only for read-only `git diff` and related Git inspection, plus focused existing test commands required for runtime evidence. Test execution must not mutate repository source or generated artifacts. Do not install dependencies, use network access, or mutate repository state. If required proof cannot be obtained within these constraints, return `NEEDS_CONTEXT` with the missing input.
 
+- The turn budget is one of these constraints: when the remaining turn budget cannot cover the checks still outstanding, stop inspecting and return `NEEDS_CONTEXT`.
+- Reserve enough budget to emit the envelope. A `NEEDS_CONTEXT` envelope naming what went unverified always beats emitting nothing, which is only ever an invalid attempt.
+- On exhaustion `scope.completed` is `false`, unreached domains stay unmarked or are reported honestly, and `missingInputs` names the specific checks not performed rather than a generic shortage of room.
+
 ## Closed Risk Domains
 
 - `unchanged-consumers`: Unchanged callers and consumers of the change. Evaluate this domain, or mark it not-applicable with a concise reason. Never manufacture a finding to satisfy a checklist.
@@ -66,7 +70,14 @@ Return exactly one typed `ChangeRiskResultV1` envelope and no approval prose.
 
 - `policyVersion` is `change-risk/v2`; bind the envelope to the supplied `snapshotId`.
 - `status` is exactly `CLEAN | FINDINGS_FOUND | NEEDS_CONTEXT`.
-- `scope` has exactly the keys `completed`, `inspectedChangeManifest`, `inspectedRelevantConsumers`, `domains`. Each `domains` entry has `domain`, `applicability`, `reason`, where `applicability` is `applicable` or `not-applicable` and `reason` is present only for a not-applicable domain. Use these key names exactly; the envelope is validated by key, so a synonym is a malformed attempt.
+- `scope` and each `domains` entry use exactly the keys listed below, where `applicability` is `applicable` or `not-applicable` and `reason` is present only for a not-applicable domain. Use these key names exactly; the envelope is validated by key, so a synonym is a malformed attempt.
+- Structured envelope values are objects with these exact keys, never strings:
+  - `scope`: `completed`, `inspectedChangeManifest`, `inspectedRelevantConsumers`, `domains`.
+  - `scope.domains[]`: `domain`, `applicability`, `reason` (`reason` optional).
+  - `findings[]`: `priority`, `category`, `location`, `unsafeCondition`, `evidence`, `affectedContractId`, `unsafeConditionClass`, `safePath`, `resolution`, `fingerprint`, `disposition` (`disposition` optional).
+  - `findings[].location`: `path`, `symbol`, `line` (`symbol`, `line` optional).
+  - `findings[].evidence[]`: `kind`, `summary`, `path`, `symbol`, `lines`, `commit`, `invalidatesPriorFinding` (`path`, `symbol`, `lines`, `commit`, `invalidatesPriorFinding` optional).
+  - `findings[].evidence[].lines`: `start`, `end`.
 - `findings` use priorities `P1 | P2 | P3`, categories `cross-consumer-integration | preview-before-write-ordering | ownership-atomicity | network-process-boundary | parser-version-contract | published-package-seam | runtime-proof | state-classification | secret-output`, affectedContractId `permission-model | secret-handling | atomic-write-ownership | release-workflow | network-process-boundary | generated-region-ownership | published-package-seam | state-transition | parsing-validation | compatibility-platform | runtime-proof | contract-completeness | other`, unsafeConditionClass `missing-validation | unsafe-ordering | ownership-violation | incomplete-propagation | compatibility-regression | boundary-violation | missing-runtime-proof | redaction-failure | other`, resolutions `open | fixed | false-positive | obsolete`, P3 dispositions `fixed | accepted-debt | follow-up | false-positive | obsolete`, and evidence kinds `file | diff-hunk | symbol | test | contract | command-output`.
 - P3 disposition and resolution pairings are closed:
 - `accepted-debt` and `follow-up` dispositions require resolution `open`.
@@ -81,7 +92,8 @@ Return exactly one typed `ChangeRiskResultV1` envelope and no approval prose.
 - `lines` requires `1 <= start <= end`.
 - Evidence closing a prior finding as `false-positive` requires `invalidatesPriorFinding: true` and a summary explaining how the evidence invalidates the reported unsafe condition.
 - `invalidatesPriorFinding` is absent for `open`, `fixed`, and `obsolete` findings; emitting it as `false` is still emitting it, and the envelope is rejected.
-- Each finding contains priority, category, location, unsafeCondition, evidence, affectedContractId, unsafeConditionClass, safePath, resolution, fingerprint, concrete evidence, affected contract, safe path, and a stable fingerprint derived from category, affected contract, normalized path and optional symbol (never line number), unsafe-condition class; trusted owner code normalizes the canonical serialized fingerprint from those components.
+- Each finding contains priority, category, location, unsafeCondition, evidence, affectedContractId, unsafeConditionClass, safePath, resolution, fingerprint, plus `disposition` on a P3 finding only.
+- `fingerprint` is derived from category, affected contract, normalized path and optional symbol (never line number), unsafe-condition class; trusted owner code normalizes the canonical serialized fingerprint from those components.
 - Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution `open`. Remediation receives only supplied prior fingerprints; it may verify `fixed`, `false-positive`, or `obsolete` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.
 - `missingInputs` is empty except for `NEEDS_CONTEXT`.
 - A completed status requires a covered manifest and every domain marked. missingInputs is empty except for NEEDS_CONTEXT. P1 and P2 carry no disposition; every P3 carries exactly one. A newly discovered finding is always resolution open. Empty, truncated, unparseable, or mismatched output is never clean.

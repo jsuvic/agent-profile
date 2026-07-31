@@ -50,7 +50,7 @@
       "id": "targets/claude-subagents/change-risk-reviewer@1",
       "target": "claude-subagents",
       "version": "1",
-      "sha256": "b65895f182e6328bbabcbe0fdd04b03d115db469749897b84664f3cdd2b1e424"
+      "sha256": "f7b78c775a6642fc4e38fe8e5f4ca1a3f442f5865b03ebd3af2776fe651f10a4"
     },
     {
       "id": "targets/claude-subagents/code-quality-reviewer@1",
@@ -128,7 +128,7 @@
       "id": "targets/codex-subagents/change-risk-reviewer@1",
       "target": "codex-subagents",
       "version": "1",
-      "sha256": "8e5bb77237e58da97c13374255367b9807ab7257bd624e0f15410dacc1dc9019"
+      "sha256": "c6b91fe07794adfe9b5bda29d74c1d04d52ed1ddcd9d1aa9f06fcbb5af58c31c"
     },
     {
       "id": "targets/codex-subagents/code-quality-reviewer@1",
@@ -246,7 +246,7 @@
       "target": "claude-subagents",
       "templateId": "targets/claude-subagents/change-risk-reviewer@1",
       "ownership": "generated-owned",
-      "sha256": "b65895f182e6328bbabcbe0fdd04b03d115db469749897b84664f3cdd2b1e424"
+      "sha256": "f7b78c775a6642fc4e38fe8e5f4ca1a3f442f5865b03ebd3af2776fe651f10a4"
     },
     {
       "path": ".claude/agents/code-quality-reviewer.md",
@@ -337,7 +337,7 @@
       "target": "codex-subagents",
       "templateId": "targets/codex-subagents/change-risk-reviewer@1",
       "ownership": "generated-owned",
-      "sha256": "8e5bb77237e58da97c13374255367b9807ab7257bd624e0f15410dacc1dc9019"
+      "sha256": "c6b91fe07794adfe9b5bda29d74c1d04d52ed1ddcd9d1aa9f06fcbb5af58c31c"
     },
     {
       "path": ".codex/agents/code-quality-reviewer.toml",
