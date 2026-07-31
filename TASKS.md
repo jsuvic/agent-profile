@@ -2108,19 +2108,24 @@ independent full-change reviewer after spec and code-quality review, bounded
 remediation and escalation, versioned review-learning records, recurring-
 finding promotion, and a provider-neutral external-review boundary.
 
-| Id  | Task                                            | State      | Brief                                                                                                    |
-| --- | ----------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------- |
-| I1  | Emit the independent change-risk reviewer       | done       | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                    |
-| I2  | Orchestrate bounded review remediation          | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)        |
-| I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)              |
-| I4  | Promote recurring findings into stronger guards | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)      |
-| I5  | Backfill the recent PR review corpus            | human-gate | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)        |
-| I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)  |
-| G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)     |
-| I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                |
-| G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
-| I8  | Budget exhaustion degrades to NEEDS_CONTEXT     | ready      | [008-reviewer-budget-exhaustion.md](docs/specs/phase-33/issues/008-reviewer-budget-exhaustion.md)        |
-| I9  | Guard the reviewer envelope field shapes        | ready      | [009-reviewer-field-shape-guard.md](docs/specs/phase-33/issues/009-reviewer-field-shape-guard.md)        |
+| Id  | Task                                            | State      | Brief                                                                                                             |
+| --- | ----------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| I1  | Emit the independent change-risk reviewer       | done       | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                             |
+| I2  | Orchestrate bounded review remediation          | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)                 |
+| I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)                       |
+| I4  | Promote recurring findings into stronger guards | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)               |
+| I5  | Backfill the recent PR review corpus            | human-gate | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)                 |
+| I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)           |
+| G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)              |
+| I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                         |
+| G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md)          |
+| I8  | Budget exhaustion degrades to NEEDS_CONTEXT     | done       | [008-reviewer-budget-exhaustion.md](docs/specs/phase-33/issues/008-reviewer-budget-exhaustion.md)                 |
+| I9  | Guard the reviewer envelope field shapes        | done       | [009-reviewer-field-shape-guard.md](docs/specs/phase-33/issues/009-reviewer-field-shape-guard.md)                 |
+| I10 | Make the reviewer's turn budget observable      | ready      | [010-reviewer-budget-observability.md](docs/specs/phase-33/issues/010-reviewer-budget-observability.md)           |
+| I11 | State the locator interior value constraints    | ready      | [011-reviewer-locator-value-constraints.md](docs/specs/phase-33/issues/011-reviewer-locator-value-constraints.md) |
+| I12 | Resolve the ledger-write snapshot conflict      | human-gate | [012-ledger-write-snapshot-conflict.md](docs/specs/phase-33/issues/012-ledger-write-snapshot-conflict.md)         |
+| I13 | Guard reviewer field-list completeness          | ready      | [013-reviewer-field-completeness-guard.md](docs/specs/phase-33/issues/013-reviewer-field-completeness-guard.md)   |
+| I14 | Fail on self-applied generated-artifact drift   | ready      | [014-self-applied-artifact-drift-guard.md](docs/specs/phase-33/issues/014-self-applied-artifact-drift-guard.md)   |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
@@ -2755,6 +2760,31 @@ and spent a transient retry. That is the cost being guarded against.
 Also recorded for I9: the same emitted sentence lists `evidence`, `safePath`,
 and `fingerprint` twice, once from `requiredFindingFields` and again in
 trailing prose.
+
+Correction 2026-07-31, before any of I10-I14 is dispatched. I8's outcome was
+recorded as a failure of its own rule - "prose has now failed this problem
+three times (10 turns, 18 turns, the stated rule)" - and that is wrong. The
+reviewer invocations that produced those observations ran against this
+repository's own stale `.claude/agents/change-risk-reviewer.md`, so the prompt
+in effect was the pre-I8 one and the rule was never present to fire. I8 is
+UNEXERCISED, not failed. The count of prose failures against the budget problem
+is two (10 turns, 18 turns), not three, and no third-occurrence mechanical-guard
+obligation arises from it.
+
+The error is mine and it propagated: I sharpened the miscount, it went into
+I10's behavior slice and the ledger commit message, and I10's justification
+rested on it. Both are corrected; I10 is now justified on the ground that holds
+
+- the reviewer is told to ration a quantity it is never given, so nothing
+  outside a run can distinguish a trigger that fired, declined, or was never
+  reached. Worth noting where it lands: the promotion machinery this phase built
+  keys on occurrence counts, and the miscount was of an occurrence count.
+
+Consequence for I6, which is the reason this could not be left: there are
+currently ZERO reviews of any change under the post-I8 prompt. I6 must treat
+the first such review as the initial data point rather than reading the
+existing record as evidence about I8 in either direction, and I14 is what makes
+"the artifacts under review are the current ones" checkable instead of assumed.
 
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
