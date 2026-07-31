@@ -1643,6 +1643,10 @@ const PROMOTION_PROJECTION: ChangeRiskPromotionProjection = deepFreeze({
       "sourceCategory",
       "scope",
       "evidenceRecordReferences",
+      // Amendment 002: promotion reads cluster events alongside category
+      // counts. They are carried as evidence on the rule and never counted as
+      // occurrences, so the two signals stay separable (ADR 0026).
+      "clusterEvidence",
       "dateIntroduced",
       "mechanicalGuard",
       "lifecycleStatus",

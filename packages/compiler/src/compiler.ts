@@ -89,6 +89,7 @@ import { buildClientMappingReport } from "./permission-mapping.js";
 import {
   changeRiskLearningRecordProjection,
   changeRiskOrchestrationProjection,
+  changeRiskPromotionProjection,
   changeRiskReviewerProjection,
 } from "./change-risk-policy.js";
 
@@ -1484,6 +1485,7 @@ Return a concise final review with spec compliance, tests run, contract impact, 
 function renderSubagentDrivenChangeSkill(): string {
   const orchestration = changeRiskOrchestrationProjection();
   const learning = changeRiskLearningRecordProjection();
+  const promote = changeRiskPromotionProjection();
   const ownerRules = [
     `at most ${orchestration.budgets.maxFixRounds} fix rounds, ${orchestration.budgets.maxLogicalInvocations} completed logical reviews, and ${orchestration.budgets.maxTransientRetriesPerInvocation} transient retries per logical invocation.`,
     `Run at most ${orchestration.budgets.maxFinalCleanRoomConfirmations} confirmation invocations; a confirmation must be a distinct later clean-room review and cannot be claimed by the initial review.`,
@@ -1536,7 +1538,8 @@ ${ownerRules.map((rule) => `- ${rule}`).join("\n")}
 
 11. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
 12. When orchestration reaches any terminal status, persist exactly one normalized \`${learning.recordSchema.schemaVersion}\` record for this change under \`${learning.persistence.committedPathPrefix}\`, carrying \`sourcePolicy: ${learning.policyVersion}\` with its execution counters, per-round and per-finding \`source\` markers, cluster events, and the terminal status. Write the normalized record only: ${learning.redaction.join(" ")} Historical records feed promotion and evaluation only; never load them into initial or final clean-room reviewer context.
-13. After change-risk orchestration reaches terminal \`CLEAN\` and the required tests complete, invoke \`final-review\` against the validated handoff and current snapshot. Fix or escalate its findings before handoff.
+13. Then apply the promotion table to each validated finding, keyed on its canonical category with alias normalization - never on raw wording, and never on a cluster key, which is mechanism-keyed and may span categories. The occurrence unit is ${promote.recurrenceClassification.occurrenceUnit}. A finding counts only when its recorded resolution is one of \`${promote.recurrenceClassification.countedResolutions.join(" | ")}\`, or when it is open and ${promote.recurrenceClassification.countedOpenRequires}. A finding resolved \`${promote.recurrenceClassification.excludedResolutions.join("\` or \`")}\` never counts, and a finding whose category is \`${promote.recurrenceClassification.excludedCategories.join("\`, \`")}\` is excluded from recurrence and earns no rule until a human assigns a canonical category. A P1 is systemic when: ${promote.recurrenceClassification.systemicPredicate.join(" ")} First systemic P1: ${promote.actions.firstSystemicP1} First non-systemic P1: ${promote.actions.firstNonSystemicP1} First ordinary P2/P3: ${promote.actions.firstOrdinaryP2OrP3} Second occurrence: ${promote.actions.secondOccurrence} Third occurrence: ${promote.actions.thirdOccurrence} ${promote.actions.guardPreference.join(" ")} Any promoted prose rule is: ${promote.actions.promotedRuleRequirements.join(" ")} ${promote.ownership.generatedRegions} ${promote.ownership.withinReviewedChange} ${promote.ownership.applyingProposal} ${promote.ownership.retirement}
+14. After change-risk orchestration reaches terminal \`CLEAN\` and the required tests complete, invoke \`final-review\` against the validated handoff and current snapshot. Fix or escalate its findings before handoff.
 
 ## Status Values
 
