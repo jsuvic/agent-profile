@@ -57,25 +57,31 @@ function profileWithPreset(): AiProfile {
   };
 }
 
-test("resolveModelPolicyLockfile stays valid and unaffected by the Tabnine capability gap (no profile-level Tabnine override exists yet)", () => {
+test("resolveModelPolicyLockfile stays valid and unaffected by the Tabnine capability gap (no Tabnine override set in this profile)", () => {
   const modelPolicy = resolveModelPolicyLockfile(profileWithPreset());
   assert.ok(modelPolicy);
-  // Every resolution is still Codex/Claude today: no profile schema field
-  // supplies an explicit Tabnine override in this pass, so the merge is a
-  // no-op in practice, but must not throw or corrupt the existing rows.
+  // This profile sets no explicit Tabnine override for any role, so every
+  // role resolves to guided manual selection (no exact model) and the merge
+  // emits zero Tabnine rows, but must not throw or corrupt the Codex/Claude
+  // rows.
   assert.ok(modelPolicy.resolutions.every((r) => r.client !== "tabnine"));
   assert.ok(modelPolicy.resolutions.some((r) => r.client === "codex"));
   assert.ok(modelPolicy.resolutions.some((r) => r.client === "claude"));
 });
 
-test("resolveModelPolicyLockfile preserves a prior lock's tabnine rows verbatim since the fresh tabnine table currently emits none (PR review finding)", () => {
-  // A caller's `planModelPolicyUpgrade` plan can carry preserved prior
-  // `client: "tabnine"` rows forward (the lockfile schema explicitly
-  // supports a mixed Codex/Claude/Tabnine block). Before this fix,
-  // `resolveModelPolicyLockfile` unconditionally recomputed tabnine rows
-  // fresh (currently always empty) and discarded whatever the caller
-  // passed in as `previousModelPolicy`, so the actually-written lock would
-  // disagree with a plan that had just been previewed to the user.
+test("resolveModelPolicyLockfile no longer perpetuates a stale explicit-override tabnine row once the profile no longer sets it (Phase 31.5 I6d supersession)", () => {
+  // Superseded PR-review-era behavior (I3/I6): `resolveModelPolicyLockfile`
+  // used to unconditionally carry every previous `client: "tabnine"` row
+  // forward whenever the fresh Tabnine table produced none, regardless of
+  // that row's own `source` or whether the preset still matched. Phase 31.5
+  // I6d adds real per-role Tabnine reconciliation
+  // (`buildModelPolicyTabnineTargetTable`'s `previousModelPolicy` parameter,
+  // mirroring Codex/Claude's `deriveLockedClientOverride`), which correctly
+  // distinguishes "unchanged" from "removed override": a previously-recorded
+  // row sourced `"explicit-override"` is a real user choice the profile no
+  // longer declares, so it must re-resolve to guided manual selection (no
+  // row emitted) instead of being perpetuated forever -- exactly the
+  // "Removing a previously-set Tabnine exact override" acceptance criterion.
   const previousTabnineRow: LockModelPolicyResolutionV2 = {
     client: "tabnine",
     role: "architect",
@@ -99,9 +105,9 @@ test("resolveModelPolicyLockfile preserves a prior lock's tabnine rows verbatim 
   );
   assert.ok(modelPolicy);
   const tabnineRow = modelPolicy.resolutions.find(
-    (row) => row.client === "tabnine",
+    (row) => row.client === "tabnine" && row.role === "architect",
   );
-  assert.deepEqual(tabnineRow, previousTabnineRow);
+  assert.equal(tabnineRow, undefined);
 });
 
 test("a hand-assembled mixed Codex/Claude/Tabnine lockfile modelPolicy block validates and keeps each client's rows independent", () => {

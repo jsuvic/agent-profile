@@ -15,9 +15,14 @@ import type { ModelPolicyPreset } from "@agent-profile/core";
 import { compareModelPolicyResolutions } from "./lockfile.js";
 import {
   buildModelPolicyTargetTable,
+  deriveModelPolicyTabnineRoleOverrides,
   toLockModelPolicyFromTargetTable,
   type ModelPolicyRoleOverrides,
 } from "./model-policy-target-adapter.js";
+import {
+  buildModelPolicyTabnineTargetTable,
+  toLockModelPolicyTabnineResolutions,
+} from "./model-policy-tabnine-adapter.js";
 import type { LockModelPolicyV2 } from "./types.js";
 
 export type ModelPolicyUpgradeBulkStrategy =
@@ -51,17 +56,27 @@ export function planModelPolicyUpgrade(
     buildModelPolicyTargetTable(targetPreset, roleOverrides),
   );
 
-  // `toLockModelPolicyFromTargetTable` only ever resolves Codex/Claude rows
-  // (Tabnine model-resolution reconciliation is I6d's scope, not this
-  // slice's). A prior lock can legitimately carry `client: "tabnine"` rows
-  // (the lockfile schema and compiler tests explicitly support a mixed
-  // Codex/Claude/Tabnine block) -- rebuilding the block purely from the
-  // Codex/Claude target table would otherwise silently drop those rows'
-  // exact provenance from the plan, and an Adopt/bulk-preset-switch write
-  // would then delete them from the lock even though nothing about this
-  // strategy touches Tabnine at all (PR review finding).
-  const preservedTabnineRows =
-    previous?.resolutions.filter((row) => row.client === "tabnine") ?? [];
+  // Phase 31.5 (I6d PR review Finding 4, then Finding "resolve adopt plans
+  // from fresh Tabnine state"): genuinely resolve Tabnine rows for the
+  // TARGET preset -- do not blindly relabel every prior `client: "tabnine"`
+  // row under the new preset as if it had always resolved there (the
+  // original defect this fix closed). But also do NOT pass `previous` as
+  // `buildModelPolicyTabnineTargetTable`'s lock-reuse input here: every
+  // bulk-upgrade strategy ("adopt" included) is a deliberate "show/apply
+  // what the live catalog resolves today" operation that intentionally
+  // ignores ordinary-compile lock reuse -- exactly mirroring
+  // `buildModelPolicyTargetTable(targetPreset, roleOverrides)` just above,
+  // which likewise never forwards `previous` for Codex/Claude. Passing
+  // `previous` here would let Tabnine (uniquely among the three clients)
+  // silently reuse a stale catalog-sourced row or stale-catalog-version
+  // explicit override even while `compareModelPolicyTabnineUpgrade` (which
+  // always ignores reuse) reports that row as changing to a fresh value --
+  // a real plan/comparison disagreement (PR review finding).
+  const tabnineRoleOverrides =
+    deriveModelPolicyTabnineRoleOverrides(roleOverrides);
+  const tabnineResolutions = toLockModelPolicyTabnineResolutions(
+    buildModelPolicyTabnineTargetTable(targetPreset, tabnineRoleOverrides),
+  );
 
   // The lockfile's deterministic-order validation requires
   // `modelPolicy.resolutions` sorted (client, role); `buildLockfile` applies
@@ -74,7 +89,7 @@ export function planModelPolicyUpgrade(
     strategy,
     block: Object.freeze({
       ...resolved,
-      resolutions: [...resolved.resolutions, ...preservedTabnineRows].sort(
+      resolutions: [...resolved.resolutions, ...tabnineResolutions].sort(
         compareModelPolicyResolutions,
       ),
     }),

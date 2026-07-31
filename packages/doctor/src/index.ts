@@ -24,8 +24,17 @@ export type {
 export type {
   DoctorIssue,
   DoctorIssueCode,
+  DoctorModelProbeCandidate,
+  DoctorModelProbeResultRow,
+  DoctorModelProbeRunner,
+  DoctorModelProbeStatus,
   DoctorRequest,
   DoctorResult,
   DoctorSeverity,
   DoctorStatus,
 } from "./types.js";
+export {
+  buildModelPolicyDoctorIssues,
+  buildModelPolicyProbeCandidates,
+  buildModelProbeResultIssue,
+} from "./model-policy-doctor.js";

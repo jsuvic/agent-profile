@@ -95,7 +95,10 @@ async function readV2Lockfile(rootDir: string): Promise<AiProfileLockV2> {
   return result.lockfile as AiProfileLockV2;
 }
 
-function ownershipOf(lockfile: AiProfileLockV2, filePath: string): string | undefined {
+function ownershipOf(
+  lockfile: AiProfileLockV2,
+  filePath: string,
+): string | undefined {
   return lockfile.outputs.find((output) => output.path === filePath)?.ownership;
 }
 
@@ -142,7 +145,11 @@ async function driftFile(
   addition: string,
 ): Promise<void> {
   const current = await readFile(path.join(rootDir, filePath), "utf8");
-  await writeFile(path.join(rootDir, filePath), `${current}${addition}`, "utf8");
+  await writeFile(
+    path.join(rootDir, filePath),
+    `${current}${addition}`,
+    "utf8",
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +171,112 @@ test("AC1 accidental restores AGENTS.md canonical bytes and generated-owned hash
 
   assert.equal(code, 0, output.stderrText());
   assert.deepEqual(await readFile(path.join(rootDir, "AGENTS.md")), canonical);
-  assert.equal(ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"), "generated-owned");
+  assert.equal(
+    ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"),
+    "generated-owned",
+  );
+});
+
+test("targeted drift reconciliation keeps every other target's lockfile provenance", async () => {
+  const rootDir = await createRoot();
+  await materialize(rootDir);
+  const before = await readV2Lockfile(rootDir);
+  const outOfScopeTemplates = before.templates.filter(
+    (template) => template.target !== "agents-md",
+  );
+  const outOfScopeOutputs = before.outputs.filter(
+    (output) => output.target !== "agents-md",
+  );
+  assert.ok(
+    outOfScopeTemplates.length > 0 && outOfScopeOutputs.length > 0,
+    "the fixture profile must enable more than the scoped target",
+  );
+  await driftFile(rootDir, "AGENTS.md", "My extra line.\n");
+
+  const { prompts } = scriptPrompts({ "AGENTS.md": "accidental" });
+  const output = createOutput();
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+    { ...output, reconcilePrompts: prompts },
+  );
+  assert.equal(code, 0, output.stderrText());
+
+  // The reconciliation branch returns before `runCompile`'s own write, so it
+  // needs the same scoped-target preservation; otherwise the interactive path
+  // silently drops the provenance the non-interactive path now keeps.
+  const after = await readV2Lockfile(rootDir);
+  for (const template of outOfScopeTemplates) {
+    assert.deepEqual(
+      after.templates.find((candidate) => candidate.id === template.id),
+      template,
+      `template ${template.id} must survive a scoped reconciliation write`,
+    );
+  }
+  for (const output of outOfScopeOutputs) {
+    assert.deepEqual(
+      after.outputs.find((candidate) => candidate.path === output.path),
+      output,
+      `output ${output.path} must survive a scoped reconciliation write`,
+    );
+  }
+});
+
+test("targeted drift reconciliation does not create Tabnine settings", async () => {
+  const rootDir = await createRoot();
+  await writeFile(
+    path.join(rootDir, "ai-profile.yaml"),
+    FIXTURE_PROFILE.replace(
+      "tabnine:\n    enabled: false",
+      "tabnine:\n    enabled: true",
+    ).replace(
+      "permissions:",
+      `subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    implementer:
+      capability: balanced
+      effort: high
+      overrides:
+        tabnine:
+          model: gpt-5.4
+permissions:`,
+    ),
+  );
+
+  const initial = createOutput();
+  assert.equal(
+    await runCli(
+      [
+        "compile",
+        "--root",
+        rootDir,
+        "--write",
+        "--force",
+        "--target",
+        "agents-md",
+      ],
+      { io: initial.io },
+    ),
+    0,
+    initial.stderrText(),
+  );
+  await driftFile(rootDir, "AGENTS.md", "My extra line.\n");
+
+  const { prompts } = scriptPrompts({ "AGENTS.md": "accidental" });
+  const output = createOutput();
+  assert.equal(
+    await runCli(
+      ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+      { ...output, reconcilePrompts: prompts },
+    ),
+    0,
+    output.stderrText(),
+  );
+  await assert.rejects(
+    readFile(path.join(rootDir, ".tabnine", "agent", "settings.json"), "utf8"),
+    { code: "ENOENT" },
+  );
 });
 
 test("AC1 shared relocation lands user lines byte-identically in the AGENTS.md manual region", async () => {
@@ -181,13 +293,18 @@ test("AC1 shared relocation lands user lines byte-identically in the AGENTS.md m
   );
 
   assert.equal(code, 0, output.stderrText());
-  const parsed = parseMixedFile(await readFile(path.join(rootDir, "AGENTS.md")));
+  const parsed = parseMixedFile(
+    await readFile(path.join(rootDir, "AGENTS.md")),
+  );
   assert.ok(parsed.ok);
   if (!parsed.ok) return;
   assert.equal(parsed.manualInner.toString("utf8"), "Shared team rule.\n");
   // Generated region restored to canonical bytes.
   assert.deepEqual(parsed.generatedInner, canonical);
-  assert.equal(ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"), "mixed");
+  assert.equal(
+    ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"),
+    "mixed",
+  );
 });
 
 test("AC1 client-specific on AGENTS.md relocates into its own manual region", async () => {
@@ -203,11 +320,16 @@ test("AC1 client-specific on AGENTS.md relocates into its own manual region", as
   );
 
   assert.equal(code, 0, output.stderrText());
-  const parsed = parseMixedFile(await readFile(path.join(rootDir, "AGENTS.md")));
+  const parsed = parseMixedFile(
+    await readFile(path.join(rootDir, "AGENTS.md")),
+  );
   assert.ok(parsed.ok);
   if (!parsed.ok) return;
   assert.equal(parsed.manualInner.toString("utf8"), "AGENTS-only rule.\n");
-  assert.equal(ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"), "mixed");
+  assert.equal(
+    ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"),
+    "mixed",
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -228,7 +350,9 @@ test("AC2 client-specific on CLAUDE.md relocates into CLAUDE.md's own manual reg
   });
 
   assert.equal(code, 0, output.stderrText());
-  const parsed = parseMixedFile(await readFile(path.join(rootDir, "CLAUDE.md")));
+  const parsed = parseMixedFile(
+    await readFile(path.join(rootDir, "CLAUDE.md")),
+  );
   assert.ok(parsed.ok);
   if (!parsed.ok) return;
   assert.equal(parsed.manualInner.toString("utf8"), "Claude-only rule.\n");
@@ -236,7 +360,10 @@ test("AC2 client-specific on CLAUDE.md relocates into CLAUDE.md's own manual reg
   assert.equal(ownershipOf(lockfile, "CLAUDE.md"), "mixed");
   // AGENTS.md is untouched and stays generated-owned.
   assert.equal(ownershipOf(lockfile, "AGENTS.md"), "generated-owned");
-  assert.deepEqual(await readFile(path.join(rootDir, "AGENTS.md")), agentsBefore);
+  assert.deepEqual(
+    await readFile(path.join(rootDir, "AGENTS.md")),
+    agentsBefore,
+  );
 });
 
 test("AC2 shared on CLAUDE.md relocates into AGENTS.md and restores CLAUDE.md canonical", async () => {
@@ -254,9 +381,14 @@ test("AC2 shared on CLAUDE.md relocates into AGENTS.md and restores CLAUDE.md ca
 
   assert.equal(code, 0, output.stderrText());
   // CLAUDE.md restored to canonical.
-  assert.deepEqual(await readFile(path.join(rootDir, "CLAUDE.md")), claudeCanonical);
+  assert.deepEqual(
+    await readFile(path.join(rootDir, "CLAUDE.md")),
+    claudeCanonical,
+  );
   // AGENTS.md now carries the shared line in its manual region.
-  const agents = parseMixedFile(await readFile(path.join(rootDir, "AGENTS.md")));
+  const agents = parseMixedFile(
+    await readFile(path.join(rootDir, "AGENTS.md")),
+  );
   assert.ok(agents.ok);
   if (!agents.ok) return;
   assert.equal(agents.manualInner.toString("utf8"), "Shared across clients.\n");
@@ -282,7 +414,9 @@ test("AC2 shared relocations into AGENTS.md accumulate across multiple drifted r
   });
 
   assert.equal(code, 0, output.stderrText());
-  const agents = parseMixedFile(await readFile(path.join(rootDir, "AGENTS.md")));
+  const agents = parseMixedFile(
+    await readFile(path.join(rootDir, "AGENTS.md")),
+  );
   assert.ok(agents.ok);
   if (!agents.ok) return;
   assert.equal(
@@ -314,7 +448,10 @@ test("AC3 keep reclassifies a drifted skill manual-owned, leaves it untouched, a
   // Root files were not drifted, so only the skill goes through the two-way menu.
   assert.ok(events.includes(`classifyOther:${SKILL_PATH}`));
   assert.deepEqual(await readFile(path.join(rootDir, SKILL_PATH)), drifted);
-  assert.equal(ownershipOf(await readV2Lockfile(rootDir), SKILL_PATH), "manual-owned");
+  assert.equal(
+    ownershipOf(await readV2Lockfile(rootDir), SKILL_PATH),
+    "manual-owned",
+  );
 
   // A subsequent non-interactive compile preserves the manual-owned skill.
   const second = await runCli(
@@ -340,7 +477,10 @@ test("AC3 restore overwrites a drifted skill with canonical bytes and refreshes 
 
   assert.equal(code, 0, output.stderrText());
   assert.deepEqual(await readFile(path.join(rootDir, SKILL_PATH)), canonical);
-  assert.equal(ownershipOf(await readV2Lockfile(rootDir), SKILL_PATH), "generated-owned");
+  assert.equal(
+    ownershipOf(await readV2Lockfile(rootDir), SKILL_PATH),
+    "generated-owned",
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -371,7 +511,10 @@ test("AC4 interleaved edit refuses relocation and offers keep/restore/cancel onl
   // Relocation was not offered: the two-way menu handled it.
   assert.ok(events.includes("classifyOther:AGENTS.md"));
   assert.ok(!events.some((event) => event.startsWith("classifyRoot")));
-  assert.equal(ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"), "generated-owned");
+  assert.equal(
+    ownershipOf(await readV2Lockfile(rootDir), "AGENTS.md"),
+    "generated-owned",
+  );
 });
 
 test("AC4 keeping AGENTS.md manual-owned does not disable client-specific CLAUDE.md relocation", async () => {
@@ -402,7 +545,9 @@ test("AC4 keeping AGENTS.md manual-owned does not disable client-specific CLAUDE
   assert.equal(ownershipOf(lockfile, "AGENTS.md"), "manual-owned");
   assert.equal(ownershipOf(lockfile, "CLAUDE.md"), "mixed");
 
-  const claude = parseMixedFile(await readFile(path.join(rootDir, "CLAUDE.md")));
+  const claude = parseMixedFile(
+    await readFile(path.join(rootDir, "CLAUDE.md")),
+  );
   assert.ok(claude.ok);
   if (!claude.ok) return;
   assert.equal(
@@ -433,8 +578,14 @@ test("AC5 cancel writes nothing and prints the standard refusal", async () => {
   assert.equal(code, 3);
   assert.match(output.stderrText(), /hash-mismatch/u);
   // Write-path sentinel: nothing changed on disk.
-  assert.deepEqual(await readFile(path.join(rootDir, "AGENTS.md")), agentsBefore);
-  assert.deepEqual(await readFile(path.join(rootDir, "ai-profile.lock")), lockBefore);
+  assert.deepEqual(
+    await readFile(path.join(rootDir, "AGENTS.md")),
+    agentsBefore,
+  );
+  assert.deepEqual(
+    await readFile(path.join(rootDir, "ai-profile.lock")),
+    lockBefore,
+  );
 });
 
 test("AC5 declining the final confirmation writes nothing", async () => {
@@ -455,8 +606,14 @@ test("AC5 declining the final confirmation writes nothing", async () => {
   );
 
   assert.equal(code, 3);
-  assert.deepEqual(await readFile(path.join(rootDir, "AGENTS.md")), agentsBefore);
-  assert.deepEqual(await readFile(path.join(rootDir, "ai-profile.lock")), lockBefore);
+  assert.deepEqual(
+    await readFile(path.join(rootDir, "AGENTS.md")),
+    agentsBefore,
+  );
+  assert.deepEqual(
+    await readFile(path.join(rootDir, "ai-profile.lock")),
+    lockBefore,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -501,8 +658,14 @@ test("root reconciliation does not overwrite a non-drift protected file (missing
   // Reconciliation was skipped entirely (no menu shown) and nothing was written.
   assert.equal(events.length, 0);
   assert.deepEqual(await readFile(path.join(rootDir, SKILL_PATH)), skillBefore);
-  assert.deepEqual(await readFile(path.join(rootDir, "AGENTS.md")), agentsBefore);
-  assert.deepEqual(await readFile(path.join(rootDir, "ai-profile.lock")), lockBefore);
+  assert.deepEqual(
+    await readFile(path.join(rootDir, "AGENTS.md")),
+    agentsBefore,
+  );
+  assert.deepEqual(
+    await readFile(path.join(rootDir, "ai-profile.lock")),
+    lockBefore,
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -553,10 +716,13 @@ test("AC7 after shared relocation, init --import and compile agree AGENTS.md is 
   await driftFile(rootDir, "AGENTS.md", "Shared reconciled rule.\n");
   const { prompts } = scriptPrompts({ "AGENTS.md": "shared" });
   assert.equal(
-    await runCli(["compile", "--root", rootDir, "--write", "--target", "agents-md"], {
-      ...createOutput(),
-      reconcilePrompts: prompts,
-    }),
+    await runCli(
+      ["compile", "--root", rootDir, "--write", "--target", "agents-md"],
+      {
+        ...createOutput(),
+        reconcilePrompts: prompts,
+      },
+    ),
     0,
   );
 
@@ -593,7 +759,10 @@ test("AC7 after keep, init --import and compile agree the skill is preserved", a
   assert.equal(finding.ownership, "manual-owned");
   assert.notEqual(finding.action, "refuse-conflict");
 
-  const code = await runCli(["compile", "--root", rootDir, "--write"], createOutput());
+  const code = await runCli(
+    ["compile", "--root", rootDir, "--write"],
+    createOutput(),
+  );
   assert.equal(code, 0);
   assert.deepEqual(await readFile(path.join(rootDir, SKILL_PATH)), before);
 });

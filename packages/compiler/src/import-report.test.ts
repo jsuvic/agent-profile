@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -17,6 +17,7 @@ import {
   buildPhase14ImportReport,
   extractDeclaredName,
   planRootInstructionsAdoption,
+  readRegionAwareFile,
   serializeLockfile,
   sha256Hex,
   type AiProfileLockV2,
@@ -27,6 +28,25 @@ import {
 async function createTempRoot(): Promise<string> {
   return mkdtemp(path.join(tmpdir(), "ap-import-report-"));
 }
+
+test("readRegionAwareFile refuses a symlinked ancestor directory", async () => {
+  const root = await createTempRoot();
+  const outside = await createTempRoot();
+  await mkdir(path.join(outside, "agent"), { recursive: true });
+  await writeFile(path.join(outside, "agent", "settings.json"), "external", "utf8");
+  try {
+    await symlink(outside, path.join(root, ".tabnine"), "junction");
+  } catch {
+    // Symlink creation can require privileges on some Windows installations.
+    return;
+  }
+
+  const result = await readRegionAwareFile(
+    root,
+    ".tabnine/agent/settings.json",
+  );
+  assert.deepEqual(result, { refused: true });
+});
 
 const EMPTY_STACK = {
   languages: [],

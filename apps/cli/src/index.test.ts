@@ -24,6 +24,11 @@ import {
   parseProfileYaml,
   type PresetTokenPayloadV1,
 } from "@agent-profile/core";
+import {
+  compileProfile,
+  createLockfileFile,
+  resolveModelPolicyLockfile,
+} from "@agent-profile/compiler";
 
 import { runCli } from "./index.js";
 import {
@@ -193,6 +198,145 @@ test("doctor without --mcp-suggestions emits no MCP suggestion codes", async () 
 
   assert.equal(code, 0);
   assert.doesNotMatch(output.stdoutText(), /MCP-SUGGEST/u);
+});
+
+// --- Phase 31.5 (I7): doctor --models / --probe ---
+
+test("doctor without --models never emits model-policy findings (default output unchanged)", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+  const code = await runCli(["doctor", "--root", rootDir], { io: output });
+
+  assert.equal(code, 0);
+  assert.doesNotMatch(output.stdoutText(), /LINT-MODEL/u);
+});
+
+test("doctor --models runs zero client/network processes", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(["doctor", "--root", rootDir, "--models"], { io: output }),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.match(output.stdoutText(), /LINT-MODEL/u);
+});
+
+test("doctor declining --probe never touches the injected probeRunner", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+  const probe = createProbeRunnerStub();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(["doctor", "--root", rootDir, "--models"], {
+      io: output,
+      probeRunner: probe.runner,
+    }),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls, 0);
+  assert.doesNotMatch(output.stdoutText(), /LINT-MODEL-PROBE-001/u);
+});
+
+test("doctor --probe alone (without --models) is a documented no-op: zero probe calls", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+  const probe = createProbeRunnerStub();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(["doctor", "--root", rootDir, "--probe"], {
+      io: output,
+      probeRunner: probe.runner,
+    }),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls, 0);
+  assert.doesNotMatch(output.stdoutText(), /LINT-MODEL-PROBE-001/u);
+});
+
+test("doctor --models --probe calls the injected probeRunner and adds advisory rows without changing status for unknown evidence", async () => {
+  const rootDir = await createModelsRoot();
+  const baselineOutput = createOutput();
+  const baselineCode = await runCli(
+    ["doctor", "--root", rootDir, "--models", "--json"],
+    { io: baselineOutput },
+  );
+  assert.equal(baselineCode, 0, baselineOutput.stderrText());
+  const baseline = JSON.parse(baselineOutput.stdoutText()) as {
+    status: string;
+    issues: Array<{ code: string }>;
+  };
+
+  const output = createOutput();
+  const probe = createProbeRunnerStub();
+  const code = await runCli(
+    ["doctor", "--root", rootDir, "--models", "--probe", "--json"],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls > 0, true);
+  const parsed = JSON.parse(output.stdoutText()) as {
+    status: string;
+    issues: Array<{
+      code: string;
+      severity: string;
+      actual: string;
+    }>;
+  };
+  const probeIssues = parsed.issues.filter(
+    (issue) => issue.code === "LINT-MODEL-PROBE-001",
+  );
+  assert.equal(probeIssues.length > 0, true);
+  assert.equal(
+    probeIssues.every((issue) => issue.severity === "info"),
+    true,
+  );
+  // Closed status/evidence vocabulary only -- no raw client output leaks.
+  const CLOSED_PROBE_STATUSES = new Set([
+    "available",
+    "not-entitled",
+    "temporarily-limited",
+    "unsupported-client",
+    "provider-unavailable",
+    "auth-required",
+    "unknown",
+  ]);
+  for (const issue of probeIssues) {
+    assert.equal(CLOSED_PROBE_STATUSES.has(issue.actual), true, issue.actual);
+  }
+  // Probe evidence never retroactively changes an offline finding's status
+  // or the non-probe issue set.
+  assert.equal(parsed.status, baseline.status);
+  const nonProbeIssues = parsed.issues.filter(
+    (issue) => issue.code !== "LINT-MODEL-PROBE-001",
+  );
+  assert.deepEqual(nonProbeIssues, baseline.issues);
+});
+
+test("doctor --models --probe --json still repeats the pre-probe consent disclosure (on stderr, keeping stdout a single clean JSON line)", async () => {
+  const rootDir = await createModelsRoot();
+  const output = createOutput();
+  const probe = createProbeRunnerStub();
+
+  const code = await runCli(
+    ["doctor", "--root", rootDir, "--models", "--probe", "--json"],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls > 0, true);
+  assert.match(
+    output.stderrText(),
+    /Probing exact model availability \(--probe\)/u,
+  );
+  // stdout stays exactly one clean JSON record: the disclosure never leaks
+  // into it.
+  assert.doesNotThrow(() => JSON.parse(output.stdoutText()));
+  assert.doesNotMatch(output.stdoutText(), /Probing exact model availability/u);
 });
 
 // --- TTY-gating: piped/non-interactive runs stay byte-identical (no color) ---
@@ -534,6 +678,120 @@ test("compile selected target writes selected output and lockfile only", async (
   assert.match(
     await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
     /"path": "AGENTS.md"/u,
+  );
+});
+
+test("compile --target --write keeps every other target's lockfile provenance", async () => {
+  const rootDir = await createProfileOnlyRoot();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write"], {
+      io: createOutput(),
+    }),
+    0,
+  );
+  const before = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  );
+  const outOfScopeTemplates = before.templates.filter(
+    (template: { target: string }) => template.target !== "agents-md",
+  );
+  const outOfScopeOutputs = before.outputs.filter(
+    (output: { target: string }) => output.target !== "agents-md",
+  );
+  assert.ok(
+    outOfScopeTemplates.length > 0 && outOfScopeOutputs.length > 0,
+    "the fixture profile must enable more than the scoped target",
+  );
+
+  assert.equal(
+    await runCli(
+      ["compile", "--root", rootDir, "--target", "agents-md", "--write"],
+      { io: createOutput() },
+    ),
+    0,
+  );
+  const after = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  );
+
+  // A scoped run does not regenerate the other targets, so their entries are
+  // not "no longer in the current compile result" - they were never requested.
+  // Dropping them would leave their files on disk with no recorded ownership.
+  for (const template of outOfScopeTemplates) {
+    assert.deepEqual(
+      after.templates.find(
+        (candidate: { id: string }) => candidate.id === template.id,
+      ),
+      template,
+      `template ${template.id} must survive a scoped compile byte-identically`,
+    );
+  }
+  for (const output of outOfScopeOutputs) {
+    assert.deepEqual(
+      after.outputs.find(
+        (candidate: { path: string }) => candidate.path === output.path,
+      ),
+      output,
+      `output ${output.path} must survive a scoped compile byte-identically`,
+    );
+  }
+  assert.ok(
+    after.outputs.some(
+      (output: { path: string }) => output.path === "AGENTS.md",
+    ),
+    "the scoped target's own entry is still refreshed",
+  );
+});
+
+test("compile --target --write still prunes an orphan inside the requested target", async () => {
+  const rootDir = await createProfileOnlyRoot();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write"], {
+      io: createOutput(),
+    }),
+    0,
+  );
+  const lockPath = path.join(rootDir, "ai-profile.lock");
+  const seeded = JSON.parse(await readFile(lockPath, "utf8"));
+  const orphan = {
+    path: "AGENTS-RETIRED.md",
+    target: "agents-md",
+    templateId: "targets/agents-md@1",
+    ownership: "generated-owned",
+    sha256: "0".repeat(64),
+  };
+  seeded.outputs = [...seeded.outputs, orphan].sort(
+    (left: { path: string }, right: { path: string }) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  await writeFile(lockPath, `${JSON.stringify(seeded, null, 2)}\n`, "utf8");
+
+  assert.equal(
+    await runCli(
+      ["compile", "--root", rootDir, "--target", "agents-md", "--write"],
+      { io: createOutput() },
+    ),
+    0,
+  );
+  const after = JSON.parse(await readFile(lockPath, "utf8"));
+
+  // Preservation must not invert phase-05's pruning rule: an entry belonging to
+  // a target this run DID regenerate is genuinely orphaned and still goes. This
+  // also pins the two vocabularies together - if a lockfile `target` value ever
+  // stopped matching the `--target` id, nothing here would match `requested`
+  // and the orphan would be resurrected instead.
+  assert.equal(
+    after.outputs.some(
+      (output: { path: string }) => output.path === "AGENTS-RETIRED.md",
+    ),
+    false,
+    "an orphan inside the requested target must still be pruned",
+  );
+  assert.ok(
+    after.outputs.some(
+      (output: { path: string }) => output.path === ".codex/config.toml",
+    ),
+    "while an untouched target's entry survives",
   );
 });
 
@@ -2004,6 +2262,83 @@ async function createProfileOnlyRoot(): Promise<string> {
   );
   await writeFile(path.join(rootDir, ".gitignore"), ".env\n.env.*\n", "utf8");
   return rootDir;
+}
+
+// Phase 31.5 (I7): a doctor --models fixture. Enables v3 model-policy
+// (subagentPolicy.enabled + preset) and records a matching, freshly-resolved
+// `ai-profile.lock` modelPolicy block, so `--models` has real rows to
+// classify and `--probe`'s primary-role candidate list is non-empty.
+async function createModelsRoot(): Promise<string> {
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-cli-models-"),
+  );
+  const profileYaml = `${(
+    await readFile(path.join(fixtureDir, "ai-profile.yaml"), "utf8")
+  ).trimEnd()}\nsubagentPolicy:\n  enabled: true\n  preset: role-aware\n`;
+  await writeFile(path.join(rootDir, "ai-profile.yaml"), profileYaml, "utf8");
+  await writeFile(
+    path.join(rootDir, ".gitignore"),
+    ".env\n.env.*\n.cce/\n.mcp.json\n.claude/settings.local.json\n.claude/worktrees/\n.codex/config.toml\n.codex/hooks.json\n",
+    "utf8",
+  );
+
+  const profileBytes = Buffer.from(profileYaml, "utf8");
+  const profileResult = parseProfileYaml(profileYaml);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) return rootDir;
+
+  const compileResult = compileProfile({ profile: profileResult.profile });
+  assert.equal(compileResult.ok, true);
+  if (!compileResult.ok) return rootDir;
+
+  for (const file of compileResult.files) {
+    await mkdir(path.join(rootDir, path.dirname(file.path)), {
+      recursive: true,
+    });
+    await writeFile(path.join(rootDir, file.path), file.bytes);
+  }
+
+  const modelPolicy = resolveModelPolicyLockfile(profileResult.profile);
+  const lockfile = createLockfileFile({
+    profileBytes,
+    templates: compileResult.templates,
+    files: compileResult.files,
+    ...(modelPolicy ? { modelPolicy } : {}),
+  });
+  await writeFile(path.join(rootDir, lockfile.path), lockfile.bytes);
+
+  return rootDir;
+}
+
+function createProbeRunnerStub(): {
+  runner: {
+    run(): Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+    }>;
+  };
+  calls: number;
+} {
+  const stub = {
+    calls: 0,
+    runner: {
+      async run() {
+        stub.calls += 1;
+        // Deliberately ambiguous: no closed-vocabulary pattern matches, so
+        // the classifier reports "unknown" -- proving unknown evidence never
+        // changes any offline finding's severity.
+        return {
+          exitCode: 0,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    },
+  };
+  return stub;
 }
 
 async function createTypescriptRoot(): Promise<string> {

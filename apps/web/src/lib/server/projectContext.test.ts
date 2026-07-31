@@ -3,13 +3,22 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 
 import {
+  serializeLockfile,
+  sha256Hex,
+  type AiProfileLockV2,
+} from "@agent-profile/compiler";
+
+import {
   loadProjectContext,
   redactIfSecretLike,
+  redactSubagentPolicyForBrowser,
+  readLockModelPolicy,
+  readTabnineSettingsOwnership,
   resolveProjectRoot,
   truncatePreview,
 } from "./projectContext.js";
@@ -124,6 +133,62 @@ test("loadProjectContext parses a valid profile and reports safety mode", async 
   });
 });
 
+test("model-policy presentation degrades when ai-profile.lock cannot be read", async () => {
+  await withTempProject(async (rootDir) => {
+    await mkdir(path.join(rootDir, "ai-profile.lock"));
+    assert.equal(await readLockModelPolicy(rootDir), undefined);
+  });
+});
+
+test("Tabnine settings ownership treats a non-file settings path as unowned", async () => {
+  await withTempProject(async (rootDir) => {
+    await mkdir(path.join(rootDir, ".tabnine", "agent", "settings.json"), {
+      recursive: true,
+    });
+    assert.equal(await readTabnineSettingsOwnership(rootDir), "unowned");
+  });
+});
+
+test("Tabnine settings ownership degrades an unreadable generated-owned file to unowned", async () => {
+  if (process.platform === "win32") return;
+  await withTempProject(async (rootDir) => {
+    const relativePath = ".tabnine/agent/settings.json";
+    const settingsPath = path.join(rootDir, relativePath);
+    const bytes = Buffer.from('{"model":{"id":"gpt-5.4"}}\n');
+    await mkdir(path.dirname(settingsPath), { recursive: true });
+    await writeFile(settingsPath, bytes);
+    const lockfile: AiProfileLockV2 = {
+      version: 2,
+      profile: {
+        path: "ai-profile.yaml",
+        schemaVersion: 1,
+        sha256: sha256Hex(Buffer.from("profile")),
+      },
+      compiler: { name: "agent-profile", version: "0.0.0" },
+      templates: [],
+      outputs: [
+        {
+          path: relativePath,
+          target: "tabnine",
+          templateId: "tabnine-model-settings@1",
+          ownership: "generated-owned",
+          sha256: sha256Hex(bytes),
+        },
+      ],
+    };
+    await writeFile(
+      path.join(rootDir, "ai-profile.lock"),
+      serializeLockfile(lockfile),
+    );
+    await chmod(settingsPath, 0o000);
+    try {
+      assert.equal(await readTabnineSettingsOwnership(rootDir), "unowned");
+    } finally {
+      await chmod(settingsPath, 0o600);
+    }
+  });
+});
+
 test("redactIfSecretLike masks values that look like secrets", () => {
   // The core security helper looks for explicit secret-like patterns
   // (api_key/token/secret/password assignments, BEGIN PRIVATE KEY blocks,
@@ -137,6 +202,27 @@ test("redactIfSecretLike masks values that look like secrets", () => {
 test("redactIfSecretLike leaves benign text alone", () => {
   const benign = "languages: [typescript]\nframeworks: [sveltekit]";
   assert.equal(redactIfSecretLike(benign), benign);
+});
+
+test("redactSubagentPolicyForBrowser never serializes a secret-like model override", () => {
+  const secretLike = `api_key: sk-${"x".repeat(48)}`;
+  const policy = {
+    enabled: true,
+    preset: "role-aware",
+    roles: {
+      implementer: {
+        capability: "balanced",
+        effort: "high",
+        overrides: { codex: { model: secretLike } },
+      },
+    },
+  } as const;
+  const browserPolicy = redactSubagentPolicyForBrowser(policy);
+  assert.equal(JSON.stringify(browserPolicy).includes(secretLike), false);
+  assert.equal(
+    browserPolicy?.roles?.implementer?.overrides?.codex?.model,
+    redactIfSecretLike(secretLike),
+  );
 });
 
 test("truncatePreview marks oversize content", () => {

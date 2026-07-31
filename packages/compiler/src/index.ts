@@ -54,6 +54,22 @@ export {
   renderClaudeMd,
 } from "./compiler.js";
 export {
+  createValidatedExternalChangeRiskReviewEvent,
+  createChangeRiskOrchestrationState,
+  deriveRemediatedClusterKeys,
+  transitionChangeRiskOrchestration,
+  validateChangeRiskOrchestrationStateV1,
+} from "./change-risk-orchestration.js";
+export type {
+  ChangeRiskClusterFinding,
+  ChangeRiskOrchestrationEvent,
+  ChangeRiskOrchestrationStateV1,
+  ChangeRiskOrchestrationStateValidation,
+  ChangeRiskReviewFinding,
+  ChangeRiskReviewResultEvent,
+  ValidatedExternalChangeRiskReviewEvent,
+} from "./change-risk-orchestration.js";
+export {
   buildClientMappingReport,
   CLIENT_MAPPING_VERSION,
 } from "./permission-mapping.js";
@@ -80,8 +96,10 @@ export {
   CLAUDE_MODEL_POLICY_CATALOG,
   CODEX_MODEL_POLICY_CATALOG,
   deriveModelPolicyRoleOverrides,
+  deriveModelPolicyTabnineRoleOverrides,
   MODEL_POLICY_PRIMARY_ROLE,
   MODEL_POLICY_TARGET_CATALOG_VERSION,
+  modelPolicyEffortFromTargetEffort,
   resolveModelPolicyLockfile,
   toLockModelPolicyFromTargetTable,
 } from "./model-policy-target-adapter.js";
@@ -91,8 +109,14 @@ export type {
   ModelPolicyTargetClientResolution,
   ModelPolicyTargetRow,
 } from "./model-policy-target-adapter.js";
-export { compareModelPolicyUpgrade } from "./model-policy-upgrade-comparison.js";
-export type { ModelPolicyUpgradeComparisonRow } from "./model-policy-upgrade-comparison.js";
+export {
+  compareModelPolicyTabnineUpgrade,
+  compareModelPolicyUpgrade,
+} from "./model-policy-upgrade-comparison.js";
+export type {
+  ModelPolicyTabnineUpgradeComparisonRow,
+  ModelPolicyUpgradeComparisonRow,
+} from "./model-policy-upgrade-comparison.js";
 export { compareModelPolicyUpgradeFromLegacy } from "./model-policy-legacy-upgrade-comparison.js";
 export type { ModelPolicyLegacyUpgradeComparisonRow } from "./model-policy-legacy-upgrade-comparison.js";
 export { planModelPolicyUpgrade } from "./model-policy-upgrade-planning.js";
@@ -124,6 +148,11 @@ export type {
   ModelPolicyTabnineSettingsPlan,
   TabnineSettingsOwnership,
 } from "./model-policy-tabnine-adapter.js";
+// Phase 31.5 (I8): the single owner of Tabnine's rendered lifecycle wording,
+// re-exported so the local web UI renders the same `organization/private -
+// unrated` label the generated guidance tables use, rather than restating the
+// rule and drifting from it.
+export { tabnineLifecycleLabel } from "./subagent-policy-guidance.js";
 export {
   ADVISORY_HOOK_TEMPLATES,
   advisoryHookCommandViolatesForbiddenPatterns,
@@ -203,6 +232,7 @@ export type {
   ModelPolicyPreset,
   ModelPolicyResolutionSource,
   ModelPolicyRoleId,
+  ModelPolicyTargetEffort,
   TemplateDescriptor,
 } from "./types.js";
 export type {

@@ -7,6 +7,7 @@ explicit capability status, consented availability checks, and safe upgrade
 provenance.
 
 - Spec: [`001-model-selection-lifecycle.md`](001-model-selection-lifecycle.md)
+- Final evidence: [`002-final-spec-to-test-matrix.md`](002-final-spec-to-test-matrix.md)
 - Issue briefs: [`issues/`](issues/)
 - Evidence: [`../../research/012-model-policy-mapping-v3-evidence.md`](../../research/012-model-policy-mapping-v3-evidence.md)
 - Governing decisions: ADR 0016 as amended and ADR 0021

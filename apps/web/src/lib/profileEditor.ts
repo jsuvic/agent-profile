@@ -1,10 +1,89 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Agent Profile Compiler contributors
 
-import type {
-  AiProfile,
-  AiProfileEffectivePermissions,
+import {
+  MODEL_POLICY_PRESET_TABLE,
+  type ModelPolicyPreset,
+  type ModelPolicyRoleId,
+  type AiProfile,
+  type AiProfileEffectivePermissions,
+  type ModelPolicyCapability,
+  type ModelPolicyEffort,
 } from "@agent-profile/core";
+
+type ModelPolicyRoles = NonNullable<
+  NonNullable<AiProfile["subagentPolicy"]>["roles"]
+>;
+
+export function rebaseTransientModelPolicyRoles(input: {
+  roles: ModelPolicyRoles | undefined;
+  transientRoles: ReadonlySet<ModelPolicyRoleId>;
+  preset: ModelPolicyPreset;
+}): ModelPolicyRoles | undefined {
+  if (!input.roles) return undefined;
+  const roles = { ...input.roles };
+  for (const role of input.transientRoles) {
+    const existing = roles[role];
+    if (!existing) continue;
+    roles[role] = {
+      ...existing,
+      ...MODEL_POLICY_PRESET_TABLE[input.preset][role],
+    };
+  }
+  return roles;
+}
+
+export function updateModelPolicyOverride(input: {
+  roles: ModelPolicyRoles | undefined;
+  role: ModelPolicyRoleId;
+  fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort };
+  client: "codex" | "claude" | "tabnine";
+  value: string;
+  transient: boolean;
+}): { roles: ModelPolicyRoles | undefined; transient: boolean } {
+  const existing = input.roles?.[input.role];
+  const trimmed = input.value.trim();
+  if (!existing && !trimmed) {
+    return { roles: input.roles, transient: false };
+  }
+
+  const base = existing ?? input.fallback;
+  const overrides = { ...base.overrides };
+  if (trimmed) {
+    overrides[input.client] = {
+      ...overrides[input.client],
+      model: trimmed,
+    };
+  } else {
+    const current = overrides[input.client];
+    if (current) {
+      const { model: _removedModel, ...remaining } = current;
+      if (Object.keys(remaining).length > 0)
+        overrides[input.client] = remaining;
+      else delete overrides[input.client];
+    }
+  }
+
+  const roles = { ...input.roles };
+  const transient = input.transient || (!existing && Boolean(trimmed));
+  if (Object.keys(overrides).length > 0) {
+    roles[input.role] = { ...base, overrides };
+    return { roles, transient };
+  }
+  if (transient) {
+    delete roles[input.role];
+    return {
+      roles: Object.keys(roles).length > 0 ? roles : undefined,
+      transient: false,
+    };
+  }
+
+  // The role predated this override edit (or was explicitly edited through
+  // capability/effort controls), so clearing its final model must preserve
+  // that intent instead of silently reverting to the preset.
+  roles[input.role] = { ...base, overrides: undefined };
+  return { roles, transient: false };
+}
 
 export const WORKFLOW_CONTROLS = [
   { key: "sdd", label: "sdd" },
@@ -132,6 +211,7 @@ export type ProfileCandidateSource = {
   rawPermissions: AiProfile["permissions"];
   rawSafety: AiProfile["safety"];
   rawCapabilities: AiProfile["capabilities"];
+  editableSubagentPolicy: AiProfile["subagentPolicy"];
 };
 
 export type ProfileCandidateDraft = PermissionDraft &
@@ -147,6 +227,7 @@ export type ProfileCandidateDraft = PermissionDraft &
     claudeEnabled: boolean;
     safetyMode: string;
     requiresSandbox: boolean;
+    subagentPolicy: AiProfile["subagentPolicy"];
   };
 
 export function parseSlugList(raw: string): string[] {
@@ -162,15 +243,24 @@ export function initialPermissionValue(
 ): string {
   switch (key) {
     case "filesystemRead":
-      return v.rawPermissions?.filesystem?.read ?? v.permissions.filesystem.read;
+      return (
+        v.rawPermissions?.filesystem?.read ?? v.permissions.filesystem.read
+      );
     case "filesystemWrite":
-      return v.rawPermissions?.filesystem?.write ?? v.permissions.filesystem.write;
+      return (
+        v.rawPermissions?.filesystem?.write ?? v.permissions.filesystem.write
+      );
     case "shellRun":
       return v.rawPermissions?.shell?.run ?? v.permissions.shell.run;
     case "dependenciesInstall":
-      return v.rawPermissions?.dependencies?.install ?? v.permissions.dependencies.install;
+      return (
+        v.rawPermissions?.dependencies?.install ??
+        v.permissions.dependencies.install
+      );
     case "networkExternal":
-      return v.rawPermissions?.network?.external ?? v.permissions.network.external;
+      return (
+        v.rawPermissions?.network?.external ?? v.permissions.network.external
+      );
   }
 }
 
@@ -231,6 +321,15 @@ export function buildCandidateProfile(
   // so saves never drop selected skill or subagent packs.
   if (source?.rawCapabilities !== undefined) {
     candidate["capabilities"] = source.rawCapabilities;
+  }
+
+  // Model policy uses the same reviewed candidate/diff/write path as every
+  // other editable profile field. Keeping the complete structured value here
+  // preserves legacy/v3 roles and exact target overrides that this UI does not
+  // currently change, while the progressively disclosed controls edit only the
+  // selected preset and explicit role values.
+  if (source?.editableSubagentPolicy !== undefined) {
+    candidate["subagentPolicy"] = draft.subagentPolicy;
   }
 
   if (hasExplicitPerms || hasPermissionChanges) {

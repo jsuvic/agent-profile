@@ -15,11 +15,15 @@ import {
   applyWritePlanAtomic,
   AtomicWritePlanError,
   buildPhase14ImportReport,
+  compareModelPolicyTabnineUpgrade,
   compareModelPolicyUpgrade,
   compareModelPolicyUpgradeFromLegacy,
   compileProfile,
   deriveModelPolicyRoleOverrides,
+  deriveModelPolicyTabnineRoleOverrides,
   getLocalRuntimeGitignoreFindings,
+  MODEL_POLICY_PRIMARY_ROLE,
+  modelPolicyEffortFromTargetEffort,
   parseMixedFile,
   planModelPolicyUpgrade,
   planRootInstructionsAdoption,
@@ -44,9 +48,11 @@ import {
   type ImportStrategy,
   type LockModelPolicyV2,
   type LockOutputV2,
+  type LockTemplate,
   type MixedOutputDescriptor,
   type ModelPolicyLegacyUpgradeComparisonRow,
   type ModelPolicyTabnineSettingsPlan,
+  type ModelPolicyTabnineUpgradeComparisonRow,
   type ModelPolicyUpgradeBulkStrategy,
   type ModelPolicyUpgradeComparisonRow,
   type ModelPolicyUpgradePlan,
@@ -69,6 +75,7 @@ import {
   computeOfferedCapabilities,
   DEFAULT_MODEL_POLICY_PRESET,
   deriveEffectivePermissions,
+  MODEL_POLICY_PRESET_TABLE,
   parseProfileYaml,
   resolveEffectiveSubagentPolicy,
   verifyPresetToken,
@@ -89,6 +96,7 @@ import {
 import {
   runDoctor,
   type DoctorIssue,
+  type DoctorModelProbeRunner,
   type DoctorResult,
 } from "@agent-profile/doctor";
 
@@ -96,6 +104,7 @@ import type { LogoCommand } from "./branding.js";
 import {
   buildCompileWrites,
   findLockfileOwnedDrift,
+  hasSecretLikeModelOverride,
   planCompileDryRun,
   planRegionAwareWrites,
   resolveTabnineModelSettings,
@@ -128,7 +137,16 @@ import {
   formatUpdateCheckMessage,
   UPDATE_CHECK_PACKAGE_NAME,
 } from "./update-check.js";
-import type { ModelProbeProcessRunner } from "./model-probe.js";
+import {
+  buildModelProbePlan,
+  createNodeModelProbeProcessRunner,
+  runModelProbe,
+  type ModelProbeClientId,
+  type ModelProbeProcessRunner,
+  type ModelProbeReport,
+  type ModelProbeSelection,
+  type ModelProbeStatus,
+} from "./model-probe.js";
 import {
   formatWizardDeclined,
   isNonInteractive,
@@ -236,6 +254,11 @@ type ParsedDoctorArgs =
       root: string;
       json: boolean;
       mcpSuggestions: boolean;
+      // Phase 31.5 (I7): opt-in, offline model-policy category.
+      models: boolean;
+      // Phase 31.5 (I7): opt-in, ADDITIVE ephemeral availability rows. Only
+      // takes effect combined with `models`; alone it is a documented no-op.
+      probe: boolean;
       help: boolean;
     }
   | {
@@ -275,6 +298,17 @@ type ParsedUpgradeArgs =
        * rejected as a flag; this one isn't, since `upgrade` is already a
        * scriptable, non-interactive-friendly command). */
       checkForUpdates: boolean;
+      /** Phase 31.5 (I6c): explicit, off-by-default opt-in to re-run I4's
+       * consented, source-free model probe against the exact candidate
+       * model(s) an adopt/bulk-preset-switch `--write` is about to adopt, to
+       * help confirm availability before adopting. A SEPARATE consent from
+       * `checkForUpdates` above -- accepting or declining one never affects
+       * the other, and both default to declined. Unlike `init`'s
+       * `--probe-models` (rejected outright: interactive-wizard-only
+       * consent), `upgrade` already treats `checkForUpdates` as a plain
+       * boolean flag rather than an interactive prompt, so this flag follows
+       * that same precedent. */
+      probeModels: boolean;
     }
   | { ok: false; message: string };
 
@@ -398,7 +432,12 @@ export async function runCli(
       io,
       options,
       {
-        doctor: () => runDoctorCommand([], cwd, io),
+        doctor: () =>
+          runDoctorCommand([], cwd, io, {
+            ...(options.probeRunner
+              ? { probeRunner: options.probeRunner }
+              : {}),
+          }),
         init: () =>
           runInit([], cwd, io, {
             ...(options.prompts ? { prompts: options.prompts } : {}),
@@ -413,6 +452,9 @@ export async function runCli(
               : {}),
             ...(options.nonInteractive !== undefined
               ? { nonInteractive: options.nonInteractive }
+              : {}),
+            ...(options.probeRunner
+              ? { probeRunner: options.probeRunner }
               : {}),
           }),
         configure: () =>
@@ -465,7 +507,9 @@ export async function runCli(
           : {}),
       });
     case "doctor":
-      return runDoctorCommand(rest, cwd, io);
+      return runDoctorCommand(rest, cwd, io, {
+        ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
+      });
     case "init":
       return runInit(rest, cwd, io, {
         ...(options.presetNow ? { presetNow: options.presetNow } : {}),
@@ -487,6 +531,7 @@ export async function runCli(
         ...(options.updateCheckTimeoutMs !== undefined
           ? { updateCheckTimeoutMs: options.updateCheckTimeoutMs }
           : {}),
+        ...(options.probeRunner ? { probeRunner: options.probeRunner } : {}),
       });
     case "configure":
       return runConfigure(rest, cwd, io, {
@@ -615,6 +660,12 @@ type RunUpgradeOptions = {
    * registry request's abort timeout. Production callers omit this and get
    * `checkForPackageUpdate`'s own default. */
   updateCheckTimeoutMs?: number;
+  /** Test-only seam (Phase 31.5 I6c): injects a fake probe process runner
+   * for `--probe-models`, mirroring `CliOptions.probeRunner`'s existing
+   * `init`-wizard seam. Production callers omit this and get the real Node
+   * runner; only ever invoked when `--probe-models` was passed AND there is
+   * at least one exact candidate model to probe. */
+  probeRunner?: ModelProbeProcessRunner;
 };
 
 /**
@@ -626,7 +677,10 @@ type RunUpgradeOptions = {
  */
 function hasV3ModelPreset(
   policy: AiProfileSubagentPolicy | undefined,
-): policy is AiProfileSubagentPolicy & { enabled: true; preset: ModelPolicyPreset } {
+): policy is AiProfileSubagentPolicy & {
+  enabled: true;
+  preset: ModelPolicyPreset;
+} {
   return policy?.enabled === true && policy.preset !== undefined;
 }
 
@@ -665,6 +719,160 @@ function resolveModelPolicyWriteTargetPreset(
     return bulkPreset;
   }
   return bulkPreset ?? DEFAULT_MODEL_POLICY_PRESET;
+}
+
+/**
+ * Phase 31.5 (I6c): the exact candidate models an adopt/bulk-preset-switch
+ * `--write`'s plan is about to write, restricted to `MODEL_POLICY_PRIMARY_ROLE`
+ * rows only (a single role keeps the probe's bounded call count small and
+ * matches `wizard.ts`'s `buildModelProbeSelections` precedent), to clients the
+ * profile actually has ENABLED (PR review finding: a resolved lock block can
+ * carry rows for a client the profile never turned on -- e.g. only Codex
+ * enabled but the block still has a Claude row -- and probing a disabled
+ * client would start its executable and contact its provider even though
+ * that client isn't part of this repository's configured workflow), and to
+ * codex/claude only (Tabnine has no documented source-free one-shot
+ * invocation; see `model-probe.ts`'s invocation-contract table). Each
+ * selection carries the row's own recorded `alternatives` (PR review finding:
+ * omitting them meant `buildModelProbePlan` could never exercise I4's
+ * ordered-alternative-after-unavailability behavior, so a failed primary
+ * candidate was reported with no fallback ever tried, unlike `wizard.ts`'s
+ * own selection builder).
+ */
+function buildUpgradeModelProbeSelections(
+  block: LockModelPolicyV2,
+  enabledClients: ReadonlySet<ModelProbeClientId>,
+): ModelProbeSelection[] {
+  const selections: ModelProbeSelection[] = [];
+  for (const row of block.resolutions) {
+    if (row.role !== MODEL_POLICY_PRIMARY_ROLE) continue;
+    if (row.client !== "codex" && row.client !== "claude") continue;
+    if (!enabledClients.has(row.client)) continue;
+    selections.push({
+      client: row.client,
+      model: row.model,
+      effort: modelPolicyEffortFromTargetEffort(row.effort ?? "medium"),
+      alternatives: row.alternatives,
+    });
+  }
+  return selections;
+}
+
+/** Result of `runConsentedUpgradeModelProbe`: the advisory report itself,
+ * plus the subset of the exact primary candidates that this run is about to
+ * adopt but which the probe could NOT confirm as `"available"`. Callers use
+ * the latter to gate the write (PR review finding: the previous revision
+ * printed the probe's warning and then wrote the potentially-unavailable
+ * model in the very same invocation, so the result never actually informed
+ * the adopt decision as I6c requires -- only the DECLINED path may proceed
+ * on catalog-only information; an ACCEPTED probe that surfaces a real
+ * problem must stop the write, not just narrate it). */
+type ConsentedUpgradeModelProbeOutcome = Readonly<{
+  report: ModelProbeReport | undefined;
+  unconfirmedPrimaryCandidates: readonly Readonly<{
+    client: ModelProbeClientId;
+    model: string;
+    status: ModelProbeStatus;
+  }>[];
+}>;
+
+/**
+ * Phase 31.5 (I6c): the optional, SEPARATELY-consented probe re-run against
+ * the exact candidate model(s) an adopt/bulk-preset-switch `--write`'s plan
+ * is about to adopt. Declining `--probe-models` (the default) never even
+ * builds a plan or calls `runModelProbe` at all, so it provably starts zero
+ * probe processes regardless of `--check-for-updates`'s own (also
+ * independent) consent. The returned report is advisory-only: callers must
+ * fold it only into the printed report/JSON envelope, never into
+ * `modelPolicyPlan`, the lockfile, or `ai-profile.yaml`. Before any process
+ * starts, this prints the plan's disclosure (candidate/client list and bound
+ * call count/quota note) so `--probe-models` itself -- like every other
+ * explicit, scripted `upgrade --write` consent flag in this command -- is an
+ * INFORMED consent (PR review finding: passing the flag silently launched
+ * provider-facing subprocesses with no disclosure at all, unlike the init
+ * wizard's equivalent prompt). A probe-infrastructure failure (e.g. an
+ * unwritable temp directory, or the runner rejecting unexpectedly) is caught
+ * and degrades to an advisory failure notice with zero unconfirmed
+ * candidates, rather than crashing `upgrade` (PR review finding): an
+ * optional advisory feature must never turn into a hard failure of the
+ * surrounding command.
+ */
+async function runConsentedUpgradeModelProbe(input: {
+  probeModels: boolean;
+  block: LockModelPolicyV2 | undefined;
+  enabledClients: ReadonlySet<ModelProbeClientId>;
+  rootDir: string;
+  probeRunner: ModelProbeProcessRunner | undefined;
+  io: CliIo;
+  json: boolean;
+}): Promise<ConsentedUpgradeModelProbeOutcome> {
+  const { probeModels, block, enabledClients, rootDir, probeRunner, io, json } =
+    input;
+  const none: ConsentedUpgradeModelProbeOutcome = Object.freeze({
+    report: undefined,
+    unconfirmedPrimaryCandidates: Object.freeze([]),
+  });
+  if (!probeModels || block === undefined) {
+    return none;
+  }
+  const probeSelections = buildUpgradeModelProbeSelections(
+    block,
+    enabledClients,
+  );
+  if (probeSelections.length === 0) {
+    return none;
+  }
+  const probePlan = buildModelProbePlan(probeSelections);
+  if (!json) {
+    io.stdout(
+      `Probing exact model availability (--probe-models): ` +
+        `${probeSelections.map((selection) => `${selection.client}/${selection.model}`).join(", ")}. ` +
+        `${probePlan.quotaNote}\n`,
+    );
+  }
+
+  let report: ModelProbeReport;
+  try {
+    report = await runModelProbe(
+      probePlan,
+      { granted: true },
+      {
+        runner: probeRunner ?? createNodeModelProbeProcessRunner(),
+        repoRootDir: rootDir,
+      },
+    );
+  } catch {
+    if (!json) {
+      io.stdout(
+        "Model probe could not run (a probe-infrastructure failure); " +
+          "proceeding with catalog-only information.\n",
+      );
+    }
+    return none;
+  }
+
+  const unconfirmedPrimaryCandidates: {
+    client: ModelProbeClientId;
+    model: string;
+    status: ModelProbeStatus;
+  }[] = [];
+  for (const selection of probeSelections) {
+    const outcome = report.results.find(
+      (result) =>
+        result.client === selection.client && result.model === selection.model,
+    );
+    if (outcome !== undefined && outcome.status !== "available") {
+      unconfirmedPrimaryCandidates.push({
+        client: selection.client,
+        model: selection.model,
+        status: outcome.status,
+      });
+    }
+  }
+  return Object.freeze({
+    report,
+    unconfirmedPrimaryCandidates: Object.freeze(unconfirmedPrimaryCandidates),
+  });
 }
 
 async function runUpgrade(
@@ -751,6 +959,18 @@ async function runUpgrade(
     io.stderr(formatValidationIssues(profileResult.issues));
     return 1;
   }
+
+  if (hasSecretLikeModelOverride(profileResult.profile)) {
+    io.stderr(
+      formatSimpleError(
+        "subagentPolicy model overrides",
+        "non-secret model identifiers",
+        "secret-like value",
+        "Remove the blocked model override from ai-profile.yaml before compiling.",
+      ),
+    );
+    return 1;
+  }
   let lockfileView: AiProfileLockV2 | undefined;
   // A present-but-empty (or otherwise unreadable) lockfile must be validated and
   // refused like any other invalid lockfile, not silently treated as missing:
@@ -783,18 +1003,50 @@ async function runUpgrade(
       : hasV3ModelPreset(subagentPolicy)
         ? subagentPolicy.preset
         : DEFAULT_MODEL_POLICY_PRESET;
-  const modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined =
-    hasV3ModelPreset(subagentPolicy)
-      ? compareModelPolicyUpgrade(
+  const modelPolicyChanges:
+    readonly ModelPolicyUpgradeComparisonRow[] | undefined = hasV3ModelPreset(
+    subagentPolicy,
+  )
+    ? compareModelPolicyUpgrade(
+        lockfileView?.modelPolicy,
+        modelPolicyComparisonPreset,
+        deriveModelPolicyRoleOverrides(subagentPolicy.roles),
+      ).filter((row) => row.changed)
+    : undefined;
+  // Phase 31.5 (I6d PR review Finding 3): Tabnine rows now participate in
+  // the upgrade comparison table on the same terms as Codex/Claude (I6d's
+  // own approved brief's Behavior Slice step 3). Visibility only -- this
+  // does not add a new write/plan path; `planModelPolicyUpgrade` already
+  // reconciles Tabnine rows for the target preset (Finding 4).
+  //
+  // Phase 31.5 (I6d PR review round 2, "compare Tabnine when upgrading
+  // mapping-v2 profiles"): a Tabnine override validates unconditionally
+  // (packages/core/src/profile.ts's `overrides.tabnine.model` check is not
+  // gated by `isV3OptIn`, unlike Codex/Claude's), so an ENABLED mapping-v2
+  // profile (no `preset`) can legitimately declare one, and
+  // `planModelPolicyUpgrade` already reconciles it (Finding 4) using the
+  // same `modelPolicyComparisonPreset` default target this comparison uses
+  // below. Gating this comparison on `hasV3ModelPreset` alone left a
+  // mapping-v2 user seeing Codex/Claude's legacy comparison but no old/new
+  // Tabnine row, even though adopting v3 could write one -- compute the
+  // comparison for both profile shapes, mirroring
+  // `isEnabledMappingV2Policy`'s own scope just below.
+  const modelPolicyTabnineChanges:
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined =
+    hasV3ModelPreset(subagentPolicy) || isEnabledMappingV2Policy(subagentPolicy)
+      ? compareModelPolicyTabnineUpgrade(
           lockfileView?.modelPolicy,
           modelPolicyComparisonPreset,
-          deriveModelPolicyRoleOverrides(subagentPolicy.roles),
+          deriveModelPolicyTabnineRoleOverrides(
+            deriveModelPolicyRoleOverrides(subagentPolicy.roles),
+          ),
         ).filter((row) => row.changed)
       : undefined;
   const legacyEffectivePolicy = isEnabledMappingV2Policy(subagentPolicy)
     ? resolveEffectiveSubagentPolicy(subagentPolicy)
     : undefined;
-  const modelPolicyLegacyChanges: readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined =
+  const modelPolicyLegacyChanges:
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined =
     legacyEffectivePolicy
       ? compareModelPolicyUpgradeFromLegacy(
           legacyEffectivePolicy.roles,
@@ -886,6 +1138,8 @@ async function runUpgrade(
           modelPolicyChanges,
           modelPolicyPlan,
           modelPolicyLegacyChanges,
+          undefined,
+          modelPolicyTabnineChanges,
         );
       }
       if (parsed.json) {
@@ -900,6 +1154,7 @@ async function runUpgrade(
               modelPolicyChanges,
               modelPolicyPlan,
               modelPolicyLegacyChanges,
+              modelPolicyTabnineChanges,
             ),
           })}\n`,
         );
@@ -930,6 +1185,29 @@ async function runUpgrade(
         subagentPolicy,
         bulkPreset,
       );
+      const enabledProbeClients = new Set<ModelProbeClientId>(
+        (
+          [
+            ["codex", profileResult.profile.clients.codex.enabled],
+            ["claude", profileResult.profile.clients.claude.enabled],
+          ] as const
+        )
+          .filter(([, enabled]) => enabled)
+          .map(([client]) => client),
+      );
+      // See `runConsentedUpgradeModelProbe`'s doc comment for the
+      // consent-independence, disclosure, and non-persistence contract this
+      // observes.
+      const probeOutcome = await runConsentedUpgradeModelProbe({
+        probeModels: parsed.probeModels,
+        block: modelPolicyPlan!.block,
+        enabledClients: enabledProbeClients,
+        rootDir,
+        probeRunner: options.probeRunner,
+        io,
+        json: parsed.json,
+      });
+      const modelProbeReport = probeOutcome.report;
       // Explicit `--model-policy-strategy <strategy> --write` is a two-flag
       // scripted write (the same explicit-intent shape as the existing
       // capability-catalog `--write --adopt-recommended` combo, which also
@@ -944,7 +1222,31 @@ async function runUpgrade(
           modelPolicyChanges,
           modelPolicyPlan,
           modelPolicyLegacyChanges,
+          modelProbeReport,
+          modelPolicyTabnineChanges,
         );
+      }
+      // An ACCEPTED probe that could not confirm one of the exact candidates
+      // this write is about to adopt must actually gate the write, not just
+      // narrate it in the report above (PR review finding: the previous
+      // revision printed the warning and then wrote the unconfirmed model in
+      // the same invocation, so the probe never informed the adopt decision
+      // as I6c requires). Declining `--probe-models` never reaches here with
+      // any unconfirmed candidates, since `probeOutcome.unconfirmedPrimaryCandidates`
+      // is always empty when the probe never ran.
+      if (probeOutcome.unconfirmedPrimaryCandidates.length > 0) {
+        const summary = probeOutcome.unconfirmedPrimaryCandidates
+          .map(
+            (candidate) =>
+              `${candidate.client}/${candidate.model} (${candidate.status})`,
+          )
+          .join(", ");
+        io.stderr(
+          `Refusing to write (${parsed.modelPolicyStrategy}): --probe-models could not confirm ` +
+            `availability for: ${summary}. Resolve the issue and re-run with --probe-models, ` +
+            "or omit --probe-models to write using catalog-only information instead.\n",
+        );
+        return 1;
       }
       return runModelPolicyWrite({
         rootDir,
@@ -958,6 +1260,8 @@ async function runUpgrade(
         targetPreset,
         modelPolicyChanges,
         modelPolicyLegacyChanges,
+        modelPolicyTabnineChanges,
+        modelProbeReport,
         recordedVersion,
         offeredIds,
       });
@@ -989,6 +1293,8 @@ async function runUpgrade(
       modelPolicyChanges,
       modelPolicyPlan,
       modelPolicyLegacyChanges,
+      undefined,
+      modelPolicyTabnineChanges,
     );
   }
 
@@ -1001,6 +1307,7 @@ async function runUpgrade(
       modelPolicyChanges,
       modelPolicyPlan,
       modelPolicyLegacyChanges,
+      modelPolicyTabnineChanges,
     );
   }
   if (offered.length === 0) {
@@ -1013,6 +1320,7 @@ async function runUpgrade(
         modelPolicyChanges,
         modelPolicyPlan,
         modelPolicyLegacyChanges,
+        modelPolicyTabnineChanges,
       );
     }
     if (interactive && !scriptedWrite) {
@@ -1034,6 +1342,7 @@ async function runUpgrade(
         modelPolicyChanges,
         modelPolicyPlan,
         modelPolicyLegacyChanges,
+        modelPolicyTabnineChanges,
       );
     }
     return 0;
@@ -1084,6 +1393,7 @@ async function runUpgrade(
             modelPolicyChanges,
             modelPolicyPlan,
             modelPolicyLegacyChanges,
+            modelPolicyTabnineChanges,
           ),
         })}\n`,
       );
@@ -1124,25 +1434,31 @@ async function runUpgrade(
         upgrade: { catalogVersion: CAPABILITY_CATALOG_VERSION },
       }
     : undefined;
-  try {
-    // The explicit flag pair or interactive confirmation approves one write plan;
-    // provenance is included when a usable lockfile exists and otherwise deferred.
-    await applyWritePlan({
-      rootDir,
-      writes: [
-        { path: "ai-profile.yaml", bytes: edit.source },
-        ...(stampedLockfile
-          ? [
-              {
-                path: "ai-profile.lock",
-                bytes: serializeLockfile(stampedLockfile),
-              },
-            ]
-          : []),
-      ],
-    });
-  } catch {
-    io.stderr("Upgrade write plan could not be applied safely under --root.\n");
+  // The explicit flag pair or interactive confirmation approves one write plan;
+  // provenance is included when a usable lockfile exists and otherwise deferred.
+  // Uses `atomic: true` (staged-then-committed, rolled back cleanly on any
+  // failure) because this batch can span both `ai-profile.yaml` and
+  // `ai-profile.lock`, and a mid-write failure leaving the profile updated but
+  // the lock stale (or vice versa) would be worse than refusing the whole
+  // write -- same precedent as the model-policy write path.
+  const upgradeWritePlan = await createOrApplyWritePlan(
+    rootDir,
+    [
+      { path: "ai-profile.yaml", bytes: edit.source },
+      ...(stampedLockfile
+        ? [
+            {
+              path: "ai-profile.lock",
+              bytes: serializeLockfile(stampedLockfile),
+            },
+          ]
+        : []),
+    ],
+    true,
+    io,
+    { atomic: true },
+  );
+  if (!upgradeWritePlan) {
     return 1;
   }
 
@@ -1160,6 +1476,7 @@ async function runUpgrade(
           modelPolicyChanges,
           modelPolicyPlan,
           modelPolicyLegacyChanges,
+          modelPolicyTabnineChanges,
         ),
       })}\n`,
     );
@@ -1293,7 +1610,9 @@ function modelPolicyBlocksEqual(
       row.capabilityStatus === other.capabilityStatus &&
       row.catalogVersion === other.catalogVersion &&
       row.alternatives.length === other.alternatives.length &&
-      row.alternatives.every((alt, altIndex) => alt === other.alternatives[altIndex])
+      row.alternatives.every(
+        (alt, altIndex) => alt === other.alternatives[altIndex],
+      )
     );
   });
 }
@@ -1464,15 +1783,23 @@ async function previewModelPolicyWrites(
     }
     const write = allWrites.find((candidate) => candidate.path === action.path);
     if (write === undefined) continue;
-    const newBytes =
-      typeof write.bytes === "string"
-        ? Buffer.from(write.bytes, "utf8")
-        : write.bytes;
     const onDiskBytes = await readOptionalBytes(rootDir, action.path);
     const oldText = onDiskBytes
       ? Buffer.from(onDiskBytes).toString("utf8")
       : "";
-    const diff = formatTextDiff(oldText, Buffer.from(newBytes).toString("utf8"));
+    if (write.delete) {
+      const diff = formatTextDiff(oldText, "");
+      if (diff.length > 0) lines.push(diff);
+      continue;
+    }
+    const newBytes =
+      typeof write.bytes === "string"
+        ? Buffer.from(write.bytes, "utf8")
+        : write.bytes;
+    const diff = formatTextDiff(
+      oldText,
+      Buffer.from(newBytes).toString("utf8"),
+    );
     if (diff.length > 0) {
       lines.push(diff);
     }
@@ -1521,8 +1848,24 @@ async function runModelPolicyWrite(input: {
    * resolutions were actually adopted/switched). */
   modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined;
   modelPolicyLegacyChanges:
-    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
-    | undefined;
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined;
+  /** Phase 31.5 (I6d PR review round 2, "include Tabnine changes in JSON
+   * write responses"): the SAME `modelPolicyTabnineChanges` `runUpgrade`
+   * already computed and (for a non-JSON caller) already printed via
+   * `printModelPolicyTextReport` before dispatching here -- previously only
+   * threaded into the preview/retain JSON paths, never into this write
+   * path's own final `buildModelPolicyJsonFields` call, so a successful
+   * `--json --write` response silently omitted a field the preview/retain
+   * responses included (PR review finding: automation could not rely on the
+   * field being present on a successful write). */
+  modelPolicyTabnineChanges:
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined;
+  /** Phase 31.5 (I6c): the optional, separately-consented probe result
+   * (`undefined` when `--probe-models` was declined or built no
+   * candidates). Advisory-only -- surfaced in the JSON envelope below, but
+   * NEVER written into the lockfile, `ai-profile.yaml`, or any other
+   * persisted state. */
+  modelProbeReport: ModelProbeReport | undefined;
   /** The SAME capability-catalog discovery `runUpgrade` already computed
    * (unconditionally, before this model-policy dispatch) -- this write path
    * only concerns model policy, but it's still the same `upgrade` command
@@ -1545,6 +1888,8 @@ async function runModelPolicyWrite(input: {
     targetPreset,
     modelPolicyChanges,
     modelPolicyLegacyChanges,
+    modelPolicyTabnineChanges,
+    modelProbeReport,
     recordedVersion,
     offeredIds,
   } = input;
@@ -1695,7 +2040,9 @@ async function runModelPolicyWrite(input: {
     io.stderr(
       `Refusing to write (${strategyLabel}): the following generated target files are manual-owned and would actually change under this write, so writing would leave them on the old resolution while the lock claimed the fresh one:\n${manualOwnedModelBearing
         .map((output) => `- ${output.path}`)
-        .join("\n")}\nReconcile ownership first (see \`agent-profile doctor\`), or accept the model-policy change manually.\n`,
+        .join(
+          "\n",
+        )}\nReconcile ownership first (see \`agent-profile doctor\`), or accept the model-policy change manually.\n`,
     );
     return 1;
   }
@@ -1826,7 +2173,21 @@ async function runModelPolicyWrite(input: {
           modelPolicyChanges,
           modelPolicyPlan,
           modelPolicyLegacyChanges,
+          modelPolicyTabnineChanges,
         ),
+        // Advisory-only per `runConsentedUpgradeModelProbe`'s contract:
+        // ephemeral for this single stdout line, never written to
+        // ai-profile.lock/ai-profile.yaml (this block only ever writes
+        // `allWrites`, built before this probe ever ran). Omitted entirely
+        // when `--probe-models` was declined or built no candidates.
+        ...(modelProbeReport === undefined
+          ? {}
+          : {
+              modelProbe: {
+                executed: modelProbeReport.executed,
+                results: modelProbeReport.results,
+              },
+            }),
       })}\n`,
     );
   } else {
@@ -1900,14 +2261,31 @@ function buildModelPolicyJsonFields(
   modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined,
   modelPolicyPlan: ModelPolicyUpgradePlan | undefined,
   modelPolicyLegacyChanges:
-    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
-    | undefined,
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined,
+  modelPolicyTabnineChanges?:
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined,
 ): Record<string, unknown> {
   return {
     ...(modelPolicyChanges === undefined
       ? {}
       : {
           modelPolicyChanges: modelPolicyChanges.map((row) => ({
+            role: row.role,
+            client: row.client,
+            old: row.old ?? null,
+            fresh: row.fresh,
+            reason: row.reason,
+          })),
+        }),
+    // Phase 31.5 (I6d PR review Finding 3): Tabnine rows on the same terms
+    // as Codex/Claude's `modelPolicyChanges` above, under a distinctly
+    // labeled field (Tabnine's row shape has no
+    // effort/targetEffort/primaryStatus/skillStatus, so it is never merged
+    // into `modelPolicyChanges` itself).
+    ...(modelPolicyTabnineChanges === undefined
+      ? {}
+      : {
+          modelPolicyTabnineChanges: modelPolicyTabnineChanges.map((row) => ({
             role: row.role,
             client: row.client,
             old: row.old ?? null,
@@ -2014,8 +2392,7 @@ function formatModelPolicyWriteResultText(input: {
   if (wrote) {
     const targetActions = plan.actions.filter(
       (action) =>
-        action.action !== "unchanged" &&
-        !METADATA_WRITE_PATHS.has(action.path),
+        action.action !== "unchanged" && !METADATA_WRITE_PATHS.has(action.path),
     );
     const created = targetActions.filter(
       (action) => action.action === "create",
@@ -2023,7 +2400,8 @@ function formatModelPolicyWriteResultText(input: {
     const regenerated = targetActions.filter(
       (action) => action.action === "change",
     ).length;
-    const resolutionLabel = targetPreset === undefined ? "adopted" : targetPreset;
+    const resolutionLabel =
+      targetPreset === undefined ? "adopted" : targetPreset;
     if (targetActions.length === 0) {
       return `Updated ai-profile.lock for an unrelated metadata change; the ${resolutionLabel} model policy itself is unchanged.\n`;
     }
@@ -2053,6 +2431,7 @@ function emitUpgradeReport(
   modelPolicyChanges?: readonly ModelPolicyUpgradeComparisonRow[],
   modelPolicyPlan?: ModelPolicyUpgradePlan,
   modelPolicyLegacyChanges?: readonly ModelPolicyLegacyUpgradeComparisonRow[],
+  modelPolicyTabnineChanges?: readonly ModelPolicyTabnineUpgradeComparisonRow[],
 ): void {
   if (json) {
     io.stdout(
@@ -2065,6 +2444,7 @@ function emitUpgradeReport(
           modelPolicyChanges,
           modelPolicyPlan,
           modelPolicyLegacyChanges,
+          modelPolicyTabnineChanges,
         ),
       })}\n`,
     );
@@ -2097,14 +2477,29 @@ function buildModelPolicyReportLines(
   modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined,
   modelPolicyPlan: ModelPolicyUpgradePlan | undefined,
   modelPolicyLegacyChanges:
-    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
-    | undefined,
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined,
+  modelProbeReport?: ModelProbeReport,
+  modelPolicyTabnineChanges?:
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined,
 ): string[] {
   const lines: string[] = [];
   if (modelPolicyChanges !== undefined && modelPolicyChanges.length > 0) {
     lines.push(
       "model policy changes:",
       ...modelPolicyChanges.map(formatModelPolicyChangeLine),
+    );
+  }
+  // Phase 31.5 (I6d PR review Finding 3): a distinctly-labeled Tabnine
+  // section, using Tabnine's own honest row shape (no
+  // effort/status-surface split) rather than reshaping it to fit the
+  // Codex/Claude line format above.
+  if (
+    modelPolicyTabnineChanges !== undefined &&
+    modelPolicyTabnineChanges.length > 0
+  ) {
+    lines.push(
+      "model policy changes (tabnine):",
+      ...modelPolicyTabnineChanges.map(formatModelPolicyTabnineChangeLine),
     );
   }
   if (modelPolicyPlan !== undefined) {
@@ -2145,6 +2540,18 @@ function buildModelPolicyReportLines(
       ...modelPolicyLegacyChanges.map(formatModelPolicyLegacyChangeLine),
     );
   }
+  // Advisory only, per `runConsentedUpgradeModelProbe`'s contract: present
+  // only when `--probe-models` was accepted AND built at least one
+  // candidate (declining, or having no candidate, leaves `modelProbeReport`
+  // `undefined` and prints nothing here).
+  if (modelProbeReport !== undefined) {
+    lines.push(
+      `model probe (advisory only, not persisted; ${modelProbeReport.results.length} result(s)):`,
+      ...modelProbeReport.results.map(
+        (result) => `- ${result.client} ${result.model}: ${result.status}`,
+      ),
+    );
+  }
   return lines;
 }
 
@@ -2163,13 +2570,17 @@ function printModelPolicyTextReport(
   modelPolicyChanges: readonly ModelPolicyUpgradeComparisonRow[] | undefined,
   modelPolicyPlan: ModelPolicyUpgradePlan | undefined,
   modelPolicyLegacyChanges:
-    | readonly ModelPolicyLegacyUpgradeComparisonRow[]
-    | undefined,
+    readonly ModelPolicyLegacyUpgradeComparisonRow[] | undefined,
+  modelProbeReport?: ModelProbeReport,
+  modelPolicyTabnineChanges?:
+    readonly ModelPolicyTabnineUpgradeComparisonRow[] | undefined,
 ): void {
   const lines = buildModelPolicyReportLines(
     modelPolicyChanges,
     modelPolicyPlan,
     modelPolicyLegacyChanges,
+    modelProbeReport,
+    modelPolicyTabnineChanges,
   );
   if (lines.length > 0) {
     io.stdout(`${lines.join("\n")}\n`);
@@ -2194,6 +2605,28 @@ function formatModelPolicyChangeLine(
     `model ${row.old?.model ?? "(none)"} -> ${row.fresh.model}, ` +
     `effort ${row.old?.effort ?? "(none)"} -> ${row.fresh.effort}, ` +
     `effort status ${row.old?.effortStatus ?? "(none)"} -> ${row.fresh.effortStatus}, ` +
+    `status ${row.old?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
+    `alternatives [${formatAlternativesList(row.old?.alternatives ?? [])}] -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
+    `lifecycle ${row.old?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle}, ` +
+    `source ${row.old?.source ?? "(none)"} -> ${row.fresh.source}, ` +
+    `catalog version ${row.old?.catalogVersion ?? "(none)"} -> ${row.fresh.catalogVersion} ` +
+    `(${row.reason})`
+  );
+}
+
+/**
+ * Tabnine's own counterpart to `formatModelPolicyChangeLine` (Phase 31.5
+ * I6d PR review Finding 3): covers Tabnine's honest row shape (model,
+ * lifecycle, status, alternatives, source, catalog version), never an
+ * effort/target-effort/primary-status/skill-status column, since Tabnine has
+ * none of those concepts.
+ */
+function formatModelPolicyTabnineChangeLine(
+  row: ModelPolicyTabnineUpgradeComparisonRow,
+): string {
+  return (
+    `- ${row.role} ${row.client}: ` +
+    `model ${row.old?.model ?? "(none)"} -> ${row.fresh.model ?? "(none)"}, ` +
     `status ${row.old?.capabilityStatus ?? "(none)"} -> ${row.fresh.capabilityStatus}, ` +
     `alternatives [${formatAlternativesList(row.old?.alternatives ?? [])}] -> [${formatAlternativesList(row.fresh.alternatives)}], ` +
     `lifecycle ${row.old?.lifecycle ?? "(none)"} -> ${row.fresh.lifecycle}, ` +
@@ -2357,10 +2790,79 @@ async function runUi(
   });
 }
 
+type RunDoctorOptions = {
+  probeRunner?: ModelProbeProcessRunner;
+};
+
+/**
+ * Phase 31.5 (I7): builds the injected `DoctorModelProbeRunner` port `runDoctor`
+ * calls when `--models --probe` are both set. This is the ONLY place doctor's
+ * `--probe` wiring reuses the I4 consented, source-free probe adapter
+ * (`buildModelProbePlan`/`runModelProbe`); `@agent-profile/doctor` itself
+ * never imports it, keeping the package dependency direction correct and the
+ * probe port injectable (mock boundary) for tests. Prints a one-line
+ * disclosure before any process starts, mirroring
+ * `runConsentedUpgradeModelProbe`'s own informed-consent precedent -- doctor
+ * is non-interactive/scripted, so the explicit `--probe` flag itself is the
+ * consent, with no additional confirm prompt.
+ */
+function createDoctorModelProbeRunner(input: {
+  rootDir: string;
+  probeRunner: ModelProbeProcessRunner | undefined;
+  io: CliIo;
+  json: boolean;
+}): DoctorModelProbeRunner {
+  const { rootDir, probeRunner, io, json } = input;
+  // Repeat the consent notice immediately before execution regardless of
+  // `--json`: a client/provider process is about to start either way. `json`
+  // mode keeps stdout reserved for the single clean JSON line, so both
+  // disclosure messages route to stderr instead of being silently dropped
+  // (PR review finding).
+  const emit = json ? io.stderr : io.stdout;
+  return async (candidates) => {
+    const selections: ModelProbeSelection[] = candidates.map((candidate) => ({
+      client: candidate.client,
+      model: candidate.model,
+      effort: candidate.effort,
+      alternatives: candidate.alternatives,
+    }));
+    const plan = buildModelProbePlan(selections);
+    emit(
+      `Probing exact model availability (--probe): ` +
+        `${selections.map((selection) => `${selection.client}/${selection.model}`).join(", ")}. ` +
+        `${plan.quotaNote}\n`,
+    );
+    try {
+      const report = await runModelProbe(
+        plan,
+        { granted: true },
+        {
+          runner: probeRunner ?? createNodeModelProbeProcessRunner(),
+          repoRootDir: rootDir,
+        },
+      );
+      return report.results.map((result) => ({
+        client: result.client as "codex" | "claude",
+        model: result.model,
+        status: result.status,
+        probed: result.probed,
+        evidence: result.evidence,
+      }));
+    } catch {
+      emit(
+        "Model probe could not run (a probe-infrastructure failure); " +
+          "proceeding with offline-only information.\n",
+      );
+      return [];
+    }
+  };
+}
+
 async function runDoctorCommand(
   args: string[],
   cwd: string,
   io: CliIo,
+  options: RunDoctorOptions = {},
 ): Promise<number> {
   const parsed = parseDoctorArgs(args);
 
@@ -2374,9 +2876,22 @@ async function runDoctorCommand(
     return 0;
   }
 
+  const rootDir = path.resolve(cwd, parsed.root);
   const request = {
-    rootDir: path.resolve(cwd, parsed.root),
+    rootDir,
     mcpSuggestions: parsed.mcpSuggestions,
+    models: parsed.models,
+    probe: parsed.probe,
+    ...(parsed.models && parsed.probe
+      ? {
+          modelProbeRunner: createDoctorModelProbeRunner({
+            rootDir,
+            probeRunner: options.probeRunner,
+            io,
+            json: parsed.json,
+          }),
+        }
+      : {}),
   };
 
   // Interactive rendering is gated behind a real TTY and never applies to
@@ -2496,6 +3011,18 @@ async function runCompile(
     return 1;
   }
 
+  if (hasSecretLikeModelOverride(profileResult.profile)) {
+    io.stderr(
+      formatSimpleError(
+        "subagentPolicy model overrides",
+        "non-secret model identifiers",
+        "secret-like value",
+        "Remove the blocked model override from ai-profile.yaml before compiling.",
+      ),
+    );
+    return 1;
+  }
+
   // Read the prior lock's `modelPolicy` block EARLY, before compiling, so the
   // rendered generated files (AGENTS.md/.codex/config.toml) and the lockfile
   // this run eventually writes reconcile against the exact same previous
@@ -2503,6 +3030,21 @@ async function runCompile(
   // claims to describe them).
   const previousLockForCompile = await readLockfileForRegions(rootDir);
   const previousModelPolicy = previousLockForCompile?.modelPolicy;
+  // A scoped run generates only the requested targets, so any lockfile written
+  // from that partial result must carry the untouched targets' entries forward
+  // instead of dropping provenance for files the run never looked at. Computed
+  // once here because `runCompile` has two write paths - its own, and the
+  // interactive drift reconciliation it can hand off to - and they must not
+  // disagree about it. An unscoped run leaves this undefined and rebuilds in
+  // full, which is what prunes genuinely orphaned entries.
+  const scopedTargets =
+    parsed.targets.length > 0 && previousLockForCompile
+      ? {
+          requested: parsed.targets,
+          previousTemplates: previousLockForCompile.templates,
+          previousOutputs: previousLockForCompile.outputs,
+        }
+      : undefined;
 
   const compileResult = compileProfile({
     profile: profileResult.profile,
@@ -2598,6 +3140,8 @@ async function runCompile(
           profile: profileResult.profile,
           profilePath: safeProfilePath.path,
           profileBytes,
+          includeTabnine: parsed.targets.length === 0,
+          ...(scopedTargets ? { scopedTargets } : {}),
         });
       }
     }
@@ -2632,9 +3176,11 @@ async function runCompile(
   const tabnineModelSettings = await resolveTabnineModelSettings(
     rootDir,
     profileResult.profile,
+    undefined,
+    parsed.targets.length === 0,
   );
 
-  const { writes } = buildCompileWrites({
+  const { writes, tabnine, tabnineMutation } = buildCompileWrites({
     profilePath: safeProfilePath.path,
     profileBytes,
     templates: compileResult.templates,
@@ -2646,6 +3192,7 @@ async function runCompile(
     // can never disagree about a retained role/client resolution.
     ...(previousModelPolicy ? { previousModelPolicy } : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
+    ...(scopedTargets ? { scopedTargets } : {}),
   });
 
   if (parsed.write && !parsed.force) {
@@ -2678,7 +3225,9 @@ async function runCompile(
     }
   }
 
-  const plan = await createOrApplyWritePlan(rootDir, writes, parsed.write, io);
+  const plan = await createOrApplyWritePlan(rootDir, writes, parsed.write, io, {
+    atomic: tabnineMutation !== undefined,
+  });
 
   if (!plan) {
     return 1;
@@ -2717,6 +3266,17 @@ async function runCompile(
         presenter.logInfo(note.message);
       }
     }
+    if (tabnineMutation === "delete") {
+      presenter.logInfo(
+        parsed.write
+          ? `${TABNINE_SETTINGS_PATH} removed after its persisted override was cleared.`
+          : `${TABNINE_SETTINGS_PATH} would be removed because its persisted override was cleared.`,
+      );
+    } else if (tabnine?.action === "advisory") {
+      presenter.logInfo(
+        `${TABNINE_SETTINGS_PATH} left untouched: ${tabnine.guidance}`,
+      );
+    }
     if (!parsed.write) {
       presenter.logInfo(
         "Nothing was written; run `agent-profile compile --write` to apply.",
@@ -2732,6 +3292,16 @@ async function runCompile(
       `\nNotes:\n${compileResult.notes
         .map((note) => `- ${note.message}`)
         .join("\n")}\n`,
+    );
+  }
+
+  if (tabnineMutation === "delete") {
+    io.stdout(
+      `\nNotes:\n- ${TABNINE_SETTINGS_PATH} ${parsed.write ? "removed" : "would be removed"} because its persisted override was cleared.\n`,
+    );
+  } else if (tabnine?.action === "advisory") {
+    io.stdout(
+      `\nNotes:\n- ${TABNINE_SETTINGS_PATH} left untouched: ${tabnine.guidance}\n`,
     );
   }
 
@@ -2837,6 +3407,15 @@ async function runDriftReconciliation(input: {
   otherDriftPaths: readonly string[];
   profilePath: string;
   profileBytes: Uint8Array;
+  includeTabnine: boolean;
+  /** Forwarded unchanged from `runCompile` so this write path preserves
+   * out-of-scope lockfile provenance exactly as the non-interactive one does.
+   * Present only for a target-scoped run. */
+  scopedTargets?: {
+    requested: readonly string[];
+    previousTemplates: readonly LockTemplate[];
+    previousOutputs: readonly LockOutputV2[];
+  };
 }): Promise<number> {
   const { io, prompts } = input;
   const fileByPath = new Map(
@@ -2985,6 +3564,7 @@ async function runDriftReconciliation(input: {
   // the atomic write.
   const writeByPath = new Map<string, Uint8Array>();
   for (const write of input.regionPlan.writes) {
+    if (write.delete) continue;
     writeByPath.set(
       write.path,
       typeof write.bytes === "string"
@@ -3023,9 +3603,11 @@ async function runDriftReconciliation(input: {
   const tabnineModelSettings = await resolveTabnineModelSettings(
     input.rootDir,
     input.profile,
+    undefined,
+    input.includeTabnine,
   );
 
-  const { writes } = buildCompileWrites({
+  const { writes, tabnine, tabnineMutation } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: input.compileResult.templates,
@@ -3044,6 +3626,7 @@ async function runDriftReconciliation(input: {
       ? { previousModelPolicy: input.regionPlan.previousModelPolicy }
       : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
+    ...(input.scopedTargets ? { scopedTargets: input.scopedTargets } : {}),
   });
 
   prompts.showSummary(formatReconciliationSummary(actions));
@@ -3072,6 +3655,7 @@ async function runDriftReconciliation(input: {
     writes,
     input.write,
     io,
+    { atomic: tabnineMutation !== undefined },
   );
   if (!plan) {
     prompts.end(false);
@@ -3087,6 +3671,15 @@ async function runDriftReconciliation(input: {
       manualOwnedPaths,
     ),
   );
+  if (tabnineMutation === "delete") {
+    io.stdout(
+      `\nNotes:\n- ${TABNINE_SETTINGS_PATH} ${input.write ? "removed" : "would be removed"} because its persisted override was cleared.\n`,
+    );
+  } else if (tabnine?.action === "advisory") {
+    io.stdout(
+      `\nNotes:\n- ${TABNINE_SETTINGS_PATH} left untouched: ${tabnine.guidance}\n`,
+    );
+  }
   prompts.end(input.write);
   return 0;
 }
@@ -3369,6 +3962,9 @@ async function runInit(
     ...(wizardModelPreset === undefined
       ? {}
       : { modelPreset: wizardModelPreset }),
+    ...(wizardTabnineModelOverride === undefined
+      ? {}
+      : { tabnineModelOverride: wizardTabnineModelOverride }),
   });
   const validation = parseProfileYaml(profileText, {
     sourcePath: safeProfilePath.path,
@@ -3835,6 +4431,7 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
   let help = false;
   let modelPolicyStrategy: ModelPolicyUpgradeBulkStrategy | undefined;
   let checkForUpdates = false;
+  let probeModels = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     switch (arg) {
@@ -3861,6 +4458,9 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
         break;
       case "--check-for-updates":
         checkForUpdates = true;
+        break;
+      case "--probe-models":
+        probeModels = true;
         break;
       case "--model-policy-strategy": {
         const value = args[index + 1];
@@ -3905,6 +4505,7 @@ function parseUpgradeArgs(args: string[]): ParsedUpgradeArgs {
     help,
     modelPolicyStrategy,
     checkForUpdates,
+    probeModels,
   };
 }
 
@@ -3912,6 +4513,8 @@ function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
   let root = ".";
   let json = false;
   let mcpSuggestions = false;
+  let models = false;
+  let probe = false;
   let help = false;
 
   for (let index = 0; index < args.length; index += 1) {
@@ -3935,6 +4538,12 @@ function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
       case "--mcp-suggestions":
         mcpSuggestions = true;
         break;
+      case "--models":
+        models = true;
+        break;
+      case "--probe":
+        probe = true;
+        break;
       case "--help":
       case "-h":
         help = true;
@@ -3944,7 +4553,7 @@ function parseDoctorArgs(args: string[]): ParsedDoctorArgs {
     }
   }
 
-  return { ok: true, root, json, mcpSuggestions, help };
+  return { ok: true, root, json, mcpSuggestions, models, probe, help };
 }
 
 function parseCompileArgs(args: string[]): ParsedCompileArgs {
@@ -4416,6 +5025,9 @@ function renderInitialProfile(input: {
    * output and lock provenance reflect what the write-plan preview showed,
    * instead of silently falling back to legacy mapping-v2 resolution. */
   modelPreset?: ModelPolicyPreset;
+  /** Exact Tabnine selection accepted by the advanced wizard. Persisting it
+   * makes the profile, generated settings, and next ordinary compile agree. */
+  tabnineModelOverride?: string;
 }): string {
   const safety = input.preferences?.safety ?? {
     mode: input.wizardCapabilities?.safetyMode ?? "guarded",
@@ -4432,10 +5044,18 @@ function renderInitialProfile(input: {
   const capabilities = input.wizardCapabilities
     ? renderInitialCapabilities(input.wizardCapabilities)
     : "";
+  const presetIntent =
+    input.modelPreset === undefined
+      ? undefined
+      : MODEL_POLICY_PRESET_TABLE[input.modelPreset][MODEL_POLICY_PRIMARY_ROLE];
   const subagentPolicy =
     input.modelPreset === undefined
       ? ""
-      : `subagentPolicy:\n  enabled: true\n  preset: ${input.modelPreset}\n`;
+      : `subagentPolicy:\n  enabled: true\n  preset: ${input.modelPreset}\n${
+          input.tabnineModelOverride === undefined || presetIntent === undefined
+            ? ""
+            : `  roles:\n    ${MODEL_POLICY_PRIMARY_ROLE}:\n      capability: ${presetIntent.capability}\n      effort: ${presetIntent.effort}\n      overrides:\n        tabnine:\n          model: ${JSON.stringify(input.tabnineModelOverride)}\n`
+        }`;
 
   return `version: 1
 profile:
@@ -4990,7 +5610,35 @@ async function createOrApplyWritePlan(
       io.stderr(
         `Refusing write-plan: an atomic write failed partway through and could not fully roll back. The following paths may still hold NEW (not necessarily complete) bytes rather than their original content:\n${error.unrestoredPaths
           .map((path) => `- ${path}`)
-          .join("\n")}\nInspect and reconcile these files manually (e.g. via \`git diff\`/\`git checkout\`) before retrying.\n`,
+          .join(
+            "\n",
+          )}\nInspect and reconcile these files manually (e.g. via \`git diff\`/\`git checkout\`) before retrying.\n`,
+      );
+      return undefined;
+    }
+    // `stage === "commit"` means every path resolved and staged fine -- the
+    // failure happened during the rename phase, and rollback restored
+    // everything cleanly (the `rollback-incomplete` branch above is what
+    // fires when that restore itself fails). Reporting this with the
+    // generic "unsafe path" message below would misdescribe a transient
+    // write failure as a path-validation problem, when nothing was actually
+    // unsafe about the paths and the repository is back to its original
+    // state.
+    if (error instanceof AtomicWritePlanError && error.stage === "commit") {
+      io.stderr(
+        "write-plan: the write failed partway through but was rolled back cleanly; nothing was changed.\n",
+      );
+      return undefined;
+    }
+    // `stage === "staging"` means every path passed validation (nothing
+    // unsafe about them) but the staging I/O itself (open/write/chmod/chown)
+    // failed -- a permission or disk-space problem, not an unsafe-path
+    // refusal. Nothing was renamed, so this is still a clean "nothing
+    // written" outcome, but the generic "unsafe path" message below would
+    // misdescribe why (PR review finding).
+    if (error instanceof AtomicWritePlanError && error.stage === "staging") {
+      io.stderr(
+        "write-plan: could not stage the write (a permission or disk-space problem, not an unsafe path); nothing was written.\n",
       );
       return undefined;
     }
@@ -5100,7 +5748,7 @@ async function writeCompiledClientFiles(input: {
     input.tabnineModelOverride,
   );
 
-  const { writes, tabnine } = buildCompileWrites({
+  const { writes, tabnine, tabnineMutation } = buildCompileWrites({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: compileResult.templates,
@@ -5117,7 +5765,9 @@ async function writeCompiledClientFiles(input: {
   try {
     return {
       ok: true,
-      plan: await applyWritePlan({ rootDir: input.rootDir, writes }),
+      plan: await (tabnineMutation
+        ? applyWritePlanAtomic({ rootDir: input.rootDir, writes })
+        : applyWritePlan({ rootDir: input.rootDir, writes })),
       ...(tabnine ? { tabnine } : {}),
     };
   } catch {
@@ -5387,9 +6037,9 @@ function formatHelp(): string {
 
 Usage:
   agent-profile compile [--root <path>] [--profile <path>] [--target <id>] [--dry-run|--write] [--force]
-  agent-profile doctor [--root <path>] [--json] [--mcp-suggestions]
+  agent-profile doctor [--root <path>] [--json] [--mcp-suggestions] [--models] [--probe]
   agent-profile init [--root <path>] [--profile <path>] [--import] [--strategy preserve|regions] [--update-gitignore] [--preset <token>] [--client <list>] [--no-client <list>] [--non-interactive] [--json] [--quiet] [--dry-run|--write]
-  agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--check-for-updates] [--non-interactive] [--json]
+  agent-profile upgrade [--root <path>] [--write --adopt-recommended] [--model-policy-strategy retain|adopt|quality-first|cost-conscious] [--check-for-updates] [--probe-models] [--non-interactive] [--json]
   agent-profile configure [--root <path>] [--non-interactive]
   agent-profile ui [--root <path>] [--host <host>] [--port auto|<number>] [--open true|false]
 
@@ -5400,6 +6050,22 @@ Commands:
             dependencies newer than APC's pinned baseline and points to
             curated MCP candidate ids. It never installs, configures, or
             fetches anything and never changes the exit code.
+            --models adds an opt-in, entirely offline model-policy category:
+            it compares ai-profile.lock's modelPolicy block against a fresh
+            resolution of ai-profile.yaml and the bundled catalogs to report
+            catalog lifecycle (current/supported-legacy/deprecated/retired),
+            uncatalogued/private overrides, missing provenance, drifted
+            (stale) configuration, and target capability status
+            (advisory/unsupported/unverified). Never starts a client or
+            network process and never changes doctor's default output when
+            omitted. --probe additionally re-runs the same consented,
+            source-free model probe init/upgrade offer, restricted to the
+            primary-role exact candidate(s) for whichever of Codex/Claude the
+            profile has enabled, to add ephemeral availability rows. Only
+            takes effect combined with --models (--probe alone is a no-op).
+            The probe result is never written anywhere and never changes any
+            offline finding's severity, even when its evidence is
+            unknown/ambiguous.
   init      Create a starting ai-profile.yaml (interactive wizard with no args).
   upgrade   Report or insert newly available capabilities (preview first).
             --write --adopt-recommended adopts all offered capabilities.
@@ -5427,6 +6093,21 @@ Commands:
             access. Cannot be combined with --json (rejected outright, since
             its text-only report would break --json's single clean line
             contract); run them as separate invocations.
+            --probe-models opts into re-running the same consented,
+            source-free model probe init's interactive wizard offers,
+            against the exact primary-role model(s) an "adopt"/
+            "quality-first"/"cost-conscious" --write is about to adopt, for
+            whichever of Codex/Claude the profile actually has enabled, to
+            confirm availability before adopting. This is a SEPARATE consent
+            from --check-for-updates: accepting or declining one never
+            affects the other, and both default to declined (declining
+            --probe-models starts zero probe processes). The probe result is
+            never written to ai-profile.lock, ai-profile.yaml, or any other
+            persisted file -- it only appears in this run's printed
+            report/JSON. If a candidate cannot be confirmed available, the
+            write is refused entirely (leaving every file byte-unchanged); a
+            probe-infrastructure failure instead degrades to proceeding with
+            catalog-only information.
   configure Change or reconcile the agent control posture (interactive).
             Shows the current posture, what each client actually does, and a
             preview before anything is written. The profile, generated files,

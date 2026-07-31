@@ -5,10 +5,28 @@
   import Badge from "$lib/components/Badge.svelte";
   import { invalidateAll } from "$app/navigation";
   import type { ProfilePageData, ProfileViewModel } from "./+page.server";
+  import type {
+    ModelPolicyView,
+    ModelPolicyViewCell,
+    ModelPolicyViewClientId,
+    ModelPolicyViewSurfaceId,
+  } from "$lib/server/modelPolicyView";
+  import type {
+    ModelCatalogLifecycleStatus,
+    ModelPolicyCapabilityStatus,
+    AiProfile,
+    ModelPolicyCapability,
+    ModelPolicyEffort,
+    ModelPolicyPreset,
+    ModelPolicyRoleId,
+  } from "@agent-profile/core";
+  import { MODEL_POLICY_PRESETS, MODEL_POLICY_PRESET_TABLE } from "@agent-profile/core";
   import {
     buildCandidateProfile,
     parseSlugList,
     permissionsChangedFrom,
+    rebaseTransientModelPolicyRoles,
+    updateModelPolicyOverride,
     workflowDraftFromProfile,
     workflowFlagEnabled,
     workflowHasChanges,
@@ -50,6 +68,7 @@
     claudeEnabled: boolean;
     safetyMode: string;
     requiresSandbox: boolean;
+    subagentPolicy: AiProfile["subagentPolicy"];
     filesystemRead: string;
     filesystemWrite: string;
     shellRun: string;
@@ -67,9 +86,11 @@
     memoryGuidance: false, loggingGuidance: false,
     filesystemRead: "allow", filesystemWrite: "ask",
     shellRun: "ask", dependenciesInstall: "ask", networkExternal: "ask",
+    subagentPolicy: undefined,
   });
 
   let validationErrors = $state<Record<string, string>>({});
+  let transientOverrideRoles = new Set<ModelPolicyRoleId>();
 
   let effective = $derived(view.ok ? view : null);
 
@@ -80,6 +101,7 @@
   });
 
   function initDraft(v: ProfileViewModel) {
+    transientOverrideRoles = new Set<ModelPolicyRoleId>();
     draft = {
       name: v.name,
       description: v.description,
@@ -98,6 +120,7 @@
       shellRun: v.rawPermissions?.shell?.run ?? v.permissions.shell.run,
       dependenciesInstall: v.rawPermissions?.dependencies?.install ?? v.permissions.dependencies.install,
       networkExternal: v.rawPermissions?.network?.external ?? v.permissions.network.external,
+      subagentPolicy: structuredClone(v.editableSubagentPolicy),
     };
     validationErrors = {};
     saveError = "";
@@ -106,12 +129,14 @@
 
   function startEdit() {
     if (!effective) return;
+    reviewedModelPolicy = null;
     initDraft(effective);
     editing = true;
   }
 
   function cancelEdit() {
     editing = false;
+    reviewedModelPolicy = null;
     diffModalOpen = false;
     saveError = "";
     validationErrors = {};
@@ -171,7 +196,9 @@
       draft.safetyMode !== effective.safety.mode ||
       draft.requiresSandbox !== effective.safety.requiresSandbox ||
       workflowHasChanges(draft, effective.workflow) ||
-      permissionsChangedFrom(draft, effective)
+      permissionsChangedFrom(draft, effective) ||
+      JSON.stringify(draft.subagentPolicy) !==
+        JSON.stringify(effective.editableSubagentPolicy)
     );
   });
 
@@ -214,7 +241,74 @@
         ? key
         : null;
     }
+    if (path.startsWith("/subagentPolicy/")) return "subagentPolicy";
     return null;
+  }
+
+  function updatePreset(value: string) {
+    if (!draft.subagentPolicy || !MODEL_POLICY_PRESETS.includes(value as ModelPolicyPreset)) return;
+    const preset = value as ModelPolicyPreset;
+    draft.subagentPolicy = {
+      ...draft.subagentPolicy,
+      preset,
+      roles: rebaseTransientModelPolicyRoles({
+        roles: draft.subagentPolicy.roles,
+        transientRoles: transientOverrideRoles,
+        preset,
+      }),
+    };
+  }
+
+  function presetFallback(role: ModelPolicyRoleId, fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort }) {
+    const preset = draft.subagentPolicy?.preset;
+    return preset ? MODEL_POLICY_PRESET_TABLE[preset][role] : fallback;
+  }
+
+  function roleIntent(role: ModelPolicyRoleId, fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort }) {
+    return draft.subagentPolicy?.roles?.[role] ?? fallback;
+  }
+
+  function updateRoleIntent(
+    role: ModelPolicyRoleId,
+    fallback: { capability: ModelPolicyCapability; effort: ModelPolicyEffort },
+    key: "capability" | "effort",
+    value: string,
+  ) {
+    if (!draft.subagentPolicy) return;
+    transientOverrideRoles.delete(role);
+    const current = roleIntent(role, fallback);
+    draft.subagentPolicy = {
+      ...draft.subagentPolicy,
+      roles: {
+        ...draft.subagentPolicy.roles,
+        [role]: { ...current, [key]: value },
+      },
+    };
+  }
+
+  function overrideValue(role: ModelPolicyRoleId, client: "codex" | "claude" | "tabnine"): string {
+    return draft.subagentPolicy?.roles?.[role]?.overrides?.[client]?.model ?? "";
+  }
+
+  function updateOverride(role: ModelPolicyRoleId, client: "codex" | "claude" | "tabnine", value: string) {
+    if (!draft.subagentPolicy) return;
+    const row = modelPolicy?.rows.find((candidate) => candidate.role === role);
+    const fallback = row ? presetFallback(role, row) : undefined;
+    if (!fallback) return;
+    const updated = updateModelPolicyOverride({
+      roles: draft.subagentPolicy.roles,
+      role,
+      fallback,
+      client,
+      value,
+      transient: transientOverrideRoles.has(role),
+    });
+    if (updated.transient) transientOverrideRoles.add(role);
+    else transientOverrideRoles.delete(role);
+    draft.subagentPolicy = {
+      ...draft.subagentPolicy,
+      roles: updated.roles,
+    };
   }
 
   async function reviewDiff() {
@@ -249,6 +343,7 @@
         }
         return;
       }
+      reviewedModelPolicy = body.modelPolicy ?? null;
       diffText = body.diff?.text ?? "";
       diffAdded = body.diff?.counts?.added ?? 0;
       diffRemoved = body.diff?.counts?.removed ?? 0;
@@ -325,6 +420,79 @@
 
   const PERM_OPTIONS = ["allow", "ask", "deny"] as const;
   const SAFETY_MODES = ["guarded", "balanced", "autonomous", "plan-only"] as const;
+
+  // ---------------------------------------------------------------------------
+  // Model policy (read-only). Every model id, lifecycle, and status below comes
+  // from the server-side view model, which is a pure projection over the
+  // compiler's own resolvers. This component must never define its own model
+  // catalog or restate a resolution rule.
+  // ---------------------------------------------------------------------------
+  let reviewedModelPolicy = $state<ModelPolicyView | null>(null);
+  let modelPolicy = $derived(reviewedModelPolicy ?? effective?.modelPolicy ?? null);
+  let modelPolicyPrimaryRow = $derived(
+    modelPolicy?.rows.find((row) => row.primary) ?? null,
+  );
+
+  const CLIENT_LABELS: Record<ModelPolicyViewClientId, string> = {
+    codex: "Codex",
+    claude: "Claude",
+    tabnine: "Tabnine",
+  };
+
+  const SURFACE_LABELS: Record<ModelPolicyViewSurfaceId, string> = {
+    "primary-default": "primary default",
+    "skill-guidance": "skill guidance",
+    "subagent-guidance": "subagent guidance",
+    model: "model",
+    effort: "effort",
+  };
+
+  /**
+   * The status the CLI summary shows for a client's headline line.
+   * `undefined` only if the view model ever stopped emitting that surface,
+   * in which case the badge is omitted rather than invented.
+   */
+  function headlineStatus(
+    cell: ModelPolicyViewCell,
+  ): ModelPolicyCapabilityStatus | undefined {
+    const surface: ModelPolicyViewSurfaceId =
+      cell.client === "tabnine" ? "model" : "primary-default";
+    return cell.statuses.find((s) => s.surface === surface)?.status;
+  }
+
+  // Parameter types are the core unions, not `string`: a new status or
+  // lifecycle added upstream must fail the build here rather than silently
+  // falling through to a "muted" badge.
+  function statusTone(
+    status: ModelPolicyCapabilityStatus,
+  ): "ok" | "warn" | "info" | "muted" {
+    if (status === "configured") return "ok";
+    if (status === "advisory") return "info";
+    if (status === "unverified") return "warn";
+    return "muted";
+  }
+
+  function lifecycleTone(
+    lifecycle: ModelCatalogLifecycleStatus | "unrated",
+  ): "ok" | "warn" | "err" | "info" | "muted" {
+    if (lifecycle === "current") return "ok";
+    if (lifecycle === "supported-legacy") return "info";
+    if (lifecycle === "deprecated") return "warn";
+    if (lifecycle === "retired") return "err";
+    return "muted";
+  }
+
+  /**
+   * Tabnine's absent-model wording matches the CLI's "guided manual selection".
+   * Codex/Claude always resolve a candidate in practice, so their branch is a
+   * defensive label with no CLI counterpart.
+   */
+  function modelLabel(cell: ModelPolicyViewCell): string {
+    if (cell.model !== undefined) return cell.model;
+    return cell.client === "tabnine"
+      ? "guided manual selection"
+      : "no catalog candidate";
+  }
 </script>
 
 <div class="content">
@@ -555,6 +723,164 @@
           {/each}
         </FormSection>
 
+        <!-- Model policy: exact resolved output stays visible while editing. -->
+        <FormSection
+            title="Model policy"
+            aside={modelPolicy
+              ? `preset ${modelPolicy.preset} - catalog v${modelPolicy.catalogVersion}`
+              : "not enabled"}
+          >
+            {#if editing && validationErrors["subagentPolicy"]}
+              <div class="field">
+                <span class="lbl">validation</span>
+                <div class="val">
+                  <span class="field-err">{validationErrors["subagentPolicy"]}</span>
+                </div>
+              </div>
+            {/if}
+            {#if !modelPolicy}
+              <div class="field">
+                <span class="lbl">status</span>
+                <div class="val col" style="gap:6px;">
+                  <span>This profile does not opt into the v3 model policy, so no exact model mapping is resolved here.</span>
+                  <span style="color: var(--ink-4); font-size: 12px;">
+                    Opt in with <span class="path">npx agent-profile upgrade</span>, then re-run
+                    <span class="path">npx agent-profile compile --dry-run</span>.
+                  </span>
+                </div>
+              </div>
+            {:else}
+              <div class="field">
+                <span class="lbl">preset</span>
+                <div class="val chip-row">
+                  {#if editing}
+                    <select class="select-input" value={draft.subagentPolicy?.preset} onchange={(event) => updatePreset(event.currentTarget.value)}>
+                      {#each MODEL_POLICY_PRESETS as preset}<option value={preset}>{preset}</option>{/each}
+                    </select>
+                  {:else}
+                    <span class="chip">{modelPolicy.preset}</span>
+                  {/if}
+                  {#if modelPolicy.presetIsRecommended}
+                    <Badge tone="ok">recommended</Badge>
+                  {:else}
+                    <span class="mp-meta">recommended: {modelPolicy.recommendedPreset}</span>
+                  {/if}
+                </div>
+              </div>
+              <div class="field">
+                <span class="lbl">catalog version</span>
+                <div class="val">{modelPolicy.catalogVersion}</div>
+              </div>
+
+              {#if modelPolicyPrimaryRow}
+                <div class="field">
+                  <span class="lbl">{modelPolicyPrimaryRow.role}</span>
+                  <div class="val col mp-primary">
+                    <span style="color: var(--ink-4); font-size: 11px;">
+                      primary workflow role - {modelPolicyPrimaryRow.capability} /
+                      {modelPolicyPrimaryRow.effort}
+                    </span>
+                    {#each modelPolicyPrimaryRow.cells as cell (cell.client)}
+                      {@const headline = headlineStatus(cell)}
+                      <div class="mp-line">
+                        <span class="mp-client">{CLIENT_LABELS[cell.client]}</span>
+                        <span class="chip" class:del={cell.model === undefined}>{modelLabel(cell)}</span>
+                        {#if cell.model !== undefined}
+                          <Badge tone={lifecycleTone(cell.lifecycle)}>{cell.lifecycleLabel}</Badge>
+                        {/if}
+                        {#if headline !== undefined}
+                          <Badge tone={statusTone(headline)}>{headline}</Badge>
+                        {/if}
+                        {#if cell.effort}<span class="chip">effort {cell.effort}</span>{/if}
+                      </div>
+                    {/each}
+                    {#if modelPolicy.clients.length === 0}
+                      <span style="color: var(--ink-4); font-size: 12px;">No targets are enabled.</span>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
+
+              <details class="mp-details">
+                <summary>All {modelPolicy.rows.length} roles ({modelPolicy.clients.length} enabled target{modelPolicy.clients.length === 1 ? "" : "s"})</summary>
+                <div class="mp-roles">
+                  {#each modelPolicy.rows as row (row.role)}
+                    <div class="mp-role">
+                      <div class="mp-role-head">
+                        <span class="mp-role-name">{row.role}</span>
+                        {#if row.primary}<Badge tone="accent">primary</Badge>{/if}
+                        <span class="chip">{row.capability}</span>
+                        <span class="chip">{row.effort}</span>
+                      </div>
+                      {#if editing}
+                        <div class="mp-editor">
+                          <label>capability
+                            <select class="select-input" value={roleIntent(row.role, presetFallback(row.role, row)).capability} onchange={(event) => updateRoleIntent(row.role, presetFallback(row.role, row), "capability", event.currentTarget.value)}>
+                              <option value="efficient">efficient</option><option value="balanced">balanced</option><option value="strongest">strongest</option>
+                            </select>
+                          </label>
+                          <label>effort
+                            <select class="select-input" value={roleIntent(row.role, presetFallback(row.role, row)).effort} onchange={(event) => updateRoleIntent(row.role, presetFallback(row.role, row), "effort", event.currentTarget.value)}>
+                              <option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="extra-high">extra-high</option>
+                            </select>
+                          </label>
+                          <label>Codex exact override<input class="text-input" value={overrideValue(row.role, "codex")} oninput={(event) => updateOverride(row.role, "codex", event.currentTarget.value)} /></label>
+                          <label>Claude exact override<input class="text-input" value={overrideValue(row.role, "claude")} oninput={(event) => updateOverride(row.role, "claude", event.currentTarget.value)} /></label>
+                          <label>Tabnine exact override<input class="text-input" value={overrideValue(row.role, "tabnine")} oninput={(event) => updateOverride(row.role, "tabnine", event.currentTarget.value)} /></label>
+                        </div>
+                      {/if}
+                      {#each row.cells as cell (cell.client)}
+                        <div class="mp-cell">
+                          <div class="mp-line">
+                            <span class="mp-client">{CLIENT_LABELS[cell.client]}</span>
+                            <span class="chip" class:del={cell.model === undefined}>{modelLabel(cell)}</span>
+                            {#if cell.model !== undefined}
+                              <Badge tone={lifecycleTone(cell.lifecycle)}>{cell.lifecycleLabel}</Badge>
+                            {/if}
+                            {#if cell.effort}<span class="chip">effort {cell.effort}</span>{/if}
+                            <span class="mp-meta">source {cell.source}</span>
+                            <span class="mp-meta">catalog v{cell.catalogVersion}</span>
+                          </div>
+                          <div class="mp-line mp-sub">
+                            {#each cell.statuses as entry (entry.surface)}
+                              <span class="mp-meta">{SURFACE_LABELS[entry.surface]}</span>
+                              <Badge tone={statusTone(entry.status)}>{entry.status}</Badge>
+                            {/each}
+                          </div>
+                          {#if cell.alternatives.length > 0}
+                            <div class="mp-line mp-sub">
+                              <span class="mp-meta">alternatives</span>
+                              {#each cell.alternatives as alternative (alternative)}
+                                <span class="chip">{alternative}</span>
+                              {/each}
+                            </div>
+                          {/if}
+                          {#if cell.guidedManualSelection && cell.guidedCandidates.length > 0}
+                            <div class="mp-line mp-sub">
+                              <span class="mp-meta">documented options</span>
+                              {#each cell.guidedCandidates as candidate (candidate)}
+                                <span class="chip">{candidate}</span>
+                              {/each}
+                            </div>
+                          {/if}
+                        </div>
+                      {/each}
+                    </div>
+                  {/each}
+                </div>
+              </details>
+
+              {#if !editing}<div class="field">
+                <span class="lbl">editing</span>
+                <div class="val" style="color: var(--ink-4); font-size: 12px;">
+                  Edit the preset and advanced role overrides through the guarded
+                  review-and-write flow. This page never contacts a provider or
+                  verifies a model against an account.
+                </div>
+              </div>{/if}
+            {/if}
+        </FormSection>
+
         <!-- Permissions -->
         <FormSection title="Permissions" aside="effective values" open={false}>
           {#if editing}
@@ -655,6 +981,63 @@
         <pre class="diff-pre">{diffText}</pre>
       {/if}
 
+      {#if reviewedModelPolicy}
+        <section class="reviewed-policy" aria-label="Reviewed model policy">
+          <div class="mp-role-head">
+            <span class="upper">Candidate resolved model policy</span>
+            <span class="chip">{reviewedModelPolicy.preset}</span>
+            <span class="mp-meta">catalog v{reviewedModelPolicy.catalogVersion}</span>
+          </div>
+          <div class="mp-roles">
+            {#each reviewedModelPolicy.rows as row (row.role)}
+              <div class="mp-role">
+                <div class="mp-role-head">
+                  <span class="mp-role-name">{row.role}</span>
+                  {#if row.primary}<Badge tone="accent">primary</Badge>{/if}
+                  <span class="chip">{row.capability}</span>
+                  <span class="chip">{row.effort}</span>
+                </div>
+                {#each row.cells as cell (cell.client)}
+                  <div class="mp-cell">
+                    <div class="mp-line">
+                      <span class="mp-client">{CLIENT_LABELS[cell.client]}</span>
+                      <span class="chip" class:del={cell.model === undefined}>{modelLabel(cell)}</span>
+                      {#if cell.model !== undefined}
+                        <Badge tone={lifecycleTone(cell.lifecycle)}>{cell.lifecycleLabel}</Badge>
+                      {/if}
+                      {#if cell.effort}<span class="chip">effort {cell.effort}</span>{/if}
+                      <span class="mp-meta">source {cell.source}</span>
+                    </div>
+                    <div class="mp-line mp-sub">
+                      {#each cell.statuses as entry (entry.surface)}
+                        <span class="mp-meta">{SURFACE_LABELS[entry.surface]}</span>
+                        <Badge tone={statusTone(entry.status)}>{entry.status}</Badge>
+                      {/each}
+                    </div>
+                    {#if cell.alternatives.length > 0}
+                      <div class="mp-line mp-sub">
+                        <span class="mp-meta">alternatives</span>
+                        {#each cell.alternatives as alternative (alternative)}
+                          <span class="chip">{alternative}</span>
+                        {/each}
+                      </div>
+                    {/if}
+                    {#if cell.guidedManualSelection && cell.guidedCandidates.length > 0}
+                      <div class="mp-line mp-sub">
+                        <span class="mp-meta">documented options</span>
+                        {#each cell.guidedCandidates as candidate (candidate)}
+                          <span class="chip">{candidate}</span>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/each}
+          </div>
+        </section>
+      {/if}
+
       {#if saveError}
         <div class="warn-callout" style="margin-top: 8px;">
           <span class="icon">!</span>{saveError}
@@ -712,6 +1095,82 @@
     gap: 8px;
   }
   .ok-callout .icon { font-weight: bold; }
+
+  /* Model policy (read-only) */
+  .mp-primary { gap: 6px; }
+  .mp-line {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .mp-sub { padding-left: 10px; }
+  .mp-client {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-3);
+    min-width: 58px;
+  }
+  .mp-meta {
+    font-size: 11px;
+    color: var(--ink-4);
+    font-family: var(--font-mono);
+  }
+  .mp-details { margin-top: 6px; }
+  .mp-details summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--ink-3);
+    padding: 4px 0;
+  }
+  .mp-roles {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  .mp-role {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .mp-role-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .mp-role-name {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--ink-1);
+  }
+  .mp-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .mp-editor {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 8px;
+    padding: 8px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .mp-editor label { display: flex; flex-direction: column; gap: 4px; color: var(--ink-3); }
+  .reviewed-policy {
+    margin: 12px 16px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: auto;
+    max-height: 38vh;
+  }
 
   /* Diff modal */
   .modal-overlay {

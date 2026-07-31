@@ -30,6 +30,7 @@ import {
   planModelPolicyUpgrade,
   resolveModelPolicyLockfile,
   serializeLockfile,
+  sha256Hex,
   toLockfileV2View,
   validateLockfileText,
   type LockModelPolicyV2,
@@ -493,6 +494,401 @@ test("upgrade rejects --check-for-updates combined with --json instead of silent
   );
 });
 
+// Phase 31.5 (I6c): --probe-models is a separate, independent consent from
+// --check-for-updates. All four combinations below prove neither flag's
+// presence/absence affects whether the OTHER's underlying mechanism
+// (`checkForPackageUpdate`'s fetch vs `runModelProbe`'s process runner) is
+// invoked. Wired only on the adopt/bulk-preset-switch `--model-policy-
+// strategy ... --write` path (the real, shipped "role-aware Adopt" path);
+// `liveModelPolicy()` is used as the prior lock so "adopt" has a real block
+// of exact candidate models to build probe selections from.
+type FetchCounter = { calls: number; restore: () => void };
+
+function stubFetchCounter(): FetchCounter {
+  const original = globalThis.fetch;
+  const counter: FetchCounter = {
+    calls: 0,
+    restore: () => {
+      globalThis.fetch = original;
+    },
+  };
+  globalThis.fetch = (async () => {
+    counter.calls += 1;
+    return new Response(JSON.stringify({ version: "0.0.1" }), { status: 200 });
+  }) as typeof fetch;
+  return counter;
+}
+
+type ProbeRunnerStub = {
+  calls: number;
+  runner: {
+    run: () => Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+    }>;
+  };
+};
+
+function stubProbeRunner(): ProbeRunnerStub {
+  const stub: ProbeRunnerStub = {
+    calls: 0,
+    runner: {
+      async run() {
+        stub.calls += 1;
+        return { exitCode: 0, stdout: "OK", stderr: "", timedOut: false };
+      },
+    },
+  };
+  return stub;
+}
+
+test("upgrade declining both --check-for-updates and --probe-models (the default) runs zero network calls and zero probe processes", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const probe = stubProbeRunner();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+      ],
+      { io: output, probeRunner: probe.runner },
+    ),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.equal(probe.calls, 0, "declining probe consent must start zero processes");
+});
+
+test("upgrade --check-for-updates alone runs the registry check but zero probe processes", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const fetchStub = stubFetchCounter();
+  const probe = stubProbeRunner();
+
+  try {
+    const code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+        "--check-for-updates",
+      ],
+      { io: output, probeRunner: probe.runner },
+    );
+    assert.equal(code, 0, output.stderrText());
+  } finally {
+    fetchStub.restore();
+  }
+
+  assert.equal(fetchStub.calls, 1, "accepting --check-for-updates must fetch exactly once");
+  assert.equal(
+    probe.calls,
+    0,
+    "accepting the registry-check consent must never trigger a probe",
+  );
+});
+
+test("upgrade --probe-models alone runs the probe but zero network calls", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const probe = stubProbeRunner();
+
+  const code = await withNetworkSentinel(() =>
+    runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+        "--probe-models",
+      ],
+      { io: output, probeRunner: probe.runner },
+    ),
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(probe.calls > 0, "accepting probe consent must run at least one process");
+  // PR review finding: --probe-models must disclose what it's about to do
+  // (candidates, bound call count, quota note) BEFORE launching any
+  // provider-facing subprocess, the same way every other explicit consent
+  // flag in this command discloses its plan before acting.
+  assert.match(output.stdoutText(), /Probing exact model availability/u);
+});
+
+test("upgrade --check-for-updates and --probe-models together run both mechanisms independently", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const fetchStub = stubFetchCounter();
+  const probe = stubProbeRunner();
+
+  try {
+    const code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "adopt",
+        "--write",
+        "--check-for-updates",
+        "--probe-models",
+      ],
+      { io: output, probeRunner: probe.runner },
+    );
+    assert.equal(code, 0, output.stderrText());
+  } finally {
+    fetchStub.restore();
+  }
+
+  assert.equal(fetchStub.calls, 1);
+  assert.ok(probe.calls > 0);
+});
+
+test("upgrade --probe-models's result is advisory-only: never written to ai-profile.lock or ai-profile.yaml", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const probe = stubProbeRunner();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(probe.calls > 0);
+  // The probe ran and produced a report, but it must never land in either
+  // persisted file -- grep both for any probe-shaped field/word.
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const profileText = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  assert.doesNotMatch(lockText, /probe/iu);
+  assert.doesNotMatch(profileText, /probe/iu);
+});
+
+// PR review finding: a locked resolution block can carry rows for a client
+// the profile never enabled (model-policy resolution doesn't consult
+// `clients.*.enabled`); probing a disabled client would start its executable
+// and contact its provider even though it isn't part of the repository's
+// configured workflow. This stub records which client's executable each
+// invocation targeted (via the pinned per-client command name), so tests can
+// assert exactly which clients were actually probed.
+type RecordingProbeRunnerStub = {
+  commands: string[];
+  runner: {
+    run(invocation: { command: string; args: readonly string[] }): Promise<{
+      exitCode: number;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+    }>;
+  };
+};
+
+function stubRecordingProbeRunner(
+  respond?: (invocation: { command: string; args: readonly string[] }) => string,
+): RecordingProbeRunnerStub {
+  const stub: RecordingProbeRunnerStub = {
+    commands: [],
+    runner: {
+      async run(invocation) {
+        stub.commands.push(invocation.command);
+        return {
+          exitCode: 0,
+          stdout: respond ? respond(invocation) : "OK",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    },
+  };
+  return stub;
+}
+
+test("upgrade --probe-models only probes clients the profile has enabled, not every client a locked row carries (PR review finding)", async () => {
+  // `liveModelPolicy()` resolves against a fully-enabled profile, so its
+  // block carries both a codex and a claude row for the primary role
+  // regardless of what THIS run's actual on-disk profile enables.
+  const modelPolicy = liveModelPolicy();
+  assert.ok(
+    modelPolicy.resolutions.some(
+      (row) => row.role === MODEL_POLICY_PRIMARY_ROLE && row.client === "claude",
+    ),
+    "fixture precondition: the locked block must carry a primary-role claude row",
+  );
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, modelPolicy);
+  // Disable claude on the actual on-disk profile after the root is created,
+  // so the lock's block (built above) still carries the claude row while the
+  // profile itself no longer has that client enabled.
+  const profileText = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  await writeFile(
+    path.join(root, "ai-profile.yaml"),
+    profileText.replace("claude: { enabled: true }", "claude: { enabled: false }"),
+    "utf8",
+  );
+  const output = createOutput();
+  const probe = stubRecordingProbeRunner();
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.ok(probe.commands.includes("codex"), "codex is still enabled and should be probed");
+  assert.ok(
+    !probe.commands.includes("claude"),
+    "claude is disabled on this profile and must never be probed even though the locked block carries a claude row",
+  );
+});
+
+test("upgrade --probe-models carries a locked row's alternatives into the probe plan (PR review finding)", async () => {
+  const fresh = liveModelPolicy();
+  const primaryClaude = fresh.resolutions.find(
+    (row) => row.role === MODEL_POLICY_PRIMARY_ROLE && row.client === "claude",
+  );
+  assert.ok(primaryClaude);
+  const alternativeModel = `${primaryClaude.model}-alt`;
+  const withAlternative: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.role === MODEL_POLICY_PRIMARY_ROLE && row.client === "claude"
+        ? { ...row, alternatives: [alternativeModel] }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, withAlternative);
+  const output = createOutput();
+  // The primary candidate reports "not entitled" (an adverse status that
+  // does NOT halt further calls), so `runModelProbe` moves on to try the
+  // ordered alternative next -- this only happens at all if the alternative
+  // was actually carried into the built plan.
+  const probe = stubRecordingProbeRunner((invocation) =>
+    invocation.args.includes(alternativeModel) ? "OK" : "not entitled for this account",
+  );
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  // The primary candidate itself still could not be confirmed available (it
+  // reported "not entitled"), so the write correctly refuses rather than
+  // silently auto-substituting the alternative into the adopted lock -- but
+  // the alternative must still have actually been probed.
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /could not confirm/u);
+  const probedModels = probe.commands.length;
+  assert.ok(probedModels >= 2, "both the primary candidate and its alternative must be probed");
+});
+
+test("upgrade --probe-models refuses the write when it cannot confirm a candidate's availability, leaving files untouched (PR review finding)", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const profileBefore = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  const output = createOutput();
+  const probe = stubRecordingProbeRunner(() => "not entitled for this account");
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: probe.runner },
+  );
+
+  assert.equal(code, 1);
+  assert.match(output.stderrText(), /Refusing to write/u);
+  assert.match(output.stderrText(), /could not confirm/u);
+  const lockAfter = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const profileAfter = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  assert.equal(lockAfter, lockBefore, "a refused write must leave ai-profile.lock byte-unchanged");
+  assert.equal(
+    profileAfter,
+    profileBefore,
+    "a refused write must leave ai-profile.yaml byte-unchanged",
+  );
+});
+
+test("upgrade --probe-models degrades to catalog-only information on a probe-infrastructure failure instead of crashing (PR review finding)", async () => {
+  const root = await createV3UpgradeRoot(CAPABILITY_CATALOG_VERSION, liveModelPolicy());
+  const output = createOutput();
+  const failingRunner = {
+    run(): Promise<never> {
+      return Promise.reject(new Error("simulated probe-infrastructure failure"));
+    },
+  };
+
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+      "--probe-models",
+    ],
+    { io: output, probeRunner: failingRunner },
+  );
+
+  assert.equal(code, 0, output.stderrText());
+  assert.match(output.stdoutText(), /could not run/u);
+  // The write must still have gone through, catalog-only, rather than the
+  // optional advisory probe crashing the surrounding upgrade command.
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  assert.match(lockText, /modelPolicy/u);
+});
+
 test("upgrade JSON remains one clean machine-readable record in report and write modes", async () => {
   for (const args of [
     ["--json"],
@@ -717,6 +1113,341 @@ test("upgrade interactive customize inserts only the selected offered capability
   const profile = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
   assert.match(profile, /      - automation\n/u);
   assert.doesNotMatch(profile, /loggingGuidance: true/u);
+
+  // I6e acceptance criterion: a successful insertion-only write leaves the
+  // lockfile fully schema-valid, not just individually-correct fields.
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const validation = validateLockfileText(lockText);
+  assert.equal(
+    validation.ok,
+    true,
+    `lockfile must be schema-valid after a successful write: ${
+      validation.ok ? "" : JSON.stringify(validation.issues)
+    }`,
+  );
+
+  const lock = JSON.parse(lockText) as {
+    upgrade?: { catalogVersion?: number };
+    profile?: { sha256?: string };
+  };
+  assert.equal(lock.upgrade?.catalogVersion, CAPABILITY_CATALOG_VERSION);
+  assert.equal(
+    lock.profile?.sha256,
+    sha256Hex(Buffer.from(profile, "utf8")),
+    "lock.profile.sha256 must match the actually-written ai-profile.yaml bytes",
+  );
+});
+
+test("upgrade --model-policy-strategy adopt --write leaves a fully schema-valid lockfile with correct modelPolicy rows, per-row catalogVersion, and outputs (I6e AC3, second round)", async () => {
+  // The prior round's regression test (immediately above) only exercised the
+  // insertion-only path against `createUpgradeRoot`, which has `outputs: []`
+  // and no `modelPolicy` block at all -- it could not detect a wrong
+  // model-policy row, a wrong per-row catalogVersion, or a missing/malformed
+  // output record. This exercises a real `--model-policy-strategy adopt
+  // --write` against a fixture that already has real prior model-policy rows
+  // AND real generated target files on disk (`createV3UpgradeRootWithGeneratedFiles`),
+  // then validates the FULL resulting lockfile against AC3's actual scope.
+  //
+  // PR review finding (third round): the prior lock and the "fresh" expected
+  // state must NOT be seeded from the same `liveModelPolicy()` call -- doing
+  // so lets `adopt --write` succeed as a complete no-op (zero rows actually
+  // changed) and the assertions below would still pass even if the real
+  // adopt-write logic were broken. So the prior lock's codex/architect row
+  // is deliberately superseded (same stale-lock construction pattern used
+  // elsewhere in this file, e.g. the "...preserves the capability-catalog
+  // report..." test above) before running the write, and the resulting row
+  // is asserted to have actually CHANGED away from that stale value.
+  const fresh = liveModelPolicy();
+  const staleArchitectCodex = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "architect",
+  );
+  assert.ok(staleArchitectCodex);
+  const priorModelPolicy: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: fresh.resolutions.map((row) =>
+      row.client === "codex" && row.role === "architect"
+        ? { ...row, model: `${row.model}-superseded`, catalogVersion: row.catalogVersion - 1 }
+        : row,
+    ),
+  };
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    priorModelPolicy,
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--non-interactive",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+
+  const lockText = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+  const validation = validateLockfileText(lockText);
+  assert.equal(
+    validation.ok,
+    true,
+    `lockfile must be schema-valid after a successful write: ${
+      validation.ok ? "" : JSON.stringify(validation.issues)
+    }`,
+  );
+
+  const lock = JSON.parse(lockText) as {
+    modelPolicy?: {
+      catalogVersion?: number;
+      preset?: string;
+      resolutions: Array<{
+        role: string;
+        client: string;
+        model: string;
+        catalogVersion: number;
+      }>;
+    };
+    outputs: Array<{
+      path: string;
+      ownership: string;
+      sha256?: string;
+    }>;
+  };
+
+  // `LockModelPolicyV2.catalogVersion` is versioned against the MODEL
+  // catalog (`fresh.catalogVersion`), which is a separate counter from
+  // `CAPABILITY_CATALOG_VERSION` (the capability/offer catalog `upgrade`
+  // stamps). Comparing against the wrong constant here would make this
+  // assertion meaningless.
+  assert.equal(lock.modelPolicy?.catalogVersion, fresh.catalogVersion);
+  assert.equal(lock.modelPolicy?.preset, fresh.preset);
+
+  // Every row must match the FRESH catalog resolution exactly, not just the
+  // single row a narrower test happened to spot-check.
+  assert.equal(
+    lock.modelPolicy?.resolutions.length,
+    fresh.resolutions.length,
+    "resolved row count must match the fresh catalog's row count",
+  );
+  const lockResolutions: Array<{
+    role: string;
+    client: string;
+    model: string;
+    catalogVersion: number;
+  }> = lock.modelPolicy?.resolutions ?? [];
+  for (const expected of fresh.resolutions) {
+    const lockRow = lockResolutions.find(
+      (row) => row.role === expected.role && row.client === expected.client,
+    );
+    assert.ok(
+      lockRow,
+      `expected a lock row for role=${expected.role} client=${expected.client}`,
+    );
+    assert.equal(lockRow?.model, expected.model);
+    assert.equal(
+      lockRow?.catalogVersion,
+      expected.catalogVersion,
+      `${expected.role}/${expected.client} row must record the catalog version that produced it`,
+    );
+  }
+
+  // Genuine-mutation proof: the codex/architect row was deliberately seeded
+  // stale above. Asserting it now differs from that seeded value (in
+  // addition to the "every row matches fresh" loop above) proves the write
+  // actually changed something on disk, rather than the fixture already
+  // matching the expected output before `adopt --write` ran at all.
+  const architectRow = lockResolutions.find(
+    (row) => row.role === "architect" && row.client === "codex",
+  );
+  assert.ok(architectRow, "expected a lock row for role=architect client=codex");
+  assert.notEqual(
+    architectRow?.model,
+    staleArchitectCodex?.model + "-superseded",
+    "the stale codex/architect model must have been overwritten by the write",
+  );
+  assert.notEqual(
+    architectRow?.catalogVersion,
+    (staleArchitectCodex?.catalogVersion ?? 0) - 1,
+    "the stale codex/architect catalogVersion must have been overwritten by the write",
+  );
+  assert.equal(
+    architectRow?.model,
+    staleArchitectCodex?.model,
+    "the codex/architect row must land on the fresh (non-superseded) model",
+  );
+
+  // `outputs` must be non-empty (real generated targets exist) and every
+  // record well-formed.
+  assert.ok(lock.outputs.length > 0, "outputs must be non-empty");
+  for (const entry of lock.outputs) {
+    assert.ok(entry.path, "every output record needs a path");
+    assert.ok(
+      entry.ownership === "generated-owned" ||
+        entry.ownership === "mixed" ||
+        entry.ownership === "manual-owned",
+      `unexpected ownership label for ${entry.path}: ${entry.ownership}`,
+    );
+    if (entry.ownership === "generated-owned") {
+      assert.ok(
+        entry.sha256,
+        `${entry.path} is generated-owned and needs a sha256`,
+      );
+    }
+  }
+  const codexConfigOutput = lock.outputs.find(
+    (entry) => entry.path === ".codex/config.toml",
+  );
+  assert.ok(codexConfigOutput, "outputs must include .codex/config.toml");
+
+  const codexConfigAfter = await readFile(
+    path.join(root, ".codex", "config.toml"),
+    "utf8",
+  );
+  const implementerAfter = fresh.resolutions.find(
+    (row) => row.client === "codex" && row.role === "implementer",
+  );
+  assert.ok(implementerAfter);
+  assert.match(
+    codexConfigAfter,
+    new RegExp(escapeRegExp(implementerAfter.model), "u"),
+  );
+});
+
+test("upgrade insertion-only write batch never calls fsPromises.writeFile for ai-profile.yaml/ai-profile.lock, guarding against a regression back to the plain (non-atomic) write path (I6e)", async () => {
+  // `applyWritePlanAtomic` stages via `fsPromises.open`/`fd.write` and
+  // commits via `fsPromises.rename` -- never `fsPromises.writeFile`. A future
+  // regression reverting this call site to plain `applyWritePlan` (which
+  // writes via `fsPromises.writeFile`) would show up here as a nonzero call
+  // count. Rollback itself is proved separately by the rename-based test
+  // immediately below.
+  const root = await createUpgradeRoot(21);
+
+  const normalize = (value: unknown): string =>
+    typeof value === "string" ? value.replaceAll("\\", "/") : "";
+  const isTrackedTarget = (value: unknown): boolean =>
+    normalize(value).endsWith("ai-profile.yaml") ||
+    normalize(value).endsWith("ai-profile.lock");
+
+  const trackedCalls: string[] = [];
+  const realWriteFile = fsPromises.writeFile;
+  (fsPromises as unknown as { writeFile: unknown }).writeFile = async (
+    file: unknown,
+    ...rest: unknown[]
+  ): Promise<void> => {
+    if (isTrackedTarget(file)) {
+      trackedCalls.push(normalize(file));
+    }
+    return (realWriteFile as (...args: unknown[]) => Promise<void>)(
+      file,
+      ...rest,
+    );
+  };
+
+  const output = createOutput();
+  const prompts = upgradePrompts({
+    choose: "customize",
+    customize: ["skills.automation"],
+    confirm: true,
+  });
+  let code: number;
+  try {
+    code = await runCli(["upgrade", "--root", root], {
+      io: output,
+      nonInteractive: false,
+      upgradePrompts: prompts,
+    });
+  } finally {
+    (fsPromises as unknown as { writeFile: unknown }).writeFile = realWriteFile;
+  }
+
+  assert.equal(code, 0);
+  assert.deepEqual(trackedCalls, []);
+});
+
+test("upgrade insertion-only write batch rolls back an already-committed ai-profile.lock rename when the ai-profile.yaml rename fails during commit (I6e)", async () => {
+  // Complements the writeFile-based test above by forcing a failure at the
+  // atomic write plan's actual commit primitive (`fsPromises.rename`),
+  // matching the established precedent
+  // ("...quality-first --write reports which specific files could not be
+  // rolled back..."). `applyWritePlanAtomic` commits targets in alphabetical
+  // path order, so "ai-profile.lock" is renamed into place BEFORE
+  // "ai-profile.yaml" is reached; forcing the ai-profile.yaml rename to fail
+  // means ai-profile.lock is already committed and must be rolled back.
+  const root = await createUpgradeRoot(21);
+  const profileBefore = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+
+  const normalize = (value: unknown): string =>
+    typeof value === "string" ? value.replaceAll("\\", "/") : "";
+  const isProfilePath = (value: unknown): boolean =>
+    normalize(value).endsWith("ai-profile.yaml");
+
+  const realRename = fsPromises.rename;
+  (fsPromises as unknown as { rename: unknown }).rename = async (
+    src: unknown,
+    dest: unknown,
+    ...rest: unknown[]
+  ): Promise<void> => {
+    if (isProfilePath(dest)) {
+      throw Object.assign(new Error("commit blocked"), { code: "EPERM" });
+    }
+    return (realRename as (...args: unknown[]) => Promise<void>)(
+      src,
+      dest,
+      ...rest,
+    );
+  };
+
+  const output = createOutput();
+  const prompts = upgradePrompts({
+    choose: "customize",
+    customize: ["skills.automation"],
+    confirm: true,
+  });
+  let code: number;
+  try {
+    code = await runCli(["upgrade", "--root", root], {
+      io: output,
+      nonInteractive: false,
+      upgradePrompts: prompts,
+    });
+  } finally {
+    (fsPromises as unknown as { rename: unknown }).rename = realRename;
+  }
+
+  assert.equal(code, 1);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    lockBefore,
+  );
+  // A `stage: "commit"` failure means the rename genuinely started (paths
+  // resolved and staged fine) and rollback restored everything cleanly -- a
+  // different, more accurate story than "the path could not be safely
+  // resolved", which is what a generic prepare-stage refusal means.
+  assert.match(
+    output.stderrText(),
+    /rolled back cleanly/u,
+    "must report the accurate clean-rollback-after-commit-failure message",
+  );
+  assert.doesNotMatch(
+    output.stderrText(),
+    /unsafe path/u,
+    "must not report the misleading generic path-validation message",
+  );
+  assert.doesNotMatch(
+    output.stderrText(),
+    /safely resolved/u,
+    "must not report the misleading generic path-validation message",
+  );
 });
 
 test("upgrade interactive cancel exits 0 and writes nothing", async () => {
@@ -739,6 +1470,34 @@ test("upgrade interactive cancel exits 0 and writes nothing", async () => {
   assert.equal(
     await readFile(path.join(root, "ai-profile.lock"), "utf8"),
     beforeLock,
+  );
+});
+
+test("upgrade interactive customize declined at final confirmation writes nothing (I6e AC4)", async () => {
+  const root = await createUpgradeRoot(21);
+  const profileBefore = await readFile(path.join(root, "ai-profile.yaml"), "utf8");
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+
+  const output = createOutput();
+  const prompts = upgradePrompts({
+    choose: "customize",
+    customize: ["skills.automation"],
+    confirm: false,
+  });
+  const code = await runCli(["upgrade", "--root", root], {
+    io: output,
+    nonInteractive: false,
+    upgradePrompts: prompts,
+  });
+
+  assert.equal(code, 0);
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    lockBefore,
   );
 });
 
@@ -2868,6 +3627,68 @@ test("upgrade --model-policy-strategy adopt --write --json includes modelPolicyC
   assert.ok((report.modelPolicyPlan?.resolutions.length ?? 0) > 0);
 });
 
+test("upgrade --model-policy-strategy adopt --write --json includes modelPolicyTabnineChanges in the write response, matching the preview/retain JSON paths (PR review round 2 finding)", async () => {
+  // Before this fix, `modelPolicyTabnineChanges` was threaded into the
+  // preview and retain/no-op JSON paths (round 1) but NOT into
+  // `runModelPolicyWrite`'s own final `buildModelPolicyJsonFields` call, so
+  // a genuinely successful `adopt --write --json` response silently omitted
+  // the field even when a real Tabnine row changed -- automation could not
+  // rely on the field's presence being consistent across a successful write
+  // versus a preview.
+  const fresh = liveModelPolicy();
+  const staleWithTabnine: LockModelPolicyV2 = {
+    ...fresh,
+    resolutions: [
+      ...fresh.resolutions,
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "stale-organization-model",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: fresh.catalogVersion,
+      },
+    ],
+  };
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    staleWithTabnine,
+  );
+
+  const output = createOutput();
+  const code = await runCli(
+    [
+      "upgrade",
+      "--root",
+      root,
+      "--json",
+      "--model-policy-strategy",
+      "adopt",
+      "--write",
+    ],
+    { io: output },
+  );
+
+  assert.equal(code, 0);
+  const report = JSON.parse(output.stdoutText()) as {
+    modelPolicyTabnineChanges?: Array<{
+      role: string;
+      client: string;
+      old: { model: string } | null;
+      fresh: { model?: string };
+    }>;
+  };
+  assert.ok(report.modelPolicyTabnineChanges);
+  const row = report.modelPolicyTabnineChanges?.find(
+    (candidate) => candidate.role === "architect" && candidate.client === "tabnine",
+  );
+  assert.ok(row);
+  assert.equal(row?.old?.model, "stale-organization-model");
+  assert.equal(row?.fresh.model, undefined);
+});
+
 test("upgrade --model-policy-strategy adopt --write preserves the capability-catalog report even though it never runs the capability-adoption path (PR review finding)", async () => {
   // The model-policy write path returns early, before the normal
   // capability-catalog computation's report -- unrelated to any model
@@ -3906,8 +4727,15 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
   // is reached -- the commit failure must be on the LATER path (`ai-profile.yaml`)
   // so an EARLIER path (`.codex/config.toml`) is already renamed and in need of
   // a restore by the time rollback runs; then that restore is the one that fails.
+  //
+  // PR review finding (third round): rollback now restores an
+  // already-committed target via `writeTempBeside` + `rename` (never a
+  // direct `writeFile` onto the possibly-read-only target), so forcing the
+  // restore to fail means intercepting the SECOND `rename` targeting
+  // `.codex/config.toml` -- the first is the original commit, which must
+  // succeed.
   const realRename = fsPromises.rename;
-  const realWriteFile = fsPromises.writeFile;
+  let codexConfigRenames = 0;
   (fsPromises as unknown as { rename: unknown }).rename = async (
     src: unknown,
     dest: unknown,
@@ -3916,21 +4744,15 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
     if (isProfilePath(dest)) {
       throw Object.assign(new Error("commit blocked"), { code: "EPERM" });
     }
+    if (isCodexConfigPath(dest)) {
+      codexConfigRenames += 1;
+      if (codexConfigRenames === 2) {
+        throw Object.assign(new Error("restore blocked"), { code: "EPERM" });
+      }
+    }
     return (realRename as (...args: unknown[]) => Promise<void>)(
       src,
       dest,
-      ...rest,
-    );
-  };
-  (fsPromises as unknown as { writeFile: unknown }).writeFile = async (
-    file: unknown,
-    ...rest: unknown[]
-  ): Promise<void> => {
-    if (isCodexConfigPath(file)) {
-      throw Object.assign(new Error("restore blocked"), { code: "EPERM" });
-    }
-    return (realWriteFile as (...args: unknown[]) => Promise<void>)(
-      file,
       ...rest,
     );
   };
@@ -3952,13 +4774,73 @@ test("upgrade --model-policy-strategy quality-first --write reports which specif
     );
   } finally {
     (fsPromises as unknown as { rename: unknown }).rename = realRename;
-    (fsPromises as unknown as { writeFile: unknown }).writeFile = realWriteFile;
   }
 
   assert.equal(code, 1);
   assert.doesNotMatch(output.stderrText(), /unsafe path/u);
   assert.match(output.stderrText(), /could not fully roll back/u);
   assert.match(output.stderrText(), /\.codex[\\/]config\.toml/u);
+});
+
+test("upgrade --model-policy-strategy quality-first --write reports the accurate staging-failure message (not 'unsafe path') when staging I/O fails after every path already validated (PR review finding, second round)", async () => {
+  // Forces a staging I/O failure (`fsPromises.chmod`, now called during
+  // staging per the mode-preservation fix) rather than a path-validation
+  // failure or a commit-phase (rename) failure. Before this fix,
+  // `createOrApplyWritePlan` collapsed this into the SAME generic "unsafe
+  // path" message it uses for a genuine path-validation refusal, even though
+  // nothing about the paths was unsafe here -- only the staging I/O itself
+  // failed.
+  const root = await createV3UpgradeRootWithGeneratedFiles(
+    CAPABILITY_CATALOG_VERSION,
+    liveModelPolicy(),
+  );
+  const profileBefore = await readFile(
+    path.join(root, "ai-profile.yaml"),
+    "utf8",
+  );
+  const lockBefore = await readFile(path.join(root, "ai-profile.lock"), "utf8");
+
+  const realChmod = fsPromises.chmod;
+  (fsPromises as unknown as { chmod: unknown }).chmod = async (): Promise<void> => {
+    throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+  };
+
+  const output = createOutput();
+  let code: number;
+  try {
+    code = await runCli(
+      [
+        "upgrade",
+        "--root",
+        root,
+        "--non-interactive",
+        "--model-policy-strategy",
+        "quality-first",
+        "--write",
+      ],
+      { io: output },
+    );
+  } finally {
+    (fsPromises as unknown as { chmod: unknown }).chmod = realChmod;
+  }
+
+  assert.equal(code, 1);
+  // The OLD generic message's distinctive "actual: unsafe path" line (from
+  // `formatSimpleError`) must NOT appear -- only the new, accurate staging
+  // message should.
+  assert.doesNotMatch(output.stderrText(), /actual: unsafe path/u);
+  assert.match(
+    output.stderrText(),
+    /could not stage the write \(a permission or disk-space problem, not an unsafe path\); nothing was written\./u,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.yaml"), "utf8"),
+    profileBefore,
+  );
+  assert.equal(
+    await readFile(path.join(root, "ai-profile.lock"), "utf8"),
+    lockBefore,
+  );
 });
 
 test("upgrade --model-policy-strategy adopt --write refuses cleanly when a generated target file has drifted from the lock, leaving every file byte-unchanged", async () => {

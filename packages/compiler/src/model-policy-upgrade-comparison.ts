@@ -27,6 +27,13 @@ import {
   type ModelPolicyTargetClientId,
   type ModelPolicyTargetClientResolution,
 } from "./model-policy-target-adapter.js";
+import {
+  buildModelPolicyTabnineTargetTable,
+  findModelCatalogEntry,
+  MODEL_POLICY_TABNINE_CATALOG_VERSION,
+  TABNINE_MODEL_POLICY_CATALOG,
+  type ModelPolicyTabnineRoleOverrides,
+} from "./model-policy-tabnine-adapter.js";
 import type {
   LockModelPolicyResolutionV2,
   LockModelPolicyV2,
@@ -253,6 +260,215 @@ export function compareModelPolicyUpgrade(
         }),
       );
     }
+  }
+
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 31.5 (I6d PR review Finding 3): Tabnine's own upgrade-comparison row.
+// `compareModelPolicyUpgrade` above cannot cover Tabnine rows: its row shape
+// assumes Codex/Claude concepts (target-effort, primary/skill status split)
+// that Tabnine does not have (no effort/reasoning control, no primary/skill
+// surface split -- just one `modelStatus`). Rather than force Tabnine into
+// that shape with invented always-undefined fields, this is a structurally
+// parallel but honestly Tabnine-shaped sibling, built from Tabnine's own
+// adapter (`buildModelPolicyTabnineTargetTable`) instead of the Codex/Claude
+// target table.
+// ---------------------------------------------------------------------------
+
+export type ModelPolicyTabnineUpgradeComparisonRow = Readonly<{
+  role: ModelPolicyRoleId;
+  client: "tabnine";
+  changed: boolean;
+  old:
+    | Readonly<{
+        model: string;
+        lifecycle: ModelCatalogLifecycleStatus | "unrated";
+        source: ModelPolicyResolutionSource;
+        alternatives: readonly string[];
+        capabilityStatus: ModelPolicyCapabilityStatus;
+        catalogVersion: number;
+        // Phase 31.5 (I6d PR review round 2, "report removal of stale
+        // Tabnine effort metadata"): a validated prior lock row's schema
+        // (`LockModelPolicyResolutionV2`) permits an optional `effort` and
+        // any `effortStatus`, even for a `client: "tabnine"` row (the schema
+        // does not special-case Tabnine) -- so a stale/legacy row could
+        // carry non-default values here even though this adapter itself
+        // never writes them. Surfacing both lets the comparison honestly
+        // report an adopt plan's removal/rewrite of that metadata instead of
+        // silently reporting the row as unchanged.
+        effort: ModelPolicyTargetEffort | undefined;
+        effortStatus: ModelPolicyCapabilityStatus;
+      }>
+    | undefined;
+  fresh: Readonly<{
+    model: string | undefined;
+    lifecycle: ModelCatalogLifecycleStatus | "unrated";
+    source: ModelPolicyResolutionSource;
+    alternatives: readonly string[];
+    capabilityStatus: ModelPolicyCapabilityStatus;
+    catalogVersion: number;
+    /** Always `undefined`: Tabnine has no confirmed effort/reasoning
+     * control, so a fresh resolution never carries one. */
+    effort: undefined;
+    /** Always `"unsupported"`, independent of `capabilityStatus`, mirroring
+     * `ModelPolicyTabnineResolution.effortStatus`'s own fixed value. */
+    effortStatus: ModelPolicyCapabilityStatus;
+  }>;
+  reason: string | undefined;
+}>;
+
+/**
+ * Same "derive `old.lifecycle` from the live catalog" convention as
+ * `lockedModelLifecycle` above, applied to Tabnine's own bundled catalog.
+ */
+function lockedTabnineLifecycle(
+  model: string,
+): ModelCatalogLifecycleStatus | "unrated" {
+  return (
+    findModelCatalogEntry(TABNINE_MODEL_POLICY_CATALOG, model)?.status ??
+    "unrated"
+  );
+}
+
+function findOldTabnineRow(
+  previous: LockModelPolicyV2 | undefined,
+  role: ModelPolicyRoleId,
+): LockModelPolicyResolutionV2 | undefined {
+  return previous?.resolutions.find(
+    (candidate) => candidate.client === "tabnine" && candidate.role === role,
+  );
+}
+
+/**
+ * Tabnine's counterpart to `compareModelPolicyUpgrade`: computes, for every
+ * role, the difference between a prior `ai-profile.lock` `client: "tabnine"`
+ * row and what today's live bundled Tabnine catalog would resolve fresh,
+ * deliberately ignoring lock-reuse (the ordinary-compile behavior from
+ * I6d's own `buildModelPolicyTabnineTargetTable` `previousModelPolicy`
+ * parameter) -- exactly mirroring `compareModelPolicyUpgrade`'s own
+ * "ignoring lock-reuse" contract for Codex/Claude.
+ */
+export function compareModelPolicyTabnineUpgrade(
+  previous: LockModelPolicyV2 | undefined,
+  preset: ModelPolicyPreset,
+  tabnineRoleOverrides?: ModelPolicyTabnineRoleOverrides,
+): readonly ModelPolicyTabnineUpgradeComparisonRow[] {
+  const freshTable = buildModelPolicyTabnineTargetTable(
+    preset,
+    tabnineRoleOverrides,
+  );
+
+  const blockReasons: string[] = [];
+  if (previous !== undefined) {
+    if (previous.preset !== preset) {
+      blockReasons.push("preset changed");
+    }
+    if (previous.catalogVersion !== MODEL_POLICY_TABNINE_CATALOG_VERSION) {
+      blockReasons.push("block catalog version changed");
+    }
+  }
+
+  const rows: ModelPolicyTabnineUpgradeComparisonRow[] = [];
+
+  for (const role of MODEL_POLICY_ROLE_IDS) {
+    const freshRow = freshTable.find((candidate) => candidate.role === role);
+    if (freshRow === undefined) {
+      continue;
+    }
+
+    const freshResolution = freshRow.tabnine;
+    const fresh: ModelPolicyTabnineUpgradeComparisonRow["fresh"] =
+      Object.freeze({
+        model: freshResolution.model,
+        lifecycle: freshResolution.lifecycle,
+        source: freshResolution.source,
+        alternatives: freshResolution.alternatives,
+        capabilityStatus: freshResolution.modelStatus,
+        catalogVersion: freshResolution.catalogVersion,
+        effort: undefined,
+        effortStatus: freshResolution.effortStatus,
+      });
+
+    const oldRow = findOldTabnineRow(previous, role);
+    const old: ModelPolicyTabnineUpgradeComparisonRow["old"] =
+      oldRow === undefined
+        ? undefined
+        : Object.freeze({
+            model: oldRow.model,
+            lifecycle: lockedTabnineLifecycle(oldRow.model),
+            source: oldRow.source,
+            alternatives: oldRow.alternatives,
+            capabilityStatus: oldRow.capabilityStatus,
+            catalogVersion: oldRow.catalogVersion,
+            effort: oldRow.effort,
+            effortStatus: oldRow.effortStatus,
+          });
+
+    const reasons: string[] = [];
+    // Phase 31.5 (I6d PR review round 2, "suppress nonexistent Tabnine
+    // comparison rows", then a further round-3 finding on the same branch):
+    // the common case -- no prior lock row AND no fresh model resolved
+    // either (guided manual selection on both sides) -- is NOT a change for
+    // THIS role, regardless of `blockReasons`: a block-level preset/catalog-
+    // version migration is a real mutation of the lock's `modelPolicy`
+    // block, but it cannot possibly affect a role/client pair that emits no
+    // row on either side of it (there is nothing to "change" for a role with
+    // no Tabnine row before or after). Folding `blockReasons` into every
+    // role indiscriminately -- as the Codex/Claude sibling comparison
+    // correctly does, since EVERY role there always has both an old and a
+    // fresh row -- would misreport every one of the (typically nine)
+    // no-override roles as changed purely because of an unrelated preset/
+    // catalog bump. Only a genuine per-role transition, OR a block-level
+    // migration that actually affects a role with a real row on at least one
+    // side, is a real change.
+    const isAbsentOnBothSides = old === undefined && fresh.model === undefined;
+    if (isAbsentOnBothSides) {
+      // No reasons pushed at all (not even blockReasons): both sides agree
+      // "nothing resolved", so no per-role or block-level mutation touches
+      // this role/client pair.
+    } else if (old === undefined) {
+      reasons.push("newly resolved (no prior lock entry)");
+    } else {
+      if (old.model !== fresh.model) {
+        reasons.push("model changed");
+      }
+      if (old.capabilityStatus !== fresh.capabilityStatus) {
+        reasons.push("capability status changed");
+      }
+      if (alternativesDiffer(old.alternatives, fresh.alternatives)) {
+        reasons.push("alternatives changed");
+      }
+      if (old.catalogVersion !== fresh.catalogVersion) {
+        reasons.push("catalog version changed");
+      }
+      if (old.source !== fresh.source) {
+        reasons.push("resolution source changed");
+      }
+      if (old.effort !== fresh.effort) {
+        reasons.push("effort changed");
+      }
+      if (old.effortStatus !== fresh.effortStatus) {
+        reasons.push("effort status changed");
+      }
+    }
+    if (!isAbsentOnBothSides) {
+      reasons.push(...blockReasons);
+    }
+
+    const changed = reasons.length > 0;
+
+    rows.push(
+      Object.freeze({
+        role,
+        client: "tabnine" as const,
+        changed,
+        old,
+        fresh,
+        reason: changed ? reasons.join("; ") : undefined,
+      }),
+    );
   }
 
   return rows;

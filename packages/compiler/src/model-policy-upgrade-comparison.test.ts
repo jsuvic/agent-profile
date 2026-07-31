@@ -18,12 +18,16 @@ import {
 } from "@agent-profile/core";
 
 import type { LockModelPolicyV2 } from "./types.js";
-import { compareModelPolicyUpgrade } from "./model-policy-upgrade-comparison.js";
+import {
+  compareModelPolicyTabnineUpgrade,
+  compareModelPolicyUpgrade,
+} from "./model-policy-upgrade-comparison.js";
 import {
   buildModelPolicyTargetTable,
   toLockModelPolicyFromTargetTable,
   type ModelPolicyRoleOverrides,
 } from "./model-policy-target-adapter.js";
+import { MODEL_POLICY_TABNINE_CATALOG_VERSION } from "./model-policy-tabnine-adapter.js";
 
 test("a role/client whose locked model differs from today's live catalog resolution is reported as changed with a model reason", () => {
   const previous: LockModelPolicyV2 = {
@@ -312,4 +316,189 @@ test("a role/client with no prior locked row at all is reported as changed with 
   assert.equal(row.old, undefined);
   assert.ok(row.reason);
   assert.match(row.reason, /no prior lock entry/i);
+});
+
+// Phase 31.5 (I6d PR review Finding 3): `compareModelPolicyTabnineUpgrade`
+// mirrors `compareModelPolicyUpgrade`'s structural pattern (block-level
+// preset/catalogVersion reasons folded into every row, per-row
+// changed/reason/old/fresh) but is built from Tabnine's own adapter and row
+// shape (no effort/targetEffort/primaryStatus/skillStatus, since Tabnine has
+// none of these concepts).
+
+test("compareModelPolicyTabnineUpgrade reports a changed exact override with a model reason", () => {
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "stale-organization-model",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyTabnineUpgrade(previous, "role-aware", {
+    architect: { model: "new-organization-model" },
+  });
+  const row = rows.find((r) => r.role === "architect");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.match(row.reason, /model/i);
+  assert.equal(row.old?.model, "stale-organization-model");
+  assert.equal(row.fresh.model, "new-organization-model");
+});
+
+test("compareModelPolicyTabnineUpgrade reports an unchanged reused row as changed=false", () => {
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "organization-model-id",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyTabnineUpgrade(previous, "role-aware", {
+    architect: { model: "organization-model-id" },
+  });
+  const row = rows.find((r) => r.role === "architect");
+  assert.ok(row);
+  assert.equal(row.changed, false);
+  assert.equal(row.reason, undefined);
+});
+
+test("compareModelPolicyTabnineUpgrade reports a removed override as changed (forces fresh, guided manual selection)", () => {
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "stale-explicit-override-model",
+        effortStatus: "unsupported",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyTabnineUpgrade(previous, "role-aware");
+  const row = rows.find((r) => r.role === "architect");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.equal(row.fresh.model, undefined);
+  assert.match(row.reason, /model/i);
+});
+
+// Phase 31.5 (I6d PR review round 2): a Codex bot review found two further
+// issues on the round-1 fix.
+
+test("compareModelPolicyTabnineUpgrade does not report a role as changed when neither the prior lock nor the fresh resolution has a Tabnine model (the common no-override case)", () => {
+  // No prior lock at all, and no `tabnineRoleOverrides` supplied: every role
+  // resolves to guided manual selection (no model) on both the "old" (absent
+  // entirely) and "fresh" side. Before this fix, every one of
+  // `MODEL_POLICY_ROLE_IDS`' roles was wrongly reported `changed: true` with
+  // reason "newly resolved (no prior lock entry)", even though nothing about
+  // Tabnine actually differs -- misleading noise in every ordinary v3
+  // upgrade report that has never set a Tabnine override.
+  const rows = compareModelPolicyTabnineUpgrade(undefined, "role-aware");
+  for (const row of rows) {
+    assert.equal(row.old, undefined);
+    assert.equal(row.fresh.model, undefined);
+    assert.equal(
+      row.changed,
+      false,
+      `role "${row.role}" should not be reported as changed when neither side has a Tabnine model`,
+    );
+    assert.equal(row.reason, undefined);
+  }
+});
+
+test("compareModelPolicyTabnineUpgrade reports a stale prior row's leftover effort/effortStatus as a change even when model/source/status/alternatives/catalogVersion otherwise match", () => {
+  // A validated prior lock row's schema (`LockModelPolicyResolutionV2`)
+  // permits an optional `effort` and any `effortStatus` even for a
+  // `client: "tabnine"` row -- this adapter itself never writes either
+  // (Tabnine has no effort control), but a stale/legacy row could still
+  // carry them. An adopt plan always emits `effort: undefined`/
+  // `effortStatus: "unsupported"` for Tabnine (mirrors
+  // `toLockModelPolicyTabnineResolutions`), so a prior row with a leftover
+  // non-default `effort`/`effortStatus` IS a real mutation an adopt plan
+  // would make, even though every other field matches.
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+    preset: "role-aware",
+    resolutions: [
+      {
+        client: "tabnine",
+        role: "architect",
+        model: "organization-model-id",
+        effort: "high",
+        effortStatus: "advisory",
+        alternatives: [],
+        source: "explicit-override",
+        capabilityStatus: "unverified",
+        catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+      },
+    ],
+  };
+
+  const rows = compareModelPolicyTabnineUpgrade(previous, "role-aware", {
+    architect: { model: "organization-model-id" },
+  });
+  const row = rows.find((r) => r.role === "architect");
+  assert.ok(row);
+  assert.equal(row.changed, true);
+  assert.ok(row.reason);
+  assert.match(row.reason, /effort/i);
+  assert.equal(row.old?.effort, "high");
+  assert.equal(row.fresh.effort, undefined);
+});
+
+test("compareModelPolicyTabnineUpgrade does not report a role as changed due to a block-level preset/catalog-version migration when neither side has a Tabnine model for that role", () => {
+  // Phase 31.5 (I6d PR review round 3): a preset switch or block-level
+  // catalog-version bump is a real mutation of the lock's `modelPolicy`
+  // block, but it cannot affect a role/client pair that emits no Tabnine row
+  // on either side of it -- there is nothing for that migration to change
+  // for a role with no Tabnine override before or after. Before this fix,
+  // `blockReasons` was still unconditionally appended after the "absent on
+  // both sides" branch, so every no-override role was misreported as
+  // changed purely because of the unrelated preset bump.
+  const previous: LockModelPolicyV2 = {
+    catalogVersion: MODEL_POLICY_TABNINE_CATALOG_VERSION,
+    // Different preset than the one passed below, so `blockReasons` picks up
+    // "preset changed" -- exactly the scenario the finding described.
+    preset: "cost-conscious",
+    resolutions: [],
+  };
+
+  const rows = compareModelPolicyTabnineUpgrade(previous, "role-aware");
+  for (const row of rows) {
+    assert.equal(row.old, undefined);
+    assert.equal(row.fresh.model, undefined);
+    assert.equal(
+      row.changed,
+      false,
+      `role "${row.role}" should not be reported as changed by a block-level migration when it has no Tabnine row on either side`,
+    );
+    assert.equal(row.reason, undefined);
+  }
 });

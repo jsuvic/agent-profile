@@ -61,7 +61,19 @@ export type DoctorIssueCode =
   | "LINT-LEDGER-002"
   | "LINT-CONTEXT-001"
   | "MCP-SUGGEST-NEW-FRAMEWORK"
-  | "MCP-SUGGEST-UNCOMPARABLE";
+  | "MCP-SUGGEST-UNCOMPARABLE"
+  // Phase 31.5 (I7): opt-in, offline `doctor --models` model-policy category.
+  // Never emitted unless `DoctorRequest.models` is true.
+  | "LINT-MODEL-001"
+  | "LINT-MODEL-002"
+  | "LINT-MODEL-003"
+  | "LINT-MODEL-004"
+  | "LINT-MODEL-005"
+  | "LINT-MODEL-006"
+  | "LINT-MODEL-007"
+  | "LINT-MODEL-008"
+  | "LINT-MODEL-009"
+  | "LINT-MODEL-PROBE-001";
 
 export type DoctorIssue = {
   code: DoctorIssueCode;
@@ -79,9 +91,54 @@ export type DoctorResult = {
   issues: DoctorIssue[];
 };
 
+// Phase 31.5 (I7): a caller-injected, source-free model-availability probe
+// port. Doctor never spawns a client process or imports a CLI-only probe
+// adapter itself; the caller (apps/cli) wires in the real I4 adapter. Given
+// candidates, the runner returns closed-vocabulary result rows only -- no
+// raw client output, account, or credential data may cross this boundary.
+export type DoctorModelProbeCandidate = Readonly<{
+  client: "codex" | "claude";
+  model: string;
+  effort: "low" | "medium" | "high" | "extra-high";
+  alternatives: readonly string[];
+}>;
+
+export type DoctorModelProbeStatus =
+  | "available"
+  | "not-entitled"
+  | "temporarily-limited"
+  | "unsupported-client"
+  | "provider-unavailable"
+  | "auth-required"
+  | "unknown";
+
+export type DoctorModelProbeResultRow = Readonly<{
+  client: "codex" | "claude";
+  model: string;
+  status: DoctorModelProbeStatus;
+  probed: boolean;
+  evidence: string;
+}>;
+
+export type DoctorModelProbeRunner = (
+  candidates: readonly DoctorModelProbeCandidate[],
+) => Promise<readonly DoctorModelProbeResultRow[]>;
+
 export type DoctorRequest = {
   rootDir?: string;
   // Phase 19 (WS4): opt-in static, offline MCP recommendation scan.
   // Informational only; never changes status or exit behavior.
   mcpSuggestions?: boolean;
+  // Phase 31.5 (I7): opt-in, offline model-policy category (profile/lock/
+  // catalog/ownership consistency only). Off by default; default doctor
+  // output stays byte-identical when omitted.
+  models?: boolean;
+  // Phase 31.5 (I7): opt-in, ADDITIVE ephemeral availability rows built from
+  // `modelProbeRunner`'s results. Only takes effect when `models` is also
+  // true; `probe` alone (without `models`) is a documented no-op. Probe
+  // evidence never changes any offline issue's severity.
+  probe?: boolean;
+  // Phase 31.5 (I7): the injected probe port. Omitting it (the default) means
+  // `probe: true` starts zero client/network processes.
+  modelProbeRunner?: DoctorModelProbeRunner;
 };

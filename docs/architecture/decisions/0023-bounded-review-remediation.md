@@ -1,0 +1,60 @@
+# ADR 0023: Bounded Review Remediation and Escalation
+
+## Status
+
+Accepted 2026-07-24 with phase-33/001.
+
+## Context
+
+A reviewer may discover additional findings after each fix, and transient
+subagent/tool failures can cause retries. Unlimited retries can loop without
+learning, while a single pass can falsely imply that all defects were
+enumerated.
+
+## Decision
+
+Allow an initial review followed by at most three fix rounds, at most six
+completed logical reviewer invocations including up to two final clean-room
+confirmations (the second exists for any path where a required confirmation
+discovers blockers, remediation follows within the remaining fix-round
+budget, and the still-applicable trigger requires a new confirmation), and
+at most two transient retries per logical invocation. A fix round may begin only when the remaining budget covers its
+remediation review plus any then-required final confirmation; otherwise the
+workflow escalates. Repeated fingerprints or two rounds without blocker-count
+improvement produce `NO_PROGRESS`; remaining blockers or exhausted transient
+retries produce `NEEDS_HUMAN_REVIEW`. When both terminal triggers apply,
+`NEEDS_HUMAN_REVIEW` takes precedence. A completed result with no open P1/P2
+findings — every blocker verified closed and every P3 dispositioned —
+reaches terminal clean without re-review. Any
+code change invalidates an earlier clean result, except files under the
+`docs/review-learning/` metadata prefix (the learning record and promotion
+proposals written after the terminal state), which are excluded from
+snapshot invalidation per phase-33/001.
+
+Final clean-room confirmation is required after a P1, after two or more fix
+rounds, or for the high-risk surfaces enumerated in phase-33/001.
+That confirmation intentionally re-reviews the unchanged final snapshot;
+other unchanged-snapshot repetition is skipped. Empty, malformed, mismatched,
+or `NEEDS_CONTEXT` reviewer output is incomplete and consumes the bounded
+attempt retry path rather than producing a clean result.
+
+## Rationale
+
+Multiple complete-change passes acknowledge incomplete discovery, while fixed
+limits and explicit progress tests prevent self-approval and unbounded agent
+loops. Separate transient attempts from logical review rounds so capacity
+failures do not masquerade as product findings.
+
+## Consequences
+
+Positive:
+
+- Retry consumption and remediation progress become visible and auditable.
+- Findings cannot be silently converted into acceptance when budget runs out.
+- High-risk changes receive independent confirmation.
+
+Negative:
+
+- Some valid changes will require human review after budget exhaustion.
+- Orchestration must track snapshots, fingerprints, counts, and attempt types.
+- Six logical reviews can still be expensive on a large change.
