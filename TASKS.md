@@ -99,6 +99,37 @@ only on this machine's `tar`. Not done here: no formal spec amendment was
 filed, since amending an approved spec is human-gated - if the retention rule
 should be stated explicitly rather than derived, that is a grill decision.
 
+Follow-up 2026-07-31, from the change-risk review of that fix (first run of the
+reviewer as a native subagent): the preservation had been wired into one of two
+reachable write paths. `runCompile` can hand off to `runDriftReconciliation`,
+which calls `buildCompileWrites` itself and RETURNS before `runCompile`'s own
+call is reached, so a scoped `--write` that hit interactive drift
+reconciliation still rebuilt the lock from the partial result - the same
+ownership violation, still live, and live specifically on the path where the
+user has just classified their edits and is most likely to accept the write.
+The reviewer's reachability proof is the part the hand investigation missed:
+`runCompile` already forwards `includeTabnine: parsed.targets.length === 0`
+into that branch, so the entry point demonstrably knows the run may be scoped
+and dropped the provenance anyway; and the first regression test only drove the
+non-interactive path, so nothing covered it. `scopedTargets` is now computed
+once in `runCompile` before the reconciliation branch and handed to both call
+sites, so they cannot diverge again. Audited the remaining callers: only
+`runCompile` passes `targets` to `compileProfile` at all - upgrade, init,
+`configure`, and `dispatch` compile every target - so the value correctly stays
+undefined there. CLI suite 609 tests, compiler 482, 0 failures; root
+`npm run check` clean; a real scoped compile against this repository remains a
+byte-exact lockfile no-op.
+
+Disclosed defect in the reviewer artifact itself, not in the code it reviewed:
+its envelope would not pass `validateChangeRiskResultV1`. It emitted
+`scope.domains[].state` for `applicability`, `manifestCovered` for
+`inspectedChangeManifest`, `invalidatesPriorFinding: false` on evidence for
+`fixed` findings (the contract requires that marker absent except on a
+`false-positive` closure), and re-labelled a prior P2 as P1. A real
+orchestration would classify that as a malformed attempt and spend a transient
+retry, so the prompt's result-contract section is not yet producing a
+conformant envelope. Not fixed here; it belongs with I1's reviewer prompt.
+
 ## phase-28: Release Automation (`docs/specs/phase-28/001-release-automation.md`)
 
 Spec 001 approved 2026-07-09 (ADR 0012 accepted).

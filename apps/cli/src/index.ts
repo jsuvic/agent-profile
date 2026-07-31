@@ -48,6 +48,7 @@ import {
   type ImportStrategy,
   type LockModelPolicyV2,
   type LockOutputV2,
+  type LockTemplate,
   type MixedOutputDescriptor,
   type ModelPolicyLegacyUpgradeComparisonRow,
   type ModelPolicyTabnineSettingsPlan,
@@ -3029,6 +3030,21 @@ async function runCompile(
   // claims to describe them).
   const previousLockForCompile = await readLockfileForRegions(rootDir);
   const previousModelPolicy = previousLockForCompile?.modelPolicy;
+  // A scoped run generates only the requested targets, so any lockfile written
+  // from that partial result must carry the untouched targets' entries forward
+  // instead of dropping provenance for files the run never looked at. Computed
+  // once here because `runCompile` has two write paths - its own, and the
+  // interactive drift reconciliation it can hand off to - and they must not
+  // disagree about it. An unscoped run leaves this undefined and rebuilds in
+  // full, which is what prunes genuinely orphaned entries.
+  const scopedTargets =
+    parsed.targets.length > 0 && previousLockForCompile
+      ? {
+          requested: parsed.targets,
+          previousTemplates: previousLockForCompile.templates,
+          previousOutputs: previousLockForCompile.outputs,
+        }
+      : undefined;
 
   const compileResult = compileProfile({
     profile: profileResult.profile,
@@ -3125,6 +3141,7 @@ async function runCompile(
           profilePath: safeProfilePath.path,
           profileBytes,
           includeTabnine: parsed.targets.length === 0,
+          ...(scopedTargets ? { scopedTargets } : {}),
         });
       }
     }
@@ -3175,20 +3192,7 @@ async function runCompile(
     // can never disagree about a retained role/client resolution.
     ...(previousModelPolicy ? { previousModelPolicy } : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
-    // A scoped run generated only the requested targets, so this lockfile is
-    // built from a partial result. Carry the untouched targets' entries
-    // forward instead of dropping provenance for files the run never looked
-    // at. An unscoped run passes nothing and rebuilds in full, which is what
-    // prunes genuinely orphaned entries.
-    ...(parsed.targets.length > 0 && previousLockForCompile
-      ? {
-          scopedTargets: {
-            requested: parsed.targets,
-            previousTemplates: previousLockForCompile.templates,
-            previousOutputs: previousLockForCompile.outputs,
-          },
-        }
-      : {}),
+    ...(scopedTargets ? { scopedTargets } : {}),
   });
 
   if (parsed.write && !parsed.force) {
@@ -3404,6 +3408,14 @@ async function runDriftReconciliation(input: {
   profilePath: string;
   profileBytes: Uint8Array;
   includeTabnine: boolean;
+  /** Forwarded unchanged from `runCompile` so this write path preserves
+   * out-of-scope lockfile provenance exactly as the non-interactive one does.
+   * Present only for a target-scoped run. */
+  scopedTargets?: {
+    requested: readonly string[];
+    previousTemplates: readonly LockTemplate[];
+    previousOutputs: readonly LockOutputV2[];
+  };
 }): Promise<number> {
   const { io, prompts } = input;
   const fileByPath = new Map(
@@ -3614,6 +3626,7 @@ async function runDriftReconciliation(input: {
       ? { previousModelPolicy: input.regionPlan.previousModelPolicy }
       : {}),
     ...(tabnineModelSettings ? { tabnineModelSettings } : {}),
+    ...(input.scopedTargets ? { scopedTargets: input.scopedTargets } : {}),
   });
 
   prompts.showSummary(formatReconciliationSummary(actions));
