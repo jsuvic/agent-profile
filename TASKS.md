@@ -2113,7 +2113,7 @@ finding promotion, and a provider-neutral external-review boundary.
 | I1  | Emit the independent change-risk reviewer       | done       | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                    |
 | I2  | Orchestrate bounded review remediation          | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)        |
 | I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)              |
-| I4  | Promote recurring findings into stronger guards | ready      | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)      |
+| I4  | Promote recurring findings into stronger guards | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)      |
 | I5  | Backfill the recent PR review corpus            | human-gate | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)        |
 | I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)  |
 | G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)     |
@@ -2618,6 +2618,58 @@ external bot rounds with local reviewer runs and no orchestration state
 machine behind them, so a `change-risk/v2` record would have to fabricate the
 invocation and attempt counters the schema requires. It is backfill, and I5
 owns backfill.
+
+I4 implemented 2026-07-31 on its own branch, kept to I4 alone per the lesson
+recorded above. Adds `packages/compiler/src/change-risk-promotion.ts`: a pure
+computation over supplied history, `validated finding history + ownership/scope
+-> promotion action`, with every action string read from I1's promotion
+projection rather than restated. The content is in the counting rules. The
+occurrence unit is one reviewed change, so repeated rounds and distinct
+fingerprints inside a change collapse to at most one - the same rule whose
+absence caused the wrong citation recorded against I1's round 3. Counting is
+keyed on canonical category identity after alias normalization; an unmapped
+raw label normalizes to `uncategorized` and is excluded from recurrence
+entirely, so an unclassifiable finding cannot accumulate toward a rule nobody
+can scope. Only validated outcomes count: `fixed` counts, `false-positive` and
+`obsolete` never do, and an `open` finding counts only with a confirmed
+disposition AND the owner's decision evidence - either half alone would rest a
+threshold on an unvalidated opinion, so both are required and tested
+separately.
+
+Amendment 002's boundary is enforced rather than assumed: a within-change
+cluster recurrence is recorded as evidence and never increments an occurrence,
+because cluster identity is mechanism-keyed and may span categories (ADR 0026)
+and substituting it would corrupt the thresholds. A test pins that a cluster
+recurrence leaves the occurrence at one.
+
+Ownership is refusal-first. A generated-region target returns
+`refused-generated-region`; within the reviewed change promotion writes only a
+proposal artifact under the proposal prefix, and applying one to a human-owned
+surface stays a separate reviewed change. A second occurrence whose protection
+already exists cites the guard instead of adding another prose rule, and the
+resulting rule record is born `retired` rather than added and forgotten -
+promotion exists to stop paying reviewer attention for what a machine can
+check.
+
+The generated `subagent-driven-change` skill now carries the full promotion
+table, the guard preference, the prose-rule requirements, and the three
+ownership rules, all interpolated from the projection. Documented in
+`docs/review-learning/PROMOTION.md`. The new module emits four packed `dist`
+artifacts; `fixtures/npm-pack/agent-profile-compiler.json` was updated in the
+same change, checked proactively this time because the I3 entry above records
+the same trap. Self-review before handoff caught one defect in this slice:
+`ruleRecord.dateIntroduced` is a required field and was emitted as an empty
+string, which would have handed a consumer a record its own schema rejects.
+Promotion is pure and has no clock, so the caller now supplies the date and
+an absent one is refused rather than defaulted. Compiler suite 500 tests,
+CLI 610, 0 failures; root `npm run check`, `verify:pack`, and the goldens
+clean.
+
+Not done here, and worth stating: promotion is a computed decision with no
+caller yet. Nothing reads persisted records and feeds this function - the
+generated skill instructs an agent to apply the table by hand. Wiring a real
+consumer over I3's records belongs with I6's validation, which is where
+behavioural evidence for the whole loop is supposed to come from.
 
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
