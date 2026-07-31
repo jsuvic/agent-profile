@@ -2210,13 +2210,21 @@ function getSubagentsForRiskReviewerTarget(
  * The change-risk reviewer inspects the complete accumulated change and its
  * reachable unchanged consumers, reads its own domain reference file, and runs
  * focused tests for runtime evidence - a strict superset of what the per-task
- * reviewers do. Deriving its budget from the read-only peer template keeps it
- * from being silently given less room than the narrower reviewers, which is
- * what a hardcoded lower number did: a truncated review returns no envelope at
- * all, which the orchestration can only classify as an invalid attempt.
+ * reviewers do. Its budget is therefore the largest budget any read-only peer
+ * reviewer gets, derived from the property that makes them peers rather than
+ * from a hand-listed name, so adding or raising a read-only template cannot
+ * leave the broader reviewer with less room than a narrower one. A truncated
+ * review returns no envelope at all, which the orchestration can only classify
+ * as an invalid attempt.
  */
-const CHANGE_RISK_REVIEWER_MAX_TURNS =
-  getSubagentTemplate("spec-reviewer").maxTurns ?? 18;
+const CHANGE_RISK_REVIEWER_MAX_TURNS = Math.max(
+  ...SUBAGENT_TEMPLATE_NAMES.map((name) => getSubagentTemplate(name)).flatMap(
+    (template) =>
+      template.toolScope === "read-only" && template.maxTurns !== undefined
+        ? [template.maxTurns]
+        : [],
+  ),
+);
 
 function createChangeRiskReviewer(): AiProfileSubagent {
   const policy = changeRiskReviewerProjection();

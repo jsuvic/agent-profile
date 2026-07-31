@@ -165,6 +165,50 @@ regenerated via `scripts/regen-golden-fixtures.mjs` (reviewer artifacts and
 their lock entries only); compiler suite 484 tests, 0 failures; root
 `npm run check` and `verify:pack` clean.
 
+Review round 2026-07-31 on those fixes returned `NEEDS_CONTEXT`, which is the
+contract working rather than failing: the reviewer exhausted its budget and
+refused to report an unfinished review as complete. It closed the prior
+`runDriftReconciliation` fingerprint as `fixed` on its own evidence (one call
+site, both write paths carrying `scopedTargets`) and raised one P3, now fixed:
+the turn budget derived from `spec-reviewer` alone while its comment claimed
+protection against every narrower peer, so raising `code-quality-reviewer`
+would have silently left the broader reviewer behind. It now derives from the
+maximum over every read-only template - the property that makes them peers,
+not a hand-listed name - and the emission test asserts against each peer. The
+emitted value is unchanged at 18, so no fixture churn.
+
+Its highest-value output was a `missingInputs` entry, not a finding: it could
+not verify that the CLI `--target` vocabulary matches the lockfile `target`
+vocabulary, and reasoned that if they ever diverged, `requested.has(target)`
+would never match and the scoped-preservation fix would INVERT phase-05's
+pruning rule - resurrecting orphans inside a requested target instead of
+pruning them. Checked: they match today (every lockfile target is a valid
+`CompilerTargetId`; `tabnine` is the one deliberate non-member and is meant to
+carry forward). Nothing pinned them, so a regression test now seeds a fake
+orphan inside the requested target and requires it to still be pruned, and the
+guard was mutation-proven by simulating the divergence and watching it fail.
+The remaining four `missingInputs` were closed by hand and are recorded as the
+implementer's evidence, not independent clean-room verification: runtime proof
+(suites run), fixture delta (exactly three lines - the budget and the two
+prompt lines), published seam (`packages/compiler/src/index.ts` and
+`fixtures/npm-pack/` untouched this round), and other `resultInterface`
+consumers (exactly one; the orchestration module has zero references).
+
+Turn cap: still UNRESOLVED, and the earlier "fixed" claim was wrong. Raising
+10 to 18 was the right relative correction but treated a symptom; this run
+truncated at 18 exactly as the previous one truncated at 10. The cause is
+structural. The reviewer's clean-room contract forbids a prior finding list or
+implementer report, so every round re-reads the whole change from scratch
+while the accumulated diff grows past 90 files and the budget stays fixed. No
+constant survives that, and the failure mode is the worst available: it
+returns no envelope at all, which an orchestration can only classify as an
+invalid attempt and retry into the same wall. The fix belongs to the
+orchestration - invoke the reviewer against a bounded snapshot rather than an
+ever-growing accumulated diff, which is what the manifest-first context and
+the `NEEDS_CONTEXT` escape were designed for and what I6 exists to validate -
+so it is deliberately not patched with another number here. CLI suite 610
+tests, compiler 484, 0 failures; root `npm run check` clean.
+
 ## phase-28: Release Automation (`docs/specs/phase-28/001-release-automation.md`)
 
 Spec 001 approved 2026-07-09 (ADR 0012 accepted).

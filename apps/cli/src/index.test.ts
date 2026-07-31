@@ -743,6 +743,58 @@ test("compile --target --write keeps every other target's lockfile provenance", 
   );
 });
 
+test("compile --target --write still prunes an orphan inside the requested target", async () => {
+  const rootDir = await createProfileOnlyRoot();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write"], {
+      io: createOutput(),
+    }),
+    0,
+  );
+  const lockPath = path.join(rootDir, "ai-profile.lock");
+  const seeded = JSON.parse(await readFile(lockPath, "utf8"));
+  const orphan = {
+    path: "AGENTS-RETIRED.md",
+    target: "agents-md",
+    templateId: "targets/agents-md@1",
+    ownership: "generated-owned",
+    sha256: "0".repeat(64),
+  };
+  seeded.outputs = [...seeded.outputs, orphan].sort(
+    (left: { path: string }, right: { path: string }) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  await writeFile(lockPath, `${JSON.stringify(seeded, null, 2)}\n`, "utf8");
+
+  assert.equal(
+    await runCli(
+      ["compile", "--root", rootDir, "--target", "agents-md", "--write"],
+      { io: createOutput() },
+    ),
+    0,
+  );
+  const after = JSON.parse(await readFile(lockPath, "utf8"));
+
+  // Preservation must not invert phase-05's pruning rule: an entry belonging to
+  // a target this run DID regenerate is genuinely orphaned and still goes. This
+  // also pins the two vocabularies together - if a lockfile `target` value ever
+  // stopped matching the `--target` id, nothing here would match `requested`
+  // and the orphan would be resurrected instead.
+  assert.equal(
+    after.outputs.some(
+      (output: { path: string }) => output.path === "AGENTS-RETIRED.md",
+    ),
+    false,
+    "an orphan inside the requested target must still be pruned",
+  );
+  assert.ok(
+    after.outputs.some(
+      (output: { path: string }) => output.path === ".codex/config.toml",
+    ),
+    "while an untouched target's entry survives",
+  );
+});
+
 test("compile supports alternate profile paths and repeated targets", async () => {
   const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-alt-"));
   await mkdir(path.join(rootDir, "profiles"), { recursive: true });

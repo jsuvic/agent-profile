@@ -4590,12 +4590,19 @@ test("phase-33 qualifying workflows run final-review after risk review and expos
     return Number(match[1]);
   };
   // Claude only: the Codex agent surface carries no turn-budget key, so the
-  // cap exists there alone.
-  assert.ok(
-    maxTurnsOf(".claude/agents/change-risk-reviewer.md", /maxTurns: (\d+)/u) >=
-      maxTurnsOf(".claude/agents/spec-reviewer.md", /maxTurns: (\d+)/u),
-    "the change-risk reviewer's turn budget must not be below its narrower peers'",
+  // cap exists there alone. Compare against every read-only peer, not one, or
+  // raising a single peer would silently leave the broader reviewer behind.
+  const reviewerTurns = maxTurnsOf(
+    ".claude/agents/change-risk-reviewer.md",
+    /maxTurns: (\d+)/u,
   );
+  for (const peer of ["spec-reviewer", "code-quality-reviewer"]) {
+    assert.ok(
+      reviewerTurns >=
+        maxTurnsOf(`.claude/agents/${peer}.md`, /maxTurns: (\d+)/u),
+      `the change-risk reviewer's turn budget must not be below ${peer}'s`,
+    );
+  }
 
   const instructions = result.files.find((file) => file.path === "AGENTS.md");
   assert.ok(instructions);
