@@ -2113,12 +2113,13 @@ finding promotion, and a provider-neutral external-review boundary.
 | I1  | Emit the independent change-risk reviewer       | done       | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                    |
 | I2  | Orchestrate bounded review remediation          | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)        |
 | I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)              |
-| I4  | Promote recurring findings into stronger guards | sequenced  | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)      |
+| I4  | Promote recurring findings into stronger guards | ready      | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)      |
 | I5  | Backfill the recent PR review corpus            | human-gate | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)        |
 | I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)  |
 | G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)     |
 | I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                |
 | G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
+| I8  | Budget exhaustion degrades to NEEDS_CONTEXT     | ready      | [008-reviewer-budget-exhaustion.md](docs/specs/phase-33/issues/008-reviewer-budget-exhaustion.md)        |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
@@ -2578,6 +2579,45 @@ this repository's own skills regenerated. The new module also emits four
 `fixtures/npm-pack/agent-profile-compiler.json` is an exact list that nothing
 regenerates, so `verify:pack` failed until they were hand-added - the same
 trap I1 hit, caught here only because that entry above records it.
+
+PR #140 merged 2026-07-31 (squash), carrying I1, I2, I7, and I3 plus the
+phase-27 scoped-compile lockfile fix. Merged rather than extended because the
+phase's own reviewer had twice failed to review the branch inside its budget:
+110 files and +13,694 lines is past what a clean-room reviewer that re-reads
+the whole change each round can cover. That the instrument this phase built
+was the thing that said so is the useful part. Lesson for the next branch,
+recorded rather than resolved: it also drifted across phases, carrying CLI
+lockfile work that belonged in its own change.
+
+Ledger movement after the merge: I3 landing satisfies `I1+I3 -> I4`, so I4
+moves from `sequenced` to `ready`, and satisfies `I3 -> I5`, so I5's
+dependency is met though it stays `human-gate` on its own approval. I8 added
+`ready`.
+
+I8 raised from the two failed review runs. Correcting an earlier claim in this
+ledger: raising the reviewer's turn budget from 10 to 18 was recorded as a fix
+and was not one - the second run failed identically. The root cause is not the
+size of the constant. The emitted prompt lists its constraints (read-only, no
+installs, no network) and says to return `NEEDS_CONTEXT` when required proof
+cannot be obtained within them, but the turn budget is not named among those
+constraints, so the reviewer never treats exhaustion as a trigger. It spends
+every turn inspecting and returns no envelope, which the orchestration can
+only read as an invalid attempt and retry into the same wall. The decisive
+evidence is what the second run produced once manually resumed: a well-formed
+`NEEDS_CONTEXT` naming five specific unverified items, one of them a real
+defect nobody else had found. The capability is already there; the prompt
+never gives it a turn to use it. I8 names the budget as a constraint and
+requires reserving enough of it to emit the envelope. Raising the number again
+is an explicit non-goal, as is the larger question of invoking the reviewer
+against a bounded per-slice snapshot - that stays open for I6 to measure
+first.
+
+PR #140's own review history is NOT a candidate for an I3 record, correcting a
+suggestion made while implementing I3. Its reviews were run ad hoc, mixing
+external bot rounds with local reviewer runs and no orchestration state
+machine behind them, so a `change-risk/v2` record would have to fabricate the
+invocation and attempt counters the schema requires. It is backfill, and I5
+owns backfill.
 
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
