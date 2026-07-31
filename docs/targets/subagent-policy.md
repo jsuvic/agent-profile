@@ -35,11 +35,13 @@ subagentPolicy:
       retention: 20
 ```
 
-The canonical role values are provider-neutral. Exact model identifiers and
-target effort are exceptions that must use the versioned allowlist described in
-[Subagent Model Mapping v2 Evidence](../research/010-subagent-model-mapping-v2.md).
-Codex and Claude receive resolved model guidance; Tabnine receives only portable
-task-capsule and local-first conventions.
+The canonical role values are provider-neutral. Without `preset` (the mapping-v2
+shape shown above), exact Codex/Claude model identifiers and target effort are
+exceptions that must use the versioned allowlist described in
+[Subagent Model Mapping v2 Evidence](../research/010-subagent-model-mapping-v2.md),
+Codex and Claude receive resolved model guidance, and Tabnine receives only
+portable task-capsule and local-first conventions. Setting `preset` opts into
+mapping v3, which changes all three of those points — see the sections below.
 
 `indexed.mode: off` omits indexed-first guidance and explicitly directs bounded
 native discovery. It neither installs nor indexes CCE.
@@ -73,9 +75,23 @@ subagentPolicy:
   rejected; see the parent spec's target-capability-status contract.
 - Without `preset`, `overrides.codex.model` / `overrides.claude.model` are
   still restricted to the pinned mapping-v2 allowlist.
+- `overrides.tabnine.model` is validated with the open bounded rule
+  **regardless** of `preset`: the field is new in mapping v3 and has no
+  mapping-v2 closed list to preserve.
 - I2 carries those validated Codex/Claude exact overrides into generated
   guidance, the owned project-local Codex primary default, and lockfile
-  provenance. Tabnine remains a separate Phase 31.5 issue.
+  provenance; Tabnine's own override, adapter, and settings write path are
+  covered under "Mapping-v3 Tabnine ..." below.
+- The JSON Schema (`packages/schemas/ai-profile.schema.json`,
+  `subagentPolicy`) accepts `preset` as the closed enum
+  `role-aware | quality-first | cost-conscious`, accepts all ten role keys
+  including `routine-implementer`, and accepts
+  `roles[id].overrides.codex|claude|tabnine`. It does not encode the
+  allowlist-versus-open-string distinction above: that is enforced by the
+  profile parser after schema validation, so an invalid exact override is a
+  parser issue (`subagent_policy_override_model`), not a schema error. The
+  Tabnine override object accepts `model` only — there is no `effort` key,
+  because Tabnine has no confirmed effort control.
 
 ## Mapping-v3 Codex/Claude exact catalog and generated artifacts (Phase 31.5 I2)
 
@@ -355,12 +371,12 @@ client-file step.
 
 In practice this means:
 
-- `agent-profile compile --write` has no source of an exact Tabnine override
-  today (see "Known scope narrowing" below), so its Tabnine branch always
-  resolves `advisory` — an existing unowned settings file is preserved
-  byte-for-byte and a missing one is never created.
-- `agent-profile init`'s interactive wizard is the only path that can resolve
-  an exact model for Tabnine, via the advanced-override entry point described
+- `agent-profile compile --write` reads the persisted exact Tabnine override
+  for the primary `implementer` role. It writes that one reviewed
+  project-local selection when the settings file is absent or generated-owned;
+  an existing unowned file is preserved byte-for-byte and remains advisory.
+- `agent-profile init`'s interactive wizard is the interactive entry path for
+  an exact Tabnine model, via the advanced-override entry point described
   in `docs/cli/README.md`'s "Model Selection" section. Selecting a client that
   is `tabnine`-only or alongside Codex/Claude, and then opting into the
   advanced override with a typed model id, causes `writeCompiledClientFiles`
@@ -376,20 +392,18 @@ In practice this means:
 ### Known scope narrowing (I3 / I5R / I6d)
 
 - A persisted `subagentPolicy.roles[id].overrides.tabnine.model`
-  profile-schema field exists (Phase 31.5 I6d) and is the recommended way to
-  set an explicit Tabnine override going forward; `resolveModelPolicyLockfile`
-  merges it into `ai-profile.lock`'s `modelPolicy` block with the same
-  prior-lock reconciliation Codex/Claude rows already have. The interactive
-  init wizard's advanced-override entry point (Phase 31.5 I5R) predates this
-  field and still supplies an ephemeral, non-persisted override at write
-  time only — it is not recorded back into `ai-profile.yaml`, so a later
-  `agent-profile compile --write` without going back through the wizard does
-  not repeat it; writing the profile field directly is the persisted
-  alternative.
-- The advanced-override entry point (Phase 31.5 I5R) offers a single exact
-  Tabnine model override, not full per-role Codex/Claude customization beyond
-  the three named presets; per-role Codex/Claude overrides remain
-  adapter/test-level only, matching the point above.
+  profile-schema field exists (Phase 31.5 I6d) and is the canonical explicit
+  Tabnine override. `resolveModelPolicyLockfile` merges it into
+  `ai-profile.lock`'s `modelPolicy` block with the same prior-lock
+  reconciliation Codex/Claude rows already have. The interactive init
+  wizard's advanced-override entry point writes its reviewed exact selection
+  into this field for the primary `implementer` role, so later ordinary
+  compiles repeat the same selection without reopening the wizard.
+- The init wizard's advanced-override entry point (Phase 31.5 I5R) offers a
+  single exact Tabnine model override, not full per-role customization beyond
+  the three named presets. The local browser Profile editor does expose
+  guarded per-role capability, effort, and exact Codex, Claude, and Tabnine
+  override controls through its plan/apply workflow.
 - No Doctor or drift-detection integration exists yet for
   `.tabnine/agent/settings.json`; Doctor does not currently flag a
   Agent-Profile-owned settings file that has drifted from its recorded hash,

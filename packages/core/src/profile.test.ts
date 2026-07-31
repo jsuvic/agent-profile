@@ -696,6 +696,48 @@ describe("subagents schema", () => {
     assert.equal(result.ok, false);
   });
 
+  it("reserves the generated change-risk reviewer name", () => {
+    const profile = profileWithSubagents({
+      enabled: true,
+      agents: [{ ...validSubagent(), name: "change-risk-reviewer" }],
+    });
+    (profile["workflow"] as Record<string, unknown>)[
+      "subagentDrivenDevelopment"
+    ] = true;
+    const result = validateProfileValue(profile);
+    assert.equal(result.ok, false);
+  });
+
+  it("allows the change-risk reviewer name when generation does not qualify", () => {
+    const workflowOff = profileWithSubagents({
+      enabled: true,
+      agents: [{ ...validSubagent(), name: "change-risk-reviewer" }],
+    });
+    (workflowOff["workflow"] as Record<string, unknown>)[
+      "subagentDrivenDevelopment"
+    ] = false;
+    const workflowOffResult = validateProfileValue(workflowOff);
+    assert.equal(
+      workflowOffResult.ok,
+      true,
+      workflowOffResult.ok ? "" : JSON.stringify(workflowOffResult.issues),
+    );
+
+    const tabnineOnly = profileWithSubagents({
+      enabled: true,
+      agents: [{ ...validSubagent(), name: "change-risk-reviewer" }],
+    });
+    (tabnineOnly["workflow"] as Record<string, unknown>)[
+      "subagentDrivenDevelopment"
+    ] = true;
+    tabnineOnly["clients"] = {
+      tabnine: { enabled: true },
+      codex: { enabled: false },
+      claude: { enabled: false },
+    };
+    assert.equal(validateProfileValue(tabnineOnly).ok, true);
+  });
+
   it("rejects enabled: true with empty agents", () => {
     const result = validateProfileValue(
       profileWithSubagents({ enabled: true, agents: [] }),
@@ -1332,7 +1374,11 @@ describe("renderProfileYaml", () => {
   });
 
   it("round-trips: parseProfileYaml(renderProfileYaml(p)).profile deep-equals p", () => {
-    for (const profile of [MINIMAL_PROFILE, FULL_PROFILE, SUBAGENT_POLICY_PROFILE]) {
+    for (const profile of [
+      MINIMAL_PROFILE,
+      FULL_PROFILE,
+      SUBAGENT_POLICY_PROFILE,
+    ]) {
       const yaml = renderProfileYaml(profile);
       const result = parseProfileYaml(yaml);
       if (!result.ok)
@@ -1476,7 +1522,10 @@ describe("renderProfileYaml", () => {
 
   it("emits subagentPolicy.preset in the rendered YAML", () => {
     const yaml = renderProfileYaml(SUBAGENT_POLICY_PROFILE);
-    assert.match(yaml, /subagentPolicy:\n\s+enabled: true\n\s+preset: quality-first/u);
+    assert.match(
+      yaml,
+      /subagentPolicy:\n\s+enabled: true\n\s+preset: quality-first/u,
+    );
   });
 });
 

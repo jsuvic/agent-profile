@@ -7,10 +7,9 @@ import path from "node:path";
 
 import { compareText, safeOutputPath } from "./shared.js";
 
-export type PlannedWrite = {
-  path: string;
-  bytes: Uint8Array | string;
-};
+export type PlannedWrite =
+  | { path: string; bytes: Uint8Array | string; delete?: false }
+  | { path: string; delete: true };
 
 export type WritePlanAction = {
   path: string;
@@ -32,10 +31,9 @@ export type WritePlanRequest = {
   writes: PlannedWrite[];
 };
 
-type NormalizedWrite = {
-  path: string;
-  bytes: Uint8Array;
-};
+type NormalizedWrite =
+  | { path: string; bytes: Uint8Array; delete?: false }
+  | { path: string; delete: true };
 
 export async function planWrites(
   request: WritePlanRequest,
@@ -57,16 +55,20 @@ async function planWritesWithResolvedRoot(
       write.path,
     );
     const current = await readOptionalFile(absolutePath);
-    const action = current
-      ? Buffer.from(current).equals(Buffer.from(write.bytes))
-        ? "unchanged"
-        : "change"
-      : "create";
+    const action = write.delete
+      ? current
+        ? "change"
+        : "unchanged"
+      : current
+        ? Buffer.from(current).equals(Buffer.from(write.bytes))
+          ? "unchanged"
+          : "change"
+        : "create";
 
     actions.push({
       path: write.path,
       action,
-      plannedBytes: write.bytes.byteLength,
+      plannedBytes: write.delete ? 0 : write.bytes.byteLength,
     });
   }
 
@@ -99,8 +101,12 @@ export async function applyWritePlan(
       rootRealPath,
       write.path,
     );
-    await fsPromises.mkdir(path.dirname(absolutePath), { recursive: true });
-    await fsPromises.writeFile(absolutePath, write.bytes);
+    if (write.delete) {
+      await fsPromises.rm(absolutePath, { force: true });
+    } else {
+      await fsPromises.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fsPromises.writeFile(absolutePath, write.bytes);
+    }
   }
 
   return plan;
@@ -154,7 +160,8 @@ export class AtomicWritePlanError extends Error {
 type AtomicTarget = {
   readonly path: string;
   readonly absolutePath: string;
-  readonly bytes: Uint8Array;
+  readonly bytes?: Uint8Array;
+  readonly delete: boolean;
   /** Pre-transaction bytes, or undefined when the target did not exist. */
   backup: Uint8Array | undefined;
   /**
@@ -218,7 +225,7 @@ export async function applyWritePlanAtomic(
       targets.push({
         path: write.path,
         absolutePath: await assertWritePathContained(rootRealPath, write.path),
-        bytes: write.bytes,
+        ...(write.delete ? { delete: true } : { bytes: write.bytes, delete: false }),
         backup: undefined,
         existingMode: undefined,
         existingOwner: undefined,
@@ -267,6 +274,7 @@ export async function applyWritePlanAtomic(
     // captured mode. A `create` (no existing target) keeps the default
     // temp-file mode/ownership.
     for (const target of targets) {
+      if (target.delete) continue;
       const firstCreated = await fsPromises.mkdir(
         path.dirname(target.absolutePath),
         { recursive: true },
@@ -274,7 +282,7 @@ export async function applyWritePlanAtomic(
       if (firstCreated !== undefined) createdDirectories.push(firstCreated);
       target.tempPath = await writeTempBeside(
         target.absolutePath,
-        target.bytes,
+        target.bytes!,
         target.existingMode,
       );
       if (target.existingOwner !== undefined) {
@@ -314,8 +322,12 @@ export async function applyWritePlanAtomic(
   // --- Commit: rename each staged temp into place. ------------------------
   try {
     for (const target of targets) {
-      await fsPromises.rename(target.tempPath!, target.absolutePath);
-      target.tempPath = undefined;
+      if (target.delete) {
+        await fsPromises.rm(target.absolutePath);
+      } else {
+        await fsPromises.rename(target.tempPath!, target.absolutePath);
+        target.tempPath = undefined;
+      }
       target.renamed = true;
     }
     await fsyncParentDirectory(rootRealPath);
@@ -512,7 +524,12 @@ async function rollbackAtomicTargets(
   for (const relativePath of unrestored) {
     const target = targets.find((item) => item.path === relativePath);
     if (!target) continue;
-    if (await pathExists(target.absolutePath)) stillPresent.push(relativePath);
+    if (
+      target.backup !== undefined ||
+      (await pathExists(target.absolutePath))
+    ) {
+      stillPresent.push(relativePath);
+    }
   }
 
   return stillPresent;
@@ -529,13 +546,17 @@ async function pathExists(absolutePath: string): Promise<boolean> {
 
 function normalizeWrites(writes: PlannedWrite[]): NormalizedWrite[] {
   return writes
-    .map((write) => ({
-      path: safeOutputPath(write.path),
-      bytes:
-        typeof write.bytes === "string"
-          ? Buffer.from(write.bytes, "utf8")
-          : write.bytes,
-    }))
+    .map((write) =>
+      write.delete
+        ? { path: safeOutputPath(write.path), delete: true as const }
+        : {
+            path: safeOutputPath(write.path),
+            bytes:
+              typeof write.bytes === "string"
+                ? Buffer.from(write.bytes, "utf8")
+                : write.bytes,
+          },
+    )
     .sort((left, right) => compareText(left.path, right.path));
 }
 

@@ -11,7 +11,9 @@ import test from "node:test";
 import {
   compileProfile,
   createLockfileFile,
+  planTabnineModelSettingsWrite,
   resolveModelPolicyLockfile,
+  sha256Hex,
   type AiProfileLockV2,
 } from "@agent-profile/compiler";
 import { parseProfileYaml } from "@agent-profile/core";
@@ -73,6 +75,23 @@ test("doctor reports structural profile and generated artifact problems", async 
   assertHasIssue(
     await runDoctor({ rootDir: missingGeneratedRoot }),
     "LINT-STRUCT-003",
+  );
+});
+
+test("doctor prioritizes compiler diagnostics over missing or invalid lockfiles", async () => {
+  const missingLockRoot = await createCompilerInvalidProject();
+  const missingLock = await runDoctor({ rootDir: missingLockRoot });
+  assert.deepEqual(
+    missingLock.issues.map((entry) => entry.code),
+    ["LINT-STRUCT-002"],
+  );
+
+  const invalidLockRoot = await createCompilerInvalidProject();
+  await writeFile(path.join(invalidLockRoot, "ai-profile.lock"), "{\n", "utf8");
+  const invalidLock = await runDoctor({ rootDir: invalidLockRoot });
+  assert.deepEqual(
+    invalidLock.issues.map((entry) => entry.code),
+    ["LINT-STRUCT-002"],
   );
 });
 
@@ -1074,7 +1093,9 @@ subagentPolicy:
   });
   assert.equal(calls, 0);
   assert.equal(
-    withoutProbeFlag.issues.some((issue) => issue.code === "LINT-MODEL-PROBE-001"),
+    withoutProbeFlag.issues.some(
+      (issue) => issue.code === "LINT-MODEL-PROBE-001",
+    ),
     false,
   );
 
@@ -1107,7 +1128,11 @@ subagentPolicy:
   // `--probe` alone (without `--models`) is a documented no-op: zero probe
   // calls, zero probe rows.
   calls = 0;
-  const probeAlone = await runDoctor({ rootDir, probe: true, modelProbeRunner });
+  const probeAlone = await runDoctor({
+    rootDir,
+    probe: true,
+    modelProbeRunner,
+  });
   assert.equal(calls, 0);
   assert.equal(
     probeAlone.issues.some((issue) => issue.code === "LINT-MODEL-PROBE-001"),
@@ -1129,6 +1154,83 @@ permissions:
   const second = await runDoctor({ rootDir });
 
   assert.deepEqual(first.issues, second.issues);
+});
+
+test("doctor validates a generated-owned Tabnine model settings output against current override and retained lock resolution", async () => {
+  // This test would have been RED before the I9 packed-journey fix: Doctor
+  // compiled before reading the model-policy lock and never added the
+  // CLI-owned Tabnine settings artifact to its expected output set, so the
+  // valid output below was reported as LINT-LOCK-005.
+  const validRoot = await createModelPolicyTabnineProject({
+    retainLockedResolution: true,
+  });
+  const valid = await runDoctor({ rootDir: validRoot, models: true });
+  assert.equal(
+    valid.issues.some((issue) => issue.code === "LINT-LOCK-005"),
+    false,
+    JSON.stringify(valid.issues, null, 2),
+  );
+  assert.equal(
+    valid.issues.some((issue) => issue.code === "LINT-LOCK-007"),
+    false,
+    JSON.stringify(valid.issues, null, 2),
+  );
+
+  const corruptedTargetRoot = await createModelPolicyTabnineProject();
+  const corruptedTargetLock = await readLockfile(corruptedTargetRoot);
+  const corruptedTargetOutput = corruptedTargetLock.outputs.find(
+    (output) => output.path === ".tabnine/agent/settings.json",
+  );
+  assert.ok(corruptedTargetOutput);
+  corruptedTargetOutput.target = "agents-md";
+  await writeLockfile(corruptedTargetRoot, corruptedTargetLock);
+  assertHasIssue(
+    await runDoctor({ rootDir: corruptedTargetRoot, models: true }),
+    "LINT-LOCK-005",
+  );
+
+  const corruptedTemplateRoot = await createModelPolicyTabnineProject();
+  const corruptedTemplateLock = await readLockfile(corruptedTemplateRoot);
+  const corruptedTemplateOutput = corruptedTemplateLock.outputs.find(
+    (output) => output.path === ".tabnine/agent/settings.json",
+  );
+  assert.ok(corruptedTemplateOutput);
+  corruptedTemplateOutput.templateId = "targets/agents-md@1";
+  await writeLockfile(corruptedTemplateRoot, corruptedTemplateLock);
+  assertHasIssue(
+    await runDoctor({ rootDir: corruptedTemplateRoot, models: true }),
+    "LINT-LOCK-005",
+  );
+
+  const changedOverrideRoot = await createModelPolicyTabnineProject();
+  const changedProfilePath = path.join(changedOverrideRoot, "ai-profile.yaml");
+  await writeFile(
+    changedProfilePath,
+    (await readFile(changedProfilePath, "utf8")).replace(
+      "model: gpt-5.4",
+      "model: organization-replacement-model",
+    ),
+    "utf8",
+  );
+  assertHasIssue(
+    await runDoctor({ rootDir: changedOverrideRoot, models: true }),
+    "LINT-LOCK-005",
+  );
+
+  const removedOverrideRoot = await createModelPolicyTabnineProject();
+  const removedProfilePath = path.join(removedOverrideRoot, "ai-profile.yaml");
+  await writeFile(
+    removedProfilePath,
+    (await readFile(removedProfilePath, "utf8")).replace(
+      /\n  roles:\n(?:    .*\n|      .*\n|        .*\n|          .*\n)+/u,
+      "\n",
+    ),
+    "utf8",
+  );
+  assertHasIssue(
+    await runDoctor({ rootDir: removedOverrideRoot, models: true }),
+    "LINT-LOCK-005",
+  );
 });
 
 async function createGeneratedProject(
@@ -1183,6 +1285,112 @@ async function createGeneratedProject(
   });
   await writeProjectFile(rootDir, lockfile.path, lockfile.bytes);
 
+  return rootDir;
+}
+
+async function createCompilerInvalidProject(): Promise<string> {
+  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-doctor-"));
+  const profileYaml = await getProfileYaml(`
+capabilities:
+  delegation:
+    subagents:
+      enabled: true
+      agents:
+        - name: writer
+          description: Writes files
+          purpose: Writes files in the workspace.
+          prompt: Edit files as instructed.
+          toolScope: workspace-write
+`);
+  const profileResult = parseProfileYaml(profileYaml);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) {
+    throw new Error("compiler-invalid fixture must parse");
+  }
+
+  const compileResult = compileProfile({ profile: profileResult.profile });
+  assert.equal(compileResult.ok, false);
+  if (compileResult.ok) {
+    throw new Error("compiler-invalid fixture must fail compilation");
+  }
+
+  await writeProjectFile(rootDir, "ai-profile.yaml", profileYaml);
+  await writeProjectFile(rootDir, ".gitignore", ".env\n.env.*\n");
+  return rootDir;
+}
+
+async function createModelPolicyTabnineProject(
+  options: { retainLockedResolution?: boolean } = {},
+): Promise<string> {
+  const profileYaml = await getProfileYaml(`
+subagentPolicy:
+  enabled: true
+  preset: role-aware
+  roles:
+    implementer:
+      capability: balanced
+      effort: high
+      overrides:
+        tabnine:
+          model: gpt-5.4
+`);
+  const profileBytes = Buffer.from(profileYaml, "utf8");
+  const profileResult = parseProfileYaml(profileYaml);
+  assert.equal(profileResult.ok, true);
+  if (!profileResult.ok) throw new Error("model-policy fixture must parse");
+
+  const initialModelPolicy = resolveModelPolicyLockfile(profileResult.profile);
+  assert.ok(initialModelPolicy, "fixture requires a v3 model-policy lock");
+  const retainedModelPolicy = options.retainLockedResolution
+    ? {
+        ...initialModelPolicy,
+        resolutions: initialModelPolicy.resolutions.map((row) =>
+          row.role === "mechanical" &&
+          row.client === "codex" &&
+          row.alternatives[0] !== undefined
+            ? { ...row, model: row.alternatives[0] }
+            : row,
+        ),
+      }
+    : initialModelPolicy;
+  const compileResult = compileProfile({
+    profile: profileResult.profile,
+    previousModelPolicy: retainedModelPolicy,
+  });
+  assert.equal(compileResult.ok, true);
+  if (!compileResult.ok) throw new Error("model-policy fixture must compile");
+
+  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-doctor-"));
+  await writeProjectFile(rootDir, "ai-profile.yaml", profileBytes);
+  await writeProjectFile(rootDir, ".gitignore", ".env\n.env.*\n");
+  for (const file of compileResult.files) {
+    await writeProjectFile(rootDir, file.path, file.bytes);
+  }
+
+  const plan = planTabnineModelSettingsWrite("gpt-5.4", "generated-owned");
+  assert.equal(plan.action, "write");
+  if (plan.action !== "write") throw new Error("expected Tabnine write plan");
+  await writeProjectFile(rootDir, ".tabnine/agent/settings.json", plan.bytes);
+
+  const lockfile = JSON.parse(
+    Buffer.from(
+      createLockfileFile({
+        profileBytes,
+        templates: compileResult.templates,
+        files: compileResult.files,
+        modelPolicy: retainedModelPolicy,
+      }).bytes,
+    ).toString("utf8"),
+  ) as AiProfileLockV2;
+  lockfile.outputs.push({
+    path: ".tabnine/agent/settings.json",
+    target: "tabnine",
+    templateId: "tabnine-model-settings@1",
+    ownership: "generated-owned",
+    sha256: sha256Hex(plan.bytes),
+  });
+  lockfile.outputs.sort((left, right) => left.path.localeCompare(right.path));
+  await writeLockfile(rootDir, lockfile);
   return rootDir;
 }
 

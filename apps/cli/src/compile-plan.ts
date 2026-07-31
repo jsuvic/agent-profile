@@ -16,6 +16,8 @@ import {
   type GeneratedFile,
   type LockModelPolicyV2,
   type LockOutputV2,
+  type LockTemplate,
+  MODEL_POLICY_PRIMARY_ROLE,
   type ModelPolicyTabnineSettingsPlan,
   type MixedOutputDescriptor,
   type PlannedWrite,
@@ -24,7 +26,11 @@ import {
   type WritePlanResult,
   planWrites,
 } from "@agent-profile/compiler";
-import type { AiProfile, ModelCatalogEntry } from "@agent-profile/core";
+import {
+  containsSecretLikeLiteral,
+  type AiProfile,
+  type ModelCatalogEntry,
+} from "@agent-profile/core";
 
 export type RegionAwareRefusal = {
   path: string;
@@ -80,6 +86,18 @@ export async function findLockfileOwnedDrift(
 }
 
 const REGION_AWARE_PATHS = new Set(["AGENTS.md", "CLAUDE.md"]);
+
+/**
+ * Byte-order text comparison, matching the compiler's internal `compareText`
+ * that `validateLockfileText` enforces on template ordering. Duplicated rather
+ * than exported from the compiler package: a sort helper is not worth widening
+ * the published package seam.
+ */
+function compareLockText(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
 
 // ---------------------------------------------------------------------------
 // Tabnine `.tabnine/agent/settings.json` ownership classification (Phase
@@ -145,13 +163,54 @@ export async function resolveTabnineModelSettings(
   rootDir: string,
   profile: AiProfile,
   model: string | undefined = undefined,
+  includeTabnine: boolean = true,
 ): Promise<
-  { model: string | undefined; ownership: TabnineSettingsOwnership } | undefined
+  | {
+      model: string | undefined;
+      ownership: TabnineSettingsOwnership;
+      preservedOutput?: LockOutputV2;
+    }
+  | undefined
 > {
   if (!profile.clients.tabnine.enabled) {
     return undefined;
   }
-  return { model, ownership: await classifyTabnineSettingsOwnership(rootDir) };
+  const ownership = await classifyTabnineSettingsOwnership(rootDir);
+  if (!includeTabnine) {
+    const lockfile =
+      ownership === "generated-owned"
+        ? await readLockfileForRegions(rootDir)
+        : undefined;
+    const preservedOutput = lockfile?.outputs.find(
+      (output) =>
+        output.path === TABNINE_SETTINGS_PATH &&
+        output.ownership === "generated-owned",
+    );
+    return {
+      model: undefined,
+      ownership,
+      ...(preservedOutput ? { preservedOutput } : {}),
+    };
+  }
+  // An explicit wizard choice is deliberately usable without model policy,
+  // but a persisted role override is only authoritative for an enabled v3
+  // policy. Mapping-v2/disabled policy data must not create a settings file.
+  const persistedPrimaryModel =
+    profile.subagentPolicy?.enabled === true && profile.subagentPolicy.preset
+      ? profile.subagentPolicy.roles?.[MODEL_POLICY_PRIMARY_ROLE]?.overrides
+          ?.tabnine?.model
+      : undefined;
+  const requestedModel = model ?? persistedPrimaryModel;
+  return {
+    // A profile may predate the web editor's secret-like-value guard. Never
+    // duplicate a credential-shaped persisted identifier into a generated
+    // client config; retain the normal advisory/manual path instead.
+    model:
+      requestedModel && containsSecretLikeLiteral(requestedModel)
+        ? undefined
+        : requestedModel,
+    ownership,
+  };
 }
 
 export async function planRegionAwareWrites(
@@ -242,6 +301,10 @@ export async function planRegionAwareWrites(
 
 export type CompileWritesResult = {
   writes: PlannedWrite[];
+  /** Actual settings-file mutation, independent from the guidance-level
+   * Tabnine plan. A generated-owned deletion remains advisory at the target
+   * adapter level but still requires atomic application and accurate output. */
+  tabnineMutation?: "write" | "delete";
   /** Present only when `input.tabnineModelSettings` was supplied: the
    * ownership-aware decision (`write` or `advisory`) for
    * `.tabnine/agent/settings.json`, so callers can render the same
@@ -276,27 +339,58 @@ export function buildCompileWrites(input: {
     model: string | undefined;
     ownership: TabnineSettingsOwnership;
     catalog?: readonly ModelCatalogEntry[];
+    preservedOutput?: LockOutputV2;
+  };
+  /**
+   * Present only for a target-scoped run (`--target`). The compile result then
+   * covers the requested targets alone, so the lockfile must carry every other
+   * target's entries forward from the previous lock instead of rebuilding from
+   * the partial result. Phase-05's rule that compile "removes from the new
+   * lockfile" the outputs a previous compile produced applies to paths the
+   * PROFILE no longer generates; a target the run simply did not ask for is
+   * not orphaned, and dropping it would strand its files on disk with no
+   * recorded ownership for doctor, import, and compile's own refusal check.
+   * Omitting this (the default, and every unscoped run) keeps the full rebuild.
+   */
+  scopedTargets?: {
+    /** The targets this run generated. Entries for any other target survive. */
+    requested: readonly string[];
+    previousTemplates: readonly LockTemplate[];
+    previousOutputs: readonly LockOutputV2[];
   };
 }): CompileWritesResult {
+  if (input.profile && hasSecretLikeModelOverride(input.profile)) {
+    // The profile may be retained for an explicit user remediation path, but
+    // compilation must never copy a secret-like literal into a lockfile or a
+    // generated client guidance surface.
+    throw new Error(
+      "Refusing to compile a secret-like subagent model override; remove it from ai-profile.yaml first.",
+    );
+  }
+  const preservedTabnineOutput = input.tabnineModelSettings?.preservedOutput;
+  const resolvedModelPolicy =
+    input.profile === undefined
+      ? undefined
+      : resolveModelPolicyLockfile(input.profile, input.previousModelPolicy);
+  const modelPolicy = preservedTabnineOutput
+    ? retainFilteredPrimaryTabnineResolution(
+        resolvedModelPolicy,
+        input.previousModelPolicy,
+      )
+    : resolvedModelPolicy;
   let lockfile = createLockfileFile({
     profilePath: input.profilePath,
     profileBytes: input.profileBytes,
     templates: input.templates,
     files: input.files,
     mixedOutputs: input.regionPlan.mixedOutputs,
-    ...(input.profile === undefined
-      ? {}
-      : {
-          modelPolicy: resolveModelPolicyLockfile(
-            input.profile,
-            input.previousModelPolicy,
-          ),
-        }),
+    ...(modelPolicy ? { modelPolicy } : {}),
   });
 
   let tabninePlan: ModelPolicyTabnineSettingsPlan | undefined;
   let tabnineWrite: PlannedWrite | undefined;
-  if (input.tabnineModelSettings) {
+  let tabnineDelete: PlannedWrite | undefined;
+  if (input.tabnineModelSettings && !preservedTabnineOutput) {
     tabninePlan = planTabnineModelSettingsWrite(
       input.tabnineModelSettings.model,
       input.tabnineModelSettings.ownership,
@@ -304,13 +398,28 @@ export function buildCompileWrites(input: {
     );
     if (tabninePlan.action === "write") {
       tabnineWrite = { path: TABNINE_SETTINGS_PATH, bytes: tabninePlan.bytes };
+    } else if (
+      input.tabnineModelSettings.model === undefined &&
+      input.tabnineModelSettings.ownership === "generated-owned" &&
+      persistedTabnineOverrideWasRemoved(
+        input.profile,
+        input.previousModelPolicy,
+      )
+    ) {
+      // The old generated selection must not survive after its persisted
+      // override is removed. Include this in the same transaction as the
+      // lockfile update so ownership is never silently orphaned.
+      tabnineDelete = { path: TABNINE_SETTINGS_PATH, delete: true };
     }
   }
 
   if (
     input.regionPlan.manualOutputs.length > 0 ||
     input.existingUpgrade ||
-    tabnineWrite
+    tabnineWrite ||
+    tabnineDelete ||
+    preservedTabnineOutput ||
+    input.scopedTargets
   ) {
     const parsed = validateLockfileText(
       Buffer.from(lockfile.bytes).toString("utf8"),
@@ -318,6 +427,35 @@ export function buildCompileWrites(input: {
     if (!parsed.ok) throw new Error("compiler generated an invalid lockfile");
     const view = toLockfileV2View(parsed.lockfile);
     if (input.existingUpgrade) view.upgrade = input.existingUpgrade;
+    if (input.scopedTargets) {
+      const requested = new Set(input.scopedTargets.requested);
+      const generatedTemplateIds = new Set(
+        view.templates.map((template) => template.id),
+      );
+      const generatedPaths = new Set(view.outputs.map((output) => output.path));
+      // This run's own entries always win; only untouched targets are carried
+      // forward, so a scoped compile can never resurrect a stale record for a
+      // path it just regenerated.
+      view.templates = [
+        ...view.templates,
+        ...input.scopedTargets.previousTemplates.filter(
+          (template) =>
+            !requested.has(template.target) &&
+            !generatedTemplateIds.has(template.id),
+        ),
+      ].sort(
+        (left, right) =>
+          compareLockText(left.id, right.id) ||
+          compareLockText(left.target, right.target),
+      );
+      view.outputs = [
+        ...view.outputs,
+        ...input.scopedTargets.previousOutputs.filter(
+          (output) =>
+            !requested.has(output.target) && !generatedPaths.has(output.path),
+        ),
+      ];
+    }
     const manualPaths = new Set(
       input.regionPlan.manualOutputs.map((output) => output.path),
     );
@@ -325,7 +463,7 @@ export function buildCompileWrites(input: {
       ...view.outputs.filter((output) => !manualPaths.has(output.path)),
       ...input.regionPlan.manualOutputs,
     ];
-    if (tabnineWrite) {
+    if (tabnineWrite && !tabnineWrite.delete) {
       outputs = [
         ...outputs.filter((output) => output.path !== TABNINE_SETTINGS_PATH),
         {
@@ -340,9 +478,26 @@ export function buildCompileWrites(input: {
           ),
         },
       ];
+    } else if (tabnineDelete) {
+      outputs = outputs.filter(
+        (output) => output.path !== TABNINE_SETTINGS_PATH,
+      );
+    } else if (preservedTabnineOutput) {
+      outputs = [
+        ...outputs.filter((output) => output.path !== TABNINE_SETTINGS_PATH),
+        preservedTabnineOutput,
+      ];
     }
-    view.outputs = outputs.sort((left, right) =>
-      left.path.localeCompare(right.path),
+    // Byte order, matching `createLockfileFile`. `localeCompare` disagrees with
+    // it (ICU collation orders `.../change-risk-reviewer.md` after
+    // `.../code-quality-reviewer.md`; byte order puts it first), so sorting
+    // here by locale made a lockfile that went through this block differ from
+    // the same lockfile built without it - churn against the determinism
+    // contract, and drift the very next unscoped compile would rewrite.
+    view.outputs = outputs.sort(
+      (left, right) =>
+        compareLockText(left.path, right.path) ||
+        compareLockText(left.target, right.target),
     );
     const bytes = Buffer.from(`${JSON.stringify(view, null, 2)}\n`, "utf8");
     lockfile = { ...lockfile, bytes, sha256: sha256Hex(bytes) };
@@ -352,10 +507,78 @@ export function buildCompileWrites(input: {
     writes: [
       ...input.regionPlan.writes,
       ...(tabnineWrite ? [tabnineWrite] : []),
+      ...(tabnineDelete ? [tabnineDelete] : []),
       { path: lockfile.path, bytes: lockfile.bytes },
     ],
     ...(tabninePlan ? { tabnine: tabninePlan } : {}),
+    ...(tabnineWrite
+      ? { tabnineMutation: "write" as const }
+      : tabnineDelete
+        ? { tabnineMutation: "delete" as const }
+        : {}),
   };
+}
+
+function retainFilteredPrimaryTabnineResolution(
+  current: LockModelPolicyV2 | undefined,
+  previous: LockModelPolicyV2 | undefined,
+): LockModelPolicyV2 | undefined {
+  if (!previous) return current;
+  if (!current) return previous;
+  const retained = previous.resolutions.filter(
+    (resolution) =>
+      resolution.client === "tabnine" &&
+      resolution.role === MODEL_POLICY_PRIMARY_ROLE,
+  );
+  if (retained.length === 0) return current;
+  return {
+    ...current,
+    resolutions: [
+      ...current.resolutions.filter(
+        (resolution) =>
+          !(
+            resolution.client === "tabnine" &&
+            resolution.role === MODEL_POLICY_PRIMARY_ROLE
+          ),
+      ),
+      ...retained,
+    ].sort(
+      (left, right) =>
+        left.client.localeCompare(right.client) ||
+        left.role.localeCompare(right.role),
+    ),
+  };
+}
+
+function persistedTabnineOverrideWasRemoved(
+  profile: AiProfile | undefined,
+  previousModelPolicy: LockModelPolicyV2 | undefined,
+): boolean {
+  if (!profile || !previousModelPolicy) return false;
+  const currentModel =
+    profile.subagentPolicy?.enabled === true && profile.subagentPolicy.preset
+      ? profile.subagentPolicy.roles?.[MODEL_POLICY_PRIMARY_ROLE]?.overrides
+          ?.tabnine?.model
+      : undefined;
+  return (
+    currentModel === undefined &&
+    previousModelPolicy.resolutions.some(
+      (resolution) =>
+        resolution.client === "tabnine" &&
+        resolution.role === MODEL_POLICY_PRIMARY_ROLE &&
+        resolution.source === "explicit-override",
+    )
+  );
+}
+
+export function hasSecretLikeModelOverride(profile: AiProfile): boolean {
+  return Object.values(profile.subagentPolicy?.roles ?? {}).some((role) =>
+    Object.values(role.overrides ?? {}).some(
+      (override) =>
+        override.model !== undefined &&
+        containsSecretLikeLiteral(override.model),
+    ),
+  );
 }
 
 export function planCompileDryRun(

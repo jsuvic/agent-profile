@@ -46,6 +46,68 @@ versioned client mapping. _Avoid:_ "model alias", "model tier".
 A metadata-only record of role resolution, context path, orchestration, and
 validation outcome. _Avoid:_ "telemetry", "prompt log".
 
+## Review Assurance
+
+**Change snapshot**
+The complete accumulated change presented for review: committed base-to-head
+diff plus identified staged, unstaged, and relevant untracked files. _Avoid:_
+"changed-file list", "last fix".
+
+**Snapshot disclosure**
+Complete and lossless reviewer access to every snapshot component via a
+deterministic manifest and read instructions, without eagerly injecting every
+diff byte into the initial prompt. _Avoid:_ "full-context dump", "partial
+file list".
+
+**Policy projection**
+The surface-specific subset of the shared change-risk policy that one
+generated artifact renders; each closed value has exactly one authoritative
+owner. _Avoid:_ "full policy copy", "duplicated counts".
+
+**Change-risk review**
+An independent adversarial pass that searches a complete change snapshot and
+its reachable consumers for correctness and contract gaps. _Avoid:_ "second
+spec review", "quality review".
+
+**Clean-room review**
+A fresh review pass that does not receive implementer conclusions, prior
+praise, or prior finding lists. _Avoid:_ "rerun", "closure check".
+
+**Finding fingerprint**
+A stable human-readable identifier for one defect class across review rounds,
+independent of wording changes. _Avoid:_ "comment id", "finding text hash".
+
+**Review result envelope**
+The closed versioned result for one reviewer invocation, tied to the reviewed
+change snapshot and carrying its status and findings. _Avoid:_ "free-form
+review response", "empty means clean".
+
+**Review-learning record**
+A versioned normalized Markdown record of review inputs, rounds, findings,
+dispositions, and terminal outcome. _Avoid:_ "raw transcript", "telemetry
+log".
+
+**Fix round**
+One bounded batch that addresses validated blocking findings before the
+complete updated change is reviewed again. _Avoid:_ "retry", "patch review".
+
+**Cluster key**
+The defect-mechanism identity of a finding, derived from its affected
+contract and unsafe-condition class. Deliberately excludes category, so one
+cluster may span product-risk categories. _Avoid:_ "finding group id",
+"category key".
+
+**Cluster**
+Three or more open findings in one review round sharing a cluster key,
+remediated as one shared cause rather than as separate findings. _Avoid:_
+"batch", "duplicate findings".
+
+**Within-change cluster recurrence**
+A later round of the same change reporting a new finding whose cluster key
+matches any finding already remediated in that change, requiring a mechanical
+guard instead of another patch. _Avoid:_ "repeat finding", "second
+occurrence".
+
 ## Model Selection
 
 **Model preset**

@@ -1020,10 +1020,24 @@ function validateSubagentSemantics(
         ),
       )
     : new Set<string>();
+  const generatedNames =
+    profile.workflow.subagentDrivenDevelopment === true &&
+    (profile.clients.codex.enabled || profile.clients.claude.enabled)
+      ? new Set(["change-risk-reviewer"])
+      : new Set<string>();
 
   entries.forEach((entry, index) => {
     const expanded = expandSubagentEntry(entry);
     const name = expanded.name;
+    if (generatedNames.has(normalizeSubagentName(name))) {
+      issues.push({
+        code: "schema_validation_error",
+        path: `/capabilities/delegation/subagents/agents/${index}/name`,
+        expected: "name distinct from generated workflow subagents",
+        actual: "collision with change-risk-reviewer",
+        message: `/capabilities/delegation/subagents/agents/${index}/name is reserved for the generated change-risk reviewer.`,
+      });
+    }
     if (packNames.has(normalizeSubagentName(name))) {
       issues.push({
         code: "schema_validation_error",
@@ -1207,7 +1221,10 @@ function validateSubagentPolicySemantics(
     // length/control-character rule the v3 Codex/Claude branch uses,
     // regardless of `isV3OptIn`.
     const tabnineModel = role.overrides?.tabnine?.model;
-    if (tabnineModel !== undefined && !isValidOpenModelPolicyOverride(tabnineModel)) {
+    if (
+      tabnineModel !== undefined &&
+      !isValidOpenModelPolicyOverride(tabnineModel)
+    ) {
       issues.push({
         code: "subagent_policy_override_model",
         path: `/subagentPolicy/roles/${roleId}/overrides/tabnine/model`,

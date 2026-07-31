@@ -88,7 +88,9 @@ export const POST: RequestHandler = async ({ request }) => {
     );
   }
 
-  const revalidation = validateCandidate(reparse.profile);
+  const revalidation = validateCandidate(reparse.profile, {
+    allowUnchangedSecretLikeOverridesFrom: disk.profile.subagentPolicy,
+  });
   if (!revalidation.ok) {
     if (revalidation.reason === "secret_like") {
       return json(
