@@ -2063,7 +2063,7 @@ finding promotion, and a provider-neutral external-review boundary.
 | --- | ----------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
 | I1  | Emit the independent change-risk reviewer       | done          | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                   |
 | I2  | Orchestrate bounded review remediation          | done         | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)       |
-| I3  | Persist versioned review-learning records       | sequenced     | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)             |
+| I3  | Persist versioned review-learning records       | done          | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)             |
 | I4  | Promote recurring findings into stronger guards | sequenced     | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)     |
 | I5  | Backfill the recent PR review corpus            | human-gate    | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
 | I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
@@ -2476,6 +2476,59 @@ handled for one case and unhandled generally. That CLI defect is tracked
 separately and is NOT fixed on this branch; phase-27's lockfile-conformance
 contract is the governing spec. Compiler suite 482 tests, 0 failures, 7
 pre-existing win32 skips; root `npm run check` clean (exit code, not a pipe).
+
+I3 implemented 2026-07-31, flipped from `sequenced` after confirming its only
+stated blocker (`I1 -> I3`) was already `done`. Adds
+`packages/compiler/src/review-learning-record.ts`: the `review-learning/v1`
+record contract and a deterministic Markdown renderer, consuming I1's
+learning-record projection for every closed value rather than restating one.
+The validator owns the record's own relationships, which is where the
+schema's real content lives: local and legacy-external terminal statuses are
+disjoint and neither may borrow the other's; a local record must carry its
+execution counters and a `legacy-external` record must omit rather than
+fabricate them; provenance is per round AND per finding, so a local run that
+incorporates an external finding stays a local record; an external finding
+names its provider (`unknown` when unidentifiable) and a local one may not
+carry one; every P3 carries exactly one disposition plus a confirmation
+marker, and an open P3 carries the owner's decision evidence; P1/P2 carry
+none; a validated P1 carries its systemic classification; a `false-positive`
+requires invalidating evidence; fingerprints are unique within a record; the
+date is the UTC calendar date, with offsets and timestamps rejected outright
+because a local date can differ from the UTC one around midnight. Amendment
+002's cluster fields are per round and are refused on a `legacy-external`
+record rather than fabricated, kept separate from category counts so I4's
+recurrence counting is not corrupted (ADR 0026).
+
+Committed documentation is `docs/review-learning/README.md`, pinned by a test
+that walks the projection's own `requiredFields` and asserts each is
+documented, so the doc cannot silently fall behind the contract.
+`docs/review-learning/template.md` is rendered by the same renderer the
+validator pairs with, so template and schema cannot drift. The generated
+`subagent-driven-change` skill now instructs persisting exactly one record per
+reviewed change, with the path prefix, schema version, source policy, and the
+redaction rules all interpolated from the projection.
+
+RED proof was the brief's: the schema test failed with
+`ERR_MODULE_NOT_FOUND` because no record contract existed. Disclosed limits.
+The secret-shaped-evidence guard reuses the repository's single sanctioned
+`containsSecretLikeLiteral` detector rather than adding a second one; its
+reach is the assignment form (`api_key: ...`, `token = ...`), the
+`SECRET_TOKEN_VALUE` sentinel, and PEM headers, so a bare high-entropy literal
+with no prefix is NOT caught - a guard against the common accident, not a
+redaction proof, and the test says so. The `false-positive` check looks for
+invalidating language in evidence text rather than a structured marker,
+because the record's evidence rows are prose locators; a structured
+`invalidatesPriorFinding` marker exists on the reviewer envelope but not on
+the persisted row. No record was written for PR #140 itself: the change has
+not reached a terminal status - the last review returned `NEEDS_CONTEXT` -
+and manufacturing a terminal status to make the slice look finished is exactly
+what the contract forbids. Historical PRs remain I5's backfill. Compiler suite
+489 tests, 0 failures; CLI 610; root `npm run check` clean; goldens and
+this repository's own skills regenerated. The new module also emits four
+`dist/review-learning-record.*` artifacts into the packed tarball, and
+`fixtures/npm-pack/agent-profile-compiler.json` is an exact list that nothing
+regenerates, so `verify:pack` failed until they were hand-added - the same
+trap I1 hit, caught here only because that entry above records it.
 
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 

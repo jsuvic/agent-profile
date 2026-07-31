@@ -60,7 +60,8 @@ Each subagent prompt must include the full task text, relevant spec excerpts, no
 - NEEDS_HUMAN_REVIEW takes precedence over NO_PROGRESS when both apply.
 
 11. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
-12. After change-risk orchestration reaches terminal `CLEAN` and the required tests complete, invoke `final-review` against the validated handoff and current snapshot. Fix or escalate its findings before handoff.
+12. When orchestration reaches any terminal status, persist exactly one normalized `review-learning/v1` record for this change under `docs/review-learning/`, carrying `sourcePolicy: change-risk/v2` with its execution counters, per-round and per-finding `source` markers, cluster events, and the terminal status. Write the normalized record only: Raw prompts, transcripts, hidden reasoning, and unfiltered tool output stay in a local ignored location and are never committed. Secret-shaped values are described by shape and never copied verbatim. Reference commits, paths, symbols, contracts, and tests instead of reproducing source or full reviewer explanations. Unknown provider or model versions are recorded as unknown, never guessed. Historical records feed promotion and evaluation only; never load them into initial or final clean-room reviewer context.
+13. After change-risk orchestration reaches terminal `CLEAN` and the required tests complete, invoke `final-review` against the validated handoff and current snapshot. Fix or escalate its findings before handoff.
 
 ## Status Values
 
