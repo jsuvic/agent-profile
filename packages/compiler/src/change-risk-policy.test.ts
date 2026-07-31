@@ -852,6 +852,106 @@ test("the reviewer projection carries the rubric handles and the result interfac
   assert.ok(reviewer.safetyConstraints.length > 0);
 });
 
+test("the reviewer projection names the exact scope keys the validator requires", () => {
+  const { scopeFields, domainEntryFields, domainApplicabilityValues } =
+    changeRiskReviewerProjection().resultInterface;
+  assert.deepEqual(
+    [...scopeFields],
+    [
+      "completed",
+      "inspectedChangeManifest",
+      "inspectedRelevantConsumers",
+      "domains",
+    ],
+  );
+  assert.deepEqual(
+    [...domainEntryFields],
+    ["domain", "applicability", "reason"],
+  );
+  assert.deepEqual(
+    [...domainApplicabilityValues],
+    ["applicable", "not-applicable"],
+  );
+
+  // Each projected key must be load-bearing in the validator, so a reviewer
+  // that follows the prompt literally produces an accepted envelope and a
+  // renamed key can never pass silently.
+  const envelope = () => ({
+    policyVersion: CHANGE_RISK_POLICY_VERSION,
+    snapshotId: "snapshot-1",
+    status: "CLEAN" as const,
+    scope: {
+      completed: true,
+      inspectedChangeManifest: true,
+      inspectedRelevantConsumers: true,
+      domains: CHANGE_RISK_DOMAINS.map((domain) => ({
+        domain,
+        applicability: "applicable" as const,
+      })),
+    },
+    findings: [],
+    missingInputs: [],
+  });
+  assert.equal(validateChangeRiskResultV1(envelope()).ok, true);
+  for (const field of scopeFields) {
+    const mutated = envelope();
+    const scope = mutated.scope as unknown as Record<string, unknown>;
+    scope[`${field}Renamed`] = scope[field];
+    delete scope[field];
+    assert.equal(
+      validateChangeRiskResultV1(mutated).ok,
+      false,
+      `renaming scope.${field} must be rejected`,
+    );
+  }
+  const renamedApplicability = envelope();
+  renamedApplicability.scope.domains = CHANGE_RISK_DOMAINS.map((domain) => ({
+    domain,
+    state: "applicable",
+  })) as never;
+  assert.equal(
+    validateChangeRiskResultV1(renamedApplicability).ok,
+    false,
+    "renaming the domain applicability key must be rejected",
+  );
+});
+
+test("the reviewer projection states when invalidating evidence must be absent", () => {
+  const { evidenceLocatorRules } =
+    changeRiskReviewerProjection().resultInterface;
+  const absenceRule = evidenceLocatorRules.find(
+    (rule) =>
+      /absent|never|only/iu.test(rule) &&
+      rule.includes("invalidatesPriorFinding"),
+  );
+  assert.ok(
+    absenceRule,
+    "the prompt must say the marker is absent for open, fixed, and obsolete findings",
+  );
+
+  // The rule is load-bearing: the validator rejects the marker on a non
+  // false-positive finding, which is exactly what the reviewer emitted.
+  assert.equal(
+    validateChangeRiskResultV1({
+      policyVersion: CHANGE_RISK_POLICY_VERSION,
+      snapshotId: "snapshot-1",
+      status: "FINDINGS_FOUND",
+      scope: completeScope,
+      findings: [
+        {
+          ...validFinding,
+          evidence: [
+            { ...validFinding.evidence[0], invalidatesPriorFinding: false },
+          ],
+        },
+      ],
+      missingInputs: [],
+    }).ok,
+    false,
+    "a false-valued marker is still a present marker",
+  );
+});
+
 test("the reviewer projection supplies vocabularies without cluster metadata", () => {
   const resultInterface = changeRiskReviewerProjection().resultInterface;
   const serialized = JSON.stringify(resultInterface);

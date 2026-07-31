@@ -9,6 +9,7 @@ import {
   getEnabledSubagents,
   getSelectedAdvisoryHookRoles,
   getSubagentDefaults,
+  getSubagentTemplate,
   getSubagentTemplateRefs,
   resolveEffectiveSubagentPolicy,
   resolvePermissionPosture,
@@ -2205,6 +2206,18 @@ function getSubagentsForRiskReviewerTarget(
   return [...agents, createChangeRiskReviewer()];
 }
 
+/**
+ * The change-risk reviewer inspects the complete accumulated change and its
+ * reachable unchanged consumers, reads its own domain reference file, and runs
+ * focused tests for runtime evidence - a strict superset of what the per-task
+ * reviewers do. Deriving its budget from the read-only peer template keeps it
+ * from being silently given less room than the narrower reviewers, which is
+ * what a hardcoded lower number did: a truncated review returns no envelope at
+ * all, which the orchestration can only classify as an invalid attempt.
+ */
+const CHANGE_RISK_REVIEWER_MAX_TURNS =
+  getSubagentTemplate("spec-reviewer").maxTurns ?? 18;
+
 function createChangeRiskReviewer(): AiProfileSubagent {
   const policy = changeRiskReviewerProjection();
   const bullets = (items: readonly string[]) =>
@@ -2216,6 +2229,14 @@ function createChangeRiskReviewer(): AiProfileSubagent {
     )
     .join("\n");
   const result = policy.resultInterface;
+  const quotedList = (items: readonly string[], join: string) =>
+    items.map((item) => "`" + item + "`").join(join);
+  const scopeKeys = quotedList(result.scopeFields, ", ");
+  const domainEntryKeys = quotedList(result.domainEntryFields, ", ");
+  const applicabilityValues = quotedList(
+    result.domainApplicabilityValues,
+    " or ",
+  );
 
   return {
     name: "change-risk-reviewer",
@@ -2223,10 +2244,10 @@ function createChangeRiskReviewer(): AiProfileSubagent {
       "Independently review the complete accumulated change and reachable consumers for product-risk gaps.",
     purpose:
       "Perform the independent change-risk review using the critical-reviewer model-policy role.",
-    prompt: `# Change-Risk Review\n\nPolicy version: \`${policy.policyVersion}\`. Your provider-neutral model-policy role is \`critical-reviewer\`; use its target-native model and effort resolution.\n\n## Objective\n\n${policy.objective.statement}\n\n${bullets(policy.objective.authorityBoundary)}\n\n## Snapshot Access by Mode\n\nWhen the supplied mode is initial or final, do not use a prior finding list, implementer report, or prior praise. When the supplied mode is remediation, use only the supplied prior fingerprints as closure candidates and still inspect the complete updated snapshot independently. ${policy.snapshotAccess.completeness}\n\nInitial context is manifest-first, not an eager full-diff injection:\n\n${bullets(policy.snapshotAccess.initialContext)}\n\n${bullets(policy.snapshotAccess.inspectionRights)}\n\nWhen Bash is available, use it only for read-only \`git diff\` and related Git inspection, plus focused existing test commands required for runtime evidence. Test execution must not mutate repository source or generated artifacts. Do not install dependencies, use network access, or mutate repository state. If required proof cannot be obtained within these constraints, return \`NEEDS_CONTEXT\` with the missing input.\n\n## Closed Risk Domains\n\n${domains}\n\nDetailed rubrics are selectively loaded reference material; do not infer orchestration state, fix rounds, promotion rules, or learning-record requirements.\n\n## Result Contract\n\nReturn exactly one typed \`ChangeRiskResultV1\` envelope and no approval prose.\n\n- \`policyVersion\` is \`${result.policyVersion}\`; bind the envelope to the supplied \`snapshotId\`.\n- \`status\` is exactly \`${result.statuses.join(" | ")}\`.\n- \`scope\` records \`completed\`, manifest coverage, relevant-consumer inspection, and every closed domain with \`applicable\` or \`not-applicable\`; every not-applicable domain has a concise reason.\n- \`findings\` use priorities \`${result.priorities.join(" | ")}\`, categories \`${result.categories.join(" | ")}\`, affectedContractId \`${result.affectedContractIds.join(" | ")}\`, unsafeConditionClass \`${result.unsafeConditionClasses.join(" | ")}\`, resolutions \`${result.resolutions.join(" | ")}\`, P3 dispositions \`${result.p3Dispositions.join(" | ")}\`, and evidence kinds \`${result.evidenceKinds.join(" | ")}\`.\n- P3 disposition and resolution pairings are closed:\n${bullets(result.p3ResolutionRules)}\n- Evidence locators are closed by kind:\n${bullets(result.evidenceLocatorRules)}\n- Each finding contains ${result.requiredFindingFields.join(", ")}, concrete evidence, affected contract, safe path, and a stable fingerprint derived from ${result.fingerprintComponents.join(", ")}; trusted owner code normalizes the canonical serialized fingerprint from those components.\n- Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution \`open\`. Remediation receives only supplied prior fingerprints; it may verify \`fixed\`, \`false-positive\`, or \`obsolete\` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.\n- \`missingInputs\` is empty except for \`NEEDS_CONTEXT\`.\n- ${result.invalidAttemptRules.join(" ")}\n\n## Safety\n\n${bullets(policy.safetyConstraints)}`,
+    prompt: `# Change-Risk Review\n\nPolicy version: \`${policy.policyVersion}\`. Your provider-neutral model-policy role is \`critical-reviewer\`; use its target-native model and effort resolution.\n\n## Objective\n\n${policy.objective.statement}\n\n${bullets(policy.objective.authorityBoundary)}\n\n## Snapshot Access by Mode\n\nWhen the supplied mode is initial or final, do not use a prior finding list, implementer report, or prior praise. When the supplied mode is remediation, use only the supplied prior fingerprints as closure candidates and still inspect the complete updated snapshot independently. ${policy.snapshotAccess.completeness}\n\nInitial context is manifest-first, not an eager full-diff injection:\n\n${bullets(policy.snapshotAccess.initialContext)}\n\n${bullets(policy.snapshotAccess.inspectionRights)}\n\nWhen Bash is available, use it only for read-only \`git diff\` and related Git inspection, plus focused existing test commands required for runtime evidence. Test execution must not mutate repository source or generated artifacts. Do not install dependencies, use network access, or mutate repository state. If required proof cannot be obtained within these constraints, return \`NEEDS_CONTEXT\` with the missing input.\n\n## Closed Risk Domains\n\n${domains}\n\nDetailed rubrics are selectively loaded reference material; do not infer orchestration state, fix rounds, promotion rules, or learning-record requirements.\n\n## Result Contract\n\nReturn exactly one typed \`ChangeRiskResultV1\` envelope and no approval prose.\n\n- \`policyVersion\` is \`${result.policyVersion}\`; bind the envelope to the supplied \`snapshotId\`.\n- \`status\` is exactly \`${result.statuses.join(" | ")}\`.\n- \`scope\` has exactly the keys ${scopeKeys}. Each \`domains\` entry has ${domainEntryKeys}, where \`applicability\` is ${applicabilityValues} and \`reason\` is present only for a not-applicable domain. Use these key names exactly; the envelope is validated by key, so a synonym is a malformed attempt.\n- \`findings\` use priorities \`${result.priorities.join(" | ")}\`, categories \`${result.categories.join(" | ")}\`, affectedContractId \`${result.affectedContractIds.join(" | ")}\`, unsafeConditionClass \`${result.unsafeConditionClasses.join(" | ")}\`, resolutions \`${result.resolutions.join(" | ")}\`, P3 dispositions \`${result.p3Dispositions.join(" | ")}\`, and evidence kinds \`${result.evidenceKinds.join(" | ")}\`.\n- P3 disposition and resolution pairings are closed:\n${bullets(result.p3ResolutionRules)}\n- Evidence locators are closed by kind:\n${bullets(result.evidenceLocatorRules)}\n- Each finding contains ${result.requiredFindingFields.join(", ")}, concrete evidence, affected contract, safe path, and a stable fingerprint derived from ${result.fingerprintComponents.join(", ")}; trusted owner code normalizes the canonical serialized fingerprint from those components.\n- Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution \`open\`. Remediation receives only supplied prior fingerprints; it may verify \`fixed\`, \`false-positive\`, or \`obsolete\` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.\n- \`missingInputs\` is empty except for \`NEEDS_CONTEXT\`.\n- ${result.invalidAttemptRules.join(" ")}\n\n## Safety\n\n${bullets(policy.safetyConstraints)}`,
     toolScope: "read-only",
     modelPreference: "capable",
-    maxTurns: 10,
+    maxTurns: CHANGE_RISK_REVIEWER_MAX_TURNS,
     timeoutMinutes: 8,
     mcpServers: [],
   };

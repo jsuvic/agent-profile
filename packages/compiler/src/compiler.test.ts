@@ -4555,6 +4555,48 @@ test("phase-33 qualifying workflows run final-review after risk review and expos
   // The declared flag is false, but a qualifying subagent-driven workflow
   // mandates the review. Every surface that states or cross-references it must
   // agree with the surface that emits it.
+  for (const path of [
+    ".claude/agents/change-risk-reviewer.md",
+    ".codex/agents/change-risk-reviewer.toml",
+  ]) {
+    const body = Buffer.from(
+      result.files.find((file) => file.path === path)!.bytes,
+    ).toString("utf8");
+    // The envelope is validated by exact key, so the prompt must name those
+    // keys rather than describing them. A reviewer that invents a plausible
+    // synonym produces a malformed attempt and burns a transient retry.
+    for (const key of [
+      "inspectedChangeManifest",
+      "inspectedRelevantConsumers",
+      "applicability",
+    ]) {
+      assert.match(body, new RegExp(key, "u"), `${path} must name ${key}`);
+    }
+    assert.match(
+      body,
+      /absent for `open`, `fixed`, and `obsolete`/u,
+      `${path} must state when invalidatesPriorFinding is absent`,
+    );
+  }
+
+  // The change-risk reviewer inspects the complete accumulated change plus
+  // reachable unchanged consumers, a strict superset of what the per-task
+  // reviewers see, so it may never be given a smaller turn budget than they get.
+  const maxTurnsOf = (path: string, pattern: RegExp) => {
+    const file = result.files.find((candidate) => candidate.path === path);
+    assert.ok(file, path);
+    const match = pattern.exec(Buffer.from(file.bytes).toString("utf8"));
+    assert.ok(match, `${path} must declare a turn budget`);
+    return Number(match[1]);
+  };
+  // Claude only: the Codex agent surface carries no turn-budget key, so the
+  // cap exists there alone.
+  assert.ok(
+    maxTurnsOf(".claude/agents/change-risk-reviewer.md", /maxTurns: (\d+)/u) >=
+      maxTurnsOf(".claude/agents/spec-reviewer.md", /maxTurns: (\d+)/u),
+    "the change-risk reviewer's turn budget must not be below its narrower peers'",
+  );
+
   const instructions = result.files.find((file) => file.path === "AGENTS.md");
   assert.ok(instructions);
   assert.match(

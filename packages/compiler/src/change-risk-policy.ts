@@ -1096,6 +1096,13 @@ export type ChangeRiskReviewerProjection = Readonly<{
     affectedContractIds: readonly ChangeRiskContractId[];
     unsafeConditionClasses: readonly ChangeRiskUnsafeConditionClass[];
     resolutions: readonly ChangeRiskResolution[];
+    /** The exact `scope` keys the validator requires, in envelope order. The
+     * prompt names them rather than describing them: validation is by key, so
+     * a plausible synonym is a malformed attempt. */
+    scopeFields: readonly string[];
+    /** The exact keys of one `scope.domains` entry (`reason` is conditional). */
+    domainEntryFields: readonly string[];
+    domainApplicabilityValues: readonly string[];
     p3Dispositions: readonly ChangeRiskDisposition[];
     p3ResolutionRules: readonly string[];
     evidenceKinds: readonly ChangeRiskEvidenceKind[];
@@ -1294,6 +1301,14 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
     affectedContractIds: CHANGE_RISK_CONTRACT_IDS,
     unsafeConditionClasses: CHANGE_RISK_UNSAFE_CONDITION_CLASSES,
     resolutions: CHANGE_RISK_RESOLUTIONS,
+    scopeFields: [
+      "completed",
+      "inspectedChangeManifest",
+      "inspectedRelevantConsumers",
+      "domains",
+    ],
+    domainEntryFields: ["domain", "applicability", "reason"],
+    domainApplicabilityValues: ["applicable", "not-applicable"],
     p3Dispositions: CHANGE_RISK_DISPOSITIONS,
     p3ResolutionRules: [
       "`accepted-debt` and `follow-up` dispositions require resolution `open`.",
@@ -1311,6 +1326,9 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
       "Evidence closing a prior finding as `false-positive` requires " +
         "`invalidatesPriorFinding: true` and a summary explaining how the " +
         "evidence invalidates the reported unsafe condition.",
+      "`invalidatesPriorFinding` is absent for `open`, `fixed`, and " +
+        "`obsolete` findings; emitting it as `false` is still emitting it, " +
+        "and the envelope is rejected.",
     ],
     requiredFindingFields: [
       "priority",

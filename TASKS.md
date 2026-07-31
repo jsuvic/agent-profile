@@ -130,6 +130,41 @@ orchestration would classify that as a malformed attempt and spend a transient
 retry, so the prompt's result-contract section is not yet producing a
 conformant envelope. Not fixed here; it belongs with I1's reviewer prompt.
 
+Both reviewer-artifact defects fixed 2026-07-31 against I1's prompt, as
+conformance with the parent spec's typed reviewer interface rather than new
+scope. Envelope: the Result Contract described the scope block in prose
+("records `completed`, manifest coverage, relevant-consumer inspection") and
+never named a single key, so a reviewer following it invented plausible
+synonyms - the observed run emitted `state` for `applicability` and
+`manifestCovered` for `inspectedChangeManifest`. The projection now carries
+`scopeFields`, `domainEntryFields`, and `domainApplicabilityValues`, and the
+prompt renders the exact keys with the reason they are exact. It also states
+the absence rule the validator already enforces: `invalidatesPriorFinding` is
+absent for `open`, `fixed`, and `obsolete`, and emitting it as `false` is
+still emitting it. Guarded by a mutation test rather than string matching -
+each projected scope key is renamed in a valid envelope and validation must
+reject it, so the prompt cannot drift from the validator without failing.
+Turn cap: the reviewer had a hardcoded `maxTurns: 10` while `spec-reviewer`
+and `code-quality-reviewer` - which inspect strictly less, one task's diff
+against a spec - had 18. The change-risk reviewer reads the complete
+accumulated change, reachable unchanged consumers, its own 157-line domain
+reference, and runs tests for runtime evidence. The budget is now derived from
+the read-only peer template, so it cannot silently fall below its narrower
+peers again, and the emission test asserts that relation rather than the
+number. Observed cost of the old cap: the first native-subagent run exhausted
+10 turns mid-inspection and returned no envelope at all, which an
+orchestration can only classify as an invalid attempt; it produced the result
+only after a manual resume. Correction to the earlier note: of the four
+deviations reported, three are contract violations and the fourth (a prior P2
+re-reported as P1 on remediation) is not - the fingerprint deliberately
+excludes priority, and no approved clause pins priority across rounds, so
+calling it non-conformant was wrong. Scope limit worth stating: the Codex
+agent surface carries no turn-budget key at all, so this cap is Claude-only
+and a Codex reviewer run is unbounded by this mechanism. Golden fixtures
+regenerated via `scripts/regen-golden-fixtures.mjs` (reviewer artifacts and
+their lock entries only); compiler suite 484 tests, 0 failures; root
+`npm run check` and `verify:pack` clean.
+
 ## phase-28: Release Automation (`docs/specs/phase-28/001-release-automation.md`)
 
 Spec 001 approved 2026-07-09 (ADR 0012 accepted).
