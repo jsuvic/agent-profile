@@ -3,6 +3,28 @@
 Index only - task content lives in the linked issue briefs.
 States: `ready | blocked | sequenced | parallel-safe | human-gate | in-progress | done`
 
+## phase-11: Subagent Targets (`docs/specs/phase-11/001-subagents-schema.md`)
+
+Shipped before the issue-brief convention; this section exists to carry
+defects found against its target specs.
+
+| Id  | Task                            | State | Brief                                                                                                       |
+| --- | ------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------- |
+| I1  | Codex subagent execution bounds | ready | [001-codex-subagent-execution-bounds.md](docs/specs/phase-11/issues/001-codex-subagent-execution-bounds.md) |
+
+I1 raised 2026-07-31 from phase-33 work. `001-subagents-schema.md` lists
+`maxTurns` and `timeoutMinutes` as target-neutral compilation inputs that the
+three target specs consume; `002` maps `maxTurns` to Claude frontmatter and
+`004` to Tabnine `max_turns`, but `003`'s mapping table has no row for either
+and its Non-Goals do not mention them, so both are schema-accepted and then
+dropped with no output and no note. Found while capping the change-risk
+reviewer's turns: the cap reaches Claude only, so a Codex reviewer run is
+unbounded by that mechanism. `ready` rather than `human-gate` because the
+branch is decided by a fact - whether current Codex documentation defines a
+per-agent bound - not by a product preference: map it if it exists, declare it
+unsupported and emit the existing not-generated note if it does not. The brief
+forbids inventing a Codex key name.
+
 ## phase-24: Workflow Upgrade (`docs/specs/phase-24/001-workflow-upgrade-skills.md`)
 
 | Id  | Task                                                                         | State | Brief                                                                                                     |
@@ -46,15 +68,16 @@ project-MCP proof; Claude-first sequencing permitted).
 Specs 001-004, 006 approved and shipped (through 0.4.4); 007 approved
 2026-07-12 (ADR 0014 amended: consent-gated follow-up chain).
 
-| Id  | Task                                                     | State | Brief                                                                                                   |
-| --- | -------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------- |
-| I1  | Lockfile-first classification in the import report       | done  | [001-lockfile-first-classification.md](docs/specs/phase-27/issues/001-lockfile-first-classification.md) |
-| I2  | Capability catalog + `upgrade.catalogVersion` provenance | done  | [002-capability-catalog-provenance.md](docs/specs/phase-27/issues/002-capability-catalog-provenance.md) |
-| I3  | `upgrade` command: wizard, insertion editor, report mode | done  | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md)                             |
-| I4  | Compile drift classification flow                        | done  | [004-drift-reconciliation-flow.md](docs/specs/phase-27/issues/004-drift-reconciliation-flow.md)         |
-| I5  | Flow guidance conformance patch (0.4.3)                  | done  | [005-flow-guidance-conformance.md](docs/specs/phase-27/issues/005-flow-guidance-conformance.md)         |
-| I6  | No-args interactive dispatcher                           | done  | [006-no-args-dispatcher.md](docs/specs/phase-27/issues/006-no-args-dispatcher.md)                       |
-| I7  | Dispatcher follow-up offers + doctor/upgrade clarity     | done  | [007-dispatcher-follow-up-clarity.md](docs/specs/phase-27/issues/007-dispatcher-follow-up-clarity.md)   |
+| Id  | Task                                                     | State      | Brief                                                                                                   |
+| --- | -------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------- |
+| I1  | Lockfile-first classification in the import report       | done       | [001-lockfile-first-classification.md](docs/specs/phase-27/issues/001-lockfile-first-classification.md) |
+| I2  | Capability catalog + `upgrade.catalogVersion` provenance | done       | [002-capability-catalog-provenance.md](docs/specs/phase-27/issues/002-capability-catalog-provenance.md) |
+| I3  | `upgrade` command: wizard, insertion editor, report mode | done       | [003-upgrade-command.md](docs/specs/phase-27/issues/003-upgrade-command.md)                             |
+| I4  | Compile drift classification flow                        | done       | [004-drift-reconciliation-flow.md](docs/specs/phase-27/issues/004-drift-reconciliation-flow.md)         |
+| I5  | Flow guidance conformance patch (0.4.3)                  | done       | [005-flow-guidance-conformance.md](docs/specs/phase-27/issues/005-flow-guidance-conformance.md)         |
+| I6  | No-args interactive dispatcher                           | done       | [006-no-args-dispatcher.md](docs/specs/phase-27/issues/006-no-args-dispatcher.md)                       |
+| I7  | Dispatcher follow-up offers + doctor/upgrade clarity     | done       | [007-dispatcher-follow-up-clarity.md](docs/specs/phase-27/issues/007-dispatcher-follow-up-clarity.md)   |
+| I8  | Untracked generated-ownership rule                       | human-gate | [008-untracked-generated-ownership.md](docs/specs/phase-27/issues/008-untracked-generated-ownership.md) |
 
 I3 and I4 are parallel-safe apart from shared `apps/cli/src/index.ts`
 touchpoints; coordinate merges (if I3 lands first, rebase I4 onto it).
@@ -209,6 +232,23 @@ the `NEEDS_CONTEXT` escape were designed for and what I6 exists to validate -
 so it is deliberately not patched with another number here. CLI suite 610
 tests, compiler 484, 0 failures; root `npm run check` clean.
 
+I8 raised 2026-07-31 from phase-33 work, `human-gate` because it is a product
+decision rather than a defect with one correct fix. Two lockfile outputs -
+`.mcp.json` and `.codex/config.toml` - are `generated-owned`, gitignored, and
+untracked at once. `.gitignore` calls them local runtime deliberately while the
+tracked `ai-profile.lock` records a sha256 for each, so on a fresh clone the
+recorded hash describes bytes no other checkout has and the proof order's first
+step cannot confirm ownership. Found the destructive way: a hand-authored
+`.mcp.json` holding a local MCP server definition survived
+`compile --write --force` only because it had been backed up first - the file is
+untracked, so git could not have restored it. The hash-mismatch refusal did
+fire, which is the guard working; `--force` is the hole. Either the ignore
+entries are wrong and these are ordinary tracked artifacts, or the lockfile
+should stop hashing locally-materialised outputs; the brief refuses to pick
+inside an implementation slice and requires a grill. Acceptance includes an
+enumeration test asserting no output is ever again `generated-owned` +
+gitignored + untracked, so the state cannot return silently.
+
 ## phase-28: Release Automation (`docs/specs/phase-28/001-release-automation.md`)
 
 Spec 001 approved 2026-07-09 (ADR 0012 accepted).
@@ -275,24 +315,24 @@ parallel-safe after I1 apart from shared canonical types.
 Approved 2026-07-16 from the completed model/effort grill. Sequenced after the
 completed Phase 31 I8 and before Phase 32 I1.
 
-| Id | Task | State | Brief |
-| --- | --- | --- | --- |
-| I1 | Shared model-policy domain and compatibility resolver | done | [001-shared-model-policy-domain.md](docs/specs/phase-31.5/issues/001-shared-model-policy-domain.md) |
-| I1R | Complete v3 profile-schema integration | done | [001r-v3-profile-schema-integration.md](docs/specs/phase-31.5/issues/001r-v3-profile-schema-integration.md) |
-| I2 | Codex and Claude exact model adapters | done | [002-codex-claude-model-adapters.md](docs/specs/phase-31.5/issues/002-codex-claude-model-adapters.md) |
-| I3 | Tabnine historical, organization, and private models | done | [003-tabnine-historical-private-models.md](docs/specs/phase-31.5/issues/003-tabnine-historical-private-models.md) |
-| I4 | Consented source-free model probes | done | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md) |
-| I5 | Exact role-aware model selection during init | done | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md) |
-| I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | done | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
-| I6 | Locked model-resolution reuse primitive (ordinary compile reuses the lock) | done | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md) |
-| I6a | Upgrade command exact comparison and retain/adopt/customize planning | done | [006a-upgrade-comparison-and-planning.md](docs/specs/phase-31.5/issues/006a-upgrade-comparison-and-planning.md) |
-| I6b | Metadata-only package/registry update check | done | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md) |
-| I6c | Upgrade-flow probe consent, separate from update-check consent | done | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md) |
-| I6d | Tabnine model-resolution reconciliation | done | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md) |
-| I6e | Upgrade write ownership refusal and rollback | done | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md) |
-| I7 | Offline Doctor model policy and explicit recheck | done | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md) |
-| I8 | Local UI model policy and user documentation | done | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md) |
-| I9 | Published model-selection journey and final integration | done | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md) |
+| Id  | Task                                                                         | State | Brief                                                                                                                                 |
+| --- | ---------------------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| I1  | Shared model-policy domain and compatibility resolver                        | done  | [001-shared-model-policy-domain.md](docs/specs/phase-31.5/issues/001-shared-model-policy-domain.md)                                   |
+| I1R | Complete v3 profile-schema integration                                       | done  | [001r-v3-profile-schema-integration.md](docs/specs/phase-31.5/issues/001r-v3-profile-schema-integration.md)                           |
+| I2  | Codex and Claude exact model adapters                                        | done  | [002-codex-claude-model-adapters.md](docs/specs/phase-31.5/issues/002-codex-claude-model-adapters.md)                                 |
+| I3  | Tabnine historical, organization, and private models                         | done  | [003-tabnine-historical-private-models.md](docs/specs/phase-31.5/issues/003-tabnine-historical-private-models.md)                     |
+| I4  | Consented source-free model probes                                           | done  | [004-consented-source-free-probes.md](docs/specs/phase-31.5/issues/004-consented-source-free-probes.md)                               |
+| I5  | Exact role-aware model selection during init                                 | done  | [005-init-model-selection.md](docs/specs/phase-31.5/issues/005-init-model-selection.md)                                               |
+| I5R | Tabnine write-plan wiring, advanced override entry, and model-selection docs | done  | [005r-tabnine-write-wiring-and-advanced-override.md](docs/specs/phase-31.5/issues/005r-tabnine-write-wiring-and-advanced-override.md) |
+| I6  | Locked model-resolution reuse primitive (ordinary compile reuses the lock)   | done  | [006-upgrade-and-lock-resolution.md](docs/specs/phase-31.5/issues/006-upgrade-and-lock-resolution.md)                                 |
+| I6a | Upgrade command exact comparison and retain/adopt/customize planning         | done  | [006a-upgrade-comparison-and-planning.md](docs/specs/phase-31.5/issues/006a-upgrade-comparison-and-planning.md)                       |
+| I6b | Metadata-only package/registry update check                                  | done  | [006b-metadata-only-registry-check.md](docs/specs/phase-31.5/issues/006b-metadata-only-registry-check.md)                             |
+| I6c | Upgrade-flow probe consent, separate from update-check consent               | done  | [006c-probe-consent-separation.md](docs/specs/phase-31.5/issues/006c-probe-consent-separation.md)                                     |
+| I6d | Tabnine model-resolution reconciliation                                      | done  | [006d-tabnine-lock-reconciliation.md](docs/specs/phase-31.5/issues/006d-tabnine-lock-reconciliation.md)                               |
+| I6e | Upgrade write ownership refusal and rollback                                 | done  | [006e-upgrade-write-rollback.md](docs/specs/phase-31.5/issues/006e-upgrade-write-rollback.md)                                         |
+| I7  | Offline Doctor model policy and explicit recheck                             | done  | [007-doctor-model-policy.md](docs/specs/phase-31.5/issues/007-doctor-model-policy.md)                                                 |
+| I8  | Local UI model policy and user documentation                                 | done  | [008-local-ui-and-model-docs.md](docs/specs/phase-31.5/issues/008-local-ui-and-model-docs.md)                                         |
+| I9  | Published model-selection journey and final integration                      | done  | [009-published-model-journey.md](docs/specs/phase-31.5/issues/009-published-model-journey.md)                                         |
 
 I1R added 2026-07-17: I1 was marked done but never wired `preset`, the
 `routine-implementer` role, or open exact-override acceptance into the public
@@ -520,16 +560,17 @@ similarity) against the Codex/Claude mechanism and confirming
 (I6a's owned file, still hardcodes `["codex","claude"]`) were untouched, per
 this brief's own non-goals. Code-quality review's only flagged item - an
 embedded raw NUL byte detected in `packages/core/src/subagent-policy.test.ts`
+
 - was traced to line 621, a pre-existing Codex control-character test
-predating this diff entirely (confirmed via `git diff`), not something this
-cycle introduced; no fix needed. Tests: `packages/core` 218/217 (1
-pre-existing skip), `packages/compiler` 318/317 (1 pre-existing skip),
-`apps/cli` 580/576 (4 pre-existing skips), `packages/scanner`+`packages/doctor`
-88/88, all 0 failures; `npm run check` (incl. `tsconfig.test.json` and
-`svelte-check`) and `npm run verify:pack` both clean. Not carried forward as
-open scope, per this brief's own explicit non-goal: `model-policy-upgrade-comparison.ts`
-does not yet surface Tabnine rows in I6a's upgrade table - that remains I6a's
-scope, unchanged by this cycle.
+  predating this diff entirely (confirmed via `git diff`), not something this
+  cycle introduced; no fix needed. Tests: `packages/core` 218/217 (1
+  pre-existing skip), `packages/compiler` 318/317 (1 pre-existing skip),
+  `apps/cli` 580/576 (4 pre-existing skips), `packages/scanner`+`packages/doctor`
+  88/88, all 0 failures; `npm run check` (incl. `tsconfig.test.json` and
+  `svelte-check`) and `npm run verify:pack` both clean. Not carried forward as
+  open scope, per this brief's own explicit non-goal: `model-policy-upgrade-comparison.ts`
+  does not yet surface Tabnine rows in I6a's upgrade table - that remains I6a's
+  scope, unchanged by this cycle.
 
 I6e completed 2026-07-23 via one RED-first `/implement-next` cycle. AC1
 (unowned/drifted target-file refusal parity with `compile`) and AC4
@@ -548,34 +589,35 @@ the lock stamped with a new `catalogVersion`/`sha256` while the profile
 write failed and reverted). Fixed by switching that one call site
 (`apps/cli/src/index.ts`'s `runUpgrade`, ~line 1394) to the existing
 `createOrApplyWritePlan(rootDir, writes, true, io, { atomic: true })` helper
+
 - already used by the model-policy write path - introducing no new write-plan
-mechanism. RED proof: forcing `fsPromises.writeFile` to fail on
-`ai-profile.yaml` against the pre-fix code showed `ai-profile.lock` commit
-with the new `catalogVersion`/`sha256` while `ai-profile.yaml` reverted, a
-genuine cross-file inconsistency; a second RED check (forcing
-`fsPromises.rename` to fail) showed the pre-fix code never engaged any
-atomic/rollback machinery at all (silently exited 0). GREEN proof: a new
-rename-forced-failure regression test in `apps/cli/src/upgrade.test.ts`
-(~line 1192) proves the fixed path exits 1 and restores both files to their
-pre-transaction bytes; a second new test proves the mocked `writeFile` is
-never invoked for either target path post-fix (a real regression guard
-against reverting to the plain writer, not just a success-path check); a
-third new test proves declining at `confirmWrite` writes nothing (AC4,
-already-correct pre-existing behavior, now covered). Spec review found one
-Medium issue - the first new test's name/comments overstated what it proved
-(it didn't exercise any failure) - fixed by rewriting it to assert on mock
-invocation counts instead of the success path, making it a genuine
-regression guard. Code-quality review passed ACCEPTABLE with one non-blocking
-Important item (same test, independently flagged) - fixed the same way; a
-Minor note on triplicated path-suffix-matching test helpers was left as-is
-per the reviewer's own "skip if it'd expand scope" caveat, matching this
-file's existing tolerance for that duplication. Tests: `apps/cli` 584/580 (4
-pre-existing skips), 0 failures; `packages/compiler` 328/327 (1 pre-existing
-skip), 0 failures (write-plan.ts itself untouched, reused as-is); clean
-`npm run check` (including `tsconfig.test.json`) on both workspaces. Not
-carried forward as open scope: `runModelPolicyWrite`/`--model-policy-strategy`
-write paths (I6a's already-reviewed scope) and `write-plan.ts` itself were
-both deliberately untouched.
+  mechanism. RED proof: forcing `fsPromises.writeFile` to fail on
+  `ai-profile.yaml` against the pre-fix code showed `ai-profile.lock` commit
+  with the new `catalogVersion`/`sha256` while `ai-profile.yaml` reverted, a
+  genuine cross-file inconsistency; a second RED check (forcing
+  `fsPromises.rename` to fail) showed the pre-fix code never engaged any
+  atomic/rollback machinery at all (silently exited 0). GREEN proof: a new
+  rename-forced-failure regression test in `apps/cli/src/upgrade.test.ts`
+  (~line 1192) proves the fixed path exits 1 and restores both files to their
+  pre-transaction bytes; a second new test proves the mocked `writeFile` is
+  never invoked for either target path post-fix (a real regression guard
+  against reverting to the plain writer, not just a success-path check); a
+  third new test proves declining at `confirmWrite` writes nothing (AC4,
+  already-correct pre-existing behavior, now covered). Spec review found one
+  Medium issue - the first new test's name/comments overstated what it proved
+  (it didn't exercise any failure) - fixed by rewriting it to assert on mock
+  invocation counts instead of the success path, making it a genuine
+  regression guard. Code-quality review passed ACCEPTABLE with one non-blocking
+  Important item (same test, independently flagged) - fixed the same way; a
+  Minor note on triplicated path-suffix-matching test helpers was left as-is
+  per the reviewer's own "skip if it'd expand scope" caveat, matching this
+  file's existing tolerance for that duplication. Tests: `apps/cli` 584/580 (4
+  pre-existing skips), 0 failures; `packages/compiler` 328/327 (1 pre-existing
+  skip), 0 failures (write-plan.ts itself untouched, reused as-is); clean
+  `npm run check` (including `tsconfig.test.json`) on both workspaces. Not
+  carried forward as open scope: `runModelPolicyWrite`/`--model-policy-strategy`
+  write paths (I6a's already-reviewed scope) and `write-plan.ts` itself were
+  both deliberately untouched.
 
 I7 completed 2026-07-23 via one RED-first `/implement-next` cycle (plus a
 spec-review fix round and a code-quality-review fix round). Added an
@@ -878,16 +920,17 @@ count excludes the two metadata paths from the message's own count
 (`filesWritten`'s existing JSON semantics untouched). Spec review passed
 with only cosmetic notes (since fixed). Code-quality review found
 ISSUES_FOUND: `runModelPolicyWrite`'s continued growth flagged as Important
+
 - fixed by extracting the two largest new blocks into the two named helpers
-above; a ternary-message-construction ambiguity flagged as Important - fixed
-by adding both the disabled-Tabnine edge case and a clarifying comment.
-Tests: `packages/core` 213/212, `packages/compiler` 312/311, `apps/cli`
-545/541, all 0 failures; clean typecheck (including `tsconfig.test.json`)
-on all three; `verify:pack` and golden regeneration both clean. All 8
-findings resolved as GitHub review threads. State stays `ready`, not
-`done` - same open acceptance criteria as noted above (mapping-v2-
-adopting-v3 writes, "custom exact" strategy, interactive-UI triggering,
-Tabnine reconciliation deferred to I6d).
+  above; a ternary-message-construction ambiguity flagged as Important - fixed
+  by adding both the disabled-Tabnine edge case and a clarifying comment.
+  Tests: `packages/core` 213/212, `packages/compiler` 312/311, `apps/cli`
+  545/541, all 0 failures; clean typecheck (including `tsconfig.test.json`)
+  on all three; `verify:pack` and golden regeneration both clean. All 8
+  findings resolved as GitHub review threads. State stays `ready`, not
+  `done` - same open acceptance criteria as noted above (mapping-v2-
+  adopting-v3 writes, "custom exact" strategy, interactive-UI triggering,
+  Tabnine reconciliation deferred to I6d).
 
 I6a PR review fix round 10 (2026-07-21, PR #125), after I6a was already
 marked `done`: addressed 2 new Codex bot findings (P1) on the same
@@ -1210,18 +1253,19 @@ message. Code-quality review found one Critical, real gap: the new
 `runModelPolicyAdoptWrite` mirrored `planRegionAwareWrites`'s drift check
 (AGENTS.md/CLAUDE.md only) but omitted `getProtectedGeneratedPaths`, the
 SEPARATE check `runCompile` also performs for every other generated output
+
 - meaning a hand-edited `.codex/config.toml` would have been silently
-overwritten instead of refusing, contradicting the function's own doc
-comment. Fixed before closing the cycle (added the check + a regression
-test that corrupts `.codex/config.toml` in isolation and proves refusal).
-`npm test`/`npm run check` clean for `apps/cli` (520 tests/516 pass/0
-fail/4 unrelated skips) after the fix. Still left for later I6a cycles:
-mapping-v2 writes and quality-first/cost-conscious writes (both need the
-still-unbuilt `ai-profile.yaml` `subagentPolicy.preset` surgical edit),
-the "custom exact" strategy (disclosed, pre-existing non-goal - re-flagged
-by the same Codex review and deliberately left open, not a regression from
-this PR), and the disclosed lifecycle-comparison gap from cycle 1. State
-stays `ready`, not `done`.
+  overwritten instead of refusing, contradicting the function's own doc
+  comment. Fixed before closing the cycle (added the check + a regression
+  test that corrupts `.codex/config.toml` in isolation and proves refusal).
+  `npm test`/`npm run check` clean for `apps/cli` (520 tests/516 pass/0
+  fail/4 unrelated skips) after the fix. Still left for later I6a cycles:
+  mapping-v2 writes and quality-first/cost-conscious writes (both need the
+  still-unbuilt `ai-profile.yaml` `subagentPolicy.preset` surgical edit),
+  the "custom exact" strategy (disclosed, pre-existing non-goal - re-flagged
+  by the same Codex review and deliberately left open, not a regression from
+  this PR), and the disclosed lifecycle-comparison gap from cycle 1. State
+  stays `ready`, not `done`.
 
 I6a first RED-first cycle completed 2026-07-19 as a disclosed partial slice
 (one bounded `/implement-next` cycle, not full closure): added the pure
@@ -1244,32 +1288,33 @@ criteria are not yet met.
 I6a eighth RED-first cycle completed 2026-07-19, also a disclosed partial
 slice: widened `--model-policy-strategy` preview (cycle 4's flag) to also
 accept an enabled mapping-v2 profile, with zero new compiler-package code
+
 - cycle 3's `planModelPolicyUpgrade` already produces the correct plan when
-called as `planModelPolicyUpgrade(strategy, undefined, "role-aware")`
-("adopt" targets the default v3 preset since mapping-v2 has no "current
-preset" of its own; "retain" naturally yields `block: undefined`/"nothing
-to retain", exactly right since mapping-v2 has no prior v3 lock). The
-refusal message widened to name both accepted shapes (deliberate wording
-change; the one stale test asserting the old exact string was updated, no
-other test needed changes per a grep check). Added an UNCONDITIONAL
-`--write` refusal for mapping-v2 across all four strategies, placed before
-the existing quality-first/cost-conscious/adopt write logic, so `adopt
+  called as `planModelPolicyUpgrade(strategy, undefined, "role-aware")`
+  ("adopt" targets the default v3 preset since mapping-v2 has no "current
+  preset" of its own; "retain" naturally yields `block: undefined`/"nothing
+  to retain", exactly right since mapping-v2 has no prior v3 lock). The
+  refusal message widened to name both accepted shapes (deliberate wording
+  change; the one stale test asserting the old exact string was updated, no
+  other test needed changes per a grep check). Added an UNCONDITIONAL
+  `--write` refusal for mapping-v2 across all four strategies, placed before
+  the existing quality-first/cost-conscious/adopt write logic, so `adopt
 --write` on a mapping-v2 profile can never fall through to silently write
-only the lock block without also updating `ai-profile.yaml`'s
-`subagentPolicy.preset` (the exact "inert write" bug class cycle 5 already
-guarded against for v3-opted quality-first/cost-conscious). Spec review
-passed COMPLIANT and code-quality review passed ACCEPTABLE, both clean
-single-pass reviews (no fixes needed) - one forward-looking, non-blocking
-note: the `modelPolicyPlan` computation is now a three-level nested ternary
-and should become a small named helper if a future cycle adds a fifth plan
-shape. `npm test`/`npm run check` clean for `apps/cli` (520 tests/516
-pass/0 fail/4 unrelated skips). Still left for later I6a cycles: actually
-writing anything for a mapping-v2 profile (needs the deferred YAML
-`subagentPolicy.preset` surgical edit - the same gap blocking
-quality-first/cost-conscious writes for v3-opted profiles too), the
-"custom exact" strategy, the entire interactive clack UI, and the
-disclosed lifecycle-comparison gap from cycle 1. State stays `ready`, not
-`done`.
+  only the lock block without also updating `ai-profile.yaml`'s
+  `subagentPolicy.preset` (the exact "inert write" bug class cycle 5 already
+  guarded against for v3-opted quality-first/cost-conscious). Spec review
+  passed COMPLIANT and code-quality review passed ACCEPTABLE, both clean
+  single-pass reviews (no fixes needed) - one forward-looking, non-blocking
+  note: the `modelPolicyPlan` computation is now a three-level nested ternary
+  and should become a small named helper if a future cycle adds a fifth plan
+  shape. `npm test`/`npm run check` clean for `apps/cli` (520 tests/516
+  pass/0 fail/4 unrelated skips). Still left for later I6a cycles: actually
+  writing anything for a mapping-v2 profile (needs the deferred YAML
+  `subagentPolicy.preset` surgical edit - the same gap blocking
+  quality-first/cost-conscious writes for v3-opted profiles too), the
+  "custom exact" strategy, the entire interactive clack UI, and the
+  disclosed lifecycle-comparison gap from cycle 1. State stays `ready`, not
+  `done`.
 
 I6a seventh RED-first cycle completed 2026-07-19, also a disclosed partial
 slice: wired cycle 6's `compareModelPolicyUpgradeFromLegacy` into
@@ -1414,6 +1459,7 @@ constant with an explanatory comment). Still left for later I6a cycles: the
 selections, not purely derivable), CLI wiring of any planning path,
 interactive clack rendering, mapping-v2 legacy-resolver comparison/planning,
 the actual write path, and the disclosed lifecycle-comparison gap from cycle
+
 1. State stays `ready`, not `done`.
 
 I6a second RED-first cycle completed 2026-07-19, also a disclosed partial
@@ -1535,12 +1581,13 @@ Also applied from review: expose `recommendedPreset` unconditionally so a
 project on a non-default preset is still told what is recommended, suppress
 the lifecycle badge when no model resolved, redact `alternatives`/
 `guidedCandidates`, and type `statusTone`/`lifecycleTone` to the core unions
+
 - which immediately caught a latent out-of-union `"unknown"` fallback in
-`headlineStatus`. RED proof: with `modelPolicyView.ts` moved aside the new
-suite failed 0-pass/1-fail; the lock-replay and org/private tests failed
-against the pre-fix code for their own reasons. GREEN: 20 model-policy
-tests, `apps/web` 216/216, `packages/compiler` 331 pass/0 fail (no golden
-churn from the label extraction), root `npm run check` clean.
+  `headlineStatus`. RED proof: with `modelPolicyView.ts` moved aside the new
+  suite failed 0-pass/1-fail; the lock-replay and org/private tests failed
+  against the pre-fix code for their own reasons. GREEN: 20 model-policy
+  tests, `apps/web` 216/216, `packages/compiler` 331 pass/0 fail (no golden
+  churn from the label extraction), root `npm run check` clean.
 
 Cycle 3 (AC6 documentation): rewrote root `README.md`'s "Recommended Model
 Settings" from generic prose predating the phase into the implemented
@@ -1564,7 +1611,7 @@ the lockfile read-only/degradation rule and the server-side `subagentPolicy`
 preservation + redaction rules.
 
 Carried forward as open scope, deliberately not claimed by I8: advanced
-per-role/exact-override *editing* UI in the browser (the brief's AC2 wording
+per-role/exact-override _editing_ UI in the browser (the brief's AC2 wording
 "progressively exposed" is satisfied for visibility; editing remains
 CLI-only by design, and the page says so). Also still open from the earlier
 fix-round: `findSecretLikePaths`/`findNulStringPaths` do not scan
@@ -1637,7 +1684,7 @@ code missed a synthetic violation the new code catches), all replied to and
 resolved as GitHub review threads. Round 1 (4 findings): (1) the role-aware
 table assertion checked only the primary role's stdout summary, missing a
 corrupted/omitted non-primary role - fixed by `assert.deepEqual`-ing the
-*entire* per-role table passed to `selectModelPreset` against the packed
+_entire_ per-role table passed to `selectModelPreset` against the packed
 compiler's own `buildModelPolicyTargetTable` output (disclosed as a partial
 fix: exercising `createClackPrompts`'s own on-screen rendering of that table
 remains out of reach without a product-code change, since it is not part of
@@ -1686,7 +1733,7 @@ handle is a `Proxy` intercepting its mutating instance methods
 (`write`/`writev`/`writeFile`/`chmod`/`truncate`/`appendFile`/`datasync`),
 plus adding `chmod`/`chown` to the module-level list; (3) the preview
 assertions only checked the final accumulated stdout, not that the preview
-rendered *before* `confirmWritePlan` fired - fixed by snapshotting stdout
+rendered _before_ `confirmWritePlan` fired - fixed by snapshotting stdout
 inside that prompt callback and asserting the preview lines are already
 present in that snapshot, in addition to the final-stdout check. The P1
 finding asked for the full validation suite to actually be run before
@@ -1707,73 +1754,74 @@ caret-range branch treated any `^major.minor.patch` as "same major, and
 minor.patch >= declared" regardless of major version, which is wrong for a
 zero-major package under real npm/node-semver caret semantics (`^0.2.0`
 must reject `0.3.0`, not accept it, since pre-1.0 minor bumps are breaking)
+
 - fixed by branching on the declared major: nonzero-major keeps the
-original behavior, `^0.y.z` (y>0) locks major.minor and only allows patch
-to float upward, and `^0.0.z` locks to that exact version. No current
-manifest uses a zero-major external dependency, so this changed no
-existing pass/fail outcome, but closed a real gap; (2) the sentence above
-this Round 4 addendum ("proven against the real
-`fixtures/npm-pack/agent-profile-*.json` file-list fixtures") was accurate
-only as a one-time manual cross-check performed during cycle 1's
-implementation - the test itself never actually read those fixture files
-at runtime, so a future drift between the golden fixture and the
-hard-coded required-asset list would have gone unnoticed. Fixed for real
-(not just reworded): a new `readNpmPackFixture` helper now reads each
-fixture from disk at test time and asserts every required asset path is
-still listed there, in addition to the existing check against the freshly
-packed tarball - genuine three-way runtime coupling (hard-coded list <->
-golden fixture <-> fresh pack output) rather than static-only evidence.
-Round 5 (1 more P2 finding): `computeRuntimeDependencyGraph` unconditionally
-skips `@agent-profile/web` when walking the CLI's declared dependencies, so
-a stale/missing/unusable packed `web` release could not be caught the way
-every other internal dependency edge now is. Judged as a disclosed partial
-mitigation rather than a full fix: `apps/cli/bundle.mjs`'s own comment
-documents `@agent-profile/web` as a lazy, `require.resolve`-only dependency
-needed solely for the `ui` subcommand, which this journey's only scenario
-(`init`) never touches; the already-shipped, already-`done` sibling
-`scripts/release/phase31-published-journey.test.mjs` has this exact same
-exclusion and was never flagged for it; and fully building/packing a
-SvelteKit app purely to validate an unexercised dependency edge would be a
-disproportionate scope expansion for a review-fix round. Added a cheap,
-real check instead: a new `assertWebDependencyVersionMatches` compares
-`apps/cli/package.json`'s declared `@agent-profile/web` version against
-`apps/web/package.json`'s own version directly from the source tree (no
-build/pack required), catching the common stale-version-bump failure mode,
-with a code comment documenting the tradeoff and naming a future
-`ui`-subcommand cycle as the natural point to add real packed validation.
-Round 6 (4 more P2 findings, all in the same file): (1) the packed-compiler
-import (the role-aware table oracle) ran before `withRuntimeSentinels`
-installed its guards, so a side effect in a compiler-only module the CLI
-bundle tree-shakes away could execute unrecorded - moved into its own
-guarded closure, kept separate from the later `init`-scenario guard since
-they are two conceptually distinct actions; (2) `withFsWriteSentinel`
-patched `fs.promises` properties but never called
-`syncBuiltinESMExports()`, so a write reached through a named ESM import
-(e.g. `import { open } from "node:fs/promises"`, the pattern shipped
-modules like `personal-activation.ts`/`model-probe.ts` actually use) could
-bypass the patched bindings entirely and evade detection - fixed by adding
-the sync call after patching and again after restoring, mirroring
-`withRuntimeSentinels`'s existing pattern exactly; (3)
-`testOnlyFixturePathPattern` missed common test-only naming conventions
-(a plain `fixtures/` directory segment without a leading double
-underscore, a `.fixture.` infix, `.spec.` suffixes, and `.mjs` test files)
+  original behavior, `^0.y.z` (y>0) locks major.minor and only allows patch
+  to float upward, and `^0.0.z` locks to that exact version. No current
+  manifest uses a zero-major external dependency, so this changed no
+  existing pass/fail outcome, but closed a real gap; (2) the sentence above
+  this Round 4 addendum ("proven against the real
+  `fixtures/npm-pack/agent-profile-*.json` file-list fixtures") was accurate
+  only as a one-time manual cross-check performed during cycle 1's
+  implementation - the test itself never actually read those fixture files
+  at runtime, so a future drift between the golden fixture and the
+  hard-coded required-asset list would have gone unnoticed. Fixed for real
+  (not just reworded): a new `readNpmPackFixture` helper now reads each
+  fixture from disk at test time and asserts every required asset path is
+  still listed there, in addition to the existing check against the freshly
+  packed tarball - genuine three-way runtime coupling (hard-coded list <->
+  golden fixture <-> fresh pack output) rather than static-only evidence.
+  Round 5 (1 more P2 finding): `computeRuntimeDependencyGraph` unconditionally
+  skips `@agent-profile/web` when walking the CLI's declared dependencies, so
+  a stale/missing/unusable packed `web` release could not be caught the way
+  every other internal dependency edge now is. Judged as a disclosed partial
+  mitigation rather than a full fix: `apps/cli/bundle.mjs`'s own comment
+  documents `@agent-profile/web` as a lazy, `require.resolve`-only dependency
+  needed solely for the `ui` subcommand, which this journey's only scenario
+  (`init`) never touches; the already-shipped, already-`done` sibling
+  `scripts/release/phase31-published-journey.test.mjs` has this exact same
+  exclusion and was never flagged for it; and fully building/packing a
+  SvelteKit app purely to validate an unexercised dependency edge would be a
+  disproportionate scope expansion for a review-fix round. Added a cheap,
+  real check instead: a new `assertWebDependencyVersionMatches` compares
+  `apps/cli/package.json`'s declared `@agent-profile/web` version against
+  `apps/web/package.json`'s own version directly from the source tree (no
+  build/pack required), catching the common stale-version-bump failure mode,
+  with a code comment documenting the tradeoff and naming a future
+  `ui`-subcommand cycle as the natural point to add real packed validation.
+  Round 6 (4 more P2 findings, all in the same file): (1) the packed-compiler
+  import (the role-aware table oracle) ran before `withRuntimeSentinels`
+  installed its guards, so a side effect in a compiler-only module the CLI
+  bundle tree-shakes away could execute unrecorded - moved into its own
+  guarded closure, kept separate from the later `init`-scenario guard since
+  they are two conceptually distinct actions; (2) `withFsWriteSentinel`
+  patched `fs.promises` properties but never called
+  `syncBuiltinESMExports()`, so a write reached through a named ESM import
+  (e.g. `import { open } from "node:fs/promises"`, the pattern shipped
+  modules like `personal-activation.ts`/`model-probe.ts` actually use) could
+  bypass the patched bindings entirely and evade detection - fixed by adding
+  the sync call after patching and again after restoring, mirroring
+  `withRuntimeSentinels`'s existing pattern exactly; (3)
+  `testOnlyFixturePathPattern` missed common test-only naming conventions
+  (a plain `fixtures/` directory segment without a leading double
+  underscore, a `.fixture.` infix, `.spec.` suffixes, and `.mjs` test files)
 - broadened accordingly, re-verified against the repo's real packed file
-lists for false positives; (4) `buildPackedWorkspaces` never cleaned prior
-build output before rebuilding, so `tsc -b`'s incremental build could leave
-a stale orphaned `dist/` asset (from a since-removed/renamed source file)
-in the packed tarball even though a genuine clean-checkout build would
-never produce it - fixed by removing each workspace's `dist/` before
-rebuilding, with one important correction found during verification and
-documented in the code comment: deleting `dist/` alone is insufficient,
-since `tsc -b` consults `tsconfig.tsbuildinfo` (which lives next to
-`tsconfig.json`, not inside `dist/`) to decide whether a rebuild is needed
-at all, so removing only `dist/` left it seeing unchanged source hashes and
-skipping emission entirely (worse than the original stale-file problem);
-the fix also removes each workspace's `tsconfig.tsbuildinfo`. All six
-rounds' fixes (19 findings total) were scoped to the one owned file; no
-product code, `TASKS.md` (until this entry), or the sibling precedent file
-were touched. State stays `ready`, not `done` - same open scope as the
-cycle-1 entry above.
+  lists for false positives; (4) `buildPackedWorkspaces` never cleaned prior
+  build output before rebuilding, so `tsc -b`'s incremental build could leave
+  a stale orphaned `dist/` asset (from a since-removed/renamed source file)
+  in the packed tarball even though a genuine clean-checkout build would
+  never produce it - fixed by removing each workspace's `dist/` before
+  rebuilding, with one important correction found during verification and
+  documented in the code comment: deleting `dist/` alone is insufficient,
+  since `tsc -b` consults `tsconfig.tsbuildinfo` (which lives next to
+  `tsconfig.json`, not inside `dist/`) to decide whether a rebuild is needed
+  at all, so removing only `dist/` left it seeing unchanged source hashes and
+  skipping emission entirely (worse than the original stale-file problem);
+  the fix also removes each workspace's `tsconfig.tsbuildinfo`. All six
+  rounds' fixes (19 findings total) were scoped to the one owned file; no
+  product code, `TASKS.md` (until this entry), or the sibling precedent file
+  were touched. State stays `ready`, not `done` - same open scope as the
+  cycle-1 entry above.
 
 I9 second RED-first `/implement-next` cycle completed 2026-07-26, another
 disclosed partial slice in the same owned file
@@ -1790,7 +1838,7 @@ count - `runModelProbe`'s consent gate returns before touching the runner
 seam), that `confirmModelProbe` was genuinely reached with `default: false`
 and disclosed a call bound at least as large as the planned selections (so
 "zero invocations" cannot pass by skipping the step), that the exact declined
-summary line rendered in a stdout snapshot captured *inside*
+summary line rendered in a stdout snapshot captured _inside_
 `confirmWritePlan` (proving preview-before-confirmation, not merely
 present-somewhere), and that nothing was written (strict `withFsWriteSentinel`
 plus `snapshot()` equality). Scenario B (one normalized consented path, fake
@@ -1849,10 +1897,10 @@ prompt, env allowlist, isolation argv, temp-dir prefix) because
 `apps/cli/src/model-probe.ts` is re-exported by no packed artifact (the packed
 CLI's only real exports are `runCli` and `CLI_VERSION`) - re-verified, not
 assumed, each with an in-file source-of-truth pointer and a failure message
-naming the file to sync; the allowlist coupling is subset-only, so a *shrunk*
+naming the file to sync; the allowlist coupling is subset-only, so a _shrunk_
 allowlist still passes; probe bounds are checked structurally only (the pinned
 maxima are unexported and already unit-tested in
-`apps/cli/src/model-probe.test.ts`); the effort *value* mapping is not
+`apps/cli/src/model-probe.test.ts`); the effort _value_ mapping is not
 re-derived; the cwd-inside-`os.tmpdir()` assertion is near-tautological and
 labelled as such; Claude's isolation row activates only when a later scenario
 selects `claude`. Code-quality follow-up deferred by explicit agreement, to be
@@ -2008,16 +2056,17 @@ a materially larger, undecided design (a nested per-role/per-client
 `ai-profile.yaml` edit surface, a scripted-write input shape, and several
 open product-shape questions) rather than a bounded implementation cycle.
 The linked document is a findings/problem record only, not an approved spec
-- it captures what already exists (the shared `SubagentPolicyRoleOverrides`
-schema, both comparison helpers' existing `roleOverrides` support) and the
-open design questions a future grill session needs to resolve (input shape,
-whether it composes with a bulk strategy, persistence target, mapping-v2
-interaction, validation strictness, interactive UX scope).
 
-| Id | Task                                                       | State       | Brief                                                                                                     |
-| -- | ----------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------- |
-| 1  | Grill session: upgrade "custom exact" strategy design       | human-gate  | [001-upgrade-custom-exact-strategy.md](docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md)         |
-| 2  | Maintainer decision: catalog lifecycle history retention     | human-gate  | [002-catalog-lifecycle-history-retention.md](docs/specs/phase-31.9/002-catalog-lifecycle-history-retention.md) |
+- it captures what already exists (the shared `SubagentPolicyRoleOverrides`
+  schema, both comparison helpers' existing `roleOverrides` support) and the
+  open design questions a future grill session needs to resolve (input shape,
+  whether it composes with a bulk strategy, persistence target, mapping-v2
+  interaction, validation strictness, interactive UX scope).
+
+| Id  | Task                                                     | State      | Brief                                                                                                          |
+| --- | -------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
+| 1   | Grill session: upgrade "custom exact" strategy design    | human-gate | [001-upgrade-custom-exact-strategy.md](docs/specs/phase-31.9/001-upgrade-custom-exact-strategy.md)             |
+| 2   | Maintainer decision: catalog lifecycle history retention | human-gate | [002-catalog-lifecycle-history-retention.md](docs/specs/phase-31.9/002-catalog-lifecycle-history-retention.md) |
 
 Item 2 (added 2026-07-21): raised by Codex bot PR review on PR #125 -
 `lockedModelLifecycle` (`packages/compiler/src/model-policy-upgrade-comparison.ts`)
@@ -2059,17 +2108,17 @@ independent full-change reviewer after spec and code-quality review, bounded
 remediation and escalation, versioned review-learning records, recurring-
 finding promotion, and a provider-neutral external-review boundary.
 
-| Id  | Task                                            | State         | Brief                                                                                                   |
-| --- | ----------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------- |
-| I1  | Emit the independent change-risk reviewer       | done          | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                   |
-| I2  | Orchestrate bounded review remediation          | done         | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)       |
-| I3  | Persist versioned review-learning records       | done          | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)             |
-| I4  | Promote recurring findings into stronger guards | sequenced     | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)     |
-| I5  | Backfill the recent PR review corpus            | human-gate    | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)       |
-| I6  | Validate the published review workflow          | sequenced     | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md) |
-| G2  | Grill session: approve amendment 002            | done          | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)    |
-| I7  | Cluster vocabularies and cluster-key derivation  | done          | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)               |
-| G3  | Grill session: approve amendment 003             | done          | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
+| Id  | Task                                            | State      | Brief                                                                                                    |
+| --- | ----------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------- |
+| I1  | Emit the independent change-risk reviewer       | done       | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                    |
+| I2  | Orchestrate bounded review remediation          | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)        |
+| I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)              |
+| I4  | Promote recurring findings into stronger guards | sequenced  | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)      |
+| I5  | Backfill the recent PR review corpus            | human-gate | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)        |
+| I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)  |
+| G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)     |
+| I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                |
+| G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
@@ -2539,12 +2588,12 @@ dispositions, and a ledger gate on implementation dispatch. Motivated by
 the phase-33 PR #134 review history (nine rounds, 71 findings, 12 P1s,
 all pre-implementation).
 
-| Id  | Task                                            | State      | Brief                                                                                                     |
-| --- | ----------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------- |
-| G1  | Grill session: approve the phase-34 spec        | human-gate | [001-bounded-spec-review.md](docs/specs/phase-34/001-bounded-spec-review.md)                              |
-| I1  | Define the spec-review policy and reviewer      | blocked    | [001-spec-review-policy-and-reviewer.md](docs/specs/phase-34/issues/001-spec-review-policy-and-reviewer.md) |
-| I2  | Integrate the bounded loop and ledger gate      | sequenced  | [002-spec-review-loop-integration.md](docs/specs/phase-34/issues/002-spec-review-loop-integration.md)     |
-| I3  | Validate the published spec-review loop         | sequenced  | [003-spec-review-validation.md](docs/specs/phase-34/issues/003-spec-review-validation.md)                 |
+| Id  | Task                                       | State      | Brief                                                                                                       |
+| --- | ------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------------------- |
+| G1  | Grill session: approve the phase-34 spec   | human-gate | [001-bounded-spec-review.md](docs/specs/phase-34/001-bounded-spec-review.md)                                |
+| I1  | Define the spec-review policy and reviewer | blocked    | [001-spec-review-policy-and-reviewer.md](docs/specs/phase-34/issues/001-spec-review-policy-and-reviewer.md) |
+| I2  | Integrate the bounded loop and ledger gate | sequenced  | [002-spec-review-loop-integration.md](docs/specs/phase-34/issues/002-spec-review-loop-integration.md)       |
+| I3  | Validate the published spec-review loop    | sequenced  | [003-spec-review-validation.md](docs/specs/phase-34/issues/003-spec-review-validation.md)                   |
 
 Dependency map: G1 -> I1; phase-33 I1 + I3 -> I1; I1 -> I2; I1+I2 -> I3.
 I1 is blocked on both the spec approval (G1) and the phase-33 shared policy
