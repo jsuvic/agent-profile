@@ -2120,6 +2120,7 @@ finding promotion, and a provider-neutral external-review boundary.
 | I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                |
 | G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
 | I8  | Budget exhaustion degrades to NEEDS_CONTEXT     | ready      | [008-reviewer-budget-exhaustion.md](docs/specs/phase-33/issues/008-reviewer-budget-exhaustion.md)        |
+| I9  | Guard the reviewer envelope field shapes        | ready      | [009-reviewer-field-shape-guard.md](docs/specs/phase-33/issues/009-reviewer-field-shape-guard.md)        |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
@@ -2730,6 +2731,30 @@ Compiler suite 501 tests, 0 failures; root `npm run check`, `verify:pack`, and
 goldens clean. The reviewer completed a full envelope with conformant field
 names on a 16-file change after failing twice on a 110-file one, which is the
 clearest evidence yet for keeping branches this size.
+
+I9 raised 2026-07-31 from the reviewer's own output on PR #141, and it is the
+first time the promotion table this phase just implemented was applied to this
+phase's own defect. The class is envelope non-conformance caused by an
+under-specified field shape, and this is its third occurrence: (1)
+`scope.domains[].state` for `applicability` and `manifestCovered` for
+`inspectedChangeManifest`, fixed by naming the exact scope keys; (2) budget
+exhaustion returning no envelope at all, owned by I8; (3) `location` emitted as
+a string where the validator requires a record. Under the table a third
+occurrence stops earning prose and demands a mechanical guard where practical,
+and one plainly is - so I9 asks for a test that derives the structured-field
+set from the validator itself and asserts the emitted prompt states each
+shape, rather than another sentence about `location` alone.
+
+Measured, not assumed: driving the reviewer's own envelope through
+`validateChangeRiskResultV1` returns `malformed fields` for the string
+`location` and accepts the same finding with `{ path, symbol }`. The review it
+carried was sound - eight findings, all reproduced, one of them a P1 - and a
+real orchestration would have discarded the whole thing as a malformed attempt
+and spent a transient retry. That is the cost being guarded against.
+
+Also recorded for I9: the same emitted sentence lists `evidence`, `safePath`,
+and `fingerprint` twice, once from `requiredFindingFields` and again in
+trailing prose.
 
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
