@@ -16,8 +16,10 @@ unnecessary source, secret-like values, or hidden reasoning.
 Commit one normalized `review-learning/v1` Markdown record per PR/change under
 `docs/review-learning/`; keep raw transcripts local and ignored. P1/P2 block,
 while each P3 receives one explicit disposition and P1/P2 omit disposition.
-Every record carries a closed `sourcePolicy`: `change-risk/v1` for reviews
-this workflow executed, or `legacy-external` for historical/external reviews,
+Every record carries a closed `sourcePolicy`: the current workflow-policy
+version (`change-risk/v1` when this ADR was accepted, `change-risk/v2` since
+the 2026-07-30 increment recorded in ADR 0027) for reviews this workflow
+executed, or `legacy-external` for historical/external reviews,
 which omit the execution-count fields instead of fabricating provenance.
 Promotion recurrence is keyed on a closed canonical category identity with
 alias normalization. Promote a first systemic P1 immediately, record and

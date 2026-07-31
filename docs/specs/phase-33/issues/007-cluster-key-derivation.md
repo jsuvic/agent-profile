@@ -24,7 +24,7 @@ component is `other`. It sits beside fingerprint normalization and is the
 single owner of cluster identity.
 
 Add the versioning rule's emission precondition to the policy source so the
-`change-risk/v1` retention is a stated, testable rule rather than a judgement
+`change-risk/v1` retention was a stated, testable rule rather than a judgement
 (ADR 0027).
 
 Render both vocabularies into the reviewer projection's result interface, so a
@@ -54,8 +54,10 @@ history - those are orchestration-owner data.
   `unsafeConditionClass`; and `other` in either component never clustering.
 - The reviewer projection carries both vocabularies and carries no cluster
   key, membership, count, or history. Projection tests prove both.
-- The emitted policy version is `change-risk/v1`, and the versioning rule's
-  emission precondition is stated in the policy source and tested.
+- The emitted policy version is `change-risk/v2` (`change-risk/v1` when this
+  brief was approved; incremented on 2026-07-30 once the first artifact had
+  been emitted), and the versioning rule's emission precondition is stated in
+  the policy source and tested.
 - `category` is absent from cluster-key derivation, proven by a test using two
   findings whose categories differ.
 
@@ -106,7 +108,9 @@ evaluate.
 
 Widens one existing closed vocabulary and adds one new one; adds a pure
 derivation function. No profile-schema change, no role-ID change, no budget
-change. The workflow-policy version stays `change-risk/v1` per ADR 0027.
+change. The workflow-policy version stayed `change-risk/v1` for this slice
+per ADR 0027; it advanced to `change-risk/v2` on 2026-07-30 after the first
+artifacts were emitted.
 
 ## Security impact
 

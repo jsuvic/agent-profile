@@ -17,11 +17,11 @@ one record per reviewed PR/change. Records include version/date/snapshot,
 reviewer surface, attempt counts, round outcomes, fingerprints, evidence,
 closed resolution, conditional P3 disposition, and terminal status. Every
 record carries a closed `sourcePolicy` naming the producing orchestration:
-`change-risk/v1` for runs this workflow executed (with required
+`change-risk/v2` for runs this workflow executed (with required
 invocation/attempt counts), or `legacy-external` only when the entire
 record's orchestration was outside this workflow — historical backfill or an
 external-only review. A local run that incorporates a validated external
-finding remains a `change-risk/v1` record and keeps its local counters; the
+finding remains a `change-risk/v2` record and keeps its local counters; the
 external contribution is marked per-round/per-finding with the parent
 `source: local | external` markers, never by downgrading the record's
 `sourcePolicy`. Raw review material is explicitly local and ignored.
@@ -52,7 +52,7 @@ only and are never loaded wholesale into clean-room reviewer context.
 - Generated skills reference the normalized record, not an implementation
   report or free-form diary.
 - Fixtures cover clean, no-progress, and needs-human-review for
-  `change-risk/v1` records and `external-only` for `legacy-external`
+  `change-risk/v2` records and `external-only` for `legacy-external`
   records, plus both `sourcePolicy` values with their conditional execution
   fields and the exact `YYYY-MM-DD` UTC date boundary.
 - Closed values come from the I1 shared policy source's learning-record

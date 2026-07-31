@@ -9,7 +9,9 @@ import {
   getEnabledSubagents,
   getSelectedAdvisoryHookRoles,
   getSubagentDefaults,
+  getSubagentTemplate,
   getSubagentTemplateRefs,
+  resolveEffectiveSubagentPolicy,
   resolvePermissionPosture,
   REVIEWER_DEFINITIONS,
   SUBAGENT_TEMPLATE_NAMES,
@@ -65,6 +67,7 @@ import {
   deriveModelPolicyRoleOverrides,
   MODEL_POLICY_PRIMARY_ROLE,
 } from "./model-policy-target-adapter.js";
+import { resolveRoleMapping } from "./subagent-mapping.js";
 import {
   buildClaudeAdvisoryHooksValue,
   getAdvisoryHookNotes,
@@ -76,12 +79,18 @@ import {
 } from "./hooks.js";
 import {
   disablesModelInvocation,
+  emitsFinalReview,
   excludedDelegationSkills,
   resolveEmittedSkills,
   resolveSelectedSkills,
   type SkillId,
 } from "./skill-selection.js";
 import { buildClientMappingReport } from "./permission-mapping.js";
+import {
+  changeRiskLearningRecordProjection,
+  changeRiskOrchestrationProjection,
+  changeRiskReviewerProjection,
+} from "./change-risk-policy.js";
 
 type TemplateSource = {
   id: string;
@@ -538,7 +547,7 @@ function mergeTemplates(
 }
 
 export function getSubagentTemplates(profile: AiProfile): TemplateDescriptor[] {
-  const agents = getEnabledSubagents(profile);
+  const agents = getSubagentsForRiskReviewerTarget(profile);
 
   if (agents.length === 0) {
     return [];
@@ -549,27 +558,43 @@ export function getSubagentTemplates(profile: AiProfile): TemplateDescriptor[] {
 
   if (profile.clients.claude.enabled) {
     for (const agent of agents) {
+      const renderedAgent = withChangeRiskReviewerReference(
+        agent,
+        ".claude/references/change-risk-reviewer.md",
+      );
       templates.push({
         id: `targets/claude-subagents/${agent.name}@1`,
         target: "claude-subagents",
         version: "1",
         sha256: sha256Hex(
-          normalizeGeneratedText(renderClaudeSubagent(agent, effective)),
+          normalizeGeneratedText(
+            renderClaudeSubagent(renderedAgent, effective),
+          ),
         ),
       });
+    }
+    if (agents.some((agent) => agent.name === "change-risk-reviewer")) {
+      templates.push(changeRiskReviewerReferenceTemplate("claude-subagents"));
     }
   }
 
   if (profile.clients.codex.enabled) {
     for (const agent of agents) {
+      const renderedAgent = withChangeRiskReviewerReference(
+        agent,
+        ".codex/references/change-risk-reviewer.md",
+      );
       templates.push({
         id: `targets/codex-subagents/${agent.name}@1`,
         target: "codex-subagents",
         version: "1",
         sha256: sha256Hex(
-          normalizeGeneratedText(renderCodexSubagent(agent, effective)),
+          normalizeGeneratedText(renderCodexSubagent(renderedAgent, effective)),
         ),
       });
+    }
+    if (agents.some((agent) => agent.name === "change-risk-reviewer")) {
+      templates.push(changeRiskReviewerReferenceTemplate("codex-subagents"));
     }
   }
 
@@ -653,7 +678,7 @@ ${enabledClients}
 
 - SDD: ${renderRequired(profile.workflow.sdd)}
 - TDD: ${renderRequired(profile.workflow.tdd)}
-- Final implementation review: ${renderRequired(profile.workflow.finalReview)}
+- Final implementation review: ${renderRequired(emitsFinalReview(profile))}
 ${codeReviewSection}${refactoringSection}${documentationSection}${memoryGuidanceSection}${loggingGuidanceSection}${subagentPolicySection}
 ## Permissions
 
@@ -774,9 +799,9 @@ function renderTarget(
       ];
     }
     case "codex-subagents":
-      return renderCodexSubagentFiles(profile);
+      return renderCodexSubagentFiles(profile, previousModelPolicy);
     case "claude-subagents":
-      return renderClaudeSubagentFiles(profile);
+      return renderClaudeSubagentFiles(profile, previousModelPolicy);
     case "tabnine-subagents":
       return renderTabnineSubagentFiles(profile);
     case "codex-workflow-skills":
@@ -987,7 +1012,7 @@ function renderTabnineGuidelines(
     );
   }
 
-  if (profile.workflow.finalReview) {
+  if (emitsFinalReview(profile)) {
     files.push(
       createGeneratedTextFile(
         ".tabnine/guidelines/90-final-review.md",
@@ -1008,6 +1033,11 @@ function renderWorkflowSkillFiles(
 ): GeneratedFile[] {
   const selected = resolveEmittedSkills(profile);
   const selectedSet = new Set(selected);
+  const changeRiskEnabled =
+    profile.workflow.subagentDrivenDevelopment === true &&
+    profile.capabilities?.delegation?.subagents?.enabled === true &&
+    (profile.clients.codex.enabled === true ||
+      profile.clients.claude.enabled === true);
   const loggingOn = profile.workflow.loggingGuidance === true;
   return selected.map((skill) =>
     createGeneratedTextFile(
@@ -1016,7 +1046,7 @@ function renderWorkflowSkillFiles(
       getWorkflowSkillTemplateId(target, skill),
       applyModelInvocationPolicy(
         applyLoggingEnforcementToSkill(
-          renderWorkflowSkill(skill, selectedSet),
+          renderWorkflowSkill(skill, selectedSet, changeRiskEnabled),
           skill,
           loggingOn,
         ),
@@ -1062,6 +1092,7 @@ function getWorkflowSkillTemplateId(
 function renderWorkflowSkill(
   skill: SkillId,
   selectedSkills: ReadonlySet<SkillId> = new Set(),
+  changeRiskEnabled = false,
 ): string {
   switch (skill) {
     case "grill-change":
@@ -1408,14 +1439,128 @@ description: Use before handing off an implementation to compare the diff agains
 3. Confirm tests and golden tests were run when applicable.
 4. Check generated outputs for deterministic formatting and intentional fixture changes.
 5. Check that no literal secrets, production access, unsafe auto-approval, source upload, or automatic dependency installation were introduced.
-6. Report remaining risks, TODOs, and documentation gaps.
+6. Report remaining risks, TODOs, and documentation gaps.${changeRiskEnabled ? " When change-risk review applies, validate the closed snapshot-bound `ChangeRiskOrchestrationStateV1` handoff from `subagent-driven-change`; accept a terminal result only when its snapshot matches the final snapshot modulo `docs/review-learning/`, and do not run another review or interpret prose state." : ""}
 
 ## Output
 
 Return a concise final review with spec compliance, tests run, contract impact, security impact, and remaining risks.
 `;
     case "subagent-driven-change":
-      return `---
+      return changeRiskEnabled
+        ? renderSubagentDrivenChangeSkill()
+        : renderSubagentDrivenChangeSkillLegacy();
+    case "implement-next":
+      return changeRiskEnabled
+        ? renderImplementNextSkill()
+        : renderImplementNextSkillLegacy();
+    case "review-change":
+      return renderReviewChangeSkill(selectedSkills);
+    case "security-review":
+    case "readability-review":
+    case "test-review":
+    case "architecture-review": {
+      const rendered = renderSpecialistReviewSkill(skill);
+      if (rendered === undefined) {
+        throw new Error(`No specialist skill renderer for ${skill}`);
+      }
+      return rendered;
+    }
+    case "loop-implement-test-fix":
+    case "loop-review-patch-retest":
+    case "loop-security-patch-retest":
+    case "loop-docs-update":
+    case "loop-sdd-cycle": {
+      const rendered = renderLoopSkillContent(skill, selectedSkills);
+      if (rendered === undefined) {
+        throw new Error(`Missing loop skill content for ${skill}.`);
+      }
+      return rendered;
+    }
+    case "mcp-fit-check":
+      return renderMcpFitCheckSkill();
+  }
+}
+
+function renderSubagentDrivenChangeSkill(): string {
+  const orchestration = changeRiskOrchestrationProjection();
+  const learning = changeRiskLearningRecordProjection();
+  const ownerRules = [
+    `at most ${orchestration.budgets.maxFixRounds} fix rounds, ${orchestration.budgets.maxLogicalInvocations} completed logical reviews, and ${orchestration.budgets.maxTransientRetriesPerInvocation} transient retries per logical invocation.`,
+    `Run at most ${orchestration.budgets.maxFinalCleanRoomConfirmations} confirmation invocations; a confirmation must be a distinct later clean-room review and cannot be claimed by the initial review.`,
+    "Preserve missingInputs from NEEDS_CONTEXT; unavailable or forbidden context escalates immediately instead of consuming retries.",
+    "After CLEAN, only a validated external blocker or a changed snapshot may reopen orchestration.",
+    "Reset transient retries before final confirmation so prior malformed attempts do not consume its retry allowance.",
+    ...orchestration.transitions.retry,
+    ...orchestration.transitions.nonProgress,
+    ...orchestration.transitions.clustering,
+    ...orchestration.transitions.noOpenBlockerTerminal,
+    ...orchestration.transitions.validatedExternalBlocker,
+    ...orchestration.transitions.confirmationTriggers.map(
+      (trigger) => `Require final clean-room confirmation: ${trigger}.`,
+    ),
+    ...orchestration.transitions.escalation,
+  ];
+  return `---
+name: subagent-driven-change
+description: Use when a scoped implementation can be delegated to an implementation subagent and then independently reviewed for spec compliance before code quality.
+---
+
+<!-- Generated by Agent Profile Compiler. Do not edit by hand. -->
+
+# Subagent-Driven Change
+
+## Preconditions
+
+Use this workflow only when the task has a clear spec, acceptance criteria, and file ownership. Keep tightly coupled or architectural decisions in the parent session unless the user explicitly asks for delegation.
+
+Required subagents: \`implementer\`, \`spec-reviewer\`, \`code-quality-reviewer\`, and \`change-risk-reviewer\`.
+
+## Fresh Context
+
+Each subagent prompt must include the full task text, relevant spec excerpts, non-goals, acceptance criteria, file ownership, constraints, expected tests, and any command limits. Do not rely on hidden chat history or a previous subagent's memory.
+
+## Flow
+
+1. Dispatch \`implementer\` with one bounded task and the complete context it needs.
+2. If \`implementer\` returns \`BLOCKED\` or \`NEEDS_CONTEXT\`, resolve that before continuing.
+3. If \`implementer\` returns \`DONE_WITH_CONCERNS\`, read the concerns before review and decide whether to fix, narrow scope, or continue.
+4. Dispatch \`spec-reviewer\` with the original task, relevant spec excerpts, changed files, and implementer report.
+5. Fix or escalate every spec-review issue before requesting code-quality review.
+6. Dispatch \`code-quality-reviewer\` only after spec review reports compliance.
+7. Fix Critical and Important code-quality issues before handoff, or document why a finding is intentionally deferred.
+8. This surface alone owns the \`${orchestration.policyVersion}\` state machine. Invoke \`change-risk-reviewer\` only after code-quality review, keep its closed \`ChangeRiskOrchestrationStateV1\` handoff snapshot-bound, and never let a nested surface invoke it again for an unchanged snapshot.
+9. Initial review is clean-room; remediation supplies prior fingerprints and searches the complete updated snapshot; required final confirmation is clean-room again. ${orchestration.transitions.invalidation.join(" ")}
+10. Apply these bounded owner rules and preserve counters, actual snapshot IDs, and completed-round fingerprint and remediated-cluster-key history across resume:
+
+${ownerRules.map((rule) => `- ${rule}`).join("\n")}
+
+11. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
+12. When orchestration reaches any terminal status, persist exactly one normalized \`${learning.recordSchema.schemaVersion}\` record for this change under \`${learning.persistence.committedPathPrefix}\`, carrying \`sourcePolicy: ${learning.policyVersion}\` with its execution counters, per-round and per-finding \`source\` markers, cluster events, and the terminal status. Write the normalized record only: ${learning.redaction.join(" ")} Historical records feed promotion and evaluation only; never load them into initial or final clean-room reviewer context.
+13. After change-risk orchestration reaches terminal \`CLEAN\` and the required tests complete, invoke \`final-review\` against the validated handoff and current snapshot. Fix or escalate its findings before handoff.
+
+## Status Values
+
+Implementation worker status values: \`DONE\`, \`DONE_WITH_CONCERNS\`, \`BLOCKED\`, \`NEEDS_CONTEXT\`.
+
+Spec reviewer status values: \`COMPLIANT\`, \`ISSUES_FOUND\`, \`NEEDS_CONTEXT\`.
+
+Code-quality reviewer status values: \`ACCEPTABLE\`, \`ISSUES_FOUND\`, \`NEEDS_CONTEXT\`.
+
+## Safety
+
+- Do not ask subagents to commit, push, create branches, install dependencies, read secrets, contact production systems, or upload source unless the user explicitly requested that action.
+- Do not accept an implementation report without reading reviewer findings.
+- Do not run code-quality review before spec-compliance review passes.
+- Keep generated files deterministic and lockfile-tracked.
+
+## Output
+
+Final handoff must list what changed, tests run, contract impact, security impact, remaining risks or TODOs, and whether the spec acceptance criteria are fully met.
+`;
+}
+
+function renderSubagentDrivenChangeSkillLegacy(): string {
+  return `---
 name: subagent-driven-change
 description: Use when a scoped implementation can be delegated to an implementation subagent and then independently reviewed for spec compliance before code quality.
 ---
@@ -1464,8 +1609,65 @@ Code-quality reviewer status values: \`ACCEPTABLE\`, \`ISSUES_FOUND\`, \`NEEDS_C
 
 Final handoff must list what changed, tests run, contract impact, security impact, remaining risks or TODOs, and whether the spec acceptance criteria are fully met.
 `;
-    case "implement-next":
-      return `---
+}
+
+function renderImplementNextSkill(): string {
+  return `---
+name: implement-next
+description: Use after synthesis to dispatch the next ready task from the TASKS.md ledger through one subagent-driven implementation cycle, one task per invocation.
+---
+
+<!-- Generated by Agent Profile Compiler. Do not edit by hand. -->
+
+# Implement Next
+
+## Purpose
+
+Advance exactly one ready task from the \`TASKS.md\` ledger through a single implementation cycle, using its persisted issue brief as context. One invocation advances at most one task; it never iterates. Repeat the command for the next task.
+
+## Preconditions
+
+- \`TASKS.md\` exists and is an index-only ledger whose rows link to issue briefs.
+- If \`TASKS.md\` is missing or contains no \`ready\` task, stop and report the ledger state; do not invent work.
+
+## Flow
+
+1. Read \`TASKS.md\` and select the first task in state \`ready\`.
+   - Stop at a \`human-gate\` task and explain the approval it needs; do not proceed past it.
+   - Skip \`blocked\` and \`sequenced\` tasks; they are not ready.
+   - If no \`ready\` task exists, stop and report.
+2. Mark the selected task \`in-progress\` in \`TASKS.md\` through the client's write-approval flow.
+3. Load the linked issue brief and run \`subagent-driven-change\` with the brief as Fresh Context. Its owner runs \`code-quality-reviewer\` before \`change-risk-reviewer\`; initiate or resume the closed change-risk handoff and report its current state, but do not independently invoke another review, redefine budgets, or reset counters.
+4. Mark the task \`done\` only after the owner returns a validated terminal \`CLEAN\` handoff and required tests run green. Validate the closed \`ChangeRiskOrchestrationStateV1\` record; its snapshot matches the current snapshot (modulo \`docs/review-learning/\`) and its terminal status is \`CLEAN\`. Do not infer completion from free-form prose or an unvalidated status. The next task requires a new invocation.
+5. If the validated handoff reports \`NO_PROGRESS\` or \`NEEDS_HUMAN_REVIEW\`, report that outcome and its required escalation; do not mark the task \`done\` or start another review. Keep the task out of \`done\` until a human resolves the escalation.
+
+## Failure Path
+
+Stop and report \`BLOCKED\` when any of these holds:
+
+- \`implementer\` returns \`BLOCKED\` or \`NEEDS_CONTEXT\`,
+- a review finding cannot be resolved within the brief's scope,
+- GREEN is unreachable within the brief's declared seam.
+
+On failure, mark the task \`blocked\` in \`TASKS.md\` with a one-line reason; if the declared seam was wrong, include why it failed. Then stop. Do not touch the next task, do not edit the brief, and do not continue to another task. A human decides whether to edit the brief, re-grill, or split the task, and flips the state back to \`ready\`.
+
+## Output
+
+Report the selected task, the state transitions applied, the subagent results, the tests run, the change-risk handoff status when applicable, and the final state (\`done\` or \`blocked\` with its one-line reason).
+
+## Safety
+
+- Do not upload source code.
+- Do not read or print secrets.
+- Do not iterate across tasks; one invocation advances at most one task.
+- Do not self-approve; all writes, commits, and destructive steps go through the client's write-approval flow.
+- Do not edit issue briefs or advance a task that failed.
+- Do not propose \`bypassPermissions\`, tool pre-approval, dependency auto-installation, hosted execution, or remote MCP behavior.
+`;
+}
+
+function renderImplementNextSkillLegacy(): string {
+  return `---
 name: implement-next
 description: Use after synthesis to dispatch the next ready task from the TASKS.md ledger through one subagent-driven implementation cycle, one task per invocation.
 ---
@@ -1516,32 +1718,6 @@ Report the selected task, the state transitions applied, the subagent results, t
 - Do not edit issue briefs or advance a task that failed.
 - Do not propose \`bypassPermissions\`, tool pre-approval, dependency auto-installation, hosted execution, or remote MCP behavior.
 `;
-    case "review-change":
-      return renderReviewChangeSkill(selectedSkills);
-    case "security-review":
-    case "readability-review":
-    case "test-review":
-    case "architecture-review": {
-      const rendered = renderSpecialistReviewSkill(skill);
-      if (rendered === undefined) {
-        throw new Error(`Missing specialist review content for ${skill}.`);
-      }
-      return rendered;
-    }
-    case "loop-implement-test-fix":
-    case "loop-review-patch-retest":
-    case "loop-security-patch-retest":
-    case "loop-docs-update":
-    case "loop-sdd-cycle": {
-      const rendered = renderLoopSkillContent(skill, selectedSkills);
-      if (rendered === undefined) {
-        throw new Error(`Missing loop skill content for ${skill}.`);
-      }
-      return rendered;
-    }
-    case "mcp-fit-check":
-      return renderMcpFitCheckSkill();
-  }
 }
 
 function renderGeneralAgentBehaviorGuideline(profile: AiProfile): string {
@@ -1871,7 +2047,9 @@ function renderCodexPrimaryModelLines(
     roleOverrides,
     previousModelPolicy,
   );
-  const primaryRow = table.find((row) => row.role === MODEL_POLICY_PRIMARY_ROLE);
+  const primaryRow = table.find(
+    (row) => row.role === MODEL_POLICY_PRIMARY_ROLE,
+  );
   if (!primaryRow || primaryRow.codex.model === undefined) {
     return "";
   }
@@ -1881,34 +2059,256 @@ model_reasoning_effort = "${escapeTomlString(primaryRow.codex.targetEffort)}"
 `;
 }
 
-function renderClaudeSubagentFiles(profile: AiProfile): GeneratedFile[] {
-  const agents = getEnabledSubagents(profile);
+function renderClaudeSubagentFiles(
+  profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
+): GeneratedFile[] {
+  const agents = getSubagentsForRiskReviewerTarget(profile);
   const effective = deriveEffectivePermissions(profile);
   const loggingOn = profile.workflow.loggingGuidance === true;
+  const reviewerModel = resolveChangeRiskReviewerModel(
+    profile,
+    previousModelPolicy,
+  );
 
-  return agents.map((agent) =>
+  const files = agents.map((agent) =>
     createGeneratedTextFile(
       `.claude/agents/${agent.name}.md`,
       "claude-subagents",
       `targets/claude-subagents/${agent.name}@1`,
-      renderClaudeSubagent(withLoggingEnforcement(agent, loggingOn), effective),
+      renderClaudeSubagent(
+        withLoggingEnforcement(
+          withChangeRiskReviewerReference(
+            agent,
+            ".claude/references/change-risk-reviewer.md",
+          ),
+          loggingOn,
+        ),
+        effective,
+        agent.name === "change-risk-reviewer"
+          ? reviewerModel?.claude
+          : undefined,
+      ),
     ),
   );
+  if (agents.some((agent) => agent.name === "change-risk-reviewer")) {
+    files.push(
+      createGeneratedTextFile(
+        ".claude/references/change-risk-reviewer.md",
+        "claude-subagents",
+        "targets/claude-subagents/change-risk-reviewer-reference@1",
+        renderChangeRiskReviewerReference(),
+      ),
+    );
+  }
+  return files;
 }
 
-function renderCodexSubagentFiles(profile: AiProfile): GeneratedFile[] {
-  const agents = getEnabledSubagents(profile);
+function renderCodexSubagentFiles(
+  profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
+): GeneratedFile[] {
+  const agents = getSubagentsForRiskReviewerTarget(profile);
   const effective = deriveEffectivePermissions(profile);
   const loggingOn = profile.workflow.loggingGuidance === true;
+  const reviewerModel = resolveChangeRiskReviewerModel(
+    profile,
+    previousModelPolicy,
+  );
 
-  return agents.map((agent) =>
+  const files = agents.map((agent) =>
     createGeneratedTextFile(
       `.codex/agents/${agent.name}.toml`,
       "codex-subagents",
       `targets/codex-subagents/${agent.name}@1`,
-      renderCodexSubagent(withLoggingEnforcement(agent, loggingOn), effective),
+      renderCodexSubagent(
+        withLoggingEnforcement(
+          withChangeRiskReviewerReference(
+            agent,
+            ".codex/references/change-risk-reviewer.md",
+          ),
+          loggingOn,
+        ),
+        effective,
+        agent.name === "change-risk-reviewer"
+          ? reviewerModel?.codex
+          : undefined,
+      ),
     ),
   );
+  if (agents.some((agent) => agent.name === "change-risk-reviewer")) {
+    files.push(
+      createGeneratedTextFile(
+        ".codex/references/change-risk-reviewer.md",
+        "codex-subagents",
+        "targets/codex-subagents/change-risk-reviewer-reference@1",
+        renderChangeRiskReviewerReference(),
+      ),
+    );
+  }
+  return files;
+}
+
+type ChangeRiskReviewerTargetModel = Readonly<{
+  codex: Readonly<{ model: string; effort: string }>;
+  claude: Readonly<{ model: string; effort: string }>;
+}>;
+
+/** Resolve the generated reviewer through the existing critical-reviewer role. */
+function resolveChangeRiskReviewerModel(
+  profile: AiProfile,
+  previousModelPolicy?: LockModelPolicyV2,
+): ChangeRiskReviewerTargetModel | undefined {
+  const policy = profile.subagentPolicy;
+  if (policy?.enabled !== true) return undefined;
+
+  if (policy.preset !== undefined) {
+    const roleOverrides = deriveModelPolicyRoleOverrides(policy.roles);
+    const row = buildModelPolicyTargetTable(
+      policy.preset,
+      roleOverrides,
+      previousModelPolicy,
+    ).find((candidate) => candidate.role === "critical-reviewer");
+    if (row?.codex.model === undefined || row.claude.model === undefined) {
+      return undefined;
+    }
+    return {
+      codex: { model: row.codex.model, effort: row.codex.targetEffort },
+      claude: { model: row.claude.model, effort: row.claude.targetEffort },
+    };
+  }
+
+  const role =
+    resolveEffectiveSubagentPolicy(policy)?.roles["critical-reviewer"];
+  if (role === undefined) return undefined;
+  const resolved = resolveRoleMapping(
+    role.capability,
+    role.effort,
+    role.overrides,
+  );
+  return {
+    codex: {
+      model: resolved.codex.model,
+      effort: resolved.codex.reasoningEffort,
+    },
+    claude: { model: resolved.claude.model, effort: resolved.claude.effort },
+  };
+}
+
+function getSubagentsForRiskReviewerTarget(
+  profile: AiProfile,
+): AiProfileSubagent[] {
+  const agents = getEnabledSubagents(profile);
+  if (
+    profile.workflow.subagentDrivenDevelopment !== true ||
+    profile.capabilities?.delegation?.subagents?.enabled !== true
+  ) {
+    return agents;
+  }
+
+  return [...agents, createChangeRiskReviewer()];
+}
+
+/**
+ * The change-risk reviewer inspects the complete accumulated change and its
+ * reachable unchanged consumers, reads its own domain reference file, and runs
+ * focused tests for runtime evidence - a strict superset of what the per-task
+ * reviewers do. Its budget is therefore the largest budget any read-only peer
+ * reviewer gets, derived from the property that makes them peers rather than
+ * from a hand-listed name, so adding or raising a read-only template cannot
+ * leave the broader reviewer with less room than a narrower one. A truncated
+ * review returns no envelope at all, which the orchestration can only classify
+ * as an invalid attempt.
+ */
+const CHANGE_RISK_REVIEWER_MAX_TURNS = Math.max(
+  ...SUBAGENT_TEMPLATE_NAMES.map((name) => getSubagentTemplate(name)).flatMap(
+    (template) =>
+      template.toolScope === "read-only" && template.maxTurns !== undefined
+        ? [template.maxTurns]
+        : [],
+  ),
+);
+
+function createChangeRiskReviewer(): AiProfileSubagent {
+  const policy = changeRiskReviewerProjection();
+  const bullets = (items: readonly string[]) =>
+    items.map((item) => `- ${item}`).join("\n");
+  const domains = policy.domainRubric
+    .map(
+      (domain) =>
+        `- \`${domain.domain}\`: ${domain.name}. ${domain.applicability}`,
+    )
+    .join("\n");
+  const result = policy.resultInterface;
+  const quotedList = (items: readonly string[], join: string) =>
+    items.map((item) => "`" + item + "`").join(join);
+  const scopeKeys = quotedList(result.scopeFields, ", ");
+  const domainEntryKeys = quotedList(result.domainEntryFields, ", ");
+  const applicabilityValues = quotedList(
+    result.domainApplicabilityValues,
+    " or ",
+  );
+
+  return {
+    name: "change-risk-reviewer",
+    description:
+      "Independently review the complete accumulated change and reachable consumers for product-risk gaps.",
+    purpose:
+      "Perform the independent change-risk review using the critical-reviewer model-policy role.",
+    prompt: `# Change-Risk Review\n\nPolicy version: \`${policy.policyVersion}\`. Your provider-neutral model-policy role is \`critical-reviewer\`; use its target-native model and effort resolution.\n\n## Objective\n\n${policy.objective.statement}\n\n${bullets(policy.objective.authorityBoundary)}\n\n## Snapshot Access by Mode\n\nWhen the supplied mode is initial or final, do not use a prior finding list, implementer report, or prior praise. When the supplied mode is remediation, use only the supplied prior fingerprints as closure candidates and still inspect the complete updated snapshot independently. ${policy.snapshotAccess.completeness}\n\nInitial context is manifest-first, not an eager full-diff injection:\n\n${bullets(policy.snapshotAccess.initialContext)}\n\n${bullets(policy.snapshotAccess.inspectionRights)}\n\nWhen Bash is available, use it only for read-only \`git diff\` and related Git inspection, plus focused existing test commands required for runtime evidence. Test execution must not mutate repository source or generated artifacts. Do not install dependencies, use network access, or mutate repository state. If required proof cannot be obtained within these constraints, return \`NEEDS_CONTEXT\` with the missing input.\n\n## Closed Risk Domains\n\n${domains}\n\nDetailed rubrics are selectively loaded reference material; do not infer orchestration state, fix rounds, promotion rules, or learning-record requirements.\n\n## Result Contract\n\nReturn exactly one typed \`ChangeRiskResultV1\` envelope and no approval prose.\n\n- \`policyVersion\` is \`${result.policyVersion}\`; bind the envelope to the supplied \`snapshotId\`.\n- \`status\` is exactly \`${result.statuses.join(" | ")}\`.\n- \`scope\` has exactly the keys ${scopeKeys}. Each \`domains\` entry has ${domainEntryKeys}, where \`applicability\` is ${applicabilityValues} and \`reason\` is present only for a not-applicable domain. Use these key names exactly; the envelope is validated by key, so a synonym is a malformed attempt.\n- \`findings\` use priorities \`${result.priorities.join(" | ")}\`, categories \`${result.categories.join(" | ")}\`, affectedContractId \`${result.affectedContractIds.join(" | ")}\`, unsafeConditionClass \`${result.unsafeConditionClasses.join(" | ")}\`, resolutions \`${result.resolutions.join(" | ")}\`, P3 dispositions \`${result.p3Dispositions.join(" | ")}\`, and evidence kinds \`${result.evidenceKinds.join(" | ")}\`.\n- P3 disposition and resolution pairings are closed:\n${bullets(result.p3ResolutionRules)}\n- Evidence locators are closed by kind:\n${bullets(result.evidenceLocatorRules)}\n- Each finding contains ${result.requiredFindingFields.join(", ")}, concrete evidence, affected contract, safe path, and a stable fingerprint derived from ${result.fingerprintComponents.join(", ")}; trusted owner code normalizes the canonical serialized fingerprint from those components.\n- Initial and final clean-room reviews receive no prior fingerprints and every new finding uses resolution \`open\`. Remediation receives only supplied prior fingerprints; it may verify \`fixed\`, \`false-positive\`, or \`obsolete\` only when the finding fingerprint matches one of them, then it still searches the complete updated snapshot independently.\n- \`missingInputs\` is empty except for \`NEEDS_CONTEXT\`.\n- ${result.invalidAttemptRules.join(" ")}\n\n## Safety\n\n${bullets(policy.safetyConstraints)}`,
+    toolScope: "read-only",
+    modelPreference: "capable",
+    maxTurns: CHANGE_RISK_REVIEWER_MAX_TURNS,
+    timeoutMinutes: 8,
+    mcpServers: [],
+  };
+}
+
+function withChangeRiskReviewerReference(
+  agent: AiProfileSubagent,
+  path: string,
+): AiProfileSubagent {
+  if (agent.name !== "change-risk-reviewer") return agent;
+  return {
+    ...agent,
+    prompt:
+      `${agent.prompt}\n\n## Detailed Domain Reference\n\n` +
+      `Before completing the review, load \`${path}\` and apply its known ` +
+      "failure patterns and evidence expectations for every applicable domain.",
+  };
+}
+
+function renderChangeRiskReviewerReference(): string {
+  const policy = changeRiskReviewerProjection();
+  const sections = policy.domainRubric.map(
+    (entry) =>
+      `## \`${entry.domain}\`: ${entry.name}\n\n` +
+      `${entry.applicability}\n\n` +
+      "### Known failure patterns\n\n" +
+      entry.failurePatterns.map((pattern) => `- ${pattern}`).join("\n") +
+      "\n\n### Evidence expectations\n\n" +
+      entry.evidenceExpectations
+        .map((expectation) => `- ${expectation}`)
+        .join("\n"),
+  );
+  return (
+    `# Change-Risk Reviewer Domain Reference\n\n` +
+    `Policy version: \`${policy.policyVersion}\`.\n\n` +
+    sections.join("\n\n")
+  );
+}
+
+function changeRiskReviewerReferenceTemplate(
+  target: "claude-subagents" | "codex-subagents",
+): TemplateDescriptor {
+  return {
+    id: `targets/${target}/change-risk-reviewer-reference@1`,
+    target,
+    version: "1",
+    sha256: sha256Hex(
+      normalizeGeneratedText(renderChangeRiskReviewerReference()),
+    ),
+  };
 }
 
 /**
@@ -1977,12 +2377,20 @@ function titleCaseFromKebab(name: string): string {
 function renderClaudeSubagent(
   agent: AiProfileSubagent,
   effective: AiProfileEffectivePermissions,
+  targetModel?: Readonly<{ model: string; effort: string }>,
 ): string {
   const lines: string[] = ["---", `name: ${yamlScalarSafe(agent.name)}`];
   lines.push(`description: ${yamlScalarSafe(agent.description)}`);
 
   if (agent.toolScope === "read-only") {
-    lines.push("tools: Read, Glob, Grep");
+    const tools = ["Read", "Glob", "Grep"];
+    if (
+      agent.name === "change-risk-reviewer" &&
+      effective.shell.run !== "deny"
+    ) {
+      tools.push("Bash");
+    }
+    lines.push(`tools: ${tools.join(", ")}`);
   } else {
     // Workspace-write subagents need the tools required to do their work.
     // The Phase 13 contract aligns the tool allowlist with the Codex
@@ -2003,8 +2411,10 @@ function renderClaudeSubagent(
     lines.push(`tools: ${tools.join(", ")}`);
   }
 
-  const model = agent.modelPreference ?? "inherit";
-  lines.push(`model: ${model === "inherit" ? "inherit" : "inherit"}`);
+  lines.push(`model: ${yamlScalarSafe(targetModel?.model ?? "inherit")}`);
+  if (targetModel !== undefined) {
+    lines.push(`effort: ${targetModel.effort}`);
+  }
 
   if (agent.toolScope === "read-only") {
     lines.push("permissionMode: plan");
@@ -2030,6 +2440,7 @@ function renderClaudeSubagent(
 function renderCodexSubagent(
   agent: AiProfileSubagent,
   effective: AiProfileEffectivePermissions,
+  targetModel?: Readonly<{ model: string; effort: string }>,
 ): string {
   const lines: string[] = [
     "# Generated by Agent Profile Compiler. Do not edit by hand.",
@@ -2045,6 +2456,13 @@ function renderCodexSubagent(
     lines.push(`sandbox_mode = "workspace-write"`);
   } else {
     lines.push(`sandbox_mode = "read-only"`);
+  }
+
+  if (targetModel !== undefined) {
+    lines.push(`model = "${escapeTomlString(targetModel.model)}"`);
+    lines.push(
+      `model_reasoning_effort = "${escapeTomlString(targetModel.effort)}"`,
+    );
   }
 
   if (agent.prompt.includes(`"""`)) {
@@ -2519,13 +2937,27 @@ function getRequiredTemplateIds(
         "claude-workflow-skills",
       );
     case "claude-subagents":
-      return getEnabledSubagents(profile).map(
-        (agent) => `targets/claude-subagents/${agent.name}@1`,
-      );
+      return [
+        ...getSubagentsForRiskReviewerTarget(profile).map(
+          (agent) => `targets/claude-subagents/${agent.name}@1`,
+        ),
+        ...(getSubagentsForRiskReviewerTarget(profile).some(
+          (agent) => agent.name === "change-risk-reviewer",
+        )
+          ? ["targets/claude-subagents/change-risk-reviewer-reference@1"]
+          : []),
+      ];
     case "codex-subagents":
-      return getEnabledSubagents(profile).map(
-        (agent) => `targets/codex-subagents/${agent.name}@1`,
-      );
+      return [
+        ...getSubagentsForRiskReviewerTarget(profile).map(
+          (agent) => `targets/codex-subagents/${agent.name}@1`,
+        ),
+        ...(getSubagentsForRiskReviewerTarget(profile).some(
+          (agent) => agent.name === "change-risk-reviewer",
+        )
+          ? ["targets/codex-subagents/change-risk-reviewer-reference@1"]
+          : []),
+      ];
     case "tabnine-subagents":
       return getTabnineSubagents(profile)
         .filter((agent) => agent.toolScope === "read-only")
@@ -2629,7 +3061,7 @@ function getRequiredTabnineGuidelineTemplateIds(profile: AiProfile): string[] {
   if (profile.subagentPolicy?.enabled === true) {
     ids.push("targets/tabnine-guidelines/87-subagent-task-capsules@1");
   }
-  if (profile.workflow.finalReview) {
+  if (emitsFinalReview(profile)) {
     ids.push("targets/tabnine-guidelines/90-final-review@1");
   }
 

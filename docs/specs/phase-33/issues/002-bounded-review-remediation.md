@@ -29,7 +29,7 @@ The owning surface tracks logical invocations, transient attempts, snapshots,
 fingerprints, blocker counts, fix rounds, budget reservation for required
 confirmation, clean-result invalidation, required confirmation,
 result-envelope validity, terminal-trigger precedence, and terminal
-escalation using `change-risk/v1`.
+escalation using `change-risk/v2`.
 
 ## Non-goals
 

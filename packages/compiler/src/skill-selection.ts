@@ -214,14 +214,36 @@ export function hasDelegationCapableClient(clients: {
  * template-id resolution both route through this so files and lockfile stay in
  * step.
  */
-export function resolveEmittedSkills(profile: AiProfile): SkillId[] {
-  const skills = resolveSelectedSkills(profile);
-  if (
-    hasDelegationCapableClient({
+/**
+ * Whether this profile runs a final implementation review in practice: the
+ * declared flag, or a qualifying subagent-driven workflow, which mandates the
+ * review after change-risk review regardless of the flag. Every surface that
+ * emits, states, or cross-references the review reads this one predicate, so
+ * the skill, the instruction files, and the Tabnine guideline cannot disagree.
+ */
+export function emitsFinalReview(profile: AiProfile): boolean {
+  return (
+    profile.workflow.finalReview === true ||
+    (hasDelegationCapableClient({
       codex: profile.clients.codex.enabled,
       claude: profile.clients.claude.enabled,
-    })
-  ) {
+    }) &&
+      profile.workflow.subagentDrivenDevelopment === true &&
+      profile.capabilities?.delegation?.subagents?.enabled === true)
+  );
+}
+
+export function resolveEmittedSkills(profile: AiProfile): SkillId[] {
+  const selected = new Set(resolveSelectedSkills(profile));
+  const delegationCapable = hasDelegationCapableClient({
+    codex: profile.clients.codex.enabled,
+    claude: profile.clients.claude.enabled,
+  });
+  if (emitsFinalReview(profile) && delegationCapable) {
+    selected.add("final-review");
+  }
+  const skills = SKILL_ORDER.filter((skill) => selected.has(skill));
+  if (delegationCapable) {
     return skills;
   }
   return skills.filter(

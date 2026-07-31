@@ -14,7 +14,7 @@ description: Use before handing off an implementation to compare the diff agains
 3. Confirm tests and golden tests were run when applicable.
 4. Check generated outputs for deterministic formatting and intentional fixture changes.
 5. Check that no literal secrets, production access, unsafe auto-approval, source upload, or automatic dependency installation were introduced.
-6. Report remaining risks, TODOs, and documentation gaps.
+6. Report remaining risks, TODOs, and documentation gaps. When change-risk review applies, validate the closed snapshot-bound `ChangeRiskOrchestrationStateV1` handoff from `subagent-driven-change`; accept a terminal result only when its snapshot matches the final snapshot modulo `docs/review-learning/`, and do not run another review or interpret prose state.
 7. Confirm debug output added during the change was removed and any new error paths carry a stable event code, per the project's Logging Guidance convention.
 
 ## Output

@@ -1,0 +1,1208 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Agent Profile Compiler contributors
+
+import {
+  CHANGE_RISK_LIMITS,
+  CHANGE_RISK_POLICY_VERSION,
+  CHANGE_RISK_CONTRACT_IDS,
+  CHANGE_RISK_UNSAFE_CONDITION_CLASSES,
+  deriveChangeRiskClusterKey,
+  isHighRiskChange,
+  validateChangeRiskResultV1,
+  type ChangeRiskContractId,
+  type ChangeRiskManifestEntry,
+  type ChangeRiskUnsafeConditionClass,
+} from "./change-risk-policy.js";
+
+/** The closed, snapshot-bound handoff persisted by the orchestration owner. */
+export type ChangeRiskOrchestrationStateV1 = Readonly<{
+  policyVersion: typeof CHANGE_RISK_POLICY_VERSION;
+  snapshotId: string;
+  status: "ACTIVE" | "CLEAN" | "NO_PROGRESS" | "NEEDS_HUMAN_REVIEW";
+  logicalInvocations: number;
+  fixRounds: number;
+  transientAttempts: number;
+  confirmationInvocations: number;
+  awaitingFinalConfirmation: boolean;
+  cleanReviewInvocations: number;
+  initialLocalReviewCompleted: boolean;
+  confirmationRequired: boolean;
+  confirmationSatisfied: boolean;
+  highRisk: boolean;
+  missingInputs: readonly string[];
+  lastBlockerReviewSnapshotId?: string;
+  lastLocalReviewSnapshotId?: string;
+  activeUnresolvedFingerprints: readonly string[];
+  /**
+   * Index of the first completed round the active checkpoint accumulates from.
+   * It advances only when a validated clean review closes every prior round,
+   * so a handoff cannot silently drop an open blocker round.
+   */
+  activeCheckpointFromRound: number;
+  completedRounds: readonly Readonly<{
+    blockerCount: number;
+    /** How many of this round's blockers were P1, so the confirmation
+     * trigger stays derivable from the record after a resume. */
+    p1BlockerCount: number;
+    unresolvedFingerprints: readonly string[];
+    external?: true;
+    clusterMembers: readonly Readonly<{
+      fingerprint: string;
+      clusterKey: string;
+    }>[];
+    remediatedClusterKeys: readonly string[];
+  }>[];
+  /** Sticky: a P1 anywhere in this change forces a final confirmation. */
+  p1Observed: boolean;
+  requiredMechanicalGuardClusterKeys: readonly string[];
+  guardedClusterKeys: readonly string[];
+  impracticalMechanicalGuardClusterKeys: readonly string[];
+  impracticalMechanicalGuards: readonly Readonly<{
+    clusterKey: string;
+    rationale: string;
+    evidence: readonly string[];
+  }>[];
+  /** The evidence each introduced guard was accepted on, kept auditable. */
+  mechanicalGuards: readonly Readonly<{
+    clusterKey: string;
+    snapshotId: string;
+    evidence: readonly string[];
+  }>[];
+  batchedClusterKeys: readonly string[];
+}>;
+
+export type ChangeRiskOrchestrationEvent =
+  | Readonly<{ kind: "invalid-attempt" | "needs-context"; snapshotId: string }>
+  | Readonly<{
+      kind: "code-changed";
+      snapshotId: string;
+      manifest?: readonly ChangeRiskManifestEntry[];
+    }>
+  | Readonly<{
+      kind: "guard-added";
+      /** The snapshot that contains the guard; asserting one changes nothing. */
+      snapshotId: string;
+      clusterKey: string;
+      manifest?: readonly ChangeRiskManifestEntry[];
+      evidence?: readonly string[];
+    }>
+  | Readonly<{
+      kind: "guard-impractical";
+      snapshotId: string;
+      clusterKey: string;
+      rationale: string;
+      evidence: readonly string[];
+    }>
+  | Readonly<{
+      kind: "fix-applied";
+      /** The actual snapshot produced by the applied fix. */
+      snapshotId: string;
+      manifest?: readonly ChangeRiskManifestEntry[];
+      remediatedFindings: readonly ChangeRiskRemediatedFinding[];
+    }>;
+
+/** The only input from which the owner derives a cluster identity. */
+export type ChangeRiskClusterFinding = Readonly<{
+  affectedContractId: ChangeRiskContractId;
+  unsafeConditionClass: ChangeRiskUnsafeConditionClass;
+}>;
+
+export type ChangeRiskRemediatedFinding = Readonly<
+  ChangeRiskClusterFinding & { fingerprint?: string }
+>;
+
+export type ChangeRiskBlockerFinding = Readonly<
+  ChangeRiskClusterFinding & { fingerprint: string }
+>;
+
+export type ChangeRiskReviewFinding = Readonly<{
+  priority: "P1" | "P2" | "P3";
+  resolution: "open" | "fixed" | "false-positive" | "obsolete";
+  fingerprint: string;
+  disposition?:
+    "fixed" | "accepted-debt" | "follow-up" | "false-positive" | "obsolete";
+  affectedContractId?: ChangeRiskContractId;
+  unsafeConditionClass?: ChangeRiskUnsafeConditionClass;
+}>;
+
+export type ChangeRiskReviewResultEvent = Readonly<{
+  kind: "review-result";
+  /** The untrusted reviewer envelope; validity is derived, never asserted. */
+  result: unknown;
+  confirmation?: boolean;
+  /** False when requested context is unavailable or forbidden to disclose. */
+  contextAvailable?: boolean;
+}>;
+
+const validatedExternalReviewEvent = Symbol(
+  "validatedExternalChangeRiskReviewEvent",
+);
+
+export type ValidatedExternalChangeRiskReviewEvent = Readonly<
+  ChangeRiskReviewResultEvent & {
+    external: true;
+    evidence: readonly string[];
+    readonly [validatedExternalReviewEvent]: true;
+  }
+>;
+
+export function createValidatedExternalChangeRiskReviewEvent(
+  result: unknown,
+  evidence: readonly string[],
+): ValidatedExternalChangeRiskReviewEvent {
+  if (
+    !Array.isArray(evidence) ||
+    evidence.length === 0 ||
+    evidence.some((item) => !isNonEmptyString(item))
+  )
+    throw new TypeError("invalid external change-risk evidence");
+  const validated = validateChangeRiskResultV1(result);
+  if (
+    !validated.ok ||
+    validated.value.status !== "FINDINGS_FOUND" ||
+    !validated.value.findings.some(
+      (finding) =>
+        (finding.priority === "P1" || finding.priority === "P2") &&
+        finding.resolution === "open",
+    )
+  )
+    throw new TypeError("invalid external change-risk result");
+  return {
+    kind: "review-result",
+    result,
+    external: true,
+    evidence: unique(evidence),
+    [validatedExternalReviewEvent]: true,
+  };
+}
+
+/**
+ * A terminal/blocker transition can be created only after the closed reviewer
+ * envelope has been validated. A private symbol keeps this implementation
+ * detail out of the public event contract and prevents a free-form object
+ * from claiming reviewer authority at runtime.
+ */
+const validatedReviewEvent = Symbol("validatedChangeRiskReviewEvent");
+
+type ValidatedChangeRiskReviewEvent =
+  | Readonly<{
+      kind: "clean";
+      snapshotId: string;
+      confirmation?: boolean;
+      readonly [validatedReviewEvent]: true;
+    }>
+  | Readonly<{
+      kind: "blockers";
+      snapshotId: string;
+      findings: readonly Readonly<
+        ChangeRiskBlockerFinding & { priority: "P1" | "P2" }
+      >[];
+      external?: true;
+      readonly [validatedReviewEvent]: true;
+    }>;
+
+function isManifestInput(
+  value: readonly ChangeRiskManifestEntry[] | Readonly<{ highRisk?: boolean }>,
+): value is readonly ChangeRiskManifestEntry[] {
+  return Array.isArray(value);
+}
+
+export function createChangeRiskOrchestrationState(
+  snapshotId: string,
+): ChangeRiskOrchestrationStateV1;
+export function createChangeRiskOrchestrationState(
+  snapshotId: string,
+  legacyOptions: Readonly<{ highRisk?: boolean }>,
+): ChangeRiskOrchestrationStateV1;
+export function createChangeRiskOrchestrationState(
+  snapshotId: string,
+  manifest: readonly ChangeRiskManifestEntry[],
+): ChangeRiskOrchestrationStateV1;
+export function createChangeRiskOrchestrationState(
+  snapshotId: string,
+  classification:
+    readonly ChangeRiskManifestEntry[] | Readonly<{ highRisk?: boolean }> = {},
+): ChangeRiskOrchestrationStateV1 {
+  if (!isNonEmptyString(snapshotId))
+    throw new TypeError("invalid change-risk snapshot ID");
+  const highRisk = isManifestInput(classification)
+    ? isHighRiskChange(classification)
+    : true;
+  return {
+    policyVersion: CHANGE_RISK_POLICY_VERSION,
+    snapshotId,
+    status: "ACTIVE",
+    logicalInvocations: 0,
+    fixRounds: 0,
+    transientAttempts: 0,
+    confirmationInvocations: 0,
+    awaitingFinalConfirmation: false,
+    cleanReviewInvocations: 0,
+    initialLocalReviewCompleted: false,
+    confirmationRequired: false,
+    confirmationSatisfied: false,
+    highRisk,
+    missingInputs: [],
+    activeUnresolvedFingerprints: [],
+    activeCheckpointFromRound: 0,
+    completedRounds: [],
+    p1Observed: false,
+    requiredMechanicalGuardClusterKeys: [],
+    guardedClusterKeys: [],
+    impracticalMechanicalGuardClusterKeys: [],
+    impracticalMechanicalGuards: [],
+    mechanicalGuards: [],
+    batchedClusterKeys: [],
+  };
+}
+
+function unique(values: readonly string[]): readonly string[] {
+  return [...new Set(values)];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function hasUniqueNonEmptyStrings(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.every(isNonEmptyString) &&
+    new Set(value).size === value.length
+  );
+}
+
+function isClosedValue<T extends string>(
+  value: unknown,
+  values: readonly T[],
+): value is T {
+  return typeof value === "string" && values.includes(value as T);
+}
+
+function canonicalClusterKeys(): ReadonlySet<string> {
+  return new Set(
+    CHANGE_RISK_CONTRACT_IDS.flatMap((affectedContractId) =>
+      CHANGE_RISK_UNSAFE_CONDITION_CLASSES.flatMap((unsafeConditionClass) => {
+        const key = deriveChangeRiskClusterKey(
+          affectedContractId,
+          unsafeConditionClass,
+        );
+        return key === undefined ? [] : [key];
+      }),
+    ),
+  );
+}
+
+const CANONICAL_CLUSTER_KEYS = canonicalClusterKeys();
+
+function hasCanonicalClusterKeys(value: unknown): value is readonly string[] {
+  return (
+    hasUniqueNonEmptyStrings(value) &&
+    value.every((key) => CANONICAL_CLUSTER_KEYS.has(key))
+  );
+}
+
+export type ChangeRiskOrchestrationStateValidation =
+  | Readonly<{ ok: true; value: ChangeRiskOrchestrationStateV1 }>
+  | Readonly<{ ok: false; reason: string }>;
+
+/**
+ * Validate an untrusted serialized handoff before either resuming its owner
+ * or accepting its terminal outcome. This deliberately rejects impossible
+ * counter/history combinations instead of repairing or resetting them.
+ */
+export function validateChangeRiskOrchestrationStateV1(
+  value: unknown,
+  options: Readonly<{ expectedSnapshotId?: string }> = {},
+): ChangeRiskOrchestrationStateValidation {
+  if (
+    !isRecord(value) ||
+    value.policyVersion !== CHANGE_RISK_POLICY_VERSION ||
+    !isNonEmptyString(value.snapshotId) ||
+    (options.expectedSnapshotId !== undefined &&
+      value.snapshotId !== options.expectedSnapshotId) ||
+    !["ACTIVE", "CLEAN", "NO_PROGRESS", "NEEDS_HUMAN_REVIEW"].includes(
+      value.status as string,
+    ) ||
+    !isNonNegativeInteger(value.logicalInvocations) ||
+    !isNonNegativeInteger(value.fixRounds) ||
+    !isNonNegativeInteger(value.transientAttempts) ||
+    !isNonNegativeInteger(value.confirmationInvocations) ||
+    typeof value.awaitingFinalConfirmation !== "boolean" ||
+    !isNonNegativeInteger(value.cleanReviewInvocations) ||
+    typeof value.initialLocalReviewCompleted !== "boolean" ||
+    typeof value.confirmationRequired !== "boolean" ||
+    typeof value.confirmationSatisfied !== "boolean" ||
+    typeof value.highRisk !== "boolean" ||
+    typeof value.p1Observed !== "boolean" ||
+    !hasUniqueNonEmptyStrings(value.missingInputs) ||
+    (value.lastBlockerReviewSnapshotId !== undefined &&
+      !isNonEmptyString(value.lastBlockerReviewSnapshotId)) ||
+    (value.lastLocalReviewSnapshotId !== undefined &&
+      !isNonEmptyString(value.lastLocalReviewSnapshotId)) ||
+    !hasUniqueNonEmptyStrings(value.activeUnresolvedFingerprints) ||
+    !isNonNegativeInteger(value.activeCheckpointFromRound) ||
+    !Array.isArray(value.completedRounds) ||
+    !hasCanonicalClusterKeys(value.requiredMechanicalGuardClusterKeys) ||
+    !hasCanonicalClusterKeys(value.guardedClusterKeys) ||
+    !hasCanonicalClusterKeys(value.impracticalMechanicalGuardClusterKeys) ||
+    !hasCanonicalClusterKeys(value.batchedClusterKeys) ||
+    !Array.isArray(value.impracticalMechanicalGuards) ||
+    !Array.isArray(value.mechanicalGuards)
+  )
+    return { ok: false, reason: "malformed state" };
+  if (
+    value.logicalInvocations > CHANGE_RISK_LIMITS.maxLogicalInvocations ||
+    value.fixRounds > CHANGE_RISK_LIMITS.maxFixRounds ||
+    value.transientAttempts >
+      CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation + 1 ||
+    (value.transientAttempts >
+      CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation &&
+      value.status !== "NEEDS_HUMAN_REVIEW") ||
+    value.confirmationInvocations >
+      CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations ||
+    value.completedRounds.filter(
+      (round) => isRecord(round) && round.external !== true,
+    ).length +
+      value.cleanReviewInvocations !==
+      value.logicalInvocations ||
+    value.initialLocalReviewCompleted !== value.logicalInvocations > 0 ||
+    value.fixRounds > value.completedRounds.length ||
+    value.activeCheckpointFromRound > value.completedRounds.length ||
+    // Only a completed clean review can close every recorded round.
+    (value.activeCheckpointFromRound === value.completedRounds.length &&
+      value.completedRounds.length > 0 &&
+      value.cleanReviewInvocations === 0) ||
+    (value.lastBlockerReviewSnapshotId !== undefined &&
+      value.lastBlockerReviewSnapshotId !== value.snapshotId) ||
+    (value.lastLocalReviewSnapshotId !== undefined &&
+      value.lastLocalReviewSnapshotId !== value.lastBlockerReviewSnapshotId)
+  )
+    return { ok: false, reason: "invalid counters" };
+  if (
+    value.completedRounds.some((round) => {
+      if (
+        !isRecord(round) ||
+        !isNonNegativeInteger(round.blockerCount) ||
+        !hasUniqueNonEmptyStrings(round.unresolvedFingerprints) ||
+        round.blockerCount !== round.unresolvedFingerprints.length ||
+        !hasCanonicalClusterKeys(round.remediatedClusterKeys) ||
+        !isNonNegativeInteger(round.p1BlockerCount) ||
+        round.p1BlockerCount > round.blockerCount ||
+        (round.external !== undefined && round.external !== true)
+      )
+        return true;
+      // Cluster membership is required, not optional: an omitted array is
+      // indistinguishable from "nothing clusters here" and would silently
+      // erase the remediated history the guard trigger reads.
+      if (!Array.isArray(round.clusterMembers)) return true;
+      const unresolvedFingerprints =
+        round.unresolvedFingerprints as readonly string[];
+      const fingerprints = round.clusterMembers.flatMap((member) =>
+        isRecord(member) && isNonEmptyString(member.fingerprint)
+          ? [member.fingerprint]
+          : [],
+      );
+      return (
+        fingerprints.length !== round.clusterMembers.length ||
+        new Set(fingerprints).size !== fingerprints.length ||
+        round.clusterMembers.some(
+          (member) =>
+            !isRecord(member) ||
+            !isNonEmptyString(member.fingerprint) ||
+            !unresolvedFingerprints.includes(member.fingerprint) ||
+            !CANONICAL_CLUSTER_KEYS.has(member.clusterKey as string),
+        )
+      );
+    })
+  )
+    return { ok: false, reason: "invalid completed-round history" };
+  const candidate = value as ChangeRiskOrchestrationStateV1;
+  // The checkpoint is transition-consistent: it is exactly the unresolved
+  // fingerprints of the rounds it accumulates from - the latest local round
+  // plus every external round merged after it.
+  const checkpointFingerprints = new Set(
+    candidate.completedRounds
+      .slice(candidate.activeCheckpointFromRound)
+      .flatMap((round) => round.unresolvedFingerprints),
+  );
+  if (
+    candidate.activeUnresolvedFingerprints.length !==
+      checkpointFingerprints.size ||
+    candidate.activeUnresolvedFingerprints.some(
+      (fingerprint) => !checkpointFingerprints.has(fingerprint),
+    )
+  )
+    return { ok: false, reason: "invalid active blocker checkpoint" };
+  // A P1 recorded in the round history can never be un-observed on resume.
+  if (
+    !candidate.p1Observed &&
+    candidate.completedRounds.some((round) => round.p1BlockerCount > 0)
+  )
+    return { ok: false, reason: "invalid P1 history" };
+  if (
+    candidate.requiredMechanicalGuardClusterKeys.some((key) =>
+      candidate.guardedClusterKeys.includes(key),
+    ) ||
+    candidate.guardedClusterKeys.some((key) =>
+      candidate.impracticalMechanicalGuardClusterKeys.includes(key),
+    ) ||
+    candidate.impracticalMechanicalGuards.some(
+      (guard) =>
+        !isRecord(guard) ||
+        !CANONICAL_CLUSTER_KEYS.has(guard.clusterKey as string) ||
+        !isNonEmptyString(guard.rationale) ||
+        !hasUniqueNonEmptyStrings(guard.evidence) ||
+        !candidate.impracticalMechanicalGuardClusterKeys.includes(
+          guard.clusterKey as string,
+        ),
+    ) ||
+    candidate.mechanicalGuards.some(
+      (guard) =>
+        !isRecord(guard) ||
+        !CANONICAL_CLUSTER_KEYS.has(guard.clusterKey as string) ||
+        !isNonEmptyString(guard.snapshotId) ||
+        !hasUniqueNonEmptyStrings(guard.evidence) ||
+        guard.evidence.length === 0 ||
+        !candidate.guardedClusterKeys.includes(guard.clusterKey as string),
+    )
+  )
+    return { ok: false, reason: "contradictory guard history" };
+  const activeClusterMembers = candidate.completedRounds.flatMap((round) =>
+    round.clusterMembers.filter((member) =>
+      candidate.activeUnresolvedFingerprints.includes(member.fingerprint),
+    ),
+  );
+  if (
+    candidate.batchedClusterKeys.some(
+      (key) =>
+        activeClusterMembers.filter((member) => member.clusterKey === key)
+          .length < 3,
+    )
+  )
+    return { ok: false, reason: "invalid batched cluster history" };
+  if (
+    (value.status === "ACTIVE" && value.confirmationSatisfied) ||
+    (value.status === "CLEAN" &&
+      (!value.confirmationSatisfied ||
+        value.logicalInvocations === 0 ||
+        value.cleanReviewInvocations === 0 ||
+        (value.confirmationRequired && value.confirmationInvocations === 0) ||
+        (value.confirmationRequired &&
+          value.cleanReviewInvocations <= value.confirmationInvocations) ||
+        ((value.highRisk || value.fixRounds >= 2 || value.p1Observed) &&
+          !value.confirmationRequired) ||
+        value.activeUnresolvedFingerprints.length !== 0 ||
+        value.awaitingFinalConfirmation ||
+        value.transientAttempts !== 0 ||
+        value.missingInputs.length !== 0))
+  )
+    return { ok: false, reason: "invalid terminal confirmation" };
+  return { ok: true, value: candidate };
+}
+
+function requireValidState(value: unknown): ChangeRiskOrchestrationStateV1 {
+  const result = validateChangeRiskOrchestrationStateV1(value);
+  if (!result.ok)
+    throw new TypeError(
+      `invalid change-risk orchestration state: ${result.reason}`,
+    );
+  return result.value;
+}
+
+function deriveBlockerClusterKeys(
+  findings: readonly ChangeRiskBlockerFinding[],
+): readonly string[] {
+  if (
+    !Array.isArray(findings) ||
+    findings.some(
+      (finding) =>
+        !isRecord(finding) ||
+        !isNonEmptyString(finding.fingerprint) ||
+        !isClosedValue(finding.affectedContractId, CHANGE_RISK_CONTRACT_IDS) ||
+        !isClosedValue(
+          finding.unsafeConditionClass,
+          CHANGE_RISK_UNSAFE_CONDITION_CLASSES,
+        ) ||
+        "clusterKey" in finding,
+    )
+  )
+    throw new TypeError("invalid change-risk blockers");
+  return findings.flatMap((finding) => {
+    const key = deriveChangeRiskClusterKey(
+      finding.affectedContractId,
+      finding.unsafeConditionClass,
+    );
+    return key === undefined ? [] : [key];
+  });
+}
+
+function terminal(
+  state: ChangeRiskOrchestrationStateV1,
+  status: "NO_PROGRESS" | "NEEDS_HUMAN_REVIEW",
+): ChangeRiskOrchestrationStateV1 {
+  return { ...state, status };
+}
+
+function activeClusterMembersOf(state: ChangeRiskOrchestrationStateV1) {
+  return state.completedRounds.flatMap((round) =>
+    round.clusterMembers.filter((member) =>
+      state.activeUnresolvedFingerprints.includes(member.fingerprint),
+    ),
+  );
+}
+
+/**
+ * Every snapshot-changing remediation event - an ordinary fix or the
+ * mechanical guard a recurrence demands - is one fix round and is admitted and
+ * accounted identically. A guard that skipped this would be a free remediation
+ * change: it would bypass the fix-round cap, the budget reservation, and the
+ * two-fix confirmation trigger. A terminal status in the result means the
+ * round was refused.
+ */
+function admitFixRound(
+  state: ChangeRiskOrchestrationStateV1,
+  snapshotId: string,
+  manifest: readonly ChangeRiskManifestEntry[] | undefined,
+): ChangeRiskOrchestrationStateV1 {
+  if (state.status === "CLEAN") return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (manifest === undefined) return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (state.completedRounds.length === 0)
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  // Each fix round answers one completed blocker review. Two in a row would
+  // push `fixRounds` past the recorded history and hand back a state this
+  // module's own validator rejects.
+  if (state.fixRounds >= state.completedRounds.length)
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (state.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds)
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (!isNonEmptyString(snapshotId))
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  const nextHighRisk = isHighRiskChange(manifest);
+  const nextFixRounds = state.fixRounds + 1;
+  const confirmationAfterFix =
+    state.confirmationRequired ||
+    state.p1Observed ||
+    nextHighRisk ||
+    nextFixRounds >= 2;
+  const requiredReviewSlots = 1 + (confirmationAfterFix ? 1 : 0);
+  // Reserve remediation plus a final confirmation only when one is required.
+  if (
+    state.logicalInvocations + requiredReviewSlots >
+    CHANGE_RISK_LIMITS.maxLogicalInvocations
+  )
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  // The confirmation cap is a separate budget: a round that will inevitably
+  // require a confirmation the change can no longer fund never starts.
+  if (
+    confirmationAfterFix &&
+    state.confirmationInvocations >=
+      CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations
+  )
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  if (snapshotId === state.snapshotId) return terminal(state, "NO_PROGRESS");
+  const activeClusterKeys = unique(
+    activeClusterMembersOf(state).map((member) => member.clusterKey),
+  );
+  return {
+    ...state,
+    snapshotId,
+    highRisk: nextHighRisk,
+    fixRounds: nextFixRounds,
+    completedRounds: state.completedRounds.map((round, index) =>
+      index === state.completedRounds.length - 1
+        ? { ...round, remediatedClusterKeys: activeClusterKeys }
+        : round,
+    ),
+    batchedClusterKeys: [],
+    transientAttempts: 0,
+    missingInputs: [],
+    lastBlockerReviewSnapshotId: undefined,
+    lastLocalReviewSnapshotId: undefined,
+    awaitingFinalConfirmation: false,
+    confirmationSatisfied: false,
+  };
+}
+
+/**
+ * The owner-only transition function. It is deliberately pure so a resumed
+ * owner receives exactly the same decision from a JSON-round-tripped handoff.
+ */
+function transitionChangeRiskOrchestrationInternal(
+  serializedState: ChangeRiskOrchestrationStateV1,
+  event:
+    | ChangeRiskOrchestrationEvent
+    | ChangeRiskReviewResultEvent
+    | ValidatedExternalChangeRiskReviewEvent
+    | ValidatedChangeRiskReviewEvent,
+): ChangeRiskOrchestrationStateV1 {
+  const state = requireValidState(serializedState);
+  if (state.status === "NO_PROGRESS" || state.status === "NEEDS_HUMAN_REVIEW")
+    return state;
+  if (
+    (event.kind === "clean" || event.kind === "blockers") &&
+    event[validatedReviewEvent] !== true
+  ) {
+    return transitionChangeRiskOrchestrationInternal(state, {
+      kind: "invalid-attempt",
+      snapshotId: state.snapshotId,
+    });
+  }
+  if (event.kind === "review-result") {
+    const isExternal =
+      "external" in event &&
+      event.external === true &&
+      event[validatedExternalReviewEvent] === true;
+    if (state.status === "CLEAN" && !isExternal) return state;
+    if (
+      !isExternal &&
+      state.status === "ACTIVE" &&
+      !state.awaitingFinalConfirmation &&
+      state.lastLocalReviewSnapshotId === state.snapshotId
+    ) {
+      return transitionChangeRiskOrchestrationInternal(state, {
+        kind: "invalid-attempt",
+        snapshotId: state.snapshotId,
+      });
+    }
+    // Empty, malformed, truncated, NEEDS_CONTEXT, and snapshot-mismatched
+    // output are attempts, never a path to clean.
+    // A branded external review is validated independently: it never spends a
+    // confirmation slot and never owes closure coverage for local blockers.
+    // Any other review taken while blockers are still open owes that coverage,
+    // whether the snapshot moved through a fix round or out of band.
+    const validationMode = isExternal
+      ? "initial"
+      : state.awaitingFinalConfirmation
+        ? "final"
+        : !state.initialLocalReviewCompleted
+          ? "initial"
+          : state.activeUnresolvedFingerprints.length > 0
+            ? "remediation"
+            : "initial";
+    const priorFingerprints =
+      validationMode === "remediation"
+        ? state.activeUnresolvedFingerprints
+        : [];
+    const validatedResult = validateChangeRiskResultV1(event.result, {
+      expectedSnapshotId: state.snapshotId,
+      mode: validationMode,
+      priorFingerprints:
+        validationMode === "remediation" ? priorFingerprints : [],
+    });
+    if (!validatedResult.ok) {
+      return transitionChangeRiskOrchestrationInternal(state, {
+        kind: "invalid-attempt",
+        snapshotId: state.snapshotId,
+      });
+    }
+    if (validatedResult.value.status === "NEEDS_CONTEXT") {
+      const contextState = {
+        ...state,
+        missingInputs: unique(validatedResult.value.missingInputs),
+      };
+      return event.contextAvailable === false
+        ? terminal(contextState, "NEEDS_HUMAN_REVIEW")
+        : transitionChangeRiskOrchestrationInternal(contextState, {
+            kind: "needs-context",
+            snapshotId: state.snapshotId,
+          });
+    }
+    const result = validatedResult.value;
+    if (
+      validationMode === "remediation" &&
+      priorFingerprints.some(
+        (fingerprint) =>
+          !result.findings.some(
+            (finding) => finding.fingerprint === fingerprint,
+          ),
+      )
+    ) {
+      return transitionChangeRiskOrchestrationInternal(state, {
+        kind: "invalid-attempt",
+        snapshotId: state.snapshotId,
+      });
+    }
+    const confirmationInvocations =
+      state.confirmationInvocations + (validationMode === "final" ? 1 : 0);
+    if (
+      confirmationInvocations >
+      CHANGE_RISK_LIMITS.maxFinalCleanRoomConfirmations
+    )
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    const p1Observed =
+      state.p1Observed ||
+      result.findings.some((finding) => finding.priority === "P1");
+    const reviewState = {
+      ...state,
+      confirmationInvocations,
+      awaitingFinalConfirmation: false,
+      p1Observed,
+    };
+    const confirmationRequired =
+      reviewState.confirmationRequired ||
+      reviewState.highRisk ||
+      reviewState.fixRounds >= 2 ||
+      p1Observed;
+    const confirmationState = { ...reviewState, confirmationRequired };
+    if (result.status === "CLEAN") {
+      if (result.findings.length !== 0)
+        return transitionChangeRiskOrchestrationInternal(state, {
+          kind: "invalid-attempt",
+          snapshotId: reviewState.snapshotId,
+        });
+      return transitionChangeRiskOrchestrationInternal(confirmationState, {
+        kind: "clean",
+        snapshotId: reviewState.snapshotId,
+        confirmation: validationMode === "final",
+        [validatedReviewEvent]: true,
+      });
+    }
+    if (result.findings.length === 0)
+      return transitionChangeRiskOrchestrationInternal(state, {
+        kind: "invalid-attempt",
+        snapshotId: reviewState.snapshotId,
+      });
+    if (
+      result.findings.some(
+        (finding) =>
+          finding.priority === "P3" && finding.disposition === undefined,
+      )
+    ) {
+      return transitionChangeRiskOrchestrationInternal(state, {
+        kind: "invalid-attempt",
+        snapshotId: reviewState.snapshotId,
+      });
+    }
+    const openBlockers = result.findings.filter(
+      (finding) =>
+        (finding.priority === "P1" || finding.priority === "P2") &&
+        finding.resolution === "open",
+    );
+    if (
+      openBlockers.some(
+        (finding) =>
+          finding.affectedContractId === undefined ||
+          finding.unsafeConditionClass === undefined,
+      )
+    )
+      return transitionChangeRiskOrchestrationInternal(state, {
+        kind: "invalid-attempt",
+        snapshotId: reviewState.snapshotId,
+      });
+    if (openBlockers.length === 0) {
+      return transitionChangeRiskOrchestrationInternal(confirmationState, {
+        kind: "clean",
+        snapshotId: reviewState.snapshotId,
+        confirmation: validationMode === "final",
+        [validatedReviewEvent]: true,
+      });
+    }
+    // A validated external blocker may reopen a clean state only while the
+    // same closed local budgets can still fund remediation.
+    if (reviewState.status === "CLEAN" && !isExternal) {
+      return reviewState;
+    }
+    if (
+      isExternal &&
+      reviewState.status === "CLEAN" &&
+      (reviewState.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds ||
+        reviewState.logicalInvocations +
+          1 +
+          (reviewState.confirmationRequired ||
+          reviewState.highRisk ||
+          reviewState.fixRounds + 1 >= 2
+            ? 1
+            : 0) >
+          CHANGE_RISK_LIMITS.maxLogicalInvocations)
+    ) {
+      return terminal(reviewState, "NEEDS_HUMAN_REVIEW");
+    }
+    return transitionChangeRiskOrchestrationInternal(
+      {
+        ...confirmationState,
+        status: "ACTIVE",
+        confirmationSatisfied: false,
+      },
+      {
+        kind: "blockers",
+        snapshotId: reviewState.snapshotId,
+        findings: openBlockers.map((finding) => ({
+          fingerprint: finding.fingerprint,
+          affectedContractId: finding.affectedContractId!,
+          unsafeConditionClass: finding.unsafeConditionClass!,
+          priority: finding.priority as "P1" | "P2",
+        })),
+        external: isExternal ? true : undefined,
+        [validatedReviewEvent]: true,
+      },
+    );
+  }
+  if (event.kind === "code-changed") {
+    if (!isNonEmptyString(event.snapshotId) || event.manifest === undefined)
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    if (event.snapshotId === state.snapshotId) return state;
+    if (
+      state.status !== "CLEAN" &&
+      state.lastBlockerReviewSnapshotId === state.snapshotId
+    )
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    return {
+      ...state,
+      snapshotId: event.snapshotId,
+      highRisk: isHighRiskChange(event.manifest),
+      status: "ACTIVE",
+      transientAttempts: 0,
+      missingInputs: [],
+      lastBlockerReviewSnapshotId: undefined,
+      lastLocalReviewSnapshotId: undefined,
+      // An out-of-band code change moves the snapshot but closes nothing, so
+      // the unresolved checkpoint carries into the next review.
+      batchedClusterKeys: [],
+      awaitingFinalConfirmation: false,
+      confirmationSatisfied: false,
+    };
+  }
+  if (
+    event.kind !== "fix-applied" &&
+    event.kind !== "guard-added" &&
+    event.snapshotId !== state.snapshotId
+  ) {
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  }
+  if (event.kind === "invalid-attempt" || event.kind === "needs-context") {
+    const attempts = state.transientAttempts + 1;
+    return attempts > CHANGE_RISK_LIMITS.maxTransientRetriesPerInvocation
+      ? terminal(
+          { ...state, transientAttempts: attempts },
+          "NEEDS_HUMAN_REVIEW",
+        )
+      : { ...state, transientAttempts: attempts };
+  }
+  if (event.kind === "guard-added") {
+    // An unverifiable guard claim escalates like every other one, rather than
+    // throwing out of the public boundary: the owner must be left holding a
+    // persistable terminal handoff, not an exception it cannot record.
+    if (!state.requiredMechanicalGuardClusterKeys.includes(event.clusterKey))
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    // A guard is only real once it exists in reviewed bytes, so it arrives as
+    // a snapshot-changing event carrying its manifest and evidence. An
+    // assertion over unchanged bytes proves nothing and never discharges the
+    // requirement.
+    if (
+      !isNonEmptyString(event.snapshotId) ||
+      event.snapshotId === state.snapshotId ||
+      event.manifest === undefined ||
+      event.evidence === undefined ||
+      event.evidence.length === 0 ||
+      event.evidence.some((item) => !isNonEmptyString(item))
+    )
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    // The guard IS this review's fix round, so it is admitted and accounted
+    // exactly like one. The snapshot it names carries the guard and the
+    // remediation together.
+    const admitted = admitFixRound(state, event.snapshotId, event.manifest);
+    if (admitted.status !== "ACTIVE") return admitted;
+    return {
+      ...admitted,
+      requiredMechanicalGuardClusterKeys:
+        admitted.requiredMechanicalGuardClusterKeys.filter(
+          (key) => key !== event.clusterKey,
+        ),
+      guardedClusterKeys: unique([
+        ...admitted.guardedClusterKeys,
+        event.clusterKey,
+      ]),
+      mechanicalGuards: [
+        ...admitted.mechanicalGuards,
+        {
+          clusterKey: event.clusterKey,
+          snapshotId: event.snapshotId,
+          evidence: unique(event.evidence),
+        },
+      ],
+    };
+  }
+  if (event.kind === "guard-impractical") {
+    if (
+      !state.requiredMechanicalGuardClusterKeys.includes(event.clusterKey) ||
+      event.rationale.trim().length === 0 ||
+      event.evidence.length === 0 ||
+      event.evidence.some((item) => item.trim().length === 0)
+    ) {
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    }
+    return terminal(
+      {
+        ...state,
+        impracticalMechanicalGuardClusterKeys: unique([
+          ...state.impracticalMechanicalGuardClusterKeys,
+          event.clusterKey,
+        ]),
+        impracticalMechanicalGuards: [
+          ...state.impracticalMechanicalGuards,
+          {
+            clusterKey: event.clusterKey,
+            rationale: event.rationale,
+            evidence: unique(event.evidence),
+          },
+        ],
+      },
+      "NEEDS_HUMAN_REVIEW",
+    );
+  }
+  if (event.kind === "fix-applied") {
+    if (state.status === "CLEAN") return terminal(state, "NEEDS_HUMAN_REVIEW");
+    if (state.requiredMechanicalGuardClusterKeys.length > 0)
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    const activeClusterMembers = activeClusterMembersOf(state);
+    if (
+      state.batchedClusterKeys.some((key) => {
+        const members = activeClusterMembers.filter(
+          (member) => member.clusterKey === key,
+        );
+        return (
+          members.length < 3 ||
+          members.some(
+            (member) =>
+              !event.remediatedFindings.some(
+                (finding) =>
+                  finding.fingerprint === member.fingerprint &&
+                  deriveChangeRiskClusterKey(
+                    finding.affectedContractId,
+                    finding.unsafeConditionClass,
+                  ) === key,
+              ),
+          )
+        );
+      })
+    ) {
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    }
+    // Recurrence history is derived from the blockers this round actually
+    // carried, never from an unverifiable caller claim; a claim that names no
+    // active blocker is rejected rather than recorded.
+    const activeClusterKeys = unique(
+      activeClusterMembers.map((member) => member.clusterKey),
+    );
+    const claimedClusterKeys = deriveRemediatedClusterKeys(
+      event.remediatedFindings,
+    );
+    if (
+      event.remediatedFindings.some(
+        (finding) =>
+          finding.fingerprint !== undefined &&
+          !state.activeUnresolvedFingerprints.includes(finding.fingerprint),
+      ) ||
+      claimedClusterKeys.some((key) => !activeClusterKeys.includes(key))
+    )
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    return admitFixRound(state, event.snapshotId, event.manifest);
+  }
+  if (event.kind === "clean") {
+    const logicalInvocations = state.logicalInvocations + 1;
+    if (logicalInvocations > CHANGE_RISK_LIMITS.maxLogicalInvocations)
+      return terminal(state, "NEEDS_HUMAN_REVIEW");
+    const confirmationRequired =
+      state.confirmationRequired || state.highRisk || state.fixRounds >= 2;
+    const distinctConfirmation =
+      confirmationRequired &&
+      state.logicalInvocations > 0 &&
+      event.confirmation === true;
+    if (confirmationRequired && !distinctConfirmation) {
+      return {
+        ...state,
+        confirmationRequired,
+        awaitingFinalConfirmation: true,
+        logicalInvocations,
+        cleanReviewInvocations: state.cleanReviewInvocations + 1,
+        initialLocalReviewCompleted: true,
+        transientAttempts: 0,
+        missingInputs: [],
+        confirmationSatisfied: false,
+      };
+    }
+    return {
+      ...state,
+      confirmationRequired,
+      awaitingFinalConfirmation: false,
+      logicalInvocations,
+      cleanReviewInvocations: state.cleanReviewInvocations + 1,
+      initialLocalReviewCompleted: true,
+      transientAttempts: 0,
+      missingInputs: [],
+      activeUnresolvedFingerprints: [],
+      activeCheckpointFromRound: state.completedRounds.length,
+      batchedClusterKeys: [],
+      confirmationSatisfied: true,
+      status: "CLEAN",
+    };
+  }
+  if (event.kind !== "blockers") return state;
+
+  const blockerClusterKeys = deriveBlockerClusterKeys(event.findings);
+  const logicalInvocations =
+    state.logicalInvocations + (event.external === true ? 0 : 1);
+  if (logicalInvocations > CHANGE_RISK_LIMITS.maxLogicalInvocations)
+    return terminal(state, "NEEDS_HUMAN_REVIEW");
+  const prior = state.completedRounds;
+  const priorLocalRounds = prior.filter((round) => round.external !== true);
+  // No progress means a blocker that is STILL open after a local remediation
+  // round, so this compares against the live checkpoint. A fingerprint an
+  // earlier round closed - verified by remediation coverage, or cleared by a
+  // terminal clean review - may legally reappear on later bytes without
+  // stopping the loop. External rounds are excluded exactly as they are from
+  // stagnation: an independent reviewer confirming a blocker the local loop
+  // has not yet had a round to fix is corroboration, not stalled progress, and
+  // its fingerprints merge into the checkpoint instead.
+  const sameFingerprint =
+    event.external !== true &&
+    event.findings.some((finding) =>
+      state.activeUnresolvedFingerprints.includes(finding.fingerprint),
+    );
+  const recurredKeys = unique(
+    blockerClusterKeys.filter((key) =>
+      prior.some((round) => round.remediatedClusterKeys.includes(key)),
+    ),
+  );
+  const guardedRecurrence = recurredKeys.some((key) =>
+    state.guardedClusterKeys.includes(key),
+  );
+  const previousBlockers = priorLocalRounds.at(-1)?.blockerCount;
+  const previousRemediationBlockers = priorLocalRounds.at(-2)?.blockerCount;
+  // The initial review establishes the baseline. Stagnation needs two
+  // consecutive *remediation* reviews that each fail to reduce it.
+  const stagnant =
+    event.external !== true &&
+    state.fixRounds >= 2 &&
+    previousBlockers !== undefined &&
+    previousRemediationBlockers !== undefined &&
+    previousBlockers >= previousRemediationBlockers &&
+    event.findings.length >= previousBlockers;
+  const confirmationRequired =
+    state.confirmationRequired || state.highRisk || state.fixRounds >= 2;
+  const clusterMemberCounts = new Map<string, number>();
+  for (const clusterKey of blockerClusterKeys) {
+    clusterMemberCounts.set(
+      clusterKey,
+      (clusterMemberCounts.get(clusterKey) ?? 0) + 1,
+    );
+  }
+  const batchedClusterKeys = [...clusterMemberCounts]
+    .filter(([, count]) => count >= 3)
+    .map(([clusterKey]) => clusterKey);
+  const next = {
+    ...state,
+    logicalInvocations,
+    initialLocalReviewCompleted:
+      state.initialLocalReviewCompleted || event.external !== true,
+    transientAttempts: 0,
+    confirmationRequired,
+    completedRounds: [
+      ...prior,
+      {
+        blockerCount: event.findings.length,
+        p1BlockerCount: event.findings.filter(
+          (finding) => finding.priority === "P1",
+        ).length,
+        ...(event.external === true ? { external: true as const } : {}),
+        unresolvedFingerprints: unique(
+          event.findings.map((finding) => finding.fingerprint),
+        ),
+        clusterMembers: event.findings.flatMap((finding) => {
+          const clusterKey = deriveChangeRiskClusterKey(
+            finding.affectedContractId,
+            finding.unsafeConditionClass,
+          );
+          return clusterKey === undefined
+            ? []
+            : [{ fingerprint: finding.fingerprint, clusterKey }];
+        }),
+        remediatedClusterKeys: [],
+      },
+    ],
+    lastBlockerReviewSnapshotId: state.snapshotId,
+    lastLocalReviewSnapshotId:
+      event.external === true
+        ? state.lastLocalReviewSnapshotId
+        : state.snapshotId,
+    // A key that already has a guard is not demanded again; that recurrence
+    // escalates below instead.
+    requiredMechanicalGuardClusterKeys: unique([
+      ...state.requiredMechanicalGuardClusterKeys,
+      ...recurredKeys.filter((key) => !state.guardedClusterKeys.includes(key)),
+    ]),
+    activeUnresolvedFingerprints:
+      event.external === true
+        ? unique([
+            ...state.activeUnresolvedFingerprints,
+            ...event.findings.map((finding) => finding.fingerprint),
+          ])
+        : unique(event.findings.map((finding) => finding.fingerprint)),
+    // A local round supersedes the checkpoint it just reported closure for;
+    // an external round merges into the one already open.
+    activeCheckpointFromRound:
+      event.external === true ? state.activeCheckpointFromRound : prior.length,
+    batchedClusterKeys:
+      event.external === true
+        ? unique([...state.batchedClusterKeys, ...batchedClusterKeys])
+        : batchedClusterKeys,
+  };
+  // Human escalation wins whenever the no-progress condition overlaps it.
+  // Every escalation still records the round it completed, or the handoff it
+  // returns would contradict the invocation accounting its own validator
+  // enforces and the required escalation could not be resumed or reported.
+  if (next.fixRounds >= CHANGE_RISK_LIMITS.maxFixRounds)
+    return terminal(next, "NEEDS_HUMAN_REVIEW");
+  if (guardedRecurrence) return terminal(next, "NEEDS_HUMAN_REVIEW");
+  if (sameFingerprint) return terminal(next, "NO_PROGRESS");
+  return recurredKeys.length > 0
+    ? next
+    : stagnant
+      ? terminal(next, "NO_PROGRESS")
+      : next;
+}
+
+/**
+ * Public owner boundary. Reviewer-originated terminal and blocker transitions
+ * must arrive in the closed `review-result` envelope; raw lookalikes are
+ * treated as malformed attempts by the internal guard above.
+ */
+export function transitionChangeRiskOrchestration(
+  serializedState: ChangeRiskOrchestrationStateV1,
+  event:
+    | ChangeRiskOrchestrationEvent
+    | ChangeRiskReviewResultEvent
+    | ValidatedExternalChangeRiskReviewEvent,
+): ChangeRiskOrchestrationStateV1 {
+  return transitionChangeRiskOrchestrationInternal(serializedState, event);
+}
+
+/** Derive only canonical cluster keys; `other` components remain absent. */
+export function deriveRemediatedClusterKeys(
+  findings: readonly ChangeRiskClusterFinding[],
+): readonly string[] {
+  deriveBlockerClusterKeys(
+    findings.map((finding, index) => ({
+      ...finding,
+      fingerprint: `remediated-${index}`,
+    })),
+  );
+  return unique(
+    findings.flatMap((finding) => {
+      const key = deriveChangeRiskClusterKey(
+        finding.affectedContractId,
+        finding.unsafeConditionClass,
+      );
+      return key === undefined ? [] : [key];
+    }),
+  );
+}

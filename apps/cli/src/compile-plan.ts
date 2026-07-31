@@ -16,6 +16,7 @@ import {
   type GeneratedFile,
   type LockModelPolicyV2,
   type LockOutputV2,
+  type LockTemplate,
   MODEL_POLICY_PRIMARY_ROLE,
   type ModelPolicyTabnineSettingsPlan,
   type MixedOutputDescriptor,
@@ -85,6 +86,18 @@ export async function findLockfileOwnedDrift(
 }
 
 const REGION_AWARE_PATHS = new Set(["AGENTS.md", "CLAUDE.md"]);
+
+/**
+ * Byte-order text comparison, matching the compiler's internal `compareText`
+ * that `validateLockfileText` enforces on template ordering. Duplicated rather
+ * than exported from the compiler package: a sort helper is not worth widening
+ * the published package seam.
+ */
+function compareLockText(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
 
 // ---------------------------------------------------------------------------
 // Tabnine `.tabnine/agent/settings.json` ownership classification (Phase
@@ -328,6 +341,23 @@ export function buildCompileWrites(input: {
     catalog?: readonly ModelCatalogEntry[];
     preservedOutput?: LockOutputV2;
   };
+  /**
+   * Present only for a target-scoped run (`--target`). The compile result then
+   * covers the requested targets alone, so the lockfile must carry every other
+   * target's entries forward from the previous lock instead of rebuilding from
+   * the partial result. Phase-05's rule that compile "removes from the new
+   * lockfile" the outputs a previous compile produced applies to paths the
+   * PROFILE no longer generates; a target the run simply did not ask for is
+   * not orphaned, and dropping it would strand its files on disk with no
+   * recorded ownership for doctor, import, and compile's own refusal check.
+   * Omitting this (the default, and every unscoped run) keeps the full rebuild.
+   */
+  scopedTargets?: {
+    /** The targets this run generated. Entries for any other target survive. */
+    requested: readonly string[];
+    previousTemplates: readonly LockTemplate[];
+    previousOutputs: readonly LockOutputV2[];
+  };
 }): CompileWritesResult {
   if (input.profile && hasSecretLikeModelOverride(input.profile)) {
     // The profile may be retained for an explicit user remediation path, but
@@ -388,7 +418,8 @@ export function buildCompileWrites(input: {
     input.existingUpgrade ||
     tabnineWrite ||
     tabnineDelete ||
-    preservedTabnineOutput
+    preservedTabnineOutput ||
+    input.scopedTargets
   ) {
     const parsed = validateLockfileText(
       Buffer.from(lockfile.bytes).toString("utf8"),
@@ -396,6 +427,35 @@ export function buildCompileWrites(input: {
     if (!parsed.ok) throw new Error("compiler generated an invalid lockfile");
     const view = toLockfileV2View(parsed.lockfile);
     if (input.existingUpgrade) view.upgrade = input.existingUpgrade;
+    if (input.scopedTargets) {
+      const requested = new Set(input.scopedTargets.requested);
+      const generatedTemplateIds = new Set(
+        view.templates.map((template) => template.id),
+      );
+      const generatedPaths = new Set(view.outputs.map((output) => output.path));
+      // This run's own entries always win; only untouched targets are carried
+      // forward, so a scoped compile can never resurrect a stale record for a
+      // path it just regenerated.
+      view.templates = [
+        ...view.templates,
+        ...input.scopedTargets.previousTemplates.filter(
+          (template) =>
+            !requested.has(template.target) &&
+            !generatedTemplateIds.has(template.id),
+        ),
+      ].sort(
+        (left, right) =>
+          compareLockText(left.id, right.id) ||
+          compareLockText(left.target, right.target),
+      );
+      view.outputs = [
+        ...view.outputs,
+        ...input.scopedTargets.previousOutputs.filter(
+          (output) =>
+            !requested.has(output.target) && !generatedPaths.has(output.path),
+        ),
+      ];
+    }
     const manualPaths = new Set(
       input.regionPlan.manualOutputs.map((output) => output.path),
     );
@@ -428,8 +488,16 @@ export function buildCompileWrites(input: {
         preservedTabnineOutput,
       ];
     }
-    view.outputs = outputs.sort((left, right) =>
-      left.path.localeCompare(right.path),
+    // Byte order, matching `createLockfileFile`. `localeCompare` disagrees with
+    // it (ICU collation orders `.../change-risk-reviewer.md` after
+    // `.../code-quality-reviewer.md`; byte order puts it first), so sorting
+    // here by locale made a lockfile that went through this block differ from
+    // the same lockfile built without it - churn against the determinism
+    // contract, and drift the very next unscoped compile would rewrite.
+    view.outputs = outputs.sort(
+      (left, right) =>
+        compareLockText(left.path, right.path) ||
+        compareLockText(left.target, right.target),
     );
     const bytes = Buffer.from(`${JSON.stringify(view, null, 2)}\n`, "utf8");
     lockfile = { ...lockfile, bytes, sha256: sha256Hex(bytes) };

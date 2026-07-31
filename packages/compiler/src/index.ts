@@ -54,6 +54,22 @@ export {
   renderClaudeMd,
 } from "./compiler.js";
 export {
+  createValidatedExternalChangeRiskReviewEvent,
+  createChangeRiskOrchestrationState,
+  deriveRemediatedClusterKeys,
+  transitionChangeRiskOrchestration,
+  validateChangeRiskOrchestrationStateV1,
+} from "./change-risk-orchestration.js";
+export type {
+  ChangeRiskClusterFinding,
+  ChangeRiskOrchestrationEvent,
+  ChangeRiskOrchestrationStateV1,
+  ChangeRiskOrchestrationStateValidation,
+  ChangeRiskReviewFinding,
+  ChangeRiskReviewResultEvent,
+  ValidatedExternalChangeRiskReviewEvent,
+} from "./change-risk-orchestration.js";
+export {
   buildClientMappingReport,
   CLIENT_MAPPING_VERSION,
 } from "./permission-mapping.js";

@@ -329,7 +329,10 @@ test("doctor --models --probe --json still repeats the pre-probe consent disclos
 
   assert.equal(code, 0, output.stderrText());
   assert.equal(probe.calls > 0, true);
-  assert.match(output.stderrText(), /Probing exact model availability \(--probe\)/u);
+  assert.match(
+    output.stderrText(),
+    /Probing exact model availability \(--probe\)/u,
+  );
   // stdout stays exactly one clean JSON record: the disclosure never leaks
   // into it.
   assert.doesNotThrow(() => JSON.parse(output.stdoutText()));
@@ -675,6 +678,120 @@ test("compile selected target writes selected output and lockfile only", async (
   assert.match(
     await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
     /"path": "AGENTS.md"/u,
+  );
+});
+
+test("compile --target --write keeps every other target's lockfile provenance", async () => {
+  const rootDir = await createProfileOnlyRoot();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write"], {
+      io: createOutput(),
+    }),
+    0,
+  );
+  const before = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  );
+  const outOfScopeTemplates = before.templates.filter(
+    (template: { target: string }) => template.target !== "agents-md",
+  );
+  const outOfScopeOutputs = before.outputs.filter(
+    (output: { target: string }) => output.target !== "agents-md",
+  );
+  assert.ok(
+    outOfScopeTemplates.length > 0 && outOfScopeOutputs.length > 0,
+    "the fixture profile must enable more than the scoped target",
+  );
+
+  assert.equal(
+    await runCli(
+      ["compile", "--root", rootDir, "--target", "agents-md", "--write"],
+      { io: createOutput() },
+    ),
+    0,
+  );
+  const after = JSON.parse(
+    await readFile(path.join(rootDir, "ai-profile.lock"), "utf8"),
+  );
+
+  // A scoped run does not regenerate the other targets, so their entries are
+  // not "no longer in the current compile result" - they were never requested.
+  // Dropping them would leave their files on disk with no recorded ownership.
+  for (const template of outOfScopeTemplates) {
+    assert.deepEqual(
+      after.templates.find(
+        (candidate: { id: string }) => candidate.id === template.id,
+      ),
+      template,
+      `template ${template.id} must survive a scoped compile byte-identically`,
+    );
+  }
+  for (const output of outOfScopeOutputs) {
+    assert.deepEqual(
+      after.outputs.find(
+        (candidate: { path: string }) => candidate.path === output.path,
+      ),
+      output,
+      `output ${output.path} must survive a scoped compile byte-identically`,
+    );
+  }
+  assert.ok(
+    after.outputs.some(
+      (output: { path: string }) => output.path === "AGENTS.md",
+    ),
+    "the scoped target's own entry is still refreshed",
+  );
+});
+
+test("compile --target --write still prunes an orphan inside the requested target", async () => {
+  const rootDir = await createProfileOnlyRoot();
+  assert.equal(
+    await runCli(["compile", "--root", rootDir, "--write"], {
+      io: createOutput(),
+    }),
+    0,
+  );
+  const lockPath = path.join(rootDir, "ai-profile.lock");
+  const seeded = JSON.parse(await readFile(lockPath, "utf8"));
+  const orphan = {
+    path: "AGENTS-RETIRED.md",
+    target: "agents-md",
+    templateId: "targets/agents-md@1",
+    ownership: "generated-owned",
+    sha256: "0".repeat(64),
+  };
+  seeded.outputs = [...seeded.outputs, orphan].sort(
+    (left: { path: string }, right: { path: string }) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+  await writeFile(lockPath, `${JSON.stringify(seeded, null, 2)}\n`, "utf8");
+
+  assert.equal(
+    await runCli(
+      ["compile", "--root", rootDir, "--target", "agents-md", "--write"],
+      { io: createOutput() },
+    ),
+    0,
+  );
+  const after = JSON.parse(await readFile(lockPath, "utf8"));
+
+  // Preservation must not invert phase-05's pruning rule: an entry belonging to
+  // a target this run DID regenerate is genuinely orphaned and still goes. This
+  // also pins the two vocabularies together - if a lockfile `target` value ever
+  // stopped matching the `--target` id, nothing here would match `requested`
+  // and the orphan would be resurrected instead.
+  assert.equal(
+    after.outputs.some(
+      (output: { path: string }) => output.path === "AGENTS-RETIRED.md",
+    ),
+    false,
+    "an orphan inside the requested target must still be pruned",
+  );
+  assert.ok(
+    after.outputs.some(
+      (output: { path: string }) => output.path === ".codex/config.toml",
+    ),
+    "while an untouched target's entry survives",
   );
 });
 
@@ -2152,7 +2269,9 @@ async function createProfileOnlyRoot(): Promise<string> {
 // `ai-profile.lock` modelPolicy block, so `--models` has real rows to
 // classify and `--probe`'s primary-role candidate list is non-empty.
 async function createModelsRoot(): Promise<string> {
-  const rootDir = await mkdtemp(path.join(tmpdir(), "agent-profile-cli-models-"));
+  const rootDir = await mkdtemp(
+    path.join(tmpdir(), "agent-profile-cli-models-"),
+  );
   const profileYaml = `${(
     await readFile(path.join(fixtureDir, "ai-profile.yaml"), "utf8")
   ).trimEnd()}\nsubagentPolicy:\n  enabled: true\n  preset: role-aware\n`;

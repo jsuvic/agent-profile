@@ -17,7 +17,7 @@ emit a `change-risk-reviewer` definition for supported Codex and Claude
 targets. The prompt is review-only, receives complete and lossless access to
 the change snapshot and governing rules, searches the applicable closed risk
 domains, and returns prioritized evidence-bearing findings with normalized
-fingerprints inside the closed typed `change-risk/v1` result envelope.
+fingerprints inside the closed typed `change-risk/v2` result envelope.
 
 The generated `change-risk-reviewer` identifier resolves its provider-neutral
 model policy through the existing `critical-reviewer` role. Mapping-v2,
@@ -25,7 +25,7 @@ mapping-v3, target-native effort, and exact per-client overrides retain their
 configured critical-review capability without adding a new role ID.
 
 Before adding the prompt, establish one immutable review-policy/content source
-for the `change-risk/v1` identifier, result statuses, priorities,
+for the `change-risk/v2` identifier, result statuses, priorities,
 dispositions, resolutions, terminal statuses, retry limits, confirmation
 triggers, canonical risk-domain and category identifier sets, and high-risk
 surfaces. That source exposes explicit reviewer, orchestration,

@@ -9,9 +9,16 @@ Amended on 2026-07-27, before any I1 implementation, to add context
 composition and ownership, snapshot disclosure, a typed reviewer interface,
 single orchestration ownership, learning-record context isolation,
 promoted-rule lifecycle, and context-ablation evaluation contracts, and to
-close the open review findings on PR #134. Because no `change-risk/v1`
-artifact has been implemented or released, the workflow-policy version
-remains `change-risk/v1`.
+close the open review findings on PR #134. At that time no `change-risk/v1`
+artifact had been implemented or released, so the workflow-policy version
+remained `change-risk/v1`.
+
+Amended on 2026-07-30 for the version increment only. Phase 33's first
+reviewer and orchestration artifacts were generated on PR #140, so ADR 0027's
+pre-emission exception no longer applied to the subsequent fingerprint
+encoding repair. Every contract below now names `change-risk/v2`; the
+category taxonomy (`change-risk-categories/v1`) and the learning-record schema
+(`review-learning/v1`) remain independently versioned and unchanged.
 
 ## Problem
 
@@ -144,7 +151,9 @@ telemetry or making GitHub a dependency.
 
 ### Review policy version contract
 
-- The initial workflow-policy version is `change-risk/v1`.
+- The initial workflow-policy version was `change-risk/v1`. The current
+  workflow-policy version is `change-risk/v2`, incremented on 2026-07-30 under
+  the rule below once the first artifact had been emitted (ADR 0027).
 - The reviewer result envelope, orchestration skills, and
   `review-learning/v1` records produced by this workflow MUST emit the same
   exact workflow-policy version. Records normalized from reviews that this
@@ -286,6 +295,7 @@ type EvidenceReference = {
   lines?: { start: number; end: number };
   commit?: string;
   summary: string;
+  invalidatesPriorFinding?: true;
 };
 
 type ChangeRiskFindingV1 = {
@@ -315,7 +325,7 @@ type ChangeRiskFindingV1 = {
 };
 
 type ChangeRiskResultV1 = {
-  policyVersion: "change-risk/v1";
+  policyVersion: "change-risk/v2";
   snapshotId: string;
   status: "CLEAN" | "FINDINGS_FOUND" | "NEEDS_CONTEXT";
   scope: {
@@ -333,6 +343,13 @@ type ChangeRiskResultV1 = {
 };
 ```
 
+- The envelope is untrusted input, so closed size limits (finding count,
+  evidence references per finding, `missingInputs` count, scope-domain count,
+  and the length of any single string) are enforced at the validation boundary
+  before anything traverses or normalizes the contents. An envelope exceeding
+  them is an invalid attempt like any other malformed result. The limits are
+  set far above any actionable review: a round carrying more findings than the
+  bound could not be remediated inside the closed fix-round budget anyway.
 - `source` defaults to `local` when absent. `provider` is required (using
   `unknown` when unidentifiable) when `source` is `external` and MUST be
   absent otherwise. A reviewer invocation itself only emits `local`
@@ -347,6 +364,10 @@ type ChangeRiskResultV1 = {
   describes secret-shaped values by shape only and MUST NOT reproduce
   secrets, raw transcripts, or source beyond the minimum needed to locate
   the defect.
+- A `false-positive` closure requires at least one evidence reference with
+  `invalidatesPriorFinding: true`; that reference's summary explains how the
+  located evidence invalidates the prior unsafe condition. The marker MUST be
+  absent for `open`, `fixed`, and `obsolete` findings.
 - `EvidenceReference` is discriminated by `kind` with per-kind required
   locators: `file` requires `path`; `diff-hunk` requires `path` and `lines`;
   `symbol` requires `path` and `symbol`; `test` requires `path`; `contract`
@@ -491,7 +512,7 @@ type ChangeRiskResultV1 = {
   remain in a local ignored location and MUST NOT be committed.
 - The normalization-schema version (`review-learning/v1`) is separate from
   the policy that produced the review. Every record carries a closed
-  `sourcePolicy` value: `change-risk/v1` for reviews executed by this
+  `sourcePolicy` value: `change-risk/v2` for reviews executed by this
   workflow, or `legacy-external` for reviews that predate it or come from an
   external provider.
 - Schema version `review-learning/v1` requires: date, product version when
@@ -506,17 +527,17 @@ type ChangeRiskResultV1 = {
   disposition records `false` until the owner confirms it), and terminal
   status.
 - Logical-invocation and transient-attempt counts are required only for
-  `sourcePolicy: change-risk/v1` records. `legacy-external` records omit
+  `sourcePolicy: change-risk/v2` records. `legacy-external` records omit
   them instead of fabricating provenance.
 - Record-level `sourcePolicy` names the orchestration that produced the
-  record. Within a `change-risk/v1` record, every round and finding carries
+  record. Within a `change-risk/v2` record, every round and finding carries
   a closed `source: local | external` marker: local rounds keep their
   required execution counters, while findings a validated external review
   contributed carry `source: external` with the provider recorded (or
   `unknown`) and no fabricated local execution data. A record never
   collapses mixed local and external provenance into one value.
 - Terminal status is one of `clean | no-progress | needs-human-review` for
-  `sourcePolicy: change-risk/v1` records. `legacy-external` records use the
+  `sourcePolicy: change-risk/v2` records. `legacy-external` records use the
   closed status `external-only` instead — they never executed the local
   state machine, and a local terminal status is never guessed from thread
   state.
@@ -700,7 +721,7 @@ type ChangeRiskResultV1 = {
 2. The reviewer prompt and golden fixtures enforce complete-and-lossless
    snapshot access, clean-room, unchanged-consumer, risk-domain, priority,
    evidence, fingerprint, read-only, and no-upload contracts. The typed
-   `change-risk/v1` result envelope and its scope/`missingInputs`/disposition
+   `change-risk/v2` result envelope and its scope/`missingInputs`/disposition
    relationships make empty, malformed, mismatched, and `NEEDS_CONTEXT`
    output incapable of producing a clean result.
 3. The generated workflow encodes the exact three-fix-round, six-logical-
@@ -717,7 +738,7 @@ type ChangeRiskResultV1 = {
    normalized committed record with all required version/date/snapshot,
    attempt, finding, conditional-disposition, and terminal-status fields while
    excluding raw transcripts. The workflow-policy version is
-   `change-risk/v1` and advances only under the versioning rule above.
+   `change-risk/v2` and advances only under the versioning rule above.
 6. Promotion instructions implement the approved first/second/third
    occurrence policy and preserve generated/manual instruction ownership.
 7. PRs #125 and #127-#133 are backfilled in a separate slice. The normalized
@@ -748,7 +769,7 @@ type ChangeRiskResultV1 = {
 
 ## Tests
 
-- Core/unit tests for `change-risk/v1`: priorities, conditional dispositions,
+- Core/unit tests for `change-risk/v2`: priorities, conditional dispositions,
   resolutions, result-envelope statuses, scope/`missingInputs` relationships,
   fingerprint normalization, canonical category identity and aliasing,
   terminal statuses and precedence, risk-domain identifiers, retry counts,
@@ -829,7 +850,7 @@ Dependency map:
 `I1 -> I2`; `I1 -> I3`; `I1 + I3 -> I4`; `I3 -> I5`;
 `I1 + I2 + I3 + I4 + I5 -> I6`.
 I3 is sequenced after I1 because I1 owns the shared policy source whose
-closed values (`change-risk/v1`, statuses, dispositions, categories) I3's
+closed values (`change-risk/v2`, statuses, dispositions, categories) I3's
 record schema and learning-record projection must consume rather than
 duplicate. I5 is parallel-safe with I2 and I4 once I3 lands. I6 is the final
 integration slice and requires I5's accepted backfill evidence.
@@ -857,7 +878,7 @@ integration slice and requires I5's accepted backfill evidence.
 - Verify initial/final clean-room context excludes historical records,
   recurrence counts, and historical finding examples.
 - Verify every emitted reviewer artifact and every workflow-produced record
-  carries `change-risk/v1`, that `legacy-external` records satisfy their
+  carries `change-risk/v2`, that `legacy-external` records satisfy their
   separate provenance rules instead, and that the reviewer resolves model
   policy through `critical-reviewer`.
 - Reject every incomplete or invalid result envelope; only an explicit valid
