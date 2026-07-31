@@ -2671,6 +2671,66 @@ generated skill instructs an agent to apply the table by hand. Wiring a real
 consumer over I3's records belongs with I6's validation, which is where
 behavioural evidence for the whole loop is supposed to come from.
 
+I4 change-risk review 2026-07-31, and the first thing to record is that it
+should not have needed asking for: the slice was committed after a self-review
+only, skipping the spec-reviewer, code-quality-reviewer, and
+change-risk-reviewer the repository's own `subagent-driven-change` workflow
+mandates - the same workflow this slice extends. The reviewer was run on
+request afterwards and found eight findings including a P1, none of which the
+self-review had caught. Every one reproduced against the real code before being
+accepted.
+
+The P1: `input.resolution` was declared on the promotion input and read
+nowhere. `occurrence` was `priorOccurrences + 1` unconditionally, so the +1 for
+the current finding bypassed the validation gate every historical entry had to
+pass. A finding the owner resolved `false-positive` promoted exactly like a
+validated one - reproduced returning occurrence 3 with a mechanical guard
+demanded. That is precisely the brief's non-goal "automatically accepting a
+reviewer finding as valid", implemented by accident. The gate is now one
+exported predicate applied to the current finding and to history alike, and an
+invalidated finding is refused with no rule record at all.
+
+Three more P2s, all reproduced: the third occurrence derived strictly WEAKER
+obligations than the second when no guard was practical (everything false but
+the impracticality note), so the strongest threshold earned least - thresholds
+are now monotonic, a third occurrence keeps what the second earned and adds the
+guard on top; a blank `existingMechanicalGuard` cancelled both second-occurrence
+obligations and produced a rule retired at birth citing no guard, because
+presence was tested two different ways in the same function (`=== undefined`
+for the booleans, truthiness for the spread) - blank is now normalized to
+absent; and the generated-region refusal was advisory only, still emitting
+`requiresScopedRule: true` and a rule record whose `scope` was the generated
+path, so a caller honouring the record would perform the write the refusal
+exists to prevent - a refused target now yields no rule record, only the
+proposal.
+
+The last P2 was the sharpest: the generated skill is the ONLY executing
+consumer of this slice (nothing imports the module), and it rendered the
+occurrence unit and the action strings while omitting `countedResolutions`,
+`countedOpenRequires`, `excludedResolutions`, `excludedCategories`, and
+`systemicPredicate`. It told an agent to "apply the promotion table to each
+validated finding" without ever defining validated, and named a systemic-P1
+row without defining systemic. All five now render.
+
+P3s: cluster inputs were accepted and silently discarded while a comment
+claimed they were recorded - they are now carried as `clusterEvidence` on the
+rule record, added to the closed field list, which is what amendment 002 asks
+for; and `uncategorized` was excluded from counting but still emitted an active
+rule record with a `change-risk.uncategorized.*` id, so it is now refused
+outright. The third P3 named the cause of all of this: the test suite
+constrained the action strings and left the derived booleans and record values
+unasserted, which is why eight defects passed green. The suite now asserts all
+four booleans per threshold row and the record's values rather than its key
+names.
+
+Decision shape changed as a result: `decideChangeRiskPromotion` returns a
+discriminated union, so "earns nothing" is representable and every caller must
+handle refusal instead of reading a rule record that should not exist.
+Compiler suite 501 tests, 0 failures; root `npm run check`, `verify:pack`, and
+goldens clean. The reviewer completed a full envelope with conformant field
+names on a 16-file change after failing twice on a 110-file one, which is the
+clearest evidence yet for keeping branches this size.
+
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
 Draft 2026-07-27, pending grill approval; the spec itself is human-gated.

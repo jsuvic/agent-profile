@@ -11,13 +11,14 @@ import {
 import {
   countCanonicalCategoryOccurrences,
   decideChangeRiskPromotion,
+  isValidatedPromotionOutcome,
+  type ChangeRiskPromotionDecision,
   type ChangeRiskPromotionInput,
   type PromotionHistoryEntry,
 } from "./change-risk-promotion.js";
 
 const promotion = changeRiskPromotionProjection();
 
-/** One earlier reviewed change that counted for the category. */
 function occurrence(
   changeId: string,
   overrides: Partial<PromotionHistoryEntry> = {},
@@ -48,23 +49,16 @@ function input(
   };
 }
 
-test("a promoted rule carries the date it was introduced, never a blank", () => {
-  // `dateIntroduced` is a required rule-record field. Emitting it empty would
-  // hand a consumer a record its own schema rejects, so the caller supplies it
-  // and promotion refuses rather than inventing one.
-  assert.equal(
-    decideChangeRiskPromotion(input()).ruleRecord.dateIntroduced,
-    "2026-07-31",
+/** Narrow to a promoted decision, failing loudly when promotion was refused. */
+function promoted(decision: ChangeRiskPromotionDecision) {
+  assert.ok(
+    decision.promotable,
+    decision.promotable ? "" : `refused: ${decision.refusal}`,
   );
-  assert.throws(
-    () => decideChangeRiskPromotion(input({ dateIntroduced: "  " })),
-    /dateIntroduced/u,
-  );
-});
+  return decision;
+}
 
 test("recurrence counts reviewed changes, not rounds or fingerprints", () => {
-  // The occurrence unit is one reviewed change: repeated rounds and distinct
-  // fingerprints inside the same change collapse to at most one.
   assert.equal(
     countCanonicalCategoryOccurrences(
       [
@@ -79,57 +73,52 @@ test("recurrence counts reviewed changes, not rounds or fingerprints", () => {
   );
 });
 
-test("only validated outcomes count toward recurrence", () => {
+test("only validated outcomes count, in history and for the current finding", () => {
   for (const resolution of promotion.recurrenceClassification
     .excludedResolutions) {
+    assert.equal(
+      isValidatedPromotionOutcome({ resolution }),
+      false,
+      resolution,
+    );
     assert.equal(
       countCanonicalCategoryOccurrences(
         [occurrence("change-a", { resolution })],
         "state-classification",
       ),
       0,
-      `${resolution} must never count`,
+    );
+    // The same gate applies to the finding being promoted. Without it, an
+    // invalidated finding promotes exactly like a validated one.
+    const decision = decideChangeRiskPromotion(
+      input({ resolution, history: [occurrence("a"), occurrence("b")] }),
+    );
+    assert.equal(decision.promotable, false, `${resolution} must not promote`);
+    assert.equal(
+      decision.promotable ? "" : decision.refusal,
+      "unvalidated-finding",
     );
   }
-  // An open finding counts only with a confirmed disposition AND the owner's
-  // decision evidence; either alone is an unvalidated claim.
+  assert.equal(isValidatedPromotionOutcome({ resolution: "open" }), false);
   assert.equal(
-    countCanonicalCategoryOccurrences(
-      [occurrence("change-a", { resolution: "open" })],
-      "state-classification",
-    ),
-    0,
-  );
-  assert.equal(
-    countCanonicalCategoryOccurrences(
-      [
-        occurrence("change-a", {
-          resolution: "open",
-          dispositionConfirmed: true,
-        }),
-      ],
-      "state-classification",
-    ),
-    0,
+    isValidatedPromotionOutcome({
+      resolution: "open",
+      dispositionConfirmed: true,
+    }),
+    false,
     "a confirmed disposition without evidence is not validated",
   );
   assert.equal(
-    countCanonicalCategoryOccurrences(
-      [
-        occurrence("change-a", {
-          resolution: "open",
-          dispositionConfirmed: true,
-          dispositionEvidence: "owner accepted the debt; ticket filed",
-        }),
-      ],
-      "state-classification",
-    ),
-    1,
+    isValidatedPromotionOutcome({
+      resolution: "open",
+      dispositionConfirmed: true,
+      dispositionEvidence: "owner accepted the debt; ticket filed",
+    }),
+    true,
   );
 });
 
 test("recurrence is keyed on canonical category identity, never raw wording", () => {
-  // A raw label that normalizes to the same canonical category counts with it.
   assert.equal(
     countCanonicalCategoryOccurrences(
       [
@@ -141,17 +130,10 @@ test("recurrence is keyed on canonical category identity, never raw wording", ()
     1,
     "an unmapped raw label is uncategorized, not a silent match",
   );
-  // `uncategorized` is excluded from recurrence entirely.
   assert.equal(
     countCanonicalCategoryOccurrences(
       [
         occurrence("change-a", {
-          category: CHANGE_RISK_CATEGORY_UNCATEGORIZED,
-        }),
-        occurrence("change-b", {
-          category: CHANGE_RISK_CATEGORY_UNCATEGORIZED,
-        }),
-        occurrence("change-c", {
           category: CHANGE_RISK_CATEGORY_UNCATEGORIZED,
         }),
       ],
@@ -161,140 +143,195 @@ test("recurrence is keyed on canonical category identity, never raw wording", ()
   );
 });
 
-test("every approved threshold produces its exact approved action", () => {
+test("an unclassifiable finding earns no rule at all", () => {
+  // Excluding it from counting is not enough: an uncategorized finding must
+  // not produce a rule record either, or promotion emits a rule nobody can
+  // scope.
+  const decision = decideChangeRiskPromotion(input({ category: "made up" }));
+  assert.equal(decision.promotable, false);
+  assert.equal(decision.promotable ? "" : decision.refusal, "uncategorized");
+});
+
+test("the current change never counts itself twice", () => {
+  const decision = promoted(
+    decideChangeRiskPromotion(
+      input({ history: [occurrence("change-now"), occurrence("change-a")] }),
+    ),
+  );
+  assert.equal(decision.occurrence, 2, "the current change is counted once");
+});
+
+test("every threshold produces its approved action and its full obligation set", () => {
   const cases = [
     {
       name: "first systemic P1",
       value: input({ priority: "P1", systemic: true }),
-      expected: promotion.actions.firstSystemicP1,
+      action: promotion.actions.firstSystemicP1,
+      expected: { test: true, rule: true, guard: false, impractical: false },
     },
     {
       name: "first non-systemic P1",
       value: input({ priority: "P1", systemic: false }),
-      expected: promotion.actions.firstNonSystemicP1,
+      action: promotion.actions.firstNonSystemicP1,
+      expected: { test: true, rule: false, guard: false, impractical: false },
     },
     {
       name: "first ordinary P2",
       value: input({ priority: "P2" }),
-      expected: promotion.actions.firstOrdinaryP2OrP3,
+      action: promotion.actions.firstOrdinaryP2OrP3,
+      expected: { test: false, rule: false, guard: false, impractical: false },
     },
     {
       name: "first ordinary P3",
       value: input({ priority: "P3" }),
-      expected: promotion.actions.firstOrdinaryP2OrP3,
+      action: promotion.actions.firstOrdinaryP2OrP3,
+      expected: { test: false, rule: false, guard: false, impractical: false },
     },
     {
       name: "second occurrence",
       value: input({ history: [occurrence("change-a")] }),
-      expected: promotion.actions.secondOccurrence,
+      action: promotion.actions.secondOccurrence,
+      expected: { test: true, rule: true, guard: false, impractical: false },
     },
     {
-      name: "third occurrence",
+      name: "third occurrence, guard practical",
       value: input({
         history: [occurrence("change-a"), occurrence("change-b")],
       }),
-      expected: promotion.actions.thirdOccurrence,
+      action: promotion.actions.thirdOccurrence,
+      expected: { test: true, rule: true, guard: true, impractical: false },
+    },
+    {
+      name: "third occurrence, guard impractical",
+      value: input({
+        history: [occurrence("change-a"), occurrence("change-b")],
+        mechanicalGuardPractical: false,
+      }),
+      action: promotion.actions.thirdOccurrence,
+      // Thresholds escalate: a third occurrence keeps everything the second
+      // earned. It may never earn less than the second for lack of a guard.
+      expected: { test: true, rule: true, guard: false, impractical: true },
     },
   ] as const;
 
   for (const entry of cases) {
-    const decision = decideChangeRiskPromotion(entry.value);
-    assert.equal(decision.action, entry.expected, entry.name);
+    const decision = promoted(decideChangeRiskPromotion(entry.value));
+    assert.equal(decision.action, entry.action, entry.name);
+    assert.deepEqual(
+      {
+        test: decision.requiresRegressionTest,
+        rule: decision.requiresScopedRule,
+        guard: decision.requiresMechanicalGuard,
+        impractical: decision.requiresRecordedImpracticality,
+      },
+      entry.expected,
+      entry.name,
+    );
   }
 });
 
-test("a systemic P1 is protected immediately even on its first occurrence", () => {
-  const decision = decideChangeRiskPromotion(
-    input({ priority: "P1", systemic: true }),
-  );
-  assert.equal(decision.occurrence, 1);
-  assert.equal(decision.requiresRegressionTest, true);
-  assert.equal(decision.requiresScopedRule, true);
-});
-
-test("the third occurrence demands a guard, or a recorded reason it is impractical", () => {
-  const history = [occurrence("change-a"), occurrence("change-b")];
-  const practical = decideChangeRiskPromotion(input({ history }));
-  assert.equal(practical.occurrence, 3);
-  assert.equal(
-    practical.requiresMechanicalGuard,
-    true,
-    "the prompt rule alone has proven insufficient",
-  );
-  const impractical = decideChangeRiskPromotion(
-    input({ history, mechanicalGuardPractical: false }),
-  );
-  assert.equal(impractical.requiresMechanicalGuard, false);
-  assert.equal(
-    impractical.requiresRecordedImpracticality,
-    true,
-    "an impractical guard is recorded, never silently skipped",
-  );
-});
-
 test("an existing equivalent guard is cited instead of adding another prose rule", () => {
+  const guard = "packages/compiler/src/surface-coverage.test.ts";
+  const decision = promoted(
+    decideChangeRiskPromotion(
+      input({
+        history: [occurrence("change-a")],
+        existingMechanicalGuard: guard,
+      }),
+    ),
+  );
+  assert.equal(decision.requiresScopedRule, false);
+  assert.equal(decision.requiresRegressionTest, false);
+  assert.equal(decision.supersededByGuard, guard);
+  assert.equal(decision.ruleRecord.lifecycleStatus, "retired");
+  assert.equal(decision.ruleRecord.mechanicalGuard, guard);
+});
+
+test("a blank guard is absent, not a guard", () => {
+  // Otherwise an empty string cancels the protection a second occurrence
+  // earns while citing no guard at all.
+  for (const existingMechanicalGuard of ["", "   "]) {
+    const decision = promoted(
+      decideChangeRiskPromotion(
+        input({ history: [occurrence("change-a")], existingMechanicalGuard }),
+      ),
+    );
+    assert.equal(decision.requiresScopedRule, true);
+    assert.equal(decision.supersededByGuard, undefined);
+    assert.equal(decision.ruleRecord.lifecycleStatus, "active");
+    assert.equal(decision.ruleRecord.mechanicalGuard, null);
+  }
+});
+
+test("a generated-region target is refused and yields no rule record", () => {
+  // Refusing while still emitting a rule whose scope is the generated path
+  // would hand a consumer the very write the refusal exists to prevent.
   const decision = decideChangeRiskPromotion(
     input({
       history: [occurrence("change-a")],
-      existingMechanicalGuard: "packages/compiler/src/surface-coverage.test.ts",
+      targetIsGeneratedRegion: true,
+      targetScope: ".claude/skills/subagent-driven-change/SKILL.md",
     }),
   );
-  assert.equal(decision.occurrence, 2);
+  assert.equal(decision.promotable, false);
   assert.equal(
-    decision.requiresScopedRule,
-    false,
-    "an equivalent or stronger guard supersedes a new prose rule",
+    decision.promotable ? "" : decision.refusal,
+    "generated-region-refused",
   );
   assert.equal(
-    decision.supersededByGuard,
-    "packages/compiler/src/surface-coverage.test.ts",
+    decision.promotable
+      ? false
+      : decision.proposalPath?.startsWith(
+          promotion.ownership.proposalPathPrefix,
+        ),
+    true,
+    "the workflow still proposes a patch, under the proposal prefix",
   );
 });
 
-test("promotion never writes a generated region; it proposes a patch instead", () => {
-  const decision = decideChangeRiskPromotion(
-    input({ targetIsGeneratedRegion: true }),
-  );
-  assert.equal(decision.ownership, "refused-generated-region");
-  assert.ok(
-    decision.proposalPath.startsWith(promotion.ownership.proposalPathPrefix),
-    "a refused target still yields a proposal under the proposal prefix",
-  );
-  // Within the reviewed change, promotion writes only the proposal artifact.
-  const manual = decideChangeRiskPromotion(input());
-  assert.equal(manual.ownership, "proposal-only");
-  assert.ok(
-    manual.proposalPath.startsWith(promotion.ownership.proposalPathPrefix),
-  );
-});
-
-test("every promoted rule carries the closed record fields and a lifecycle status", () => {
-  const decision = decideChangeRiskPromotion(
-    input({ history: [occurrence("change-a")] }),
+test("a promoted rule carries every closed record field with real values", () => {
+  const decision = promoted(
+    decideChangeRiskPromotion(
+      input({
+        history: [
+          occurrence("change-a"),
+          occurrence("b", { resolution: "obsolete" }),
+        ],
+        clusterKeysThisChange: ["state-transition+missing-validation"],
+      }),
+    ),
   );
   assert.deepEqual(
     Object.keys(decision.ruleRecord).sort(),
     [...promotion.ownership.ruleRecordFields].sort(),
   );
+  assert.equal(decision.ruleRecord.sourceCategory, "state-classification");
+  assert.equal(decision.ruleRecord.scope, input().targetScope);
+  assert.equal(decision.ruleRecord.dateIntroduced, "2026-07-31");
+  assert.match(decision.ruleRecord.ruleId, /^change-risk\./u);
   assert.ok(
     promotion.ownership.ruleLifecycleStatuses.includes(
       decision.ruleRecord.lifecycleStatus,
     ),
   );
-  assert.equal(decision.ruleRecord.sourceCategory, "state-classification");
-  assert.equal(decision.ruleRecord.scope, input().targetScope);
-  assert.match(decision.ruleRecord.ruleId, /^change-risk\./u);
+  // Evidence cites only the changes that actually counted; the obsolete one
+  // is not evidence for a rule.
+  assert.deepEqual([...decision.ruleRecord.evidenceRecordReferences].sort(), [
+    "change-a",
+    "change-now",
+  ]);
+  assert.deepEqual(
+    [...decision.ruleRecord.clusterEvidence],
+    ["state-transition+missing-validation"],
+    "cluster events are carried as evidence, not silently discarded",
+  );
 });
 
 test("a within-change cluster recurrence is not a cross-change occurrence", () => {
-  // Amendment 002: the cluster trigger is within-change only and is answered by
-  // the orchestration's guard requirement. Cluster keys may span categories, so
-  // substituting them into recurrence counting would corrupt the thresholds.
-  const decision = decideChangeRiskPromotion(
-    input({
-      clusterRecurredThisChange: true,
-      clusterKeysThisChange: ["state-transition+missing-validation"],
-    }),
+  const decision = promoted(
+    decideChangeRiskPromotion(
+      input({ clusterKeysThisChange: ["state-transition+missing-validation"] }),
+    ),
   );
   assert.equal(
     decision.occurrence,
@@ -302,4 +339,11 @@ test("a within-change cluster recurrence is not a cross-change occurrence", () =
     "a cluster recurrence inside one change stays one occurrence",
   );
   assert.equal(decision.action, promotion.actions.firstOrdinaryP2OrP3);
+});
+
+test("a promoted rule carries the date it was introduced, never a blank", () => {
+  assert.throws(
+    () => decideChangeRiskPromotion(input({ dateIntroduced: "  " })),
+    /dateIntroduced/u,
+  );
 });

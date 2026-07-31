@@ -47,8 +47,27 @@ A mechanical or interface-level guard MAY arrive before the third occurrence
 when clearly practical and proportionate. Prefer a guard over prose: add a
 prompt rule only when model judgement remains part of the safe decision.
 
+Thresholds escalate monotonically: a third occurrence keeps everything the
+second earned and adds the guard on top. It can never earn less than the
+second merely because no guard is practical.
+
 When no deterministic guard is practical at the third occurrence, that
 impracticality is **recorded**, never silently skipped.
+
+## What earns nothing
+
+Three outcomes stop before a rule record exists, so no consumer can act on
+one. They are ordinary results, not errors:
+
+- **Unvalidated finding.** The current finding faces the same gate as history.
+  A `false-positive` or `obsolete` finding, or an `open` one without a
+  confirmed disposition and the owner's evidence, earns nothing.
+- **Uncategorized.** Excluding it from counting is not enough; it also earns no
+  rule, because a rule nobody can scope helps nobody.
+- **Generated-region target.** Refused outright, with no rule record emitted —
+  a record whose `scope` pointed inside a generated region would hand a
+  consumer the very write the refusal exists to prevent. The proposal artifact
+  is still produced, for a human-owned surface.
 
 ## Ownership: promotion proposes, it does not edit
 
@@ -63,8 +82,11 @@ impracticality is **recorded**, never silently skipped.
 ## Rule shape and lifecycle
 
 Every promoted rule records its `ruleId`, `sourceCategory`, `scope`,
-`evidenceRecordReferences`, `dateIntroduced`, `mechanicalGuard`, and
-`lifecycleStatus` (`active`, `superseded`, or `retired`).
+`evidenceRecordReferences`, `clusterEvidence`, `dateIntroduced`,
+`mechanicalGuard`, and `lifecycleStatus` (`active`, `superseded`, or
+`retired`). Evidence cites only the changes that actually counted, and
+cluster keys are carried as `clusterEvidence` — recorded alongside category
+counts as amendment 002 requires, never counted as occurrences.
 
 A rule must be concise, consequential, scoped to the narrowest applicable
 path, and must state both the unsafe condition and the safe path or a

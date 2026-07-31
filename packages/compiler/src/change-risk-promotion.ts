@@ -11,76 +11,122 @@ import {
 } from "./change-risk-policy.js";
 
 /**
- * One earlier finding that may count toward a category's recurrence. Sourced
- * from persisted `review-learning/v1` records; this module never reads them
- * itself, so promotion stays a pure computation over supplied history.
+ * A finding outcome as persisted in a `review-learning/v1` record. The same
+ * validation gate applies to the current finding and to every historical one:
+ * promotion never counts a finding the owner did not validate.
  */
-export type PromotionHistoryEntry = Readonly<{
-  /** The reviewed change this finding belonged to. The occurrence unit. */
-  changeId: string;
-  category: string;
+export type PromotionFindingOutcome = Readonly<{
   resolution: ChangeRiskResolution | "open";
   dispositionConfirmed?: boolean;
   dispositionEvidence?: string;
 }>;
 
-export type ChangeRiskPromotionInput = Readonly<{
-  changeId: string;
-  category: string;
-  priority: ChangeRiskPriority;
-  resolution: ChangeRiskResolution | "open";
-  /** Owner-validated systemic classification; only meaningful for a P1. */
-  systemic: boolean;
-  history: readonly PromotionHistoryEntry[];
-  /** The narrowest path the rule would apply to. */
-  targetScope: string;
-  /** True when that path is inside a compiler-generated instruction region. */
-  targetIsGeneratedRegion: boolean;
-  /** Whether a deterministic guard is practical for this failure. */
-  mechanicalGuardPractical: boolean;
-  /**
-   * The date the rule is introduced, supplied by the caller. Promotion is a
-   * pure computation with no clock, and `dateIntroduced` is a required rule
-   * record field, so an absent one is refused rather than defaulted to a blank
-   * that the record schema would reject downstream.
-   */
-  dateIntroduced: string;
-  /** An existing guard that already gives equivalent or stronger protection. */
-  existingMechanicalGuard?: string;
-  /**
-   * Amendment 002: recorded for the rule's evidence, never for counting. The
-   * within-change cluster trigger is answered by the orchestration's guard
-   * requirement, not by promotion.
-   */
-  clusterRecurredThisChange?: boolean;
-  clusterKeysThisChange?: readonly string[];
-}>;
+/** One earlier finding that may count toward a category's recurrence. */
+export type PromotionHistoryEntry = Readonly<
+  PromotionFindingOutcome & {
+    /** The reviewed change this finding belonged to. The occurrence unit. */
+    changeId: string;
+    category: string;
+  }
+>;
+
+export type ChangeRiskPromotionInput = Readonly<
+  PromotionFindingOutcome & {
+    changeId: string;
+    category: string;
+    priority: ChangeRiskPriority;
+    /** Owner-validated systemic classification; only meaningful for a P1. */
+    systemic: boolean;
+    history: readonly PromotionHistoryEntry[];
+    /** The narrowest path the rule would apply to. */
+    targetScope: string;
+    /** True when that path is inside a compiler-generated instruction region. */
+    targetIsGeneratedRegion: boolean;
+    /** Whether a deterministic guard is practical for this failure. */
+    mechanicalGuardPractical: boolean;
+    /**
+     * The date the rule is introduced, supplied by the caller. Promotion is a
+     * pure computation with no clock, and `dateIntroduced` is a required rule
+     * record field, so an absent one is refused rather than defaulted to a
+     * blank the record schema would reject downstream.
+     */
+    dateIntroduced: string;
+    /** An existing guard already giving equivalent or stronger protection. */
+    existingMechanicalGuard?: string;
+    /**
+     * Amendment 002 cluster events. Recorded on the rule record as evidence,
+     * never counted: cluster identity is mechanism-keyed and may span
+     * categories (ADR 0026), so counting it would corrupt the thresholds.
+     */
+    clusterKeysThisChange?: readonly string[];
+  }
+>;
 
 export type ChangeRiskPromotedRuleRecord = Readonly<{
   ruleId: string;
   sourceCategory: string;
   scope: string;
   evidenceRecordReferences: readonly string[];
+  clusterEvidence: readonly string[];
   dateIntroduced: string;
   mechanicalGuard: string | null;
   lifecycleStatus: "active" | "superseded" | "retired";
 }>;
 
-export type ChangeRiskPromotionDecision = Readonly<{
-  /** 1-based count of reviewed changes this category has now occurred in. */
-  occurrence: number;
-  /** The exact approved action text from the shared policy source. */
-  action: string;
-  requiresRegressionTest: boolean;
-  requiresScopedRule: boolean;
-  requiresMechanicalGuard: boolean;
-  requiresRecordedImpracticality: boolean;
-  /** Set when an existing guard supersedes a new prose rule. */
-  supersededByGuard?: string;
-  ownership: "proposal-only" | "refused-generated-region";
-  proposalPath: string;
-  ruleRecord: ChangeRiskPromotedRuleRecord;
-}>;
+/**
+ * Why a finding earns nothing. Each is a legitimate outcome, not an error: an
+ * invalidated finding, a finding nobody could classify, and a rule that would
+ * have to be written into a generated region all stop before a rule record
+ * exists, so no consumer can act on one.
+ */
+export type ChangeRiskPromotionRefusal =
+  "unvalidated-finding" | "uncategorized" | "generated-region-refused";
+
+export type ChangeRiskPromotionDecision =
+  | Readonly<{
+      promotable: false;
+      refusal: ChangeRiskPromotionRefusal;
+      occurrence: number;
+      /** Present when the refusal still leaves a patch worth proposing. */
+      proposalPath?: string;
+    }>
+  | Readonly<{
+      promotable: true;
+      /** 1-based count of reviewed changes this category has occurred in. */
+      occurrence: number;
+      /** The exact approved action text from the shared policy source. */
+      action: string;
+      requiresRegressionTest: boolean;
+      requiresScopedRule: boolean;
+      requiresMechanicalGuard: boolean;
+      requiresRecordedImpracticality: boolean;
+      /** Set when an existing guard supersedes a new prose rule. */
+      supersededByGuard?: string;
+      ownership: "proposal-only";
+      proposalPath: string;
+      ruleRecord: ChangeRiskPromotedRuleRecord;
+    }>;
+
+/**
+ * Whether a finding outcome is validated enough to count. An `open` finding is
+ * a claim until the owner confirms it AND records why; either half alone would
+ * rest a threshold on an unvalidated opinion.
+ */
+export function isValidatedPromotionOutcome(
+  outcome: PromotionFindingOutcome,
+): boolean {
+  const { countedResolutions, excludedResolutions } =
+    changeRiskPromotionProjection().recurrenceClassification;
+  const resolution = outcome.resolution as ChangeRiskResolution;
+  if (excludedResolutions.includes(resolution)) return false;
+  if (countedResolutions.includes(resolution)) return true;
+  return (
+    outcome.resolution === "open" &&
+    outcome.dispositionConfirmed === true &&
+    typeof outcome.dispositionEvidence === "string" &&
+    outcome.dispositionEvidence.trim().length > 0
+  );
+}
 
 /**
  * Count how many distinct reviewed changes a canonical category has counted
@@ -91,7 +137,6 @@ export function countCanonicalCategoryOccurrences(
   history: readonly PromotionHistoryEntry[],
   category: ChangeRiskCategoryLabel | string,
 ): number {
-  const promotion = changeRiskPromotionProjection();
   const target = normalizeChangeRiskCategory(category);
   // An unclassifiable finding must not accumulate toward a threshold; it would
   // promote a rule nobody can scope.
@@ -99,30 +144,10 @@ export function countCanonicalCategoryOccurrences(
   const counted = new Set<string>();
   for (const entry of history) {
     if (normalizeChangeRiskCategory(entry.category) !== target) continue;
-    if (!countsTowardRecurrence(entry, promotion)) continue;
+    if (!isValidatedPromotionOutcome(entry)) continue;
     counted.add(entry.changeId);
   }
   return counted.size;
-}
-
-function countsTowardRecurrence(
-  entry: PromotionHistoryEntry,
-  promotion: ReturnType<typeof changeRiskPromotionProjection>,
-): boolean {
-  const { countedResolutions, excludedResolutions } =
-    promotion.recurrenceClassification;
-  if (excludedResolutions.includes(entry.resolution as ChangeRiskResolution))
-    return false;
-  if (countedResolutions.includes(entry.resolution as ChangeRiskResolution))
-    return true;
-  // An open finding is a claim until the owner confirms it AND records why.
-  // Either half alone leaves the threshold resting on an unvalidated opinion.
-  return (
-    entry.resolution === "open" &&
-    entry.dispositionConfirmed === true &&
-    typeof entry.dispositionEvidence === "string" &&
-    entry.dispositionEvidence.trim().length > 0
-  );
 }
 
 function ruleIdFor(category: string, scope: string): string {
@@ -147,17 +172,48 @@ export function decideChangeRiskPromotion(
       "promotion requires a dateIntroduced for the rule record",
     );
   const category = normalizeChangeRiskCategory(input.category);
-  // The current change is one occurrence; earlier changes add to it. A cluster
-  // recurrence inside this change is deliberately not counted - cluster
-  // identity is mechanism-keyed and may span categories (ADR 0026), so
-  // substituting it here would corrupt the thresholds.
   const priorOccurrences = countCanonicalCategoryOccurrences(
     input.history.filter((entry) => entry.changeId !== input.changeId),
     category,
   );
+
+  // The current finding passes the same gate as history. Promotion must never
+  // accept a reviewer finding as valid on its own; an invalidated one earns
+  // nothing and produces no rule record for a consumer to act on.
+  if (!isValidatedPromotionOutcome(input))
+    return {
+      promotable: false,
+      refusal: "unvalidated-finding",
+      occurrence: priorOccurrences,
+    };
+  if (category === CHANGE_RISK_CATEGORY_UNCATEGORIZED)
+    return {
+      promotable: false,
+      refusal: "uncategorized",
+      occurrence: priorOccurrences,
+    };
+
+  const proposalPath = `${promotion.ownership.proposalPathPrefix}${ruleIdFor(
+    category,
+    input.targetScope,
+  )}.md`;
+  // A generated region is refused outright, and no rule record is emitted, so
+  // no consumer can honour a `scope` pointing inside one. The proposal is what
+  // the workflow puts forward instead, against a human-owned surface.
+  if (input.targetIsGeneratedRegion)
+    return {
+      promotable: false,
+      refusal: "generated-region-refused",
+      occurrence: priorOccurrences + 1,
+      proposalPath,
+    };
+
   const occurrence = priorOccurrences + 1;
   const systemicFirstP1 =
     occurrence === 1 && input.priority === "P1" && input.systemic;
+  // Blank is absent. Treating an empty guard as present would cancel the
+  // protection a second occurrence earns while citing no guard at all.
+  const supersededByGuard = input.existingMechanicalGuard?.trim() || undefined;
 
   const action =
     occurrence >= 3
@@ -170,17 +226,18 @@ export function decideChangeRiskPromotion(
             ? promotion.actions.firstNonSystemicP1
             : promotion.actions.firstOrdinaryP2OrP3;
 
-  // An existing deterministic guard already provides the protection a second
-  // prose rule would restate, so it is cited instead of duplicated.
-  const supersededByGuard = input.existingMechanicalGuard;
+  // Thresholds escalate monotonically. A third occurrence keeps everything the
+  // second earned and adds the guard on top; it can never earn less than the
+  // second, which is what a non-monotonic reading produced when no guard was
+  // practical.
+  const earnsSecondOccurrenceProtection = occurrence >= 2;
   const requiresScopedRule =
     supersededByGuard === undefined &&
-    (systemicFirstP1 || occurrence >= 2) &&
-    occurrence < 3;
+    (systemicFirstP1 || earnsSecondOccurrenceProtection);
   const requiresRegressionTest =
     systemicFirstP1 ||
     (occurrence === 1 && input.priority === "P1") ||
-    (occurrence === 2 && supersededByGuard === undefined);
+    (earnsSecondOccurrenceProtection && supersededByGuard === undefined);
   const requiresMechanicalGuard =
     occurrence >= 3 && input.mechanicalGuardPractical;
   const requiresRecordedImpracticality =
@@ -192,14 +249,17 @@ export function decideChangeRiskPromotion(
         input.changeId,
         ...input.history
           .filter(
-            (entry) => normalizeChangeRiskCategory(entry.category) === category,
+            (entry) =>
+              normalizeChangeRiskCategory(entry.category) === category &&
+              isValidatedPromotionOutcome(entry),
           )
           .map((entry) => entry.changeId),
-      ].filter((value) => value.length > 0),
+      ].filter((value) => value.trim().length > 0),
     ),
   ];
 
   return {
+    promotable: true,
     occurrence,
     action,
     requiresRegressionTest,
@@ -207,21 +267,14 @@ export function decideChangeRiskPromotion(
     requiresMechanicalGuard,
     requiresRecordedImpracticality,
     ...(supersededByGuard ? { supersededByGuard } : {}),
-    // Within the reviewed change promotion only ever proposes. A generated
-    // region is additionally refused outright so the refusal is visible in the
-    // decision rather than implied by the proposal path.
-    ownership: input.targetIsGeneratedRegion
-      ? "refused-generated-region"
-      : "proposal-only",
-    proposalPath: `${promotion.ownership.proposalPathPrefix}${ruleIdFor(
-      category,
-      input.targetScope,
-    )}.md`,
+    ownership: "proposal-only",
+    proposalPath,
     ruleRecord: {
       ruleId: ruleIdFor(category, input.targetScope),
       sourceCategory: category,
       scope: input.targetScope,
       evidenceRecordReferences,
+      clusterEvidence: [...new Set(input.clusterKeysThisChange ?? [])],
       dateIntroduced: input.dateIntroduced,
       mechanicalGuard: supersededByGuard ?? null,
       // A rule superseded by an equivalent guard is never rendered as active
