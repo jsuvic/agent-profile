@@ -658,12 +658,14 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
       [],
     );
 
-    // Every declared artifact is inside the swept tree, so the sweep above
-    // genuinely covers them rather than silently skipping absent paths.
+    // Declared-local artifacts are gitignored, so a clean checkout need not
+    // contain them. Whether present or absent before the check, the guard
+    // must leave their presence unchanged.
     for (const artifactPath of DECLARED_LOCAL_ARTIFACTS) {
-      assert.ok(
+      assert.equal(
+        afterSnapshot.has(artifactPath),
         beforeSnapshot.has(artifactPath),
-        `${artifactPath} must be covered by the sentinel`,
+        `${artifactPath} must not be created or removed by the sentinel`,
       );
     }
     assert.ok(beforeSnapshot.has(".claude/settings.json"));
