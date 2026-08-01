@@ -873,6 +873,9 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
         // release-workflow surfaces; a file may belong to more than one.
         "scripts/release/**",
         "scripts/verify-pack-files.mjs",
+        // The self-applied artifact guard spawns git to read the committed
+        // tree and spawns the built CLI to compile it into a temporary tree.
+        "scripts/verify-self-applied-artifacts.mjs",
         "apps/*/scripts/build-*.mjs",
       ],
       contracts: ["network-process-boundary"],
@@ -893,6 +896,12 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
         "CLAUDE.md",
         "ai-profile.lock",
         ".mcp.json",
+        // The self-applied artifact guard implements ownership rather than
+        // carrying it, like regions.ts and golden.ts above: it decides which
+        // committed paths are generated-owned and which are exempt. Without
+        // this, widening its exemption list would route to a
+        // network-process-boundary review and never to an ownership one.
+        "scripts/verify-self-applied-artifacts.mjs",
         ".agents/**",
         ".claude/**",
         ".codex/**",

@@ -25,5 +25,7 @@ provider-neutral external-review boundary.
 - `issues/012-ledger-write-snapshot-conflict.md` (I12)
 - `issues/013-reviewer-field-completeness-guard.md` (I13)
 - `issues/014-self-applied-artifact-drift-guard.md` (I14)
+- `issues/015-artifact-guard-local-exemption-derivation.md` (I15)
+- `issues/016-artifact-guard-mechanism-disclosure.md` (I16)
 
 Task states are tracked in the root `TASKS.md` ledger.
