@@ -2788,13 +2788,20 @@ existing record as evidence about I8 in either direction, and I14 is what makes
 
 PR #145 external review, 2026-07-31: ten findings, every one badged P1 by the
 external Codex reviewer on a docs-only change. All ten verified against the
-code before being accepted; all ten were substantive, and none was a P1 in this
-repository's taxonomy, where P1 means blocking product risk. A docs-only change
-cannot carry one. The badge is the external reviewer's own scale, which is
-exactly why the approved contract requires external findings to be validated
-and re-priced by the owner before entering the loop rather than merged at their
-stated priority. Recorded because the same mismatch will recur on every
-externally reviewed change.
+code before being accepted; all ten were substantive.
+
+CORRECTED 2026-08-01. This entry originally continued "none was a P1 in this
+repository's taxonomy ... a docs-only change cannot carry one", and that is
+false. This very diff establishes why: issue briefs are implementation
+contracts that `implement-next` executes, and ledger ordering controls which
+task is dispatched - a `human-gate` row above four `ready` rows made all four
+undispatchable, including the next intended slice. A documentation edit can
+therefore block the workflow or authorize an unsafe implementation, which is
+blocking product risk by any reading. Pricing by file type is the error; price
+by consequence. The external badge still uses its own scale and still has to be
+re-priced by the owner before entering the loop, but re-pricing means judging
+impact, not downgrading because the extension is `.md`. Two of the ten were in
+fact blocking under our own taxonomy.
 
 Two findings shared one root cause, and it was a sequencing error of mine. The
 Option C split was right - bookkeeping out of the reviewed change so its
