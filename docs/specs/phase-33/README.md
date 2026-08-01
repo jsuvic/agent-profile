@@ -17,5 +17,13 @@ provider-neutral external-review boundary.
 - `issues/004-recurring-finding-promotion.md` (I4)
 - `issues/005-historical-review-backfill.md` (I5)
 - `issues/006-published-workflow-validation.md` (I6)
+- `issues/007-cluster-key-derivation.md` (I7)
+- `issues/008-reviewer-budget-exhaustion.md` (I8)
+- `issues/009-reviewer-field-shape-guard.md` (I9)
+- `issues/010-reviewer-budget-observability.md` (I10)
+- `issues/011-reviewer-locator-value-constraints.md` (I11)
+- `issues/012-ledger-write-snapshot-conflict.md` (I12)
+- `issues/013-reviewer-field-completeness-guard.md` (I13)
+- `issues/014-self-applied-artifact-drift-guard.md` (I14)
 
 Task states are tracked in the root `TASKS.md` ledger.

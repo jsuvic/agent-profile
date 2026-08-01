@@ -2108,19 +2108,24 @@ independent full-change reviewer after spec and code-quality review, bounded
 remediation and escalation, versioned review-learning records, recurring-
 finding promotion, and a provider-neutral external-review boundary.
 
-| Id  | Task                                            | State      | Brief                                                                                                    |
-| --- | ----------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------- |
-| I1  | Emit the independent change-risk reviewer       | done       | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                    |
-| I2  | Orchestrate bounded review remediation          | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)        |
-| I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)              |
-| I4  | Promote recurring findings into stronger guards | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)      |
-| I5  | Backfill the recent PR review corpus            | human-gate | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)        |
-| I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)  |
-| G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)     |
-| I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                |
-| G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md) |
-| I8  | Budget exhaustion degrades to NEEDS_CONTEXT     | ready      | [008-reviewer-budget-exhaustion.md](docs/specs/phase-33/issues/008-reviewer-budget-exhaustion.md)        |
-| I9  | Guard the reviewer envelope field shapes        | ready      | [009-reviewer-field-shape-guard.md](docs/specs/phase-33/issues/009-reviewer-field-shape-guard.md)        |
+| Id  | Task                                            | State      | Brief                                                                                                             |
+| --- | ----------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| I1  | Emit the independent change-risk reviewer       | done       | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                             |
+| I2  | Orchestrate bounded review remediation          | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)                 |
+| I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)                       |
+| I4  | Promote recurring findings into stronger guards | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)               |
+| I5  | Backfill the recent PR review corpus            | human-gate | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)                 |
+| I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)           |
+| G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)              |
+| I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                         |
+| G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md)          |
+| I8  | Budget exhaustion degrades to NEEDS_CONTEXT     | done       | [008-reviewer-budget-exhaustion.md](docs/specs/phase-33/issues/008-reviewer-budget-exhaustion.md)                 |
+| I9  | Guard the reviewer envelope field shapes        | done       | [009-reviewer-field-shape-guard.md](docs/specs/phase-33/issues/009-reviewer-field-shape-guard.md)                 |
+| I10 | Make the reviewer's turn budget observable      | ready      | [010-reviewer-budget-observability.md](docs/specs/phase-33/issues/010-reviewer-budget-observability.md)           |
+| I11 | State the locator interior value constraints    | ready      | [011-reviewer-locator-value-constraints.md](docs/specs/phase-33/issues/011-reviewer-locator-value-constraints.md) |
+| I13 | Guard reviewer field-list completeness          | ready      | [013-reviewer-field-completeness-guard.md](docs/specs/phase-33/issues/013-reviewer-field-completeness-guard.md)   |
+| I14 | Fail on self-applied generated-artifact drift   | ready      | [014-self-applied-artifact-drift-guard.md](docs/specs/phase-33/issues/014-self-applied-artifact-drift-guard.md)   |
+| I12 | Resolve the ledger-write snapshot conflict      | human-gate | [012-ledger-write-snapshot-conflict.md](docs/specs/phase-33/issues/012-ledger-write-snapshot-conflict.md)         |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
@@ -2755,6 +2760,171 @@ and spent a transient retry. That is the cost being guarded against.
 Also recorded for I9: the same emitted sentence lists `evidence`, `safePath`,
 and `fingerprint` twice, once from `requiredFindingFields` and again in
 trailing prose.
+
+Correction 2026-07-31, before any of I10-I14 is dispatched. I8's outcome was
+recorded as a failure of its own rule - "prose has now failed this problem
+three times (10 turns, 18 turns, the stated rule)" - and that is wrong. The
+reviewer invocations that produced those observations ran against this
+repository's own stale `.claude/agents/change-risk-reviewer.md`, so the prompt
+in effect was the pre-I8 one and the rule was never present to fire. I8 is
+UNEXERCISED, not failed. The count of prose failures against the budget problem
+is two (10 turns, 18 turns), not three, and no third-occurrence mechanical-guard
+obligation arises from it.
+
+The error is mine and it propagated: I sharpened the miscount, it went into
+I10's behavior slice and the ledger commit message, and I10's justification
+rested on it. Both are corrected; I10 is now justified on the ground that holds
+
+- the reviewer is told to ration a quantity it is never given, so nothing
+  outside a run can distinguish a trigger that fired, declined, or was never
+  reached. Worth noting where it lands: the promotion machinery this phase built
+  keys on occurrence counts, and the miscount was of an occurrence count.
+
+Consequence for I6, which is the reason this could not be left: there are
+currently ZERO reviews of any change under the post-I8 prompt. I6 must treat
+the first such review as the initial data point rather than reading the
+existing record as evidence about I8 in either direction, and I14 is what makes
+"the artifacts under review are the current ones" checkable instead of assumed.
+
+PR #145 external review, 2026-07-31: ten findings, every one badged P1 by the
+external Codex reviewer on a docs-only change. All ten verified against the
+code before being accepted; all ten were substantive.
+
+CORRECTED 2026-08-01. This entry originally continued "none was a P1 in this
+repository's taxonomy ... a docs-only change cannot carry one", and that is
+false. This very diff establishes why: issue briefs are implementation
+contracts that `implement-next` executes, and ledger ordering controls which
+task is dispatched - a `human-gate` row above four `ready` rows made all four
+undispatchable, including the next intended slice. A documentation edit can
+therefore block the workflow or authorize an unsafe implementation, which is
+blocking product risk by any reading. Pricing by file type is the error; price
+by consequence. The external badge still uses its own scale and still has to be
+re-priced by the owner before entering the loop, but re-pricing means judging
+impact, not downgrading because the extension is `.md`. Two of the ten were in
+fact blocking under our own taxonomy.
+
+Two findings shared one root cause, and it was a sequencing error of mine. The
+Option C split was right - bookkeeping out of the reviewed change so its
+confirmed snapshot survives - but I never said the bookkeeping must land AFTER
+the implementation it declares done. The I8/I9 implementation (db3afcf) was
+never merged and had not even been pushed, so #145 marked both tasks `done`
+against work absent from master and cited a `review-learning/v1` record that
+does not exist in the tree. Fixed by sequencing, not by editing text: the
+implementation is now #146 and merges first.
+
+The remaining eight were defects in the briefs themselves, and their number has
+a cause worth naming: five contracts were written in one pass and filed without
+review. A brief is an implementation contract that `implement-next` executes,
+so a wrong brief becomes wrong code; every other slice this session ran
+RED -> implement -> review, and the briefs skipped review entirely. Corrected:
+the ledger ordered a `human-gate` row above four `ready` rows, which
+`implement-next` cannot dispatch past, so I14 - the next intended dispatch -
+was unreachable; I14 exempted `.claude/settings.json` wholesale although it is
+tracked, `claude-settings`-emitted and `generated-owned` in the lock, which
+would have left a stale generated artifact passing the very gate I14 adds, so
+the guard now compares committed bytes and `.mcp.json` is out of scope as
+untracked; I14 cited I5 as owner of PR #140's occurrence although I5 is scoped
+to eight other PRs by an explicit non-goal, so that occurrence is now stated as
+an owner determination that I5 must never be cited for nor double-count; I12
+listed widening the snapshot exclusion to `docs/specs/**/issues/*.md` as an
+option, but briefs are executable workflow inputs, so widening there would let
+unreviewed requirements be implemented later - now constrained to inert
+append-only bookkeeping; I13's completeness guard collapsed per-priority
+requiredness into a union, which would pass if `disposition` were stated
+unconditionally, i.e. the exact malformed envelope I13 exists to prevent, so it
+now derives required AND forbidden key sets per priority; I11 demanded the
+prompt state `path` is repo-relative, which cannot be proven load-bearing
+because the normalizer strips a leading separator and `/tmp/file.ts` is
+ACCEPTED today (verified by driving the validator), so the unprovable claim is
+removed and the gap recorded; I11 also omitted that a present `symbol` must be
+a non-empty string, which the validator enforces; and I10's third option kept a
+trigger that still required knowing the remaining budget, defeating its own
+acceptance criterion.
+
+PR #145 second external round, 2026-08-01: four findings, all verified, all
+valid — and two of them are defects the PREVIOUS round's fixes introduced.
+Worth recording as a pattern rather than four items.
+
+I10: closing the "trigger must not depend on the budget" finding, I replaced
+the bad phrasing with a category-ordering example that is observable but has no
+relationship to exhaustion — it fires immediately with ample turns left, or
+never fires at all if the implied order is followed. I substituted "observable"
+for "related to the thing being triggered". The brief now names both
+disqualified phrasings explicitly and requires a trigger that correlates with
+capacity actually running out, or the option is not viable.
+
+I12: closing the "briefs are executable inputs" finding, I excluded briefs but
+left `TASKS.md` in the inert list. It is not inert: `implement-next` reads task
+order, state, and brief links and selects the first `ready` row. The proof is
+in the same review round — the finding that a `human-gate` row above four
+`ready` rows made them undispatchable IS a demonstration that ledger order is
+executable, and I fixed that finding without drawing the conclusion from it.
+Path-level widening now has almost nothing left to cover, so the option is
+reframed: an exclusion must be defined by what it provably permits, or the
+honest resolutions are the other two.
+
+I14, two findings, neither self-inflicted. First: the parent contract states
+that promotion "reads the persisted values and never re-adjudicates prose", so
+the OWNER DETERMINATION paragraph written last round cannot authorize a
+second-occurrence promotion however honestly it is labelled — it documents the
+gap without closing it. The guard is now framed as an early mechanical guard
+under the guard-preference clause, which the table explicitly permits before a
+third occurrence when clearly practical and proportionate, so it depends on no
+count at all. That is a better justification than the one it replaces. Second:
+the acceptance criterion covered stale BYTES but not orphaned FILES. A dry run
+reports only create/change/unchanged over the current `compileResult.files`,
+and compile never deletes orphans, so a generated-owned artifact that is no
+longer emitted stays on disk, is still read at runtime, and the guard reports
+zero create and zero change. The criterion now compares the committed and
+emitted path sets in both directions.
+
+The pattern: fixing a finding is a change, and changes carry defects at the
+same rate as any other. Two of four here came from same-round fixes applied
+without re-review, and one of those was a conclusion sitting in a finding I had
+already read. Three rounds on this PR now, each smaller than the last
+(10 -> 4), which is what convergence looks like — but the halving is not
+evidence the next round is empty.
+
+PR #145 fourth external round, 2026-08-01: four findings, all verified, all
+valid. Round sizes 10 -> 4 -> 2 -> 4, so this is not converging, and the shape
+of what is being found has changed in a way worth recording.
+
+Three of the four are defects in the previous round's FIXES, not in the
+original work. The record correction added a prose `Corrections` block, but
+`review-learning/v1` has no such field and promotion reads persisted values
+rather than prose, so the canonical Rounds and Promotion sections still carried
+the superseded values a schema-oriented consumer would ingest - the correction
+was written where a human reads and not where the contract reads. Those
+sections are now rewritten to corrected values with each superseded claim
+retained inline as marked non-canonical history. I12's sequencing option was
+disqualified by the case that actually occurs: a final confirmation that itself
+raises an out-of-scope finding, which is literally how I10 and I11 were raised,
+so the briefs can only be written after the confirmation that demands they
+exist before it. I10's remaining option was disqualified because interpolating
+`CHANGE_RISK_REVIEWER_MAX_TURNS` supplies the initial ceiling while I8's rule
+conditions on REMAINING budget, which a reviewer cannot derive without knowing
+charged turns.
+
+That last one is the third consecutive round to disqualify a different I10
+candidate, and the pattern is now the finding: the reviewer needs remaining
+capacity, and no phrasing conveying only a total, only an ordering, or only a
+subjective judgement supplies it. The brief now states that as a gate every
+candidate must pass, and names the honest fallback - if nothing works in prompt
+text, the obligation belongs to the invocation owner.
+
+The fourth was ordinary incompleteness: I11 omitted the 4096-character bound
+that `nonEmptyString` enforces on `location.path` and `location.symbol`
+(verified: 4096 accepted, 4097 rejected), which is the same silent-rejection
+class the brief exists to close.
+
+Standing back: these are all BRIEFS - design documents for work not yet
+written. Four rounds of PR review have been refining speculative designs
+through review comments, which is an expensive medium for design iteration and
+has produced a fix-introduces-defect cycle three rounds running. A brief's
+design errors surface far more cheaply when the slice is implemented and its
+tests fail. This is recorded as an argument for merging the briefs once they
+are honest about their own open questions, rather than polishing them to a
+fixed point that PR review cannot reach.
 
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
