@@ -1075,6 +1075,18 @@ export type ChangeRiskDomainRubricEntry = Readonly<{
   evidenceExpectations: readonly string[];
 }>;
 
+/**
+ * One envelope value the validator requires to be a record rather than a
+ * scalar, with the exact keys the reviewer must supply. `field` uses envelope
+ * path notation with array indices normalized to `[]`.
+ */
+export type ChangeRiskStructuredFieldShape = Readonly<{
+  field: string;
+  keys: readonly string[];
+  /** Subset of `keys` that may be absent. */
+  optionalKeys: readonly string[];
+}>;
+
 export type ChangeRiskReviewerProjection = Readonly<{
   policyVersion: ChangeRiskPolicyVersion;
   objective: Readonly<{
@@ -1096,13 +1108,19 @@ export type ChangeRiskReviewerProjection = Readonly<{
     affectedContractIds: readonly ChangeRiskContractId[];
     unsafeConditionClasses: readonly ChangeRiskUnsafeConditionClass[];
     resolutions: readonly ChangeRiskResolution[];
-    /** The exact `scope` keys the validator requires, in envelope order. The
-     * prompt names them rather than describing them: validation is by key, so
-     * a plausible synonym is a malformed attempt. */
+    /** The exact `scope` keys the validator requires, in envelope order.
+     * `structuredFieldShapes` is what reaches the prompt; this stays as the
+     * flat contract, sharing one frozen const with the shape so the two can
+     * never name different keys. */
     scopeFields: readonly string[];
-    /** The exact keys of one `scope.domains` entry (`reason` is conditional). */
+    /** The exact keys of one `scope.domains` entry (`reason` is conditional),
+     * on the same terms as `scopeFields`. */
     domainEntryFields: readonly string[];
     domainApplicabilityValues: readonly string[];
+    /** Every envelope value the validator requires to be a record. A reviewer
+     * that supplies a plausible scalar (an observed `location` string) produces
+     * a malformed attempt, so the prompt states each shape explicitly. */
+    structuredFieldShapes: readonly ChangeRiskStructuredFieldShape[];
     p3Dispositions: readonly ChangeRiskDisposition[];
     p3ResolutionRules: readonly string[];
     evidenceKinds: readonly ChangeRiskEvidenceKind[];
@@ -1110,6 +1128,10 @@ export type ChangeRiskReviewerProjection = Readonly<{
     requiredFindingFields: readonly string[];
     fingerprintComponents: readonly string[];
     invalidAttemptRules: readonly string[];
+    /** The turn budget is a `NEEDS_CONTEXT` constraint like any other. A
+     * reviewer that spends its last turn inspecting emits nothing, which the
+     * orchestration can only classify as an invalid attempt. */
+    budgetDegradationRules: readonly string[];
   }>;
   safetyConstraints: readonly string[];
 }>;
@@ -1255,6 +1277,34 @@ const DOMAIN_RUBRIC_DETAILS: Readonly<
   },
 });
 
+// Shared between the projected key lists and the structured-field shapes so a
+// prompt that names the keys twice can never state two different key sets.
+const CHANGE_RISK_SCOPE_FIELDS: readonly string[] = Object.freeze([
+  "completed",
+  "inspectedChangeManifest",
+  "inspectedRelevantConsumers",
+  "domains",
+]);
+
+const CHANGE_RISK_DOMAIN_ENTRY_FIELDS: readonly string[] = Object.freeze([
+  "domain",
+  "applicability",
+  "reason",
+]);
+
+const CHANGE_RISK_REQUIRED_FINDING_FIELDS: readonly string[] = Object.freeze([
+  "priority",
+  "category",
+  "location",
+  "unsafeCondition",
+  "evidence",
+  "affectedContractId",
+  "unsafeConditionClass",
+  "safePath",
+  "resolution",
+  "fingerprint",
+]);
+
 const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
   policyVersion: CHANGE_RISK_POLICY_VERSION,
   objective: {
@@ -1301,14 +1351,59 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
     affectedContractIds: CHANGE_RISK_CONTRACT_IDS,
     unsafeConditionClasses: CHANGE_RISK_UNSAFE_CONDITION_CLASSES,
     resolutions: CHANGE_RISK_RESOLUTIONS,
-    scopeFields: [
-      "completed",
-      "inspectedChangeManifest",
-      "inspectedRelevantConsumers",
-      "domains",
-    ],
-    domainEntryFields: ["domain", "applicability", "reason"],
+    scopeFields: CHANGE_RISK_SCOPE_FIELDS,
+    domainEntryFields: CHANGE_RISK_DOMAIN_ENTRY_FIELDS,
     domainApplicabilityValues: ["applicable", "not-applicable"],
+    structuredFieldShapes: [
+      {
+        field: "scope",
+        keys: CHANGE_RISK_SCOPE_FIELDS,
+        optionalKeys: [],
+      },
+      {
+        field: "scope.domains[]",
+        keys: CHANGE_RISK_DOMAIN_ENTRY_FIELDS,
+        optionalKeys: ["reason"],
+      },
+      {
+        // `disposition` is required on a P3 finding and forbidden elsewhere, so
+        // it belongs in the key set even though it is not unconditionally
+        // required. Omitting it would tell a reviewer that a P3 finding needs
+        // only the ten unconditional fields, which the validator rejects.
+        field: "findings[]",
+        keys: [...CHANGE_RISK_REQUIRED_FINDING_FIELDS, "disposition"],
+        optionalKeys: ["disposition"],
+      },
+      {
+        field: "findings[].location",
+        keys: ["path", "symbol", "line"],
+        optionalKeys: ["symbol", "line"],
+      },
+      {
+        field: "findings[].evidence[]",
+        keys: [
+          "kind",
+          "summary",
+          "path",
+          "symbol",
+          "lines",
+          "commit",
+          "invalidatesPriorFinding",
+        ],
+        optionalKeys: [
+          "path",
+          "symbol",
+          "lines",
+          "commit",
+          "invalidatesPriorFinding",
+        ],
+      },
+      {
+        field: "findings[].evidence[].lines",
+        keys: ["start", "end"],
+        optionalKeys: [],
+      },
+    ],
     p3Dispositions: CHANGE_RISK_DISPOSITIONS,
     p3ResolutionRules: [
       "`accepted-debt` and `follow-up` dispositions require resolution `open`.",
@@ -1330,18 +1425,7 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
         "`obsolete` findings; emitting it as `false` is still emitting it, " +
         "and the envelope is rejected.",
     ],
-    requiredFindingFields: [
-      "priority",
-      "category",
-      "location",
-      "unsafeCondition",
-      "evidence",
-      "affectedContractId",
-      "unsafeConditionClass",
-      "safePath",
-      "resolution",
-      "fingerprint",
-    ],
+    requiredFindingFields: CHANGE_RISK_REQUIRED_FINDING_FIELDS,
     fingerprintComponents: [
       "category",
       "affected contract",
@@ -1354,6 +1438,17 @@ const REVIEWER_PROJECTION: ChangeRiskReviewerProjection = deepFreeze({
       "P1 and P2 carry no disposition; every P3 carries exactly one.",
       "A newly discovered finding is always resolution open.",
       "Empty, truncated, unparseable, or mismatched output is never clean.",
+    ],
+    budgetDegradationRules: [
+      "The turn budget is one of these constraints: when the remaining turn " +
+        "budget cannot cover the checks still outstanding, stop inspecting " +
+        "and return `NEEDS_CONTEXT`.",
+      "Reserve enough budget to emit the envelope. A `NEEDS_CONTEXT` envelope " +
+        "naming what went unverified always beats emitting nothing, which is " +
+        "only ever an invalid attempt.",
+      "On exhaustion `scope.completed` is `false`, unreached domains stay " +
+        "unmarked or are reported honestly, and `missingInputs` names the " +
+        "specific checks not performed rather than a generic shortage of room.",
     ],
   },
   safetyConstraints: [
