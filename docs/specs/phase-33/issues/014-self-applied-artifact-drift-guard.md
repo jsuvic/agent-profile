@@ -132,6 +132,47 @@ The guard must remain read-only and must never print file contents that could
 carry secret-shaped values from a local config; report paths and hashes, not
 bytes.
 
+## Implementation divergences (disclosed, owner ratification required)
+
+Recorded during implementation on 2026-08-01. Each is a matter of fact the
+brief could not have known, not a reinterpretation of its intent. None is
+ratified yet.
+
+1. There are THREE generated-owned artifacts with unusual local status, not
+   two. `.codex/config.toml` is declared per-machine in `.gitignore` on the
+   same line-group as `.mcp.json` ("local runtime / per-machine") and is
+   likewise untracked, so it has no committed bytes to verify. Hard-coding
+   only `.mcp.json` would leave the gate permanently red. The implementation
+   uses a frozen constant `DECLARED_LOCAL_ARTIFACTS = [".mcp.json",
+   ".codex/config.toml"]`; any other emitted artifact missing from the commit
+   is a hard failure, and the list cannot be widened at run time. This is the
+   brief's stated rationale applied consistently, but it is a literal widening
+   of the non-goal "widening the exclusion beyond the two named local files"
+   and needs owner sign-off. `.claude/settings.json` remains verified at HEAD
+   and is explicitly NOT exempt.
+
+2. Occurrence #2 as described is not reproducible from history. `6c7998b`
+   (#146) advanced `.claude/agents/change-risk-reviewer.md`,
+   `.codex/agents/change-risk-reviewer.toml` and `ai-profile.lock` in the same
+   commit as the compiler change, and `c415f8c` passes the new guard. During
+   implementation the same drift was observed and traced to a STALE
+   `apps/cli/dist`, not to stale artifacts. That is a distinct and more
+   dangerous failure mode than the one the brief describes, because it makes
+   the guard itself lie in both directions, so the guard now builds the CLI
+   from source before reading it. The regression case reproduces the observed
+   SHAPE deterministically rather than restoring pinned commit bytes, which
+   also keeps it runnable on CI's shallow clone.
+
+3. Workflow consequence, accepted rather than worked around: because the guard
+   compares committed bytes, `npm run check` is red from the moment a template
+   changes until the regenerated artifacts are committed -- staging them is not
+   enough. This follows directly from "Compare the COMMITTED bytes, not the
+   working copy" and is not otherwise avoidable.
+
+4. The guard refreshes gitignored build output (`dist/`, `*.tsbuildinfo`) via
+   `tsc -b`. It writes no tracked file and no generated artifact; the sentinel
+   test asserts the property in exactly that narrower form.
+
 ## Review expectations
 
 Confirm the no-write property is proven by sentinel and not asserted. Confirm

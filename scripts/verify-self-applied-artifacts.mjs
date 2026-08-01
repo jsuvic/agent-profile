@@ -15,9 +15,12 @@
 //      keeps a local override for; verifying it at HEAD keeps the artifact
 //      gated while tolerating the override, and exempting it would let a stale
 //      generated-owned artifact pass the very gate this script adds.
-//   2. The guard never writes into the repository under inspection. It
+//   2. The guard writes no tracked file and no generated artifact. It
 //      materializes the committed tree into a temporary directory and compiles
-//      there, so a detection run can never become the mutation it detects.
+//      there, so a detection run can never become the mutation it detects. It
+//      does refresh gitignored build output (`apps/*/dist`, `packages/*/dist`,
+//      `*.tsbuildinfo`) via `tsc -b`; see `buildCli` for why that is required.
+//      The sentinel test states the property in exactly that form.
 //
 // The guard reports; regenerating is a human or explicit step.
 
@@ -205,6 +208,15 @@ export function evaluateSelfAppliedArtifacts({
   // The other direction. A dry run reports only create/change/unchanged over
   // the current outputs and compile never deletes orphans, so a generated file
   // a target stopped emitting stays checked in and is still read at runtime.
+  //
+  // Two sources, because neither alone is complete: the directory sweep sees a
+  // leftover file the committed lockfile never recorded, and the committed
+  // lockfile sees a retired artifact at the repository root, which is never
+  // swept. Known residual gap: an orphan that BOTH sits at the repository root
+  // AND was dropped from the committed lockfile in the same commit that
+  // stopped emitting it is invisible to both. It is narrow and self-limiting
+  // -- dropping a path from the lockfile changes the lockfile's own bytes, so
+  // the commit that hides the orphan cannot also leave the lockfile current.
   const orphanCandidates = new Set(committedGeneratedPaths);
   for (const committedPath of committed.keys()) {
     if (generatedDirectories.has(posixDirname(committedPath))) {
@@ -289,6 +301,19 @@ function buildCli(repoRoot) {
  * freshly built `ai-profile.lock` whose `outputs` carry authoritative
  * ownership for every path.
  */
+/**
+ * Paths named by compile's generated-ownership refusal, or `[]` when the
+ * output is some other failure.
+ */
+export function parseOwnershipRefusal(output) {
+  if (!output.includes("Refusing to replace existing generated paths")) {
+    return [];
+  }
+  return [...output.matchAll(/^- (\S+) \(hash mismatch\)$/gmu)].map(
+    (match) => match[1],
+  );
+}
+
 function compileEmittedArtifacts({ treeDir, cliEntryPath }) {
   const result = spawnSync(
     process.execPath,
@@ -299,9 +324,18 @@ function compileEmittedArtifacts({ treeDir, cliEntryPath }) {
     throw result.error;
   }
   if (result.status !== 0) {
+    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    const refusedPaths = parseOwnershipRefusal(output);
+    if (refusedPaths.length > 0) {
+      // Not a guard malfunction: the committed artifacts and the committed
+      // lockfile disagree about their own hashes, so compile will not
+      // overwrite them without --force. That is itself a drift the gate must
+      // report by path, not crash on -- and forcing the write here would
+      // destroy the very evidence being reported.
+      return { emitted: new Map(), refusedPaths };
+    }
     throw new Error(
-      `agent-profile compile --write failed in the temporary tree (exit ${result.status}).\n` +
-        `${result.stdout ?? ""}${result.stderr ?? ""}`,
+      `agent-profile compile --write failed in the temporary tree (exit ${result.status}).\n${output}`,
     );
   }
 
@@ -328,7 +362,7 @@ function compileEmittedArtifacts({ treeDir, cliEntryPath }) {
     sha256: sha256(lockBytes),
     ownership: "lockfile",
   });
-  return emitted;
+  return { emitted, refusedPaths: [] };
 }
 
 /** This repository, which owns both the compiler and this guard. */
@@ -369,9 +403,24 @@ export async function verifySelfAppliedArtifacts({
     const committedGeneratedPaths = readGeneratedOwnedPaths(
       path.join(treeDir, AI_PROFILE_LOCK_PATH),
     );
-    const emitted = compileEmittedArtifacts({ treeDir, cliEntryPath });
+    const { emitted, refusedPaths } = compileEmittedArtifacts({
+      treeDir,
+      cliEntryPath,
+    });
+    if (refusedPaths.length > 0) {
+      return {
+        ref,
+        ok: false,
+        stale: [],
+        missing: [],
+        orphaned: [],
+        declaredLocal: [],
+        refusedPaths,
+      };
+    }
     return {
       ref,
+      refusedPaths,
       ...evaluateSelfAppliedArtifacts({
         emitted,
         committed,
@@ -405,6 +454,11 @@ export function formatSelfAppliedArtifactReport(result) {
     `Self-applied artifact verification FAILED against ${result.ref}.`,
     "The checked-in artifacts this repository runs on do not match what the current compiler emits.",
   );
+  for (const artifactPath of result.refusedPaths ?? []) {
+    lines.push(
+      `  conflict: ${artifactPath} does not match the hash ai-profile.lock records for it`,
+    );
+  }
   for (const entry of result.stale) {
     lines.push(
       `  stale:    ${entry.path} (committed ${entry.committedSha256.slice(0, 12)}, emitted ${entry.emittedSha256.slice(0, 12)})`,

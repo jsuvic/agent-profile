@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 import {
   DECLARED_LOCAL_ARTIFACTS,
   evaluateSelfAppliedArtifacts,
+  formatSelfAppliedArtifactReport,
   materializeCommittedTree,
+  parseOwnershipRefusal,
   verifySelfAppliedArtifacts,
 } from "./verify-self-applied-artifacts.mjs";
 
@@ -20,24 +22,58 @@ const repoRoot = path.resolve(
 );
 
 /**
- * The commit that landed phase-33 I8/I9: it advanced the reviewer prompt and
- * its artifacts together. Its parent therefore holds the pre-change artifact
- * bytes.
- */
-const I8_I9_COMMIT = "6c7998b";
-const PRE_I8_I9_COMMIT = `${I8_I9_COMMIT}^`;
-
-/**
- * The observed drift shape, reconstructed from real history: the compiler and
- * the golden fixtures at HEAD, these three root artifacts on their pre-I8/I9
+ * The three artifacts of the observed phase-33 I8/I9 drift shape: the compiler
+ * and both golden fixture trees advanced, while the reviewer prompt, its Codex
+ * twin, and the lockfile that records their hashes stayed on their pre-change
  * bytes. That exact state passed `npm run check`, `npm test` and
  * `npm run verify:pack` before this guard existed.
+ *
+ * The drift is staged deterministically below rather than restored from a
+ * pinned commit: depending on history would make this, the brief's own RED
+ * proof, unrunnable on CI's shallow clone and breakable by any later rebase.
  */
-const DRIFTED_ARTIFACT_PATHS = [
+const REVIEWER_ARTIFACT_PATHS = [
   ".claude/agents/change-risk-reviewer.md",
   ".codex/agents/change-risk-reviewer.toml",
-  "ai-profile.lock",
 ];
+const DRIFTED_ARTIFACT_PATHS = [...REVIEWER_ARTIFACT_PATHS, "ai-profile.lock"];
+
+const STALE_LINE = "\nA line the current compiler does not emit.\n";
+
+/**
+ * Reproduce the observed shape in `dir`: the profile, templates and fixtures
+ * current, the reviewer artifacts a version behind, and the lockfile recording
+ * those behind-the-times bytes.
+ *
+ * The lockfile is kept CONSISTENT with the artifacts on purpose. That is what
+ * made the occurrence invisible: every internal cross-check agreed, and only a
+ * comparison against fresh compiler output could see the drift. Leaving the
+ * lockfile inconsistent instead produces a different defect, which
+ * `stageOwnershipConflict` covers separately.
+ */
+function stageObservedDrift(dir) {
+  let lockText = fs.readFileSync(path.join(dir, "ai-profile.lock"), "utf8");
+  for (const artifactPath of REVIEWER_ARTIFACT_PATHS) {
+    const absolutePath = path.join(dir, artifactPath);
+    const before_ = sha256(fs.readFileSync(absolutePath));
+    fs.appendFileSync(absolutePath, STALE_LINE);
+    const after_ = sha256(fs.readFileSync(absolutePath));
+    lockText = lockText.replaceAll(before_, after_);
+  }
+  fs.writeFileSync(path.join(dir, "ai-profile.lock"), lockText);
+}
+
+/**
+ * A committed artifact whose bytes disagree with the hash the committed
+ * lockfile records for it. `compile` refuses to overwrite that without
+ * `--force`, so the guard has to report the refusal rather than crash on it.
+ */
+function stageOwnershipConflict(dir) {
+  fs.appendFileSync(
+    path.join(dir, REVIEWER_ARTIFACT_PATHS[0]),
+    "\nEdited by hand, leaving the lockfile hash behind.\n",
+  );
+}
 
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
@@ -203,6 +239,21 @@ describe("evaluateSelfAppliedArtifacts", () => {
     assert.deepEqual(result.declaredLocal, [...DECLARED_LOCAL_ARTIFACTS]);
   });
 
+  test("parses only compile's ownership refusal, not other failures", () => {
+    assert.deepEqual(
+      parseOwnershipRefusal(
+        "Refusing to replace existing generated paths without --force:\n" +
+          "- .claude/agents/change-risk-reviewer.md (hash mismatch)\n" +
+          "- .codex/config.toml (hash mismatch)\n",
+      ),
+      [".claude/agents/change-risk-reviewer.md", ".codex/config.toml"],
+    );
+    // Any other non-zero exit must keep propagating as an error rather than
+    // being silently downgraded into a tidy report.
+    assert.deepEqual(parseOwnershipRefusal("ai-profile.yaml is invalid\n"), []);
+    assert.deepEqual(parseOwnershipRefusal(""), []);
+  });
+
   test("the declared-local allowance is a frozen constant, not configuration", () => {
     assert.equal(Object.isFrozen(DECLARED_LOCAL_ARTIFACTS), true);
     assert.throws(() => {
@@ -240,17 +291,11 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
   });
 
   test("fails on the observed drift: fixtures current, root artifacts stale", async () => {
-    const driftedRepo = createRepoFromTree("HEAD", "drifted", (dir) => {
-      for (const artifactPath of DRIFTED_ARTIFACT_PATHS) {
-        fs.writeFileSync(
-          path.join(dir, artifactPath),
-          execFileSync("git", ["show", `${PRE_I8_I9_COMMIT}:${artifactPath}`], {
-            cwd: repoRoot,
-            maxBuffer: 64 * 1024 * 1024,
-          }),
-        );
-      }
-    });
+    const driftedRepo = createRepoFromTree(
+      "HEAD",
+      "drifted",
+      stageObservedDrift,
+    );
     try {
       const result = await verifySelfAppliedArtifacts({
         repoRoot: driftedRepo.dir,
@@ -266,6 +311,28 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
       }
     } finally {
       removeDir(driftedRepo.dir);
+    }
+  });
+
+  test("reports compile's ownership refusal instead of crashing on it", async () => {
+    const conflictRepo = createRepoFromTree(
+      "HEAD",
+      "conflict",
+      stageOwnershipConflict,
+    );
+    try {
+      const result = await verifySelfAppliedArtifacts({
+        repoRoot: conflictRepo.dir,
+      });
+
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.refusedPaths, [REVIEWER_ARTIFACT_PATHS[0]]);
+      assert.match(
+        formatSelfAppliedArtifactReport(result),
+        /conflict: \.claude\/agents\/change-risk-reviewer\.md/u,
+      );
+    } finally {
+      removeDir(conflictRepo.dir);
     }
   });
 
@@ -289,40 +356,69 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
     }
   });
 
-  test("writes nothing into the repository it inspects", async () => {
-    const tracked = execFileSync("git", ["ls-files", "-z"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    })
-      .split("\0")
-      .filter(Boolean);
-    // Untracked generated artifacts are sentinels too: the guard must not
-    // rewrite the owner's local files any more than the committed ones.
-    const sentinelPaths = [...tracked, ...DECLARED_LOCAL_ARTIFACTS];
+  test("tolerates a locally modified tracked artifact and still passes", async () => {
+    const dirtyRepo = createRepoFromTree("HEAD", "dirty");
+    try {
+      // `.claude/settings.json` is tracked and generated-owned, and the owner
+      // of this repository keeps a local override of it. The guard reads the
+      // commit, so the override must neither fail the check nor be rewritten.
+      const overridden = path.join(dirtyRepo.dir, ".claude/settings.json");
+      const committedBytes = fs.readFileSync(overridden);
+      fs.writeFileSync(
+        overridden,
+        `${JSON.stringify({ permissions: { allow: ["Bash(echo:*)"] } }, null, 2)}\n`,
+      );
+      const overriddenBytes = fs.readFileSync(overridden);
+      assert.notDeepEqual(overriddenBytes, committedBytes);
 
+      const result = await verifySelfAppliedArtifacts({
+        repoRoot: dirtyRepo.dir,
+      });
+
+      assert.deepEqual(result.stale, []);
+      assert.equal(result.ok, true);
+      assert.deepEqual(fs.readFileSync(overridden), overriddenBytes);
+    } finally {
+      removeDir(dirtyRepo.dir);
+    }
+  });
+
+  test("writes nothing outside gitignored build output", async () => {
+    // A whole-tree sentinel, not a list of paths the guard is expected to
+    // leave alone: anything it touches shows up, including files no assertion
+    // anticipated. `node_modules` and `.git` are excluded as volume, and
+    // `.claude/worktrees` because it holds unrelated local checkouts of this
+    // repository that other work may be changing concurrently.
+    const excludedDirectories = new Set([
+      "node_modules",
+      ".git",
+      ".claude/worktrees",
+    ]);
     const snapshot = () => {
       const entries = new Map();
-      for (const relativePath of sentinelPaths) {
-        const absolutePath = path.join(repoRoot, relativePath);
-        if (!fs.existsSync(absolutePath)) {
-          entries.set(relativePath, "<absent>");
-          continue;
+      const walk = (relativeDir) => {
+        for (const dirent of fs.readdirSync(path.join(repoRoot, relativeDir), {
+          withFileTypes: true,
+        })) {
+          const relativePath = relativeDir
+            ? `${relativeDir}/${dirent.name}`
+            : dirent.name;
+          if (dirent.isDirectory()) {
+            if (
+              !excludedDirectories.has(relativePath) &&
+              !dirent.isSymbolicLink()
+            ) {
+              walk(relativePath);
+            }
+          } else if (dirent.isFile()) {
+            entries.set(
+              relativePath,
+              sha256(fs.readFileSync(path.join(repoRoot, relativePath))),
+            );
+          }
         }
-        const stat = fs.statSync(absolutePath);
-        entries.set(
-          relativePath,
-          `${sha256(fs.readFileSync(absolutePath))}:${stat.mtimeMs}`,
-        );
-      }
-      entries.set(
-        "<git-status>",
-        execFileSync("git", ["status", "--porcelain"], {
-          cwd: repoRoot,
-          encoding: "utf8",
-          maxBuffer: 64 * 1024 * 1024,
-        }),
-      );
+      };
+      walk("");
       return entries;
     };
 
@@ -330,9 +426,28 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
     await verifySelfAppliedArtifacts({ repoRoot });
     const after_ = snapshot();
 
-    const changed = [...before_.keys()].filter(
-      (key) => before_.get(key) !== after_.get(key),
+    const changed = [...new Set([...before_.keys(), ...after_.keys()])]
+      .filter((key) => before_.get(key) !== after_.get(key))
+      .sort();
+
+    // The guard rebuilds the CLI from source, so gitignored build output is
+    // expected to change; nothing else may. This is the precise no-write
+    // property, and it is narrower than "writes nothing at all".
+    const isBuildOutput = (filePath) =>
+      filePath.includes("/dist/") || filePath.endsWith(".tsbuildinfo");
+    assert.deepEqual(
+      changed.filter((filePath) => !isBuildOutput(filePath)),
+      [],
     );
-    assert.deepEqual(changed, []);
+
+    // Every declared artifact is inside the swept tree, so the sweep above
+    // genuinely covers them rather than silently skipping absent paths.
+    for (const artifactPath of DECLARED_LOCAL_ARTIFACTS) {
+      assert.ok(
+        before_.has(artifactPath),
+        `${artifactPath} must be covered by the sentinel`,
+      );
+    }
+    assert.ok(before_.has(".claude/settings.json"));
   });
 });
