@@ -200,6 +200,11 @@ ratified yet.
      writes to is not pre-declared, because `unknownRoots` fails the check by
      name the moment any artifact is emitted into an undeclared root, so the
      entry is demanded exactly when it starts being true.
+   - It therefore differs on purpose from the `generated-ownership` surface in
+     `CHANGE_RISK_HIGH_RISK_SURFACES`, which does list `.tabnine/**`. That list
+     routes a changed path to a review; this one decides which committed files
+     are swept as compiler-owned. A path can warrant the first without the
+     second, and over-declaring here has a cost the routing list does not have.
 
    If the owner declines this widening, the narrower behaviour is to keep
    `unrecorded` as an advisory line that does not clear `ok`, accepting that a
