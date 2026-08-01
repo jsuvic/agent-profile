@@ -873,6 +873,9 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
         // release-workflow surfaces; a file may belong to more than one.
         "scripts/release/**",
         "scripts/verify-pack-files.mjs",
+        // The self-applied artifact guard spawns git to read the committed
+        // tree and spawns the built CLI to compile it into a temporary tree.
+        "scripts/verify-self-applied-artifacts.mjs",
         "apps/*/scripts/build-*.mjs",
       ],
       contracts: ["network-process-boundary"],
