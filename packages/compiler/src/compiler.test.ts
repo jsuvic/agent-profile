@@ -45,6 +45,8 @@ import type {
 import {
   CHANGE_RISK_DOMAINS,
   changeRiskOrchestrationProjection,
+  changeRiskReviewerProjection,
+  deriveChangeRiskFingerprint,
   validateChangeRiskResultV1,
 } from "./change-risk-policy.js";
 
@@ -4328,6 +4330,424 @@ test("phase-33 I1 Codex and Claude reviewer artifacts instruct a validator-compa
       /When the supplied mode is initial or final, do not use a prior finding list/u,
       file.path,
     );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Phase 33 (I8, I9): reviewer prompt guards.
+// ---------------------------------------------------------------------------
+
+const CHANGE_RISK_REVIEWER_ARTIFACT_PATHS = [
+  ".claude/agents/change-risk-reviewer.md",
+  ".codex/agents/change-risk-reviewer.toml",
+] as const;
+
+function changeRiskReviewerProfileFixture(): AiProfile {
+  const base = phase12Profile({ packs: [] });
+  return {
+    ...base,
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...base.workflow,
+      sdd: true,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
+  };
+}
+
+/** The emitted reviewer artifact bytes, keyed by output path. */
+function compiledChangeRiskReviewerArtifacts(): ReadonlyMap<string, string> {
+  const result = compileProfile({
+    profile: changeRiskReviewerProfileFixture(),
+  });
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result.issues));
+  if (!result.ok) throw new Error("the reviewer fixture profile must compile");
+  const bodies = new Map<string, string>();
+  for (const path of CHANGE_RISK_REVIEWER_ARTIFACT_PATHS) {
+    const file = result.files.find((candidate) => candidate.path === path);
+    assert.ok(file, path);
+    bodies.set(path, Buffer.from(file.bytes).toString("utf8"));
+  }
+  return bodies;
+}
+
+test("phase-33 I8 reviewer artifacts name the turn budget as a NEEDS_CONTEXT constraint", () => {
+  for (const [path, body] of compiledChangeRiskReviewerArtifacts()) {
+    // Observed twice: the prompt lists read-only/no-install/no-network as the
+    // constraints that trigger NEEDS_CONTEXT but never names the turn budget,
+    // so exhaustion produced no envelope at all.
+    assert.match(body, /turn budget/u, `${path} must name the turn budget`);
+    assert.match(
+      body,
+      /[Rr]eserve enough budget to emit the envelope/u,
+      `${path} must state the reserve-the-envelope rule`,
+    );
+    assert.match(
+      body,
+      /`missingInputs` names the specific checks not performed/u,
+      `${path} must forbid a generic exhaustion excuse`,
+    );
+  }
+
+  // The statements are owned by the projection, not written as loose renderer
+  // prose, so they cannot drift from the result contract.
+  const rules =
+    changeRiskReviewerProjection().resultInterface.budgetDegradationRules;
+  assert.ok(
+    rules.length >= 3,
+    "the reviewer projection must own the budget-degradation rules",
+  );
+  for (const [path, body] of compiledChangeRiskReviewerArtifacts()) {
+    for (const rule of rules) {
+      assert.ok(body.includes(rule), `${path} must render: ${rule}`);
+    }
+  }
+});
+
+/**
+ * A maximal VALID initial-mode envelope: every key the projection names is
+ * populated, so traversing it reaches every record-valued path AND every key a
+ * shape claims. One domain is not-applicable so `reason` is exercised, and a
+ * second finding is P3 so `disposition` is.
+ *
+ * The one key this envelope cannot carry is evidence `invalidatesPriorFinding`,
+ * which the validator accepts only on a `false-positive` finding in remediation
+ * mode. That is what the remediation case below exists for -- the two cases
+ * together, not either alone, are what makes the "maximal" claim true.
+ */
+function maximalChangeRiskEnvelope(): Record<string, unknown> {
+  return {
+    policyVersion: "change-risk/v2",
+    snapshotId: "snapshot-1",
+    status: "FINDINGS_FOUND",
+    scope: {
+      completed: true,
+      inspectedChangeManifest: true,
+      inspectedRelevantConsumers: true,
+      domains: CHANGE_RISK_DOMAINS.map((domain, index) =>
+        index === 1
+          ? {
+              domain,
+              applicability: "not-applicable",
+              reason: "no surface of this kind is touched",
+            }
+          : { domain, applicability: "applicable" },
+      ),
+    },
+    findings: [
+      {
+        priority: "P2",
+        category: "runtime-proof",
+        location: {
+          path: "packages/compiler/src/compiler.ts",
+          symbol: "compileProfile",
+          line: 141,
+        },
+        unsafeCondition: "missing proof",
+        evidence: [
+          {
+            kind: "diff-hunk",
+            path: "packages/compiler/src/compiler.ts",
+            symbol: "compileProfile",
+            summary: "missing proof",
+            lines: { start: 141, end: 158 },
+            commit: "9e5e722",
+          },
+        ],
+        affectedContractId: "runtime-proof",
+        unsafeConditionClass: "missing-runtime-proof",
+        safePath: "add proof",
+        resolution: "open",
+        fingerprint: "placeholder-normalized-by-owner-code",
+      },
+      {
+        priority: "P3",
+        category: "state-classification",
+        location: { path: "packages/compiler/src/change-risk-policy.ts" },
+        unsafeCondition: "state is classified late",
+        evidence: [
+          {
+            kind: "file",
+            path: "packages/compiler/src/change-risk-policy.ts",
+            summary: "classification happens after the transition",
+          },
+        ],
+        affectedContractId: "state-transition",
+        unsafeConditionClass: "unsafe-ordering",
+        safePath: "classify before transitioning",
+        resolution: "open",
+        disposition: "follow-up",
+        fingerprint: "placeholder-normalized-by-owner-code",
+      },
+    ],
+    missingInputs: [],
+  };
+}
+
+/**
+ * The remediation-mode counterpart, carrying the one evidence key an
+ * initial-mode envelope may never carry.
+ */
+function remediationChangeRiskCase(): {
+  envelope: Record<string, unknown>;
+  options: { mode: "remediation"; priorFingerprints: readonly string[] };
+} {
+  const location = { path: "packages/compiler/src/compiler.ts" };
+  const finding = {
+    priority: "P2" as const,
+    category: "runtime-proof" as const,
+    location,
+    unsafeCondition: "missing proof",
+    evidence: [
+      {
+        kind: "test",
+        path: "packages/compiler/src/compiler.test.ts",
+        summary: "the covering test exists and passes, so the report is void",
+        invalidatesPriorFinding: true,
+      },
+    ],
+    affectedContractId: "runtime-proof" as const,
+    unsafeConditionClass: "missing-runtime-proof" as const,
+    safePath: "no change needed",
+    resolution: "false-positive" as const,
+    fingerprint: "placeholder-normalized-by-owner-code",
+  };
+  const envelope = {
+    ...maximalChangeRiskEnvelope(),
+    findings: [finding],
+  } as Record<string, unknown>;
+  return {
+    envelope,
+    options: {
+      mode: "remediation",
+      priorFingerprints: [
+        deriveChangeRiskFingerprint({
+          category: finding.category,
+          affectedContractId: finding.affectedContractId,
+          location,
+          unsafeConditionClass: finding.unsafeConditionClass,
+        }),
+      ],
+    },
+  };
+}
+
+/** Every canonical case the derivation runs over, with its validation options. */
+function canonicalChangeRiskCases(): readonly {
+  name: string;
+  envelope: Record<string, unknown>;
+  options: Parameters<typeof validateChangeRiskResultV1>[1];
+}[] {
+  const remediation = remediationChangeRiskCase();
+  return [
+    { name: "initial", envelope: maximalChangeRiskEnvelope(), options: {} },
+    {
+      name: "remediation",
+      envelope: remediation.envelope,
+      options: remediation.options,
+    },
+  ];
+}
+
+/**
+ * Collect every record-valued path in `value`.
+ *
+ * The envelope root itself is deliberately skipped (it is reached with an empty
+ * prefix): the whole Result Contract section describes the root, so there is no
+ * single "shape of the root" statement to assert against.
+ */
+function recordValuedPaths(
+  value: unknown,
+  prefix: string,
+  out: { path: string; node: Record<string, unknown> }[],
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) =>
+      recordValuedPaths(entry, `${prefix}[${index}]`, out),
+    );
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  const node = value as Record<string, unknown>;
+  if (prefix !== "") out.push({ path: prefix, node });
+  for (const [key, child] of Object.entries(node)) {
+    recordValuedPaths(child, prefix === "" ? key : `${prefix}.${key}`, out);
+  }
+}
+
+/** `findings[0].evidence[1]` -> `findings[].evidence[]`. */
+function normalizeEnvelopePath(path: string): string {
+  return path.replaceAll(/\[\d+\]/gu, "[]");
+}
+
+/** Replace the value at `path` with the scalar a reviewer emitted on PR #141. */
+function withScalarAt(root: Record<string, unknown>, path: string): unknown {
+  const clone = structuredClone(root) as Record<string, unknown>;
+  const tokens = path.match(/[^.[\]]+/gu) ?? [];
+  let cursor: Record<string, unknown> = clone;
+  for (const token of tokens.slice(0, -1)) {
+    cursor = cursor[token] as Record<string, unknown>;
+  }
+  cursor[tokens[tokens.length - 1] as string] =
+    "packages/compiler/src/change-risk-promotion.ts:141-158 decideChangeRiskPromotion";
+  return clone;
+}
+
+test("phase-33 I9 every record-required envelope field is shaped in the reviewer artifacts", () => {
+  const cases = canonicalChangeRiskCases();
+  const derivedPaths = new Set<string>();
+  const nodesByPath = new Map<string, Record<string, unknown>[]>();
+
+  for (const testCase of cases) {
+    const baseline = validateChangeRiskResultV1(
+      testCase.envelope,
+      testCase.options,
+    );
+    assert.equal(
+      baseline.ok,
+      true,
+      baseline.ok
+        ? ""
+        : `the ${testCase.name} canonical envelope must validate: ${baseline.reason}`,
+    );
+
+    // Derive the structured-field set from the validator's own behaviour
+    // rather than from a hand-written list. A newly *required* structured
+    // field cannot be added without the prompt following it: the canonical
+    // envelopes stop validating and the baseline assert above fires. A newly
+    // *optional* record-valued field is the boundary of this guard -- neither
+    // canonical envelope would carry it, so it is neither derived nor
+    // projected, and the per-key coverage check below is what forces the
+    // envelopes to stay honest about the keys that are projected.
+    const candidates: { path: string; node: Record<string, unknown> }[] = [];
+    recordValuedPaths(testCase.envelope, "", candidates);
+    for (const candidate of candidates) {
+      const normalized = normalizeEnvelopePath(candidate.path);
+      nodesByPath.set(normalized, [
+        ...(nodesByPath.get(normalized) ?? []),
+        candidate.node,
+      ]);
+      if (
+        !validateChangeRiskResultV1(
+          withScalarAt(testCase.envelope, candidate.path),
+          testCase.options,
+        ).ok
+      )
+        derivedPaths.add(normalized);
+    }
+  }
+
+  const derived = [...derivedPaths].sort();
+  assert.ok(
+    derived.length > 0,
+    "the derivation must find the known structured fields",
+  );
+
+  const shapes =
+    changeRiskReviewerProjection().resultInterface.structuredFieldShapes;
+  assert.deepEqual(
+    derived,
+    [...shapes.map((shape) => shape.field)].sort(),
+    "every record-required envelope path needs exactly one projected shape",
+  );
+
+  // A key the canonical cases never populate is a key the derivation cannot
+  // vouch for, so the "maximal" claim above is enforced rather than trusted.
+  for (const shape of shapes) {
+    const nodes = nodesByPath.get(shape.field) ?? [];
+    for (const key of shape.keys) {
+      assert.ok(
+        nodes.some((node) => Object.hasOwn(node, key)),
+        `no canonical envelope exercises ${shape.field}.${key}`,
+      );
+    }
+  }
+
+  for (const [path, body] of compiledChangeRiskReviewerArtifacts()) {
+    for (const shape of shapes) {
+      assert.ok(shape.keys.length > 0, `${shape.field} must project its keys`);
+      const stated = `\`${shape.field}\`: ${shape.keys
+        .map((key) => `\`${key}\``)
+        .join(", ")}`;
+      assert.ok(
+        body.includes(stated),
+        `${path} must state the shape of ${shape.field} as: ${stated}`,
+      );
+    }
+  }
+});
+
+test("phase-33 I9 the reviewer artifacts state the P3-only disposition the validator requires", () => {
+  // The unconditional finding fields are not the whole story: a P3 finding
+  // without `disposition` is rejected, so a prompt that presents the ten
+  // unconditional fields as the complete set produces the very malformed
+  // attempt this slice exists to prevent. Prove the requirement against the
+  // validator rather than asserting the prompt wording alone.
+  const withPriority = (
+    priority: string,
+    disposition?: string,
+  ): Record<string, unknown> => {
+    const envelope = maximalChangeRiskEnvelope();
+    const finding = (envelope.findings as Record<string, unknown>[])[0]!;
+    finding.priority = priority;
+    if (disposition !== undefined) finding.disposition = disposition;
+    return envelope;
+  };
+  assert.equal(
+    validateChangeRiskResultV1(withPriority("P3")).ok,
+    false,
+    "a P3 finding without a disposition must be rejected",
+  );
+  assert.equal(
+    validateChangeRiskResultV1(withPriority("P3", "follow-up")).ok,
+    true,
+    "the same P3 finding with a disposition must be accepted",
+  );
+
+  for (const [path, body] of compiledChangeRiskReviewerArtifacts()) {
+    assert.match(
+      body,
+      /`disposition` on a P3 finding only/u,
+      `${path} must state that a P3 finding carries a disposition`,
+    );
+  }
+});
+
+test("phase-33 I9 the reviewer finding-fields sentence names each field exactly once", () => {
+  const { requiredFindingFields } =
+    changeRiskReviewerProjection().resultInterface;
+  for (const [path, body] of compiledChangeRiskReviewerArtifacts()) {
+    const sentence = body
+      .split(/\r?\n/u)
+      .find((line) => line.startsWith("- Each finding contains"));
+    assert.ok(sentence, `${path} must state the required finding fields`);
+    for (const field of requiredFindingFields) {
+      const matches: readonly string[] =
+        sentence.match(new RegExp(`(?<![A-Za-z])${field}(?![A-Za-z])`, "gu")) ??
+        [];
+      const occurrences: number = matches.length;
+      assert.equal(
+        occurrences,
+        1,
+        `${path}: ${field} must appear exactly once in the finding-fields sentence, saw ${occurrences}`,
+      );
+    }
   }
 });
 

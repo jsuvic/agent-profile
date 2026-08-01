@@ -916,6 +916,40 @@ test("the reviewer projection names the exact scope keys the validator requires"
   );
 });
 
+test("phase-33 I8 a NEEDS_CONTEXT envelope emitted under budget exhaustion validates as-is", () => {
+  // Exactly what the degradation rule instructs the reviewer to emit when the
+  // turn budget runs out: an incomplete scope, unreached domains left unmarked,
+  // and specific unverified checks. The validator already accepts it; this
+  // proves the rule needs no special case bolted onto the validator.
+  const exhausted = {
+    policyVersion: CHANGE_RISK_POLICY_VERSION,
+    snapshotId: "snapshot-1",
+    status: "NEEDS_CONTEXT",
+    scope: {
+      completed: false,
+      inspectedChangeManifest: true,
+      inspectedRelevantConsumers: false,
+      domains: CHANGE_RISK_DOMAINS.slice(0, 3).map((domain) => ({
+        domain,
+        applicability: "applicable" as const,
+      })),
+    },
+    findings: [],
+    missingInputs: [
+      "unchanged consumers of compileProfile were not traced",
+      "no focused test was run for the regenerated golden fixtures",
+    ],
+  };
+  const validation = validateChangeRiskResultV1(exhausted);
+  assert.equal(validation.ok, true, validation.ok ? "" : validation.reason);
+  assert.ok(exhausted.missingInputs.length > 0);
+  assert.equal(exhausted.scope.completed, false);
+  assert.ok(
+    exhausted.scope.domains.length < CHANGE_RISK_DOMAINS.length,
+    "unreached domains stay unmarked",
+  );
+});
+
 test("the reviewer projection states when invalidating evidence must be absent", () => {
   const { evidenceLocatorRules } =
     changeRiskReviewerProjection().resultInterface;

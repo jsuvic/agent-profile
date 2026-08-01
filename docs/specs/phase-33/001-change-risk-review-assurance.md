@@ -406,6 +406,32 @@ type ChangeRiskResultV1 = {
   manifest and every domain's applicability. `FINDINGS_FOUND` requires at
   least one structurally valid finding. `NEEDS_CONTEXT` requires a non-empty
   `missingInputs` list and is not a completed review.
+- The reviewer's turn budget is one of the constraints that triggers
+  `NEEDS_CONTEXT`, exactly like unavailable proof. A reviewer whose remaining
+  budget cannot cover the checks still outstanding MUST stop inspecting and
+  emit the envelope: it MUST reserve enough budget to do so, because a
+  `NEEDS_CONTEXT` envelope naming what went unverified always beats emitting
+  nothing, which the orchestration can only classify as an invalid attempt. An
+  envelope degraded this way carries `scope.completed: false`, leaves unreached
+  domains unmarked or reports them honestly, and names the specific checks not
+  performed in `missingInputs` rather than a generic shortage of room. This is
+  an ordinary `NEEDS_CONTEXT` result and requires no special case in the
+  validator; it does not reclassify a missing envelope, which remains an
+  invalid attempt.
+- Every envelope value the validator requires to be a record rather than a
+  scalar MUST have its exact keys stated in the emitted reviewer prompt, in the
+  same way `scope` (`completed`, `inspectedChangeManifest`,
+  `inspectedRelevantConsumers`, `domains`) and each `scope.domains[]` entry
+  (`domain`, `applicability`, optional `reason`) already are. That set is
+  `scope`, `scope.domains[]`, each `findings[]` entry, `findings[].location`
+  (`path`, optional `symbol`, optional `line`), each
+  `findings[].evidence[]` entry, and `findings[].evidence[].lines`
+  (`start`, `end`). The set is derived from the validator's own behavior by a
+  mechanical guard, so a newly *required* structured field cannot reach the
+  prompt unstated. The guard derives the set by scalar-substituting each
+  record-valued path of canonical envelopes, so it sees only fields those
+  envelopes carry: a newly *optional* record-valued field is outside it and
+  MUST still be projected by hand.
 - Empty, truncated, unparseable, version/snapshot-mismatched, internally
   inconsistent, or otherwise malformed output is an invalid attempt, never a
   clean review.
