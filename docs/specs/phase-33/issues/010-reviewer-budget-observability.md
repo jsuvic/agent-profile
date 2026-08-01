@@ -55,6 +55,13 @@ Pick one owner for the quantity:
 - Project the reviewer's declared turn budget into the emitted prompt text. It
   is already a compile-time constant (`CHANGE_RISK_REVIEWER_MAX_TURNS`), so
   this costs one interpolation and a golden update, and it fixes Codex too.
+  **Insufficient on its own:** the constant is the initial ceiling, while I8's
+  rule conditions on the REMAINING budget. A reviewer that knows only the total
+  cannot evaluate the trigger unless it can also count charged turns, which it
+  has no reliable way to do. Taking this option therefore requires pairing it
+  with a way to know consumption — otherwise the acceptance criterion and the
+  goldens pass while the trigger stays unevaluable and the missing-envelope
+  failure persists unchanged.
 - Or add an orchestration-projection obligation that the invocation owner
   states the remaining budget in the reviewer's task context.
 - Or reword the rule to a trigger that is both observable AND actually bounds
@@ -74,6 +81,16 @@ Pick one owner for the quantity:
   the two options that supply the budget must be chosen.
 
 Whichever is chosen needs a compiled-artifact assertion on that surface.
+
+## What every candidate must satisfy
+
+Three review rounds have now each disqualified a candidate, which is itself the
+finding: the reviewer needs REMAINING capacity, and no phrasing that conveys
+only a total, only an ordering, or only a subjective judgement supplies it. Any
+option adopted must let the reviewer answer "can I still cover what is
+outstanding?" at the moment it decides. If none of the options can, the honest
+conclusion is that this cannot be fixed in prompt text and the obligation
+belongs to the invocation owner, which is the second option below.
 
 ## Non-goals
 

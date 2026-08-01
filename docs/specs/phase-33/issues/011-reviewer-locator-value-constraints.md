@@ -55,9 +55,12 @@ its own slice against the approved contract.
 ## Acceptance criteria
 
 - The emitted Claude and Codex artifacts state, for `findings[].location`:
-  `line` is an integer `>= 1`, a present `symbol` is a non-empty string
-  (`validateFinding` rejects `symbol: ""` and any non-string), and `path` is a
-  non-empty path with no `..`
+  `line` is an integer `>= 1`; a present `symbol` is a non-empty string
+  (`validateFinding` rejects `symbol: ""` and any non-string); `path` and
+  `symbol` are each at most `CHANGE_RISK_ENVELOPE_LIMITS.maxStringLength`
+  characters, because both pass through `nonEmptyString`, which enforces that
+  bound (verified: 4096 accepted, 4097 rejected); and `path` is a non-empty
+  path with no `..`
   segment that normalizes to at least one component.
 - The statements are projected, not written as renderer prose, and sit
   alongside the existing evidence-locator rules so the two locator shapes are

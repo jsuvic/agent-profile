@@ -2885,6 +2885,47 @@ already read. Three rounds on this PR now, each smaller than the last
 (10 -> 4), which is what convergence looks like — but the halving is not
 evidence the next round is empty.
 
+PR #145 fourth external round, 2026-08-01: four findings, all verified, all
+valid. Round sizes 10 -> 4 -> 2 -> 4, so this is not converging, and the shape
+of what is being found has changed in a way worth recording.
+
+Three of the four are defects in the previous round's FIXES, not in the
+original work. The record correction added a prose `Corrections` block, but
+`review-learning/v1` has no such field and promotion reads persisted values
+rather than prose, so the canonical Rounds and Promotion sections still carried
+the superseded values a schema-oriented consumer would ingest - the correction
+was written where a human reads and not where the contract reads. Those
+sections are now rewritten to corrected values with each superseded claim
+retained inline as marked non-canonical history. I12's sequencing option was
+disqualified by the case that actually occurs: a final confirmation that itself
+raises an out-of-scope finding, which is literally how I10 and I11 were raised,
+so the briefs can only be written after the confirmation that demands they
+exist before it. I10's remaining option was disqualified because interpolating
+`CHANGE_RISK_REVIEWER_MAX_TURNS` supplies the initial ceiling while I8's rule
+conditions on REMAINING budget, which a reviewer cannot derive without knowing
+charged turns.
+
+That last one is the third consecutive round to disqualify a different I10
+candidate, and the pattern is now the finding: the reviewer needs remaining
+capacity, and no phrasing conveying only a total, only an ordering, or only a
+subjective judgement supplies it. The brief now states that as a gate every
+candidate must pass, and names the honest fallback - if nothing works in prompt
+text, the obligation belongs to the invocation owner.
+
+The fourth was ordinary incompleteness: I11 omitted the 4096-character bound
+that `nonEmptyString` enforces on `location.path` and `location.symbol`
+(verified: 4096 accepted, 4097 rejected), which is the same silent-rejection
+class the brief exists to close.
+
+Standing back: these are all BRIEFS - design documents for work not yet
+written. Four rounds of PR review have been refining speculative designs
+through review comments, which is an expensive medium for design iteration and
+has produced a fix-introduces-defect cycle three rounds running. A brief's
+design errors surface far more cheaply when the slice is implemented and its
+tests fail. This is recorded as an argument for merging the briefs once they
+are honest about their own open questions, rather than polishing them to a
+fixed point that PR review cannot reach.
+
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
 Draft 2026-07-27, pending grill approval; the spec itself is human-gated.

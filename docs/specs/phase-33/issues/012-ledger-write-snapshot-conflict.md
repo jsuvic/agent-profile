@@ -58,6 +58,22 @@ The workaround must not become the habit; that is why this is filed.
 Each changes an approved contract, which is why this is a grill decision rather
 than an implementation slice.
 
+## The sequencing option cannot stand as written
+
+"Sequence bookkeeping writes before the final confirmation" fails on the case
+that actually occurs: a final clean-room confirmation that itself discovers an
+out-of-scope finding. This very change is the example — I10 and I11 were both
+raised BY the final confirmation, so their briefs and ledger rows could only be
+written afterwards, which moves the snapshot again and recreates the conflict.
+Sequencing only works when nothing new is learned last, which is precisely when
+a confirmation is least useful.
+
+So this option must either be removed, or replaced by a terminating protocol
+that absorbs confirmation-discovered findings without an unbounded
+confirm-write-confirm loop. Any such protocol has to say what happens to a
+finding raised by the last permitted confirmation, given the confirmation
+budget is bounded.
+
 ## Constraint on the widening option
 
 If the exclusion is widened, it must NOT cover `docs/specs/**/issues/*.md`.
