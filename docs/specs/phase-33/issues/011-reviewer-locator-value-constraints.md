@@ -9,7 +9,7 @@ of the I8/I9 change (`docs/review-learning/896F5F8050686A23.md`, finding 4).
 
 ## Intent summary
 
-I9 made the reviewer prompt state the *shape* of every structured envelope
+I9 made the reviewer prompt state the _shape_ of every structured envelope
 field. For `findings[].location` it now enumerates `path`, `symbol`, and `line`
 under "these exact keys" authority, but states none of the constraints the
 validator applies to their values, so a reviewer can follow the prompt exactly
@@ -34,6 +34,16 @@ the interior keys without their constraints is what creates the gap, which
 makes this the same silent-rejection class I9 was written to close, one level
 down.
 
+## Out of reach without a validator change
+
+The prompt must not claim `path` is repo-relative. `normalizeChangeRiskFindingPath`
+strips a leading separator, so an absolute path such as `/tmp/file.ts` is
+ACCEPTED today — verified by driving `validateChangeRiskResultV1`. A
+repo-relative requirement therefore cannot be proven load-bearing by the
+mutation this brief demands, and adding absolute-path rejection is a validator
+change, which is a non-goal here. If absolute paths should be refused, that is
+its own slice against the approved contract.
+
 ## Non-goals
 
 - Changing the validator, making it lenient, or altering the envelope shape.
@@ -45,7 +55,9 @@ down.
 ## Acceptance criteria
 
 - The emitted Claude and Codex artifacts state, for `findings[].location`:
-  `line` is an integer `>= 1`, and `path` is a repo-relative path with no `..`
+  `line` is an integer `>= 1`, a present `symbol` is a non-empty string
+  (`validateFinding` rejects `symbol: ""` and any non-string), and `path` is a
+  non-empty path with no `..`
   segment that normalizes to at least one component.
 - The statements are projected, not written as renderer prose, and sit
   alongside the existing evidence-locator rules so the two locator shapes are

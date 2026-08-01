@@ -19,9 +19,17 @@ Occurrence history, same mechanism both times:
 
 1. PR #140: the reviewer was half-emitted; the checked-in artifacts did not
    carry what the change had implemented. Reviews there were ad hoc with no
-   orchestration behind them, so this occurrence is owed to the I5 backfill and
-   is recorded as an owner determination rather than derived from
-   `docs/review-learning/`.
+   orchestration behind them, so no `review-learning/v1` record exists for it.
+   This occurrence is an OWNER DETERMINATION, recorded here and in the I8/I9
+   record, and is not derivable from `docs/review-learning/`.
+
+   It is explicitly NOT owed to I5: that brief is scoped to PRs #125 and
+   #127-#133, and expanding beyond those eight is one of its non-goals, so I5
+   neither owns nor will supply this occurrence. Anyone auditing the promotion
+   count later must take it from the owner determination or normalize #140
+   separately; I5 must not be cited as its source, and must not double-count
+   #140 if its scope is ever widened.
+
 2. Phase-33 I8/I9: the change advanced both golden fixture trees but left
    `.claude/agents/change-risk-reviewer.md`, `.codex/agents/change-risk-reviewer.toml`
    and the root `ai-profile.lock` on their pre-change bytes. The reviewer that
@@ -38,10 +46,17 @@ The guard:
 
 - Assert that a dry-run compile of this repository reports zero `create` and
   zero `change` for its own artifacts.
-- Exclude exactly the two intentionally-local files, `.claude/settings.json`
-  (owner-held local permission edits) and `.mcp.json` (gitignored local MCP
-  server config). Both are reported as changed by a real compile and must not
-  fail the guard, and neither may be silently rewritten by it.
+- Compare the COMMITTED bytes, not the working copy. The two files that differ
+  locally are not equivalent and must not be exempted alike:
+  - `.claude/settings.json` is tracked, emitted by the `claude-settings`
+    target, and recorded `generated-owned` in `ai-profile.lock`. Exempting it
+    would let a stale generated-owned artifact pass the very gate this brief
+    adds. The guard verifies the committed artifact; an owner's working-copy
+    override is tolerated separately and never rewritten.
+  - `.mcp.json` is gitignored and untracked, so there is no committed artifact
+    to verify. It is out of scope here; its contradictory ownership is
+    phase-27 I8.
+- The guard must never rewrite either file.
 - The guard must not write. A dry run that mutates the working tree would be a
   worse defect than the one it detects.
 

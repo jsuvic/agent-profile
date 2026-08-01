@@ -2123,9 +2123,9 @@ finding promotion, and a provider-neutral external-review boundary.
 | I9  | Guard the reviewer envelope field shapes        | done       | [009-reviewer-field-shape-guard.md](docs/specs/phase-33/issues/009-reviewer-field-shape-guard.md)                 |
 | I10 | Make the reviewer's turn budget observable      | ready      | [010-reviewer-budget-observability.md](docs/specs/phase-33/issues/010-reviewer-budget-observability.md)           |
 | I11 | State the locator interior value constraints    | ready      | [011-reviewer-locator-value-constraints.md](docs/specs/phase-33/issues/011-reviewer-locator-value-constraints.md) |
-| I12 | Resolve the ledger-write snapshot conflict      | human-gate | [012-ledger-write-snapshot-conflict.md](docs/specs/phase-33/issues/012-ledger-write-snapshot-conflict.md)         |
 | I13 | Guard reviewer field-list completeness          | ready      | [013-reviewer-field-completeness-guard.md](docs/specs/phase-33/issues/013-reviewer-field-completeness-guard.md)   |
 | I14 | Fail on self-applied generated-artifact drift   | ready      | [014-self-applied-artifact-drift-guard.md](docs/specs/phase-33/issues/014-self-applied-artifact-drift-guard.md)   |
+| I12 | Resolve the ledger-write snapshot conflict      | human-gate | [012-ledger-write-snapshot-conflict.md](docs/specs/phase-33/issues/012-ledger-write-snapshot-conflict.md)         |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
@@ -2785,6 +2785,54 @@ currently ZERO reviews of any change under the post-I8 prompt. I6 must treat
 the first such review as the initial data point rather than reading the
 existing record as evidence about I8 in either direction, and I14 is what makes
 "the artifacts under review are the current ones" checkable instead of assumed.
+
+PR #145 external review, 2026-07-31: ten findings, every one badged P1 by the
+external Codex reviewer on a docs-only change. All ten verified against the
+code before being accepted; all ten were substantive, and none was a P1 in this
+repository's taxonomy, where P1 means blocking product risk. A docs-only change
+cannot carry one. The badge is the external reviewer's own scale, which is
+exactly why the approved contract requires external findings to be validated
+and re-priced by the owner before entering the loop rather than merged at their
+stated priority. Recorded because the same mismatch will recur on every
+externally reviewed change.
+
+Two findings shared one root cause, and it was a sequencing error of mine. The
+Option C split was right - bookkeeping out of the reviewed change so its
+confirmed snapshot survives - but I never said the bookkeeping must land AFTER
+the implementation it declares done. The I8/I9 implementation (db3afcf) was
+never merged and had not even been pushed, so #145 marked both tasks `done`
+against work absent from master and cited a `review-learning/v1` record that
+does not exist in the tree. Fixed by sequencing, not by editing text: the
+implementation is now #146 and merges first.
+
+The remaining eight were defects in the briefs themselves, and their number has
+a cause worth naming: five contracts were written in one pass and filed without
+review. A brief is an implementation contract that `implement-next` executes,
+so a wrong brief becomes wrong code; every other slice this session ran
+RED -> implement -> review, and the briefs skipped review entirely. Corrected:
+the ledger ordered a `human-gate` row above four `ready` rows, which
+`implement-next` cannot dispatch past, so I14 - the next intended dispatch -
+was unreachable; I14 exempted `.claude/settings.json` wholesale although it is
+tracked, `claude-settings`-emitted and `generated-owned` in the lock, which
+would have left a stale generated artifact passing the very gate I14 adds, so
+the guard now compares committed bytes and `.mcp.json` is out of scope as
+untracked; I14 cited I5 as owner of PR #140's occurrence although I5 is scoped
+to eight other PRs by an explicit non-goal, so that occurrence is now stated as
+an owner determination that I5 must never be cited for nor double-count; I12
+listed widening the snapshot exclusion to `docs/specs/**/issues/*.md` as an
+option, but briefs are executable workflow inputs, so widening there would let
+unreviewed requirements be implemented later - now constrained to inert
+append-only bookkeeping; I13's completeness guard collapsed per-priority
+requiredness into a union, which would pass if `disposition` were stated
+unconditionally, i.e. the exact malformed envelope I13 exists to prevent, so it
+now derives required AND forbidden key sets per priority; I11 demanded the
+prompt state `path` is repo-relative, which cannot be proven load-bearing
+because the normalizer strips a leading separator and `/tmp/file.ts` is
+ACCEPTED today (verified by driving the validator), so the unprovable claim is
+removed and the gap recorded; I11 also omitted that a present `symbol` must be
+a non-empty string, which the validator enforces; and I10's third option kept a
+trigger that still required knowing the remaining budget, defeating its own
+acceptance criterion.
 
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 

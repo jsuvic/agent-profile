@@ -57,9 +57,13 @@ Pick one owner for the quantity:
   this costs one interpolation and a golden update, and it fixes Codex too.
 - Or add an orchestration-projection obligation that the invocation owner
   states the remaining budget in the reviewer's task context.
-- Or reword the rule to a trigger the agent can actually evaluate without
-  knowing a number, e.g. emit as soon as an outstanding check would require
-  more inspection than can be completed.
+- Or reword the rule to a trigger on an objectively observable event rather
+  than a remaining quantity, e.g. emit as soon as a named category of check is
+  reached with any earlier category still unperformed. "More inspection than
+  can be completed" does NOT qualify: judging it still requires knowing how
+  much budget remains, which is the quantity this brief exists to supply, so
+  that phrasing would satisfy the prose rewrite while leaving the trigger
+  unevaluable.
 
 Whichever is chosen needs a compiled-artifact assertion on that surface.
 

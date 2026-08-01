@@ -9,8 +9,8 @@ Raised 2026-07-31 from the I8/I9 change
 
 ## Intent summary
 
-I9's derived guard proves every structured envelope field has its *shape*
-stated. It proves nothing about whether the prompt's field *lists* are
+I9's derived guard proves every structured envelope field has its _shape_
+stated. It proves nothing about whether the prompt's field _lists_ are
 complete. A completeness error slipped through I9 and was caught by a human.
 
 ## Behavior slice
@@ -35,12 +35,17 @@ covering it.
 
 Extend the guard using the same derive-from-the-validator technique:
 
-- Derive, from the validator, the set of finding fields that are required
-  under *some* priority — including conditionally required ones such as
-  `disposition` — by constructing a valid envelope per priority and removing
-  each key in turn to see which removals are rejected.
-- Assert every such field is named in the emitted artifacts, and that any
-  sentence claiming an exhaustive field set accounts for the conditional ones.
+- Derive the field sets from the validator **per priority**, not as one union.
+  For each priority, construct a valid envelope and (a) remove each key in turn
+  to find the keys that priority REQUIRES, and (b) add each other key in turn to
+  find the keys that priority FORBIDS. `disposition` is required on P3 and
+  forbidden on P1/P2, and a union loses exactly that.
+- Assert the emitted artifacts state each field's requiredness with its
+  condition, and that any sentence claiming an exhaustive set accounts for the
+  conditional ones.
+- A union-based assertion is insufficient and must not be used: it passes when
+  `disposition` is stated unconditionally, which is the malformed envelope this
+  brief exists to prevent. The guard must fail that case.
 - The test must fail if a new conditionally-required field is added to the
   validator and the prompt is not updated. Prove it by mutation, not assertion.
 

@@ -25,7 +25,7 @@ Two obligations that cannot both be met:
    that also means a follow-up issue brief for each out-of-scope finding and a
    ledger row so it is dispatchable, plus flipping the reviewed slice's own
    `TASKS.md` status to `done`.
-2. `docs/review-learning/` is the *only* prefix excluded from snapshot
+2. `docs/review-learning/` is the _only_ prefix excluded from snapshot
    identity. Anything else — `TASKS.md`, `docs/specs/**/issues/*.md`, a phase
    `README.md` — moves the snapshot past the one the terminal result certifies.
 
@@ -50,13 +50,27 @@ The workaround must not become the habit; that is why this is filed.
 - Widen the snapshot exclusion to cover the ledger and issue briefs alongside
   `docs/review-learning/`, on the grounds that none of them is reviewable
   product content and none can change compiled output.
-- Or sequence ledger and brief writes *before* the final clean-room
+- Or sequence ledger and brief writes _before_ the final clean-room
   confirmation, so the confirmed snapshot already contains them.
 - Or state explicitly that bookkeeping belongs in a separate change and make
   that the documented, expected shape rather than a workaround.
 
 Each changes an approved contract, which is why this is a grill decision rather
 than an implementation slice.
+
+## Constraint on the widening option
+
+If the exclusion is widened, it must NOT cover `docs/specs/**/issues/*.md`.
+Issue briefs are executable workflow inputs: `implement-next` loads the linked
+brief as the implementation contract. Excluding them would let a brief be added
+or altered after terminal review without invalidating the handoff, and a later
+agent would implement requirements that were never reviewed — a strictly worse
+hole than the one this brief closes. Compiled-output boundary fixtures do not
+mitigate it, because the brief is consumed as instructions rather than compiled.
+
+Any widening is therefore limited to inert append-only bookkeeping such as
+`TASKS.md` rows and a phase README index. Brief writes are sequenced and
+reviewed normally.
 
 ## Non-goals
 
