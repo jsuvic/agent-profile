@@ -256,10 +256,13 @@ async function compileFixture(runCli, repository, posture, clients = "all") {
 
 test("published Phase 31 journey joins real tarballs, state-aware configure, and safe assets", async (t) => {
   const rootPackage = JSON.parse(read("package.json"));
-  assert.equal(
-    rootPackage.scripts.test,
-    "npm run test --workspaces --if-present && npm run test:release",
-    "root npm test must run release integration tests after workspace builds",
+  // Ordering is the contract, not the exact string: release integration tests
+  // must run after the workspace builds. Further suites may be appended.
+  assert.ok(
+    rootPackage.scripts.test.startsWith(
+      "npm run test --workspaces --if-present && npm run test:release",
+    ),
+    `root npm test must run release integration tests after workspace builds; found "${rootPackage.scripts.test}"`,
   );
   const temporary = fs.mkdtempSync(
     path.join(os.tmpdir(), "agent-profile-phase31-packed-"),
