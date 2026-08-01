@@ -68,14 +68,17 @@ export const DECLARED_LOCAL_ARTIFACTS = Object.freeze([
  * profile edit, stranding every checked-in `.claude` artifact where the agent
  * still reads it.
  *
- * Kept honest by `unknownRoots`: a generated-owned artifact emitted into a root
- * this list does not name fails the check by name.
+ * Kept honest by `unknownRoots`: an artifact emitted into a root this list does
+ * not name fails the check by name. That backstop is why the list holds only
+ * roots this profile actually emits into -- pre-declaring a root nothing writes
+ * to (`.tabnine`, say) would claim ownership of a directory the compiler has
+ * never touched, with no detection benefit, since the first artifact emitted
+ * there would demand the entry anyway.
  */
 export const GENERATED_ARTIFACT_ROOTS = Object.freeze([
   ".agents",
   ".claude",
   ".codex",
-  ".tabnine",
 ]);
 
 function sha256(bytes) {
@@ -223,16 +226,16 @@ export function evaluateSelfAppliedArtifacts({
   const unknownRoots = [];
 
   for (const [artifactPath, entry] of emitted) {
-    if (entry.ownership === "generated-owned") {
-      // Checked for EVERY generated-owned artifact, including the declared
-      // local ones, and before any `continue`. This is what keeps the closed
-      // root list below honest: a target that starts emitting into a root the
-      // list does not name fails loudly here instead of leaving that root
-      // silently unswept.
-      const root = posixTopSegment(artifactPath);
-      if (root !== "" && !GENERATED_ARTIFACT_ROOTS.includes(root)) {
-        unknownRoots.push(artifactPath);
-      }
+    // Checked for EVERY emitted artifact, whatever its ownership, including
+    // the declared-local ones, and before any `continue`. This is what keeps
+    // the closed root list below honest: a target that starts emitting into a
+    // root the list does not name fails loudly here instead of leaving that
+    // root silently unswept. Gating it on `generated-owned` would let a
+    // `mixed` artifact open an unswept root, which goes blind in BOTH
+    // directions -- it passes while emitted, and strands silently once retired.
+    const root = posixTopSegment(artifactPath);
+    if (root !== "" && !GENERATED_ARTIFACT_ROOTS.includes(root)) {
+      unknownRoots.push(artifactPath);
     }
 
     const committedSha = committed.get(artifactPath);

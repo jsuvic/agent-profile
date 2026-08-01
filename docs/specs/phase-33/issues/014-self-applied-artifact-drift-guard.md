@@ -144,7 +144,7 @@ ratified yet.
    likewise untracked, so it has no committed bytes to verify. Hard-coding
    only `.mcp.json` would leave the gate permanently red. The implementation
    uses a frozen constant `DECLARED_LOCAL_ARTIFACTS = [".mcp.json",
-   ".codex/config.toml"]`; any other emitted artifact missing from the commit
+".codex/config.toml"]`; any other emitted artifact missing from the commit
    is a hard failure, and the list cannot be widened at run time. This is the
    brief's stated rationale applied consistently, but it is a literal widening
    of the non-goal "widening the exclusion beyond the two named local files"
@@ -172,6 +172,38 @@ ratified yet.
 4. The guard refreshes gitignored build output (`dist/`, `*.tsbuildinfo`) via
    `tsc -b`. It writes no tracked file and no generated artifact; the sentinel
    test asserts the property in exactly that narrower form.
+
+5. The orphan direction is WIDER than this brief's wording, and deliberately.
+   The criterion scopes it to "a generated-owned path that is checked in but no
+   longer emitted", but that set is not always computable: when a commit stops
+   emitting a path it also regenerates the lockfile that recorded it, so
+   nothing in the tree still attests the path was ever generated-owned.
+   Disabling a client does this to a whole directory in one profile edit. Two
+   successive attempts to derive the sweep units from what is currently emitted
+   were both proven blind against exactly that shape.
+
+   The guard therefore sweeps a DECLARED closed list of compiler-owned roots,
+   `GENERATED_ARTIFACT_ROOTS = [".agents", ".claude", ".codex"]`, independent of
+   emission, and treats a committed file under any of them that the compiler
+   does not emit as a failure. Consequences the owner should weigh:
+
+   - A hand-written file committed under one of those roots fails
+     `npm run check`. `.claude/commands/*.md` is a conventional Claude Code
+     location, so this is reachable by ordinary use, not only by mistake. The
+     repository has no such file today: all 25 tracked files under those roots
+     are recorded generated-owned in `ai-profile.lock`.
+   - Where the evidence is ambiguous the report says so rather than guessing. A
+     path the committed lockfile still records is reported `orphaned`; a path
+     nothing records is reported `unrecorded` and its remediation offers both
+     readings, since it may be a retired artifact or a hand-written file.
+   - The list holds only roots this profile actually emits into. A root nothing
+     writes to is not pre-declared, because `unknownRoots` fails the check by
+     name the moment any artifact is emitted into an undeclared root, so the
+     entry is demanded exactly when it starts being true.
+
+   If the owner declines this widening, the narrower behaviour is to keep
+   `unrecorded` as an advisory line that does not clear `ok`, accepting that a
+   whole-root retirement then goes undetected.
 
 ## Review expectations
 

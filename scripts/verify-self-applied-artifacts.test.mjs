@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   DECLARED_LOCAL_ARTIFACTS,
+  GENERATED_ARTIFACT_ROOTS,
   evaluateSelfAppliedArtifacts,
   formatSelfAppliedArtifactReport,
   materializeCommittedTree,
@@ -276,6 +277,31 @@ describe("evaluateSelfAppliedArtifacts", () => {
       formatSelfAppliedArtifactReport({ ref: "HEAD", ...result }),
       /GENERATED_ARTIFACT_ROOTS/u,
     );
+  });
+
+  test("checks the root of a mixed-ownership artifact too", () => {
+    const input = currentTree();
+    // Gating the check on generated-owned would let a mixed artifact open an
+    // unswept root, which goes blind in both directions: it passes while it is
+    // emitted, and strands silently once retired.
+    input.emitted.set(".cursor/RULES.md", emittedEntry("mmm", "mixed"));
+    input.committed.set(".cursor/RULES.md", "mmm");
+
+    const result = evaluateSelfAppliedArtifacts(input);
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.unknownRoots, [".cursor/RULES.md"]);
+  });
+
+  test("declares only roots this profile actually emits into", () => {
+    // A pre-declared root nothing writes to would claim ownership of a
+    // directory the compiler has never touched, and buys nothing: the first
+    // artifact emitted there demands the entry via unknownRoots anyway.
+    assert.deepEqual(
+      [...GENERATED_ARTIFACT_ROOTS],
+      [".agents", ".claude", ".codex"],
+    );
+    assert.equal(Object.isFrozen(GENERATED_ARTIFACT_ROOTS), true);
   });
 
   test("checks the root of a declared-local artifact too", () => {
