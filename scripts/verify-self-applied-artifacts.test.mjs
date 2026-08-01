@@ -196,6 +196,27 @@ describe("evaluateSelfAppliedArtifacts", () => {
     assert.deepEqual(result.orphaned, []);
   });
 
+  test("catches an orphan whose directory lost every emitted artifact", () => {
+    const input = currentTree();
+    // The shape that defeated a per-directory sweep. Retiring a skill removes
+    // the only emitted file in its directory, and the same commit regenerates
+    // the lockfile, so the retired path is in neither the emitted set nor the
+    // committed lockfile -- yet the file is still checked in and still read at
+    // runtime. Every skill artifact in this repository has this shape.
+    input.emitted.set(
+      ".claude/skills/sdd-change/SKILL.md",
+      emittedEntry("kkk"),
+    );
+    input.committed.set(".claude/skills/sdd-change/SKILL.md", "kkk");
+    input.committedGeneratedPaths.push(".claude/skills/sdd-change/SKILL.md");
+    input.committed.set(".claude/skills/grill-change/SKILL.md", "lll");
+
+    const result = evaluateSelfAppliedArtifacts(input);
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.orphaned, [".claude/skills/grill-change/SKILL.md"]);
+  });
+
   test("catches a root-level orphan through the committed lockfile", () => {
     const input = currentTree();
     // Recorded generated-owned in the committed lock and still checked in,
@@ -267,6 +288,22 @@ describe("evaluateSelfAppliedArtifacts", () => {
     // being silently downgraded into a tidy report.
     assert.deepEqual(parseOwnershipRefusal("ai-profile.yaml is invalid\n"), []);
     assert.deepEqual(parseOwnershipRefusal(""), []);
+  });
+
+  test("recognises every refusal header compile can emit", () => {
+    // All three exit 3 with the same item shape. Keying on one header would
+    // crash the gate on the other two instead of reporting them.
+    for (const header of [
+      "Refusing to replace existing generated paths without --force:",
+      "Refusing to overwrite region-aware instruction files without explicit adoption:",
+      "Refusing to overwrite lockfile-owned generated region files that differ from ai-profile.lock:",
+    ]) {
+      assert.deepEqual(
+        parseOwnershipRefusal(`${header}\n- CLAUDE.md (partial-markers)\n`),
+        [{ path: "CLAUDE.md", reason: "partial-markers" }],
+        header,
+      );
+    }
   });
 
   test("a refusal short-circuits every other category", () => {

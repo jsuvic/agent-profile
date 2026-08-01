@@ -195,7 +195,7 @@ export function evaluateSelfAppliedArtifacts({
   const stale = [];
   const missing = [];
   const declaredLocal = [];
-  const generatedDirectories = new Set();
+  const generatedRoots = new Set();
 
   for (const [artifactPath, entry] of emitted) {
     const committedSha = committed.get(artifactPath);
@@ -216,12 +216,17 @@ export function evaluateSelfAppliedArtifacts({
     }
 
     if (entry.ownership === "generated-owned") {
-      const directory = posixDirname(artifactPath);
-      // The repository root holds hand-written files, so it is never swept as
-      // a generated directory. A root-level orphan is instead caught by the
-      // committed lockfile below.
-      if (directory !== "") {
-        generatedDirectories.add(directory);
+      // The generated ROOT, not the artifact's own directory. Sweeping only
+      // the directories that still hold an emitted artifact misses a retired
+      // one whose directory lost all of them -- and every skill artifact is
+      // the only file in its directory, so retiring a single skill hits that
+      // exactly. The brief names `.claude` and `.codex` as the units that stay
+      // on disk and are still read at runtime, so those are the units swept.
+      const root = posixTopSegment(artifactPath);
+      // The repository root holds hand-written files and is never swept; a
+      // root-level orphan is caught through the committed lockfile below.
+      if (root !== "") {
+        generatedRoots.add(root);
       }
     }
   }
@@ -230,17 +235,20 @@ export function evaluateSelfAppliedArtifacts({
   // the current outputs and compile never deletes orphans, so a generated file
   // a target stopped emitting stays checked in and is still read at runtime.
   //
-  // Two sources, because neither alone is complete: the directory sweep sees a
+  // Two sources, because neither alone is complete: the root sweep sees a
   // leftover file the committed lockfile never recorded, and the committed
   // lockfile sees a retired artifact at the repository root, which is never
-  // swept. Known residual gap: an orphan that BOTH sits at the repository root
-  // AND was dropped from the committed lockfile in the same commit that
-  // stopped emitting it is invisible to both. It is narrow and self-limiting
-  // -- dropping a path from the lockfile changes the lockfile's own bytes, so
-  // the commit that hides the orphan cannot also leave the lockfile current.
+  // swept.
+  //
+  // Known residual gap, now the only one: an orphan that BOTH sits at the
+  // repository root AND was dropped from the committed lockfile in the same
+  // commit that stopped emitting it. Note what does NOT save us here -- the
+  // commit that retires a path regenerates the lockfile too, so the lockfile
+  // is current rather than stale, and its being current is exactly what
+  // removes the path from the candidate set.
   const orphanCandidates = new Set(committedGeneratedPaths);
   for (const committedPath of committed.keys()) {
-    if (generatedDirectories.has(posixDirname(committedPath))) {
+    if (generatedRoots.has(posixTopSegment(committedPath))) {
       orphanCandidates.add(committedPath);
     }
   }
@@ -258,8 +266,9 @@ export function evaluateSelfAppliedArtifacts({
   };
 }
 
-function posixDirname(filePath) {
-  const slash = filePath.lastIndexOf("/");
+/** The first path segment, or `""` for a file at the repository root. */
+function posixTopSegment(filePath) {
+  const slash = filePath.indexOf("/");
   return slash === -1 ? "" : filePath.slice(0, slash);
 }
 
@@ -314,17 +323,19 @@ function buildCli(repoRoot) {
 }
 
 /**
- * `{ path, reason }` for every entry of compile's generated-ownership
- * refusal, or `[]` when the output is some other failure.
+ * `{ path, reason }` for every entry of a compile ownership refusal, or `[]`
+ * when the output is some other failure.
  *
- * The reason is captured rather than matched, so the only string this couples
- * to is the header. Compile emits several reasons under it (`hash mismatch`,
- * `missing lockfile entry`, `no lockfile`, `invalid lockfile`); matching one
- * of them would name a partial path list for a mixed refusal, and a gate whose
- * whole value is naming paths must not print an incomplete one.
+ * Keyed on the shared `Refusing to ...` / `- <path> (<reason>)` item shape
+ * rather than on any one header, because compile has three of them -- a
+ * generated-path refusal, a region-adoption refusal, and a lockfile-owned
+ * region refusal -- all exiting 3 with the same item shape. Matching one
+ * header would crash the gate on the other two, and matching a fixed reason
+ * would name a partial path list for a mixed refusal. A gate whose whole value
+ * is naming paths must not print an incomplete list.
  */
 export function parseOwnershipRefusal(output) {
-  if (!output.includes("Refusing to replace existing generated paths")) {
+  if (!/^Refusing to .*:$/mu.test(output)) {
     return [];
   }
   return [...output.matchAll(/^- (\S+) \((.+)\)$/gmu)].map((match) => ({

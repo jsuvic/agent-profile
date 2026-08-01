@@ -896,6 +896,12 @@ export const CHANGE_RISK_HIGH_RISK_SURFACES: readonly ChangeRiskHighRiskSurface[
         "CLAUDE.md",
         "ai-profile.lock",
         ".mcp.json",
+        // The self-applied artifact guard implements ownership rather than
+        // carrying it, like regions.ts and golden.ts above: it decides which
+        // committed paths are generated-owned and which are exempt. Without
+        // this, widening its exemption list would route to a
+        // network-process-boundary review and never to an ownership one.
+        "scripts/verify-self-applied-artifacts.mjs",
         ".agents/**",
         ".claude/**",
         ".codex/**",
