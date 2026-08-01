@@ -175,6 +175,7 @@ describe("evaluateSelfAppliedArtifacts", () => {
   test("fails on a committed generated-owned path that is no longer emitted", () => {
     const input = currentTree();
     input.committed.set(".claude/agents/retired-reviewer.md", "ggg");
+    input.committedGeneratedPaths.push(".claude/agents/retired-reviewer.md");
 
     const result = evaluateSelfAppliedArtifacts(input);
 
@@ -214,7 +215,79 @@ describe("evaluateSelfAppliedArtifacts", () => {
     const result = evaluateSelfAppliedArtifacts(input);
 
     assert.equal(result.ok, false);
-    assert.deepEqual(result.orphaned, [".claude/skills/grill-change/SKILL.md"]);
+    // Reported as unrecorded rather than orphaned: the regenerated lockfile no
+    // longer names it, so the evidence cannot distinguish a retired artifact
+    // from a hand-written one, and the report says exactly that.
+    assert.deepEqual(result.unrecorded, [
+      ".claude/skills/grill-change/SKILL.md",
+    ]);
+  });
+
+  test("catches an orphan when its whole root stops being emitted", () => {
+    const input = currentTree();
+    // `clients.claude.enabled: false` removes every `.claude` output in one
+    // profile edit. If the sweep units were derived from what is emitted,
+    // `.claude` would stop being swept at exactly the moment its artifacts
+    // were stranded, and the regenerated lockfile no longer names them either
+    // -- both detection sources blind together.
+    input.emitted.delete(".claude/agents/reviewer.md");
+    input.committedGeneratedPaths = [".codex/agents/reviewer.toml"];
+
+    const result = evaluateSelfAppliedArtifacts(input);
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.unrecorded, [".claude/agents/reviewer.md"]);
+  });
+
+  test("splits stranded files on whether a lockfile ever recorded them", () => {
+    const input = currentTree();
+    // Still recorded by the committed lockfile: demonstrably emitted once.
+    input.committed.set(".claude/agents/retired.md", "ggg");
+    input.committedGeneratedPaths.push(".claude/agents/retired.md");
+    // Recorded nowhere: could be a leftover, could be hand-written.
+    input.committed.set(".claude/commands/handwritten.md", "hhh");
+
+    const result = evaluateSelfAppliedArtifacts(input);
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.orphaned, [".claude/agents/retired.md"]);
+    assert.deepEqual(result.unrecorded, [".claude/commands/handwritten.md"]);
+
+    const report = formatSelfAppliedArtifactReport({ ref: "HEAD", ...result });
+    assert.match(report, /unrecorded: \.claude\/commands\/handwritten\.md/u);
+    assert.match(report, /orphaned: \.claude\/agents\/retired\.md/u);
+    // The ambiguous class must not tell its reader to restore a producer that
+    // may never have existed; it offers both resolutions instead.
+    assert.match(report, /move it outside that root if it is yours/u);
+  });
+
+  test("fails when a generated artifact lands in an unswept root", () => {
+    const input = currentTree();
+    // A new target emitting into a root the closed list does not name would
+    // otherwise leave that root permanently unswept for orphans.
+    input.emitted.set(".cursor/rules/main.md", emittedEntry("iii"));
+    input.committed.set(".cursor/rules/main.md", "iii");
+
+    const result = evaluateSelfAppliedArtifacts(input);
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.unknownRoots, [".cursor/rules/main.md"]);
+    assert.match(
+      formatSelfAppliedArtifactReport({ ref: "HEAD", ...result }),
+      /GENERATED_ARTIFACT_ROOTS/u,
+    );
+  });
+
+  test("checks the root of a declared-local artifact too", () => {
+    const input = currentTree();
+    // `.codex/config.toml` is never committed, so it exits the loop early.
+    // Its root must still be validated, or a declared-local artifact could be
+    // the thing that quietly introduces an unswept root.
+    input.emitted.set(".cursor/config.toml", emittedEntry("jjj"));
+
+    const result = evaluateSelfAppliedArtifacts(input);
+
+    assert.deepEqual(result.unknownRoots, [".cursor/config.toml"]);
   });
 
   test("catches a root-level orphan through the committed lockfile", () => {
@@ -347,6 +420,8 @@ describe("evaluateSelfAppliedArtifacts", () => {
         stale: [],
         missing: [],
         orphaned: [],
+        unrecorded: [],
+        unknownRoots: [],
         declaredLocal: [],
         refusals: [],
         ...outcome,
@@ -448,11 +523,13 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
     }
   });
 
-  test("fails on a committed artifact the compiler no longer emits", async () => {
-    const orphan = ".claude/agents/retired-reviewer.md";
+  test("fails on a committed file under a generated root that nothing emits", async () => {
+    // End-to-end wiring for the reverse direction: real lockfile, real
+    // committed path list, real root sweep. No unit test exercises that chain.
+    const stranded = ".claude/agents/retired-reviewer.md";
     const orphanRepo = createRepoFromTree("HEAD", "orphan", (dir) => {
       fs.writeFileSync(
-        path.join(dir, orphan),
+        path.join(dir, stranded),
         "# left behind by a removed target\n",
       );
     });
@@ -462,7 +539,8 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
       });
 
       assert.equal(result.ok, false);
-      assert.deepEqual(result.orphaned, [orphan]);
+      assert.deepEqual(result.unrecorded, [stranded]);
+      assert.deepEqual(result.orphaned, []);
     } finally {
       removeDir(orphanRepo.dir);
     }

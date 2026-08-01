@@ -55,6 +55,29 @@ export const DECLARED_LOCAL_ARTIFACTS = Object.freeze([
   ".codex/config.toml",
 ]);
 
+/**
+ * The top-level directories this compiler owns outright, swept whole for
+ * artifacts it no longer emits.
+ *
+ * Declared rather than derived. Deriving the sweep units from what is
+ * currently emitted makes both orphan-detection sources fail together at the
+ * one moment they matter: the commit that stops emitting a path also
+ * regenerates the lockfile that recorded it, and if that was the last emission
+ * under its root, the root stops being swept as well. Setting
+ * `clients.claude.enabled: false` does exactly that to `.claude` in a single
+ * profile edit, stranding every checked-in `.claude` artifact where the agent
+ * still reads it.
+ *
+ * Kept honest by `unknownRoots`: a generated-owned artifact emitted into a root
+ * this list does not name fails the check by name.
+ */
+export const GENERATED_ARTIFACT_ROOTS = Object.freeze([
+  ".agents",
+  ".claude",
+  ".codex",
+  ".tabnine",
+]);
+
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
@@ -188,6 +211,8 @@ export function evaluateSelfAppliedArtifacts({
       stale: [],
       missing: [],
       orphaned: [],
+      unrecorded: [],
+      unknownRoots: [],
       declaredLocal: [],
       refusals,
     };
@@ -195,14 +220,24 @@ export function evaluateSelfAppliedArtifacts({
   const stale = [];
   const missing = [];
   const declaredLocal = [];
-  const generatedRoots = new Set();
+  const unknownRoots = [];
 
   for (const [artifactPath, entry] of emitted) {
+    if (entry.ownership === "generated-owned") {
+      // Checked for EVERY generated-owned artifact, including the declared
+      // local ones, and before any `continue`. This is what keeps the closed
+      // root list below honest: a target that starts emitting into a root the
+      // list does not name fails loudly here instead of leaving that root
+      // silently unswept.
+      const root = posixTopSegment(artifactPath);
+      if (root !== "" && !GENERATED_ARTIFACT_ROOTS.includes(root)) {
+        unknownRoots.push(artifactPath);
+      }
+    }
+
     const committedSha = committed.get(artifactPath);
     if (committedSha === undefined) {
       if (DECLARED_LOCAL_ARTIFACTS.includes(artifactPath)) {
-        // Nothing committed to verify and nothing committed to sweep, so this
-        // artifact contributes no directory either.
         declaredLocal.push(artifactPath);
         continue;
       }
@@ -214,53 +249,56 @@ export function evaluateSelfAppliedArtifacts({
         emittedSha256: entry.sha256,
       });
     }
-
-    if (entry.ownership === "generated-owned") {
-      // The generated ROOT, not the artifact's own directory. Sweeping only
-      // the directories that still hold an emitted artifact misses a retired
-      // one whose directory lost all of them -- and every skill artifact is
-      // the only file in its directory, so retiring a single skill hits that
-      // exactly. The brief names `.claude` and `.codex` as the units that stay
-      // on disk and are still read at runtime, so those are the units swept.
-      const root = posixTopSegment(artifactPath);
-      // The repository root holds hand-written files and is never swept; a
-      // root-level orphan is caught through the committed lockfile below.
-      if (root !== "") {
-        generatedRoots.add(root);
-      }
-    }
   }
 
   // The other direction. A dry run reports only create/change/unchanged over
   // the current outputs and compile never deletes orphans, so a generated file
   // a target stopped emitting stays checked in and is still read at runtime.
   //
-  // Two sources, because neither alone is complete: the root sweep sees a
-  // leftover file the committed lockfile never recorded, and the committed
-  // lockfile sees a retired artifact at the repository root, which is never
-  // swept.
+  // The sweep units are DECLARED, never derived from what is currently
+  // emitted. Deriving them means both detection sources go blind together at
+  // exactly the moment they are needed: the commit that stops emitting a path
+  // also regenerates the lockfile that recorded it, and if it was the last
+  // emission under its root, that root stops being a sweep unit too. Turning
+  // off a client does that to a whole root in one profile edit.
   //
-  // Known residual gap, now the only one: an orphan that BOTH sits at the
-  // repository root AND was dropped from the committed lockfile in the same
-  // commit that stopped emitting it. Note what does NOT save us here -- the
-  // commit that retires a path regenerates the lockfile too, so the lockfile
-  // is current rather than stale, and its being current is exactly what
-  // removes the path from the candidate set.
+  // Known residual gap: an orphan that BOTH sits at the repository root -- the
+  // root holds hand-written files and can never be swept wholesale -- AND was
+  // dropped from the committed lockfile in the same commit that stopped
+  // emitting it.
   const orphanCandidates = new Set(committedGeneratedPaths);
   for (const committedPath of committed.keys()) {
-    if (generatedRoots.has(posixTopSegment(committedPath))) {
+    if (GENERATED_ARTIFACT_ROOTS.includes(posixTopSegment(committedPath))) {
       orphanCandidates.add(committedPath);
     }
   }
-  const orphaned = [...orphanCandidates]
+  const stranded = [...orphanCandidates]
     .filter((candidate) => committed.has(candidate) && !emitted.has(candidate))
     .sort();
+  // Split on the EVIDENCE, and claim no more than the evidence supports. A
+  // path the committed lockfile still records was demonstrably emitted once
+  // and has been retired. A path nothing records is ambiguous: it may be a
+  // retired artifact whose lockfile entry was dropped in the same commit, or a
+  // file that was hand-written under a compiler-owned root and never generated
+  // at all. Both are reported; only the second class has to leave the reader a
+  // choice, and neither is told to restore a producer that may never have
+  // existed.
+  const recorded = new Set(committedGeneratedPaths);
+  const orphaned = stranded.filter((candidate) => recorded.has(candidate));
+  const unrecorded = stranded.filter((candidate) => !recorded.has(candidate));
 
   return {
-    ok: stale.length === 0 && missing.length === 0 && orphaned.length === 0,
+    ok:
+      stale.length === 0 &&
+      missing.length === 0 &&
+      orphaned.length === 0 &&
+      unrecorded.length === 0 &&
+      unknownRoots.length === 0,
     stale,
     missing,
     orphaned,
+    unrecorded,
+    unknownRoots,
     declaredLocal,
     refusals,
   };
@@ -504,6 +542,16 @@ export function formatSelfAppliedArtifactReport(result) {
       `  orphaned: ${artifactPath} is committed but no longer emitted`,
     );
   }
+  for (const artifactPath of result.unrecorded) {
+    lines.push(
+      `  unrecorded: ${artifactPath} is committed under a compiler-owned root and no lockfile records it`,
+    );
+  }
+  for (const artifactPath of result.unknownRoots) {
+    lines.push(
+      `  unswept:  ${artifactPath} is emitted into a root this guard does not sweep`,
+    );
+  }
   // Remediation is per class. `compile --write` fixes a stale or missing
   // artifact and does nothing at all for an orphan, because compile never
   // deletes; pointing at it for every class sends people down a dead end.
@@ -515,8 +563,25 @@ export function formatSelfAppliedArtifactReport(result) {
   }
   if (result.orphaned.length > 0) {
     lines.push(
-      "orphaned: compile never deletes, so remove the file with `git rm` if the target",
-      "  really did retire it, or restore whatever stopped emitting it.",
+      "orphaned: the committed lockfile recorded this path, so it was generated once and",
+      "  the compiler has stopped emitting it. Compile never deletes: remove it with",
+      "  `git rm` if the target really did retire it, or restore whatever stopped",
+      "  emitting it.",
+    );
+  }
+  if (result.unrecorded.length > 0) {
+    lines.push(
+      "unrecorded: the committed lockfile does not record this path, so it is either a",
+      "  retired artifact whose lockfile entry was dropped in the same commit, or a file",
+      "  written by hand under a directory the compiler owns outright. Remove it with",
+      "  `git rm` if it is a leftover, or move it outside that root if it is yours.",
+    );
+  }
+  if (result.unknownRoots.length > 0) {
+    lines.push(
+      "unswept: a target now emits into a top-level directory GENERATED_ARTIFACT_ROOTS does",
+      "  not name, so that directory would never be swept for orphans. Add the root to",
+      "  that constant in scripts/verify-self-applied-artifacts.mjs.",
     );
   }
   if (result.refusals.length > 0) {
