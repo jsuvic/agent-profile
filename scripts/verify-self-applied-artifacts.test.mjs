@@ -55,10 +55,10 @@ function stageObservedDrift(dir) {
   let lockText = fs.readFileSync(path.join(dir, "ai-profile.lock"), "utf8");
   for (const artifactPath of REVIEWER_ARTIFACT_PATHS) {
     const absolutePath = path.join(dir, artifactPath);
-    const before_ = sha256(fs.readFileSync(absolutePath));
+    const currentSha = sha256(fs.readFileSync(absolutePath));
     fs.appendFileSync(absolutePath, STALE_LINE);
-    const after_ = sha256(fs.readFileSync(absolutePath));
-    lockText = lockText.replaceAll(before_, after_);
+    const staleSha = sha256(fs.readFileSync(absolutePath));
+    lockText = lockText.replaceAll(currentSha, staleSha);
   }
   fs.writeFileSync(path.join(dir, "ai-profile.lock"), lockText);
 }
@@ -121,6 +121,12 @@ describe("evaluateSelfAppliedArtifacts", () => {
     sha256: sha,
     ownership,
   });
+
+  const staleEntry = {
+    path: ".claude/agents/reviewer.md",
+    committedSha256: "a".repeat(64),
+    emittedSha256: "b".repeat(64),
+  };
 
   const currentTree = () => ({
     emitted: new Map([
@@ -239,19 +245,71 @@ describe("evaluateSelfAppliedArtifacts", () => {
     assert.deepEqual(result.declaredLocal, [...DECLARED_LOCAL_ARTIFACTS]);
   });
 
-  test("parses only compile's ownership refusal, not other failures", () => {
+  test("captures every refusal reason, not just hash mismatches", () => {
+    // Compile emits several reasons under one header. Matching only
+    // `hash mismatch` would name a partial path list for a mixed refusal, and
+    // the omitted paths would look clean.
     assert.deepEqual(
       parseOwnershipRefusal(
         "Refusing to replace existing generated paths without --force:\n" +
           "- .claude/agents/change-risk-reviewer.md (hash mismatch)\n" +
-          "- .codex/config.toml (hash mismatch)\n",
+          "- .codex/config.toml (missing lockfile entry)\n",
       ),
-      [".claude/agents/change-risk-reviewer.md", ".codex/config.toml"],
+      [
+        {
+          path: ".claude/agents/change-risk-reviewer.md",
+          reason: "hash mismatch",
+        },
+        { path: ".codex/config.toml", reason: "missing lockfile entry" },
+      ],
     );
     // Any other non-zero exit must keep propagating as an error rather than
     // being silently downgraded into a tidy report.
     assert.deepEqual(parseOwnershipRefusal("ai-profile.yaml is invalid\n"), []);
     assert.deepEqual(parseOwnershipRefusal(""), []);
+  });
+
+  test("a refusal short-circuits every other category", () => {
+    const input = currentTree();
+    // Compile produced nothing, so the emitted set is empty. Without the
+    // short-circuit every committed artifact would be reported orphaned.
+    input.emitted = new Map();
+    input.refusals = [
+      { path: ".claude/agents/reviewer.md", reason: "hash mismatch" },
+    ];
+
+    const result = evaluateSelfAppliedArtifacts(input);
+
+    assert.equal(result.ok, false);
+    assert.deepEqual(result.refusals, input.refusals);
+    assert.deepEqual(result.orphaned, []);
+    assert.deepEqual(result.stale, []);
+    assert.deepEqual(result.missing, []);
+  });
+
+  test("names the right remediation for each failure class", () => {
+    const report = (outcome) =>
+      formatSelfAppliedArtifactReport({
+        ref: "HEAD",
+        ok: false,
+        stale: [],
+        missing: [],
+        orphaned: [],
+        declaredLocal: [],
+        refusals: [],
+        ...outcome,
+      });
+
+    // `compile --write` fixes a stale artifact and does nothing whatever for
+    // an orphan, because compile never deletes. Printing it for both sends
+    // people down a dead end.
+    assert.match(report({ stale: [staleEntry] }), /compile --write/u);
+    assert.doesNotMatch(report({ orphaned: ["x"] }), /compile --write/u);
+    assert.match(report({ orphaned: ["x"] }), /git rm/u);
+    assert.match(
+      report({ refusals: [{ path: "x", reason: "hash mismatch" }] }),
+      /doctor/u,
+    );
   });
 
   test("the declared-local allowance is a frozen constant, not configuration", () => {
@@ -326,10 +384,12 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
       });
 
       assert.equal(result.ok, false);
-      assert.deepEqual(result.refusedPaths, [REVIEWER_ARTIFACT_PATHS[0]]);
+      assert.deepEqual(result.refusals, [
+        { path: REVIEWER_ARTIFACT_PATHS[0], reason: "hash mismatch" },
+      ]);
       assert.match(
         formatSelfAppliedArtifactReport(result),
-        /conflict: \.claude\/agents\/change-risk-reviewer\.md/u,
+        /conflict: \.claude\/agents\/change-risk-reviewer\.md \(hash mismatch\)/u,
       );
     } finally {
       removeDir(conflictRepo.dir);
@@ -422,12 +482,14 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
       return entries;
     };
 
-    const before_ = snapshot();
+    const beforeSnapshot = snapshot();
     await verifySelfAppliedArtifacts({ repoRoot });
-    const after_ = snapshot();
+    const afterSnapshot = snapshot();
 
-    const changed = [...new Set([...before_.keys(), ...after_.keys()])]
-      .filter((key) => before_.get(key) !== after_.get(key))
+    const changed = [
+      ...new Set([...beforeSnapshot.keys(), ...afterSnapshot.keys()]),
+    ]
+      .filter((key) => beforeSnapshot.get(key) !== afterSnapshot.get(key))
       .sort();
 
     // The guard rebuilds the CLI from source, so gitignored build output is
@@ -444,10 +506,10 @@ describe("verifySelfAppliedArtifacts", { concurrency: false }, () => {
     // genuinely covers them rather than silently skipping absent paths.
     for (const artifactPath of DECLARED_LOCAL_ARTIFACTS) {
       assert.ok(
-        before_.has(artifactPath),
+        beforeSnapshot.has(artifactPath),
         `${artifactPath} must be covered by the sentinel`,
       );
     }
-    assert.ok(before_.has(".claude/settings.json"));
+    assert.ok(beforeSnapshot.has(".claude/settings.json"));
   });
 });

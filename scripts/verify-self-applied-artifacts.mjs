@@ -98,6 +98,9 @@ function listCommittedBlobs(repoRoot, ref) {
     if (type !== "blob") {
       continue;
     }
+    // Symlinks (mode 120000) are blobs too, and are materialized as ordinary
+    // files holding the link target. This tree has none; revisit if that
+    // changes, since compile would then read the target text as content.
     blobs.push({ oid, filePath: record.slice(tab + 1) });
   }
   return blobs;
@@ -164,13 +167,31 @@ export function materializeCommittedTree({ repoRoot, ref, destinationDir }) {
  * @param committedGeneratedPaths Paths the COMMITTED `ai-profile.lock` records
  *                  as generated-owned. This is the repository's own record of
  *                  what its artifacts were, and it is what makes an orphan at
- *                  the repository root detectable.
+ *                  the repository root detectable. Required, not defaulted: an
+ *                  omitted list would silently disable root-orphan detection.
+ * @param refusals  Compile's generated-ownership refusals, if it declined to
+ *                  produce output at all. Sole owner of the outcome shape, so
+ *                  every caller returns the same keys.
  */
 export function evaluateSelfAppliedArtifacts({
   emitted,
   committed,
-  committedGeneratedPaths = [],
+  committedGeneratedPaths,
+  refusals = [],
 }) {
+  if (refusals.length > 0) {
+    // Compile produced nothing, so there is no emitted set to compare against
+    // and every other category would be an artifact of that emptiness rather
+    // than a finding.
+    return {
+      ok: false,
+      stale: [],
+      missing: [],
+      orphaned: [],
+      declaredLocal: [],
+      refusals,
+    };
+  }
   const stale = [];
   const missing = [];
   const declaredLocal = [];
@@ -233,6 +254,7 @@ export function evaluateSelfAppliedArtifacts({
     missing,
     orphaned,
     declaredLocal,
+    refusals,
   };
 }
 
@@ -292,6 +314,26 @@ function buildCli(repoRoot) {
 }
 
 /**
+ * `{ path, reason }` for every entry of compile's generated-ownership
+ * refusal, or `[]` when the output is some other failure.
+ *
+ * The reason is captured rather than matched, so the only string this couples
+ * to is the header. Compile emits several reasons under it (`hash mismatch`,
+ * `missing lockfile entry`, `no lockfile`, `invalid lockfile`); matching one
+ * of them would name a partial path list for a mixed refusal, and a gate whose
+ * whole value is naming paths must not print an incomplete one.
+ */
+export function parseOwnershipRefusal(output) {
+  if (!output.includes("Refusing to replace existing generated paths")) {
+    return [];
+  }
+  return [...output.matchAll(/^- (\S+) \((.+)\)$/gmu)].map((match) => ({
+    path: match[1],
+    reason: match[2],
+  }));
+}
+
+/**
  * Compile the materialized committed tree in place and return every artifact
  * the current compiler emits for it, keyed by repository-relative path.
  *
@@ -301,19 +343,6 @@ function buildCli(repoRoot) {
  * freshly built `ai-profile.lock` whose `outputs` carry authoritative
  * ownership for every path.
  */
-/**
- * Paths named by compile's generated-ownership refusal, or `[]` when the
- * output is some other failure.
- */
-export function parseOwnershipRefusal(output) {
-  if (!output.includes("Refusing to replace existing generated paths")) {
-    return [];
-  }
-  return [...output.matchAll(/^- (\S+) \(hash mismatch\)$/gmu)].map(
-    (match) => match[1],
-  );
-}
-
 function compileEmittedArtifacts({ treeDir, cliEntryPath }) {
   const result = spawnSync(
     process.execPath,
@@ -325,14 +354,14 @@ function compileEmittedArtifacts({ treeDir, cliEntryPath }) {
   }
   if (result.status !== 0) {
     const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
-    const refusedPaths = parseOwnershipRefusal(output);
-    if (refusedPaths.length > 0) {
+    const refusals = parseOwnershipRefusal(output);
+    if (refusals.length > 0) {
       // Not a guard malfunction: the committed artifacts and the committed
-      // lockfile disagree about their own hashes, so compile will not
-      // overwrite them without --force. That is itself a drift the gate must
-      // report by path, not crash on -- and forcing the write here would
-      // destroy the very evidence being reported.
-      return { emitted: new Map(), refusedPaths };
+      // lockfile disagree about each other, so compile will not overwrite them
+      // without --force. That is itself a drift the gate must report by path,
+      // not crash on -- and forcing the write here would destroy the very
+      // evidence being reported.
+      return { emitted: new Map(), refusals };
     }
     throw new Error(
       `agent-profile compile --write failed in the temporary tree (exit ${result.status}).\n${output}`,
@@ -362,7 +391,7 @@ function compileEmittedArtifacts({ treeDir, cliEntryPath }) {
     sha256: sha256(lockBytes),
     ownership: "lockfile",
   });
-  return { emitted, refusedPaths: [] };
+  return { emitted, refusals: [] };
 }
 
 /** This repository, which owns both the compiler and this guard. */
@@ -403,28 +432,17 @@ export async function verifySelfAppliedArtifacts({
     const committedGeneratedPaths = readGeneratedOwnedPaths(
       path.join(treeDir, AI_PROFILE_LOCK_PATH),
     );
-    const { emitted, refusedPaths } = compileEmittedArtifacts({
+    const { emitted, refusals } = compileEmittedArtifacts({
       treeDir,
       cliEntryPath,
     });
-    if (refusedPaths.length > 0) {
-      return {
-        ref,
-        ok: false,
-        stale: [],
-        missing: [],
-        orphaned: [],
-        declaredLocal: [],
-        refusedPaths,
-      };
-    }
     return {
       ref,
-      refusedPaths,
       ...evaluateSelfAppliedArtifacts({
         emitted,
         committed,
         committedGeneratedPaths,
+        refusals,
       }),
     };
   } finally {
@@ -454,9 +472,9 @@ export function formatSelfAppliedArtifactReport(result) {
     `Self-applied artifact verification FAILED against ${result.ref}.`,
     "The checked-in artifacts this repository runs on do not match what the current compiler emits.",
   );
-  for (const artifactPath of result.refusedPaths ?? []) {
+  for (const refusal of result.refusals) {
     lines.push(
-      `  conflict: ${artifactPath} does not match the hash ai-profile.lock records for it`,
+      `  conflict: ${refusal.path} (${refusal.reason}) -- compile refused to replace it`,
     );
   }
   for (const entry of result.stale) {
@@ -472,10 +490,31 @@ export function formatSelfAppliedArtifactReport(result) {
       `  orphaned: ${artifactPath} is committed but no longer emitted`,
     );
   }
+  // Remediation is per class. `compile --write` fixes a stale or missing
+  // artifact and does nothing at all for an orphan, because compile never
+  // deletes; pointing at it for every class sends people down a dead end.
+  lines.push("");
+  if (result.stale.length > 0 || result.missing.length > 0) {
+    lines.push(
+      "stale/missing: run `node apps/cli/dist/index.js compile --write`, then commit the result.",
+    );
+  }
+  if (result.orphaned.length > 0) {
+    lines.push(
+      "orphaned: compile never deletes, so remove the file with `git rm` if the target",
+      "  really did retire it, or restore whatever stopped emitting it.",
+    );
+  }
+  if (result.refusals.length > 0) {
+    lines.push(
+      "conflict: the committed artifact and the committed ai-profile.lock disagree.",
+      "  Reconcile them (see `agent-profile doctor`) before regenerating; this guard",
+      "  will not force the write, because that would destroy the evidence.",
+    );
+  }
   lines.push(
     "",
-    "Regenerate with `node apps/cli/dist/index.js compile --write` and commit the result;",
-    "this guard compares committed bytes, so an uncommitted fix still fails.",
+    "This guard compares committed bytes, so a staged but uncommitted fix still fails.",
   );
   return lines.join("\n");
 }
