@@ -290,6 +290,21 @@ describe("evaluateSelfAppliedArtifacts", () => {
     assert.deepEqual(parseOwnershipRefusal(""), []);
   });
 
+  test("recognises a refusal whose lines are CRLF-terminated", () => {
+    assert.deepEqual(
+      parseOwnershipRefusal(
+        "Refusing to replace existing generated paths without --force:\r\n" +
+          "- .claude/agents/change-risk-reviewer.md (hash mismatch)\r\n",
+      ),
+      [
+        {
+          path: ".claude/agents/change-risk-reviewer.md",
+          reason: "hash mismatch",
+        },
+      ],
+    );
+  });
+
   test("recognises every refusal header compile can emit", () => {
     // All three exit 3 with the same item shape. Keying on one header would
     // crash the gate on the other two instead of reporting them.

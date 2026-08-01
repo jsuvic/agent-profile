@@ -335,10 +335,13 @@ function buildCli(repoRoot) {
  * is naming paths must not print an incomplete list.
  */
 export function parseOwnershipRefusal(output) {
-  if (!/^Refusing to .*:$/mu.test(output)) {
+  // `\r?` because this parses another process's stream, not a file: a header
+  // that matched while its item lines did not would yield an empty list and
+  // fall through to the throw, turning a reportable refusal into a crash.
+  if (!/^Refusing to .*:\r?$/mu.test(output)) {
     return [];
   }
-  return [...output.matchAll(/^- (\S+) \((.+)\)$/gmu)].map((match) => ({
+  return [...output.matchAll(/^- (\S+) \((.+)\)\r?$/gmu)].map((match) => ({
     path: match[1],
     reason: match[2],
   }));
