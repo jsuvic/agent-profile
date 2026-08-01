@@ -2834,6 +2834,50 @@ a non-empty string, which the validator enforces; and I10's third option kept a
 trigger that still required knowing the remaining budget, defeating its own
 acceptance criterion.
 
+PR #145 second external round, 2026-08-01: four findings, all verified, all
+valid — and two of them are defects the PREVIOUS round's fixes introduced.
+Worth recording as a pattern rather than four items.
+
+I10: closing the "trigger must not depend on the budget" finding, I replaced
+the bad phrasing with a category-ordering example that is observable but has no
+relationship to exhaustion — it fires immediately with ample turns left, or
+never fires at all if the implied order is followed. I substituted "observable"
+for "related to the thing being triggered". The brief now names both
+disqualified phrasings explicitly and requires a trigger that correlates with
+capacity actually running out, or the option is not viable.
+
+I12: closing the "briefs are executable inputs" finding, I excluded briefs but
+left `TASKS.md` in the inert list. It is not inert: `implement-next` reads task
+order, state, and brief links and selects the first `ready` row. The proof is
+in the same review round — the finding that a `human-gate` row above four
+`ready` rows made them undispatchable IS a demonstration that ledger order is
+executable, and I fixed that finding without drawing the conclusion from it.
+Path-level widening now has almost nothing left to cover, so the option is
+reframed: an exclusion must be defined by what it provably permits, or the
+honest resolutions are the other two.
+
+I14, two findings, neither self-inflicted. First: the parent contract states
+that promotion "reads the persisted values and never re-adjudicates prose", so
+the OWNER DETERMINATION paragraph written last round cannot authorize a
+second-occurrence promotion however honestly it is labelled — it documents the
+gap without closing it. The guard is now framed as an early mechanical guard
+under the guard-preference clause, which the table explicitly permits before a
+third occurrence when clearly practical and proportionate, so it depends on no
+count at all. That is a better justification than the one it replaces. Second:
+the acceptance criterion covered stale BYTES but not orphaned FILES. A dry run
+reports only create/change/unchanged over the current `compileResult.files`,
+and compile never deletes orphans, so a generated-owned artifact that is no
+longer emitted stays on disk, is still read at runtime, and the guard reports
+zero create and zero change. The criterion now compares the committed and
+emitted path sets in both directions.
+
+The pattern: fixing a finding is a change, and changes carry defects at the
+same rate as any other. Two of four here came from same-round fixes applied
+without re-review, and one of those was a conclusion sitting in a finding I had
+already read. Three rounds on this PR now, each smaller than the last
+(10 -> 4), which is what convergence looks like — but the halving is not
+evidence the next round is empty.
+
 ## phase-34: Bounded Pre-Implementation Spec Review (`docs/specs/phase-34/001-bounded-spec-review.md`)
 
 Draft 2026-07-27, pending grill approval; the spec itself is human-gated.

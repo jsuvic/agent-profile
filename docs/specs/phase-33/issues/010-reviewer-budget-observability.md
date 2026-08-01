@@ -57,13 +57,21 @@ Pick one owner for the quantity:
   this costs one interpolation and a golden update, and it fixes Codex too.
 - Or add an orchestration-projection obligation that the invocation owner
   states the remaining budget in the reviewer's task context.
-- Or reword the rule to a trigger on an objectively observable event rather
-  than a remaining quantity, e.g. emit as soon as a named category of check is
-  reached with any earlier category still unperformed. "More inspection than
-  can be completed" does NOT qualify: judging it still requires knowing how
-  much budget remains, which is the quantity this brief exists to supply, so
-  that phrasing would satisfy the prose rewrite while leaving the trigger
-  unevaluable.
+- Or reword the rule to a trigger that is both observable AND actually bounds
+  remaining capacity. Two phrasings are already known not to qualify, and the
+  acceptance criterion must reject both:
+  - "More inspection than can be completed" — judging it still requires
+    knowing how much budget remains, the very quantity this brief exists to
+    supply.
+  - A pure ordering signal, e.g. "a named category is reached with an earlier
+    one unperformed" — observable, but unrelated to exhaustion. It fires
+    immediately with ample turns left, making ordinary reviews incomplete, and
+    if the implied order is followed it never fires at all, leaving I8's
+    original failure untouched.
+
+  A qualifying trigger has to correlate with capacity actually running out. If
+  none can be stated without the number, this option is not viable and one of
+  the two options that supply the budget must be chosen.
 
 Whichever is chosen needs a compiled-artifact assertion on that surface.
 

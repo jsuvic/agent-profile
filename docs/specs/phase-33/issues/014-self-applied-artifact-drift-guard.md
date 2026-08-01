@@ -4,8 +4,21 @@
 
 `docs/specs/phase-33/001-change-risk-review-assurance.md`
 
-Raised 2026-07-31 as a promotion outcome on the second occurrence of one
-mechanism (`docs/review-learning/896F5F8050686A23.md`, promotion section).
+Raised 2026-07-31. Framed as an EARLY MECHANICAL GUARD under the promoted-rule
+lifecycle's guard-preference clause — "a mechanical or interface-level guard
+may be introduced before the third occurrence when it is clearly practical and
+proportionate" — and NOT as a validated second-occurrence promotion outcome.
+
+That distinction is deliberate. The parent contract requires promotion to count
+distinct reviewed changes with validated findings and to read persisted record
+values, never re-adjudicating prose
+(`docs/specs/phase-33/001-change-risk-review-assurance.md`, recurrence
+classification). PR #140 has no `review-learning/v1` record, so its occurrence
+is not auditable and cannot authorize a threshold. Claiming it as a second
+occurrence would have promotion act on an assertion the contract forbids it to
+read. The guard stands on its own merits instead: the check is exact, no model
+judgement is part of the safe decision, and it would have caught both observed
+instances. Nothing here depends on the count.
 
 ## Intent summary
 
@@ -25,10 +38,10 @@ Occurrence history, same mechanism both times:
 
    It is explicitly NOT owed to I5: that brief is scoped to PRs #125 and
    #127-#133, and expanding beyond those eight is one of its non-goals, so I5
-   neither owns nor will supply this occurrence. Anyone auditing the promotion
-   count later must take it from the owner determination or normalize #140
-   separately; I5 must not be cited as its source, and must not double-count
-   #140 if its scope is ever widened.
+   neither owns nor will supply this occurrence. Because no record exists, this
+   instance is context for why the guard is worth building and carries NO
+   promotion authority. I5 must not be cited as its source, and must not
+   double-count #140 if its scope is ever widened.
 
 2. Phase-33 I8/I9: the change advanced both golden fixture trees but left
    `.claude/agents/change-risk-reviewer.md`, `.codex/agents/change-risk-reviewer.toml`
@@ -36,11 +49,12 @@ Occurrence history, same mechanism both times:
    found this was itself running the stale prompt. `npm run check`, `npm test`
    and `npm run verify:pack` all passed with the artifacts stale.
 
-Under the promotion table a second occurrence earns a reviewer regression case
-plus a scoped rule, and the table explicitly permits a mechanical guard earlier
-when clearly practical and proportionate. A mechanical guard is available and
-is preferred to a prompt rule here, because no model judgement is part of the
-safe decision — the check is exact.
+Both instances are recorded above as history, not as a promotion count. The
+guard is elected under the guard-preference clause because it is clearly
+practical and proportionate: the check is exact and no model judgement is part
+of the safe decision. If PR #140 is ever normalized into a record, the count
+becomes auditable and the promotion framing can be revisited; the guard does
+not wait on that.
 
 The guard:
 
@@ -73,6 +87,13 @@ It would have caught both occurrences.
 
 - A check fails when any generated-owned artifact of this repository diverges
   from what the current compiler emits, with the diverging paths named.
+- The check also fails on an ORPHANED artifact: a generated-owned path that is
+  checked in but no longer emitted. A dry run reports only `create`, `change`
+  and `unchanged` over the current `compileResult.files`, and compile never
+  deletes orphans (phase-05/001), so zero create and zero change does not
+  imply the checked-in set is correct. A forgotten `.claude` or `.codex` file
+  stays on disk and is still read at runtime. Compare the committed
+  generated-artifact path set against the emitted set, in both directions.
 - The check passes on a tree whose artifacts are current, including when the
   two excluded local files differ.
 - The check performs no write; proven by a filesystem sentinel rather than by

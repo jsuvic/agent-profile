@@ -68,9 +68,21 @@ agent would implement requirements that were never reviewed — a strictly worse
 hole than the one this brief closes. Compiled-output boundary fixtures do not
 mitigate it, because the brief is consumed as instructions rather than compiled.
 
-Any widening is therefore limited to inert append-only bookkeeping such as
-`TASKS.md` rows and a phase README index. Brief writes are sequenced and
-reviewed normally.
+`TASKS.md` is not inert either, and must not be excluded by path. The
+generated `implement-next` flow reads task order, state, and brief links from
+it and selects the first `ready` row, so a post-review status, ordering, or
+link edit changes which contract the next agent implements. This is not
+hypothetical: the previous review round on this branch found a `human-gate`
+row ordered above four `ready` rows, which made those rows undispatchable —
+ledger order is executable.
+
+So a path-level widening has almost nothing left to cover: briefs are
+executable, the ledger is executable, and what remains is a phase README
+index. Any exclusion must therefore be defined by what it provably permits —
+inert additions that no generated skill reads as an instruction — rather than
+by naming a file. If that cannot be defined crisply, the honest resolutions
+are the other two: sequence bookkeeping writes before the final confirmation,
+or make the two-commit split the documented shape.
 
 ## Non-goals
 
