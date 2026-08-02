@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { changeRiskEarnedObligations } from "../../packages/compiler/dist/change-risk-promotion.js";
+import { validateReviewLearningRecordV1 } from "../../packages/compiler/dist/review-learning-record.js";
 
 function resolveRepositoryRoot(argument) {
   if (argument) return resolve(argument);
@@ -182,6 +183,20 @@ async function generate(repositoryRoot) {
   const corpus = normalizeCorpus(
     JSON.parse(await readFile(corpusPath, "utf8")),
   );
+
+  // Fail CLOSED, before the first write. `normalizeCorpus` copies every
+  // `sanitizedSummary` into committed evidence, so a secret-shaped literal,
+  // malformed provenance, or any invalid field in the checked-in source would
+  // otherwise reach both the JSON corpus and the generated Markdown on disk,
+  // with the focused test reporting it only after the unsafe bytes existed.
+  // Validation must gate the write, not audit it afterwards.
+  for (const entry of corpus.records) {
+    const validated = validateReviewLearningRecordV1(entry.record);
+    if (!validated.ok)
+      throw new Error(
+        `refusing to write PR #${entry.pullRequest}: ${validated.reason}`,
+      );
+  }
 
   await writeFile(corpusPath, `${JSON.stringify(corpus, null, 2)}\n`);
   await Promise.all([

@@ -71,7 +71,8 @@ categories, so collapsing the two would corrupt recurrence counting. A
 
 | Field                     | Required                     | Notes                                                             |
 | ------------------------- | ---------------------------- | ----------------------------------------------------------------- |
-| `fingerprint`             | always, unique in the record | Stable, human-readable, derived from structured fields.           |
+| `fingerprint`             | always                       | Stable STRUCTURAL identity from structured fields, never prose. Unique in the record only when `findingId` is absent. |
+| `findingId`               | all findings or none         | Per-finding identity, unique in the record. See below.            |
 | `source`                  | always                       | `local` or `external`, per finding.                               |
 | `provider`                | on every external finding    | `unknown` when unidentifiable. Absent on a local finding.         |
 | `category`                | always                       |                                                                   |
@@ -94,6 +95,33 @@ A local run that incorporates a validated external finding stays a
 `change-risk/v2` record and keeps its local counters; the external
 contribution is marked per round and per finding instead. Provenance is never
 collapsed into a single value.
+
+### Finding identity: `fingerprint` versus `findingId`
+
+`fingerprint` is the STRUCTURAL identity. It is derived from category,
+affected contract, normalized path and unsafe-condition class, and it
+deliberately omits `line` so identity survives code movement. Two findings of
+the same mechanism at the same path therefore SHARE a fingerprint. It never
+contains reviewer prose.
+
+A record chooses one identity mode and applies it to every finding:
+
+- **Fingerprint mode** (`findingId` absent from all findings). Fingerprints
+  must be unique within the record. This is correct for a record covering one
+  reviewed change, where two reports of one mechanism at one path are one
+  finding and collapsing them is the point.
+- **Finding-id mode** (`findingId` present on all findings). `findingId` is
+  unique within the record and fingerprints may repeat. Use it when a record
+  aggregates several reviewed changes, where distinct findings legitimately
+  share a structural fingerprint.
+
+A record that mixes the two is rejected. So is a blank or non-string
+`findingId` in finding-id mode.
+
+Producers must not manufacture fingerprint uniqueness by placing
+finding-specific wording into `location.symbol`: that puts reviewer prose into
+the identity, so rewording a comment changes the identity of the defect it
+describes. Use `findingId` instead, derived from stable source identity.
 
 ## Template
 

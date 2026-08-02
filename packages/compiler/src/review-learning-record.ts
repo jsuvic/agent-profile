@@ -141,6 +141,7 @@ function carriesSecretShapedText(values: readonly string[]): boolean {
 function validateFinding(
   value: unknown,
   seenFindingIds: Set<string>,
+  usesFindingIds: boolean,
 ): string | undefined {
   if (!isRecord(value)) return "malformed finding";
   if (!nonEmptyString(value.fingerprint)) return "missing finding fingerprint";
@@ -158,13 +159,23 @@ function validateFinding(
   //
   // `findingId` is therefore optional: existing v1 records keep their exact
   // meaning, and only a record that needs per-finding identity opts in.
-  const hasFindingId = nonEmptyString(value.findingId);
-  const identity = hasFindingId
-    ? (value.findingId as string)
-    : value.fingerprint;
-  if (seenFindingIds.has(identity))
-    return hasFindingId ? "duplicate finding id" : "duplicate finding fingerprint";
-  seenFindingIds.add(identity);
+  // The mode is decided ONCE for the record, never per row. Selecting it per
+  // finding let a mixed record slip through: one row with `findingId: "a"` and
+  // another with only `fingerprint: "x"` compared `a` against `x` and passed,
+  // even though the second row carries no per-finding identity at all and so
+  // cannot be distinguished from a third row sharing its fingerprint. A blank
+  // or non-string `findingId` is likewise not "absent" -- in id mode it is a
+  // malformed row, and treating it as absent would silently reopen the hole.
+  if (usesFindingIds) {
+    if (!nonEmptyString(value.findingId)) return "missing finding id";
+    if (seenFindingIds.has(value.findingId)) return "duplicate finding id";
+    seenFindingIds.add(value.findingId);
+  } else {
+    if (value.findingId !== undefined) return "inconsistent finding identity";
+    if (seenFindingIds.has(value.fingerprint))
+      return "duplicate finding fingerprint";
+    seenFindingIds.add(value.fingerprint);
+  }
   if (value.source !== "local" && value.source !== "external")
     return "missing finding provenance";
   // A local run may carry an external finding, but never anonymously.
@@ -330,9 +341,15 @@ export function validateReviewLearningRecordV1(
   }
   if (!Array.isArray(value.findings))
     return { ok: false, reason: "missing findings" };
+  // Infer the record's identity mode from the first finding, then hold every
+  // row to it. A record either carries per-finding ids throughout or none at
+  // all; a partial record is rejected rather than half-checked.
+  const first = value.findings[0];
+  const usesFindingIds =
+    isRecord(first) && (first as Record<string, unknown>).findingId !== undefined;
   const seenFindingIds = new Set<string>();
   for (const finding of value.findings) {
-    const reason = validateFinding(finding, seenFindingIds);
+    const reason = validateFinding(finding, seenFindingIds, usesFindingIds);
     if (reason) return { ok: false, reason };
   }
   return { ok: true, value: value as unknown as ReviewLearningRecordV1 };
@@ -421,7 +438,14 @@ export function renderReviewLearningRecordV1(
     "",
   ];
   for (const finding of record.findings) {
-    lines.push(`### \`${finding.fingerprint}\``, "");
+    // Label by `findingId` when the record carries one. Headings keyed on the
+    // fingerprint would be duplicated and indistinguishable in exactly the
+    // records that need per-finding identity, and would omit the only handle
+    // that identifies each row. Legacy records fall back to the fingerprint,
+    // where it is still unique by construction.
+    lines.push(`### \`${finding.findingId ?? finding.fingerprint}\``, "");
+    if (finding.findingId !== undefined)
+      lines.push(`- Fingerprint: \`${finding.fingerprint}\``);
     for (const item of finding.evidence) lines.push(`- ${item}`);
     if (finding.systemic !== undefined)
       lines.push(

@@ -3,9 +3,10 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { promisify } from "node:util";
 
@@ -91,17 +92,18 @@ test("historical corpus generation is isolated, deterministic, and idempotent", 
       join(tempDocsRoot, "historical-corpus.json"),
       await readFile(corpusPath),
     );
-    const tempGenerator = join(tempDocsRoot, "generate-historical-corpus.mjs");
-    await writeFile(tempGenerator, await readFile(generatorPath));
-    // The generator reads the threshold ladder from the shared policy instead
-    // of keeping a private copy, so the isolated tree needs that module too.
-    // Isolation here means "no dependency on the checked-in output", not "no
-    // dependency on the compiler"; copying it keeps the generator honest
-    // rather than letting it drift behind a convenient local reimplementation.
-    const tempCompilerDist = join(tempRoot, "packages", "compiler", "dist");
-    await cp(new URL("../dist/", import.meta.url), tempCompilerDist, {
-      recursive: true,
-    });
+    // Run the REAL generator against a temp output root, rather than copying
+    // it into the temp tree. Isolation here means "generates from the
+    // sanitized source alone, not from the checked-in output" -- which the
+    // temp root already gives us, since the generator reads its corpus from
+    // the root it is handed.
+    //
+    // A copied generator would need the compiler, `@agent-profile/core` and
+    // its transitive dependencies resolvable inside the temp tree. Copying
+    // those risks drift from the real modules, and linking them would put
+    // Windows junctions inside a directory this test later removes
+    // recursively -- which can traverse into the real workspace.
+    const tempGenerator = fileURLToPath(generatorPath);
 
     await execFileAsync(process.execPath, [tempGenerator, tempRoot]);
     const expected = await readGeneratedArtifacts(docsRoot);
@@ -119,11 +121,18 @@ test("historical corpus generation is isolated, deterministic, and idempotent", 
     const probeEntry = projectionProbe.records[0];
     probeEntry.currentThreadObservation.observedOn = "fixture-observation-date";
     probeEntry.record.reviewerSurfaceVersion = "fixture-reviewer-version";
-    probeEntry.record.terminalStatus = "fixture-terminal-status";
+    // The probe proves the renderer PROJECTS record values rather than
+    // recomputing them, so it varies fields the renderer must pass through.
+    // Those values must still be valid: the generator now validates every
+    // record before writing, and a probe built from invalid values would only
+    // prove that the fail-closed gate works, which is a different test.
+    // Free-form fields (surface version, observation date, safe path,
+    // evidence) still carry the escaping and pass-through assertions.
+    probeEntry.record.terminalStatus = "external-only";
     const probeFinding = probeEntry.record.findings[0];
-    probeFinding.source = "fixture-source";
+    probeFinding.source = "external";
     probeFinding.provider = "fixture|provider";
-    probeFinding.resolution = "fixture-resolution";
+    probeFinding.resolution = "obsolete";
     probeFinding.safePath = "Use C:\\safe | route\nthen continue.";
     probeFinding.sanitizedSummary =
       "Evidence crosses a | table cell, keeps C:\\fixture, and\ncontinues safely.";
@@ -142,11 +151,7 @@ test("historical corpus generation is isolated, deterministic, and idempotent", 
         "- Reviewer surface version: fixture-reviewer-version",
       ),
     );
-    assert.ok(
-      projectedMarkdown.includes(
-        "- Terminal status: `fixture-terminal-status`",
-      ),
-    );
+    assert.ok(projectedMarkdown.includes("- Terminal status: `external-only`"));
     assert.ok(
       projectedMarkdown.includes(
         "- Later observation (fixture-observation-date):",
@@ -156,14 +161,61 @@ test("historical corpus generation is isolated, deterministic, and idempotent", 
       probeFinding.priority,
       probeFinding.category,
       probeFinding.affectedContract,
-      "fixture-source (fixture|provider)",
-      "fixture-resolution",
+      "external (fixture|provider)",
+      "obsolete",
       "Use C:\\safe | route\nthen continue.",
       probeFinding.findingId,
       probeFinding.fingerprint,
       "Evidence crosses a | table cell, keeps C:\\fixture, and\ncontinues safely.",
     ].map(escapeMarkdownTableCell);
     assert.ok(projectedMarkdown.includes(`| ${projectedCells.join(" | ")} |`));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("generation fails closed and writes nothing on an invalid record", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "historical-corpus-refuse-"));
+  const tempDocsRoot = join(tempRoot, "docs", "review-learning");
+  try {
+    await mkdir(tempDocsRoot, { recursive: true });
+    const corpus = JSON.parse(await readFile(corpusPath, "utf8"));
+    // A secret-shaped literal in checked-in source is the case that must never
+    // reach disk. Validation has to gate the write, not audit it afterwards.
+    //
+    // Uses an assignment-shaped literal because that is what
+    // `containsSecretLikeLiteral` actually detects. Bare provider token
+    // formats (`ghp_`, `AKIA`, `sk-ant-`) are NOT detected today; that gap is
+    // real but belongs to the detector, not to this gate.
+    corpus.records[0].record.findings[0].sanitizedSummary =
+      "token=abcdef1234567890abcdef1234567890";
+    await writeFile(
+      join(tempDocsRoot, "historical-corpus.json"),
+      `${JSON.stringify(corpus, null, 2)}\n`,
+    );
+
+    await assert.rejects(
+      execFileAsync(process.execPath, [
+        fileURLToPath(generatorPath),
+        tempRoot,
+      ]),
+      /refusing to write/u,
+    );
+
+    // The refusal must leave NO generated artifact behind, including the
+    // corpus JSON the generator rewrites in place.
+    for (const name of generatedArtifactNames.filter(
+      (entry) => entry !== "historical-corpus.json",
+    ))
+      await assert.rejects(readFile(join(tempDocsRoot, name)));
+    const untouched = JSON.parse(
+      await readFile(join(tempDocsRoot, "historical-corpus.json"), "utf8"),
+    );
+    assert.match(
+      untouched.records[0].record.findings[0].sanitizedSummary,
+      /token=/u,
+      "the refused corpus was rewritten instead of left alone",
+    );
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }
