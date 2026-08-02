@@ -2131,13 +2131,17 @@ finding promotion, and a provider-neutral external-review boundary.
 | I17 | Guard against reimplementing shared logic        | ready      | [017-shared-logic-reimplementation-guard.md](docs/specs/phase-33/issues/017-shared-logic-reimplementation-guard.md)             |
 | I18 | Require class-level remediation of findings     | sequenced  | [018-class-level-remediation-rule.md](docs/specs/phase-33/issues/018-class-level-remediation-rule.md)                           |
 | I19 | Detect bare provider token formats              | ready      | [019-secret-detector-provider-formats.md](docs/specs/phase-33/issues/019-secret-detector-provider-formats.md)                   |
-| I20 | Add the independent spec-conformance reviewer   | in-progress | [020-spec-conformance-reviewer.md](docs/specs/phase-33/issues/020-spec-conformance-reviewer.md)                                |
+| I20 | Add the independent spec-conformance reviewer   | blocked    | [020-spec-conformance-reviewer.md](docs/specs/phase-33/issues/020-spec-conformance-reviewer.md)                                 |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
 I1+I2+I3+I4+I5+I20 -> I6; I1+I14 -> I20; I17 -> I18. I3 is sequenced after I1 because it consumes the
 shared policy source's closed values and learning-record projection. I5 is
 parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
 requires I5's accepted backfill evidence.
+
+I20 blocked 2026-08-02: the compiler seam has no trusted repository-local
+Git/filesystem owner, so validated snapshot and evidence provenance cannot be
+fixed without an approved CLI-owned builder and invocation-path expansion.
 
 I5 resumed 2026-08-01: the owner approved a checked-in, docs-only corpus
 normalizer that consumes sanitized structured input and deterministically
