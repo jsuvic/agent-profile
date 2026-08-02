@@ -30,6 +30,14 @@ import {
  * external finding stays a local record and marks that row `external`.
  */
 export type ReviewLearningFindingV1 = Readonly<{
+  /**
+   * Optional per-finding identity, unique within a record. Distinct from
+   * `fingerprint`, which is the STRUCTURAL identity and is deliberately shared
+   * by findings of the same mechanism at the same path. Supply it only when a
+   * record aggregates several reviewed changes; a single-change record wants
+   * fingerprint-keyed dedupe instead.
+   */
+  findingId?: string;
   fingerprint: string;
   source: "local" | "external";
   /** Required on an external-sourced finding; `unknown` when unidentifiable. */
@@ -132,13 +140,31 @@ function carriesSecretShapedText(values: readonly string[]): boolean {
 
 function validateFinding(
   value: unknown,
-  seenFingerprints: Set<string>,
+  seenFindingIds: Set<string>,
 ): string | undefined {
   if (!isRecord(value)) return "malformed finding";
   if (!nonEmptyString(value.fingerprint)) return "missing finding fingerprint";
-  if (seenFingerprints.has(value.fingerprint))
-    return "duplicate finding fingerprint";
-  seenFingerprints.add(value.fingerprint);
+  // Identity is `findingId` when the record supplies one, else the canonical
+  // fingerprint.
+  //
+  // For a single reviewed change, fingerprint-keyed dedupe is the CORRECT
+  // semantics: two reports of the same mechanism at the same path are one
+  // finding, and collapsing them is the point. A record that aggregates many
+  // reviewed changes is different -- there, distinct findings legitimately
+  // share a structural fingerprint, because the fingerprint omits `line` so
+  // identity survives code movement. Forcing uniqueness onto the fingerprint
+  // in that case made records smuggle reviewer wording into the identity to
+  // manufacture it, so rewording a comment moved the defect's identity.
+  //
+  // `findingId` is therefore optional: existing v1 records keep their exact
+  // meaning, and only a record that needs per-finding identity opts in.
+  const hasFindingId = nonEmptyString(value.findingId);
+  const identity = hasFindingId
+    ? (value.findingId as string)
+    : value.fingerprint;
+  if (seenFindingIds.has(identity))
+    return hasFindingId ? "duplicate finding id" : "duplicate finding fingerprint";
+  seenFindingIds.add(identity);
   if (value.source !== "local" && value.source !== "external")
     return "missing finding provenance";
   // A local run may carry an external finding, but never anonymously.
@@ -304,9 +330,9 @@ export function validateReviewLearningRecordV1(
   }
   if (!Array.isArray(value.findings))
     return { ok: false, reason: "missing findings" };
-  const seenFingerprints = new Set<string>();
+  const seenFindingIds = new Set<string>();
   for (const finding of value.findings) {
-    const reason = validateFinding(finding, seenFingerprints);
+    const reason = validateFinding(finding, seenFindingIds);
     if (reason) return { ok: false, reason };
   }
   return { ok: true, value: value as unknown as ReviewLearningRecordV1 };

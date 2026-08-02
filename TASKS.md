@@ -2114,7 +2114,7 @@ finding promotion, and a provider-neutral external-review boundary.
 | I2  | Orchestrate bounded review remediation          | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)                               |
 | I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)                                     |
 | I4  | Promote recurring findings into stronger guards | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)                             |
-| I5  | Backfill the recent PR review corpus            | human-gate | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)                               |
+| I5  | Backfill the recent PR review corpus            | in-progress | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)                               |
 | I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)                         |
 | G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)                            |
 | I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                                       |
@@ -2134,6 +2134,10 @@ I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
 shared policy source's closed values and learning-record projection. I5 is
 parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
 requires I5's accepted backfill evidence.
+
+I5 resumed 2026-08-01: the owner approved a checked-in, docs-only corpus
+normalizer that consumes sanitized structured input and deterministically
+generates the eight records and summary without retaining raw transcripts.
 
 G2 completed 2026-07-28: amendment 002 (root-cause clustering) approved from
 its grill and synthesized. Motivated by PR #139's own review history - three

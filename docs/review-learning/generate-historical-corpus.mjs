@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2026 Agent Profile Compiler contributors
+
+import { readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { changeRiskEarnedObligations } from "../../packages/compiler/dist/change-risk-promotion.js";
+
+function resolveRepositoryRoot(argument) {
+  if (argument) return resolve(argument);
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+}
+
+function escapeMarkdownTableCell(value) {
+  return String(value)
+    .replaceAll("\\", "\\\\")
+    .replaceAll("|", "\\|")
+    .replaceAll("\r\n", "<br>")
+    .replaceAll("\n", "<br>");
+}
+
+function normalizeCorpus(corpus) {
+  for (const entry of corpus.records) {
+    for (const finding of entry.record.findings) {
+      if (!finding.sanitizedSummary)
+        throw new Error(
+          `missing sanitized summary for ${finding.fingerprint ?? "unknown finding"}`,
+        );
+      finding.evidence = [finding.sanitizedSummary];
+    }
+  }
+  return corpus;
+}
+
+function renderRoundRow(round) {
+  return `| ${[round.round, round.source, round.blockerCount].map(escapeMarkdownTableCell).join(" | ")} |`;
+}
+
+function renderFindingRow(finding) {
+  return `| ${[
+    finding.priority,
+    finding.category,
+    finding.affectedContract,
+    `${finding.source} (${finding.provider})`,
+    finding.resolution,
+    finding.safePath,
+    finding.findingId,
+    finding.fingerprint,
+    finding.evidence[0],
+  ]
+    .map(escapeMarkdownTableCell)
+    .join(" | ")} |`;
+}
+
+// Keyed by `findingId`, not by fingerprint. The canonical fingerprint is
+// structural and is SHARED by every finding of the same mechanism at the same
+// path, so using it as a heading would collide. That sharing is the intended
+// behaviour: identity must not move when a reviewer rewords a comment.
+function renderEvidence(finding) {
+  return [
+    `### \`${finding.findingId}\``,
+    `- Fingerprint: \`${finding.fingerprint}\``,
+    `- ${finding.evidence[0]}`,
+    "",
+  ];
+}
+
+function renderRecord(entry) {
+  const record = entry.record;
+  const observation = entry.currentThreadObservation;
+  return `${[
+    `# Historical review learning record: PR #${entry.pullRequest}`,
+    "",
+    `- Schema: \`${record.schemaVersion}\``,
+    `- Date (UTC): ${record.date}`,
+    `- Source policy: \`${record.sourcePolicy}\``,
+    `- Base: \`${record.baseId}\``,
+    `- Head: \`${record.headId}\``,
+    `- Reviewer surface: ${record.reviewerSurface}`,
+    `- Reviewer surface version: ${record.reviewerSurfaceVersion}`,
+    `- Terminal status: \`${record.terminalStatus}\``,
+    `- Approved snapshot: ${entry.approvedSnapshot.findingCount} findings (${entry.approvedSnapshot.p1Count} P1, ${entry.approvedSnapshot.p2Count} P2).`,
+    `- Later observation (${observation.observedOn}): ${observation.threadCount} threads, ${observation.outdatedThreadCount} outdated; this does not replace the approved snapshot.`,
+    "",
+    "## Rounds",
+    "",
+    "| Round | Source | Blockers |",
+    "| --- | --- | ---: |",
+    ...record.roundOutcomes.map(renderRoundRow),
+    "",
+    "## Findings",
+    "",
+    "| Priority | Category | Contract | Source / provider | Resolution | Safe path | Finding | Fingerprint | Sanitized evidence |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...record.findings.map(renderFindingRow),
+    "",
+    "## Evidence",
+    "",
+    ...record.findings.flatMap(renderEvidence),
+  ]
+    .join("\n")
+    .trimEnd()}\n`;
+}
+
+function aggregateCategories(corpus) {
+  const aggregates = new Map();
+  for (const entry of corpus.records) {
+    for (const finding of entry.record.findings) {
+      const aggregate = aggregates.get(finding.category) ?? {
+        findingCount: 0,
+        pullRequests: new Set(),
+        hasP1: false,
+        hasSystemicP1: false,
+      };
+      aggregate.findingCount += 1;
+      aggregate.pullRequests.add(entry.pullRequest);
+      aggregate.hasP1 ||= finding.priority === "P1";
+      aggregate.hasSystemicP1 ||=
+        finding.priority === "P1" && finding.systemic === true;
+      aggregates.set(finding.category, aggregate);
+    }
+  }
+  return aggregates;
+}
+
+// The threshold ladder is NOT reimplemented here. A private copy previously
+// selected one threshold's action and dropped the protections earlier
+// thresholds had already earned, so a third-occurrence category silently lost
+// the regression test and scoped rule it was owed.
+function renderEarnedObligations(earned, occurrence) {
+  const obligations = [
+    earned.requiresRegressionTest ? "regression test" : undefined,
+    earned.requiresScopedRule ? "scoped rule" : undefined,
+    // The corpus is historical and does not record whether a mechanical guard
+    // was practical, so the summary reports the disjunction the policy allows
+    // rather than inventing the answer.
+    occurrence >= 3 ? "mechanical guard or recorded impracticality" : undefined,
+  ].filter((entry) => entry !== undefined);
+  return obligations.length === 0 ? "none" : obligations.join(", ");
+}
+
+function renderSummary(corpus) {
+  return `${[
+    "# Historical review corpus summary",
+    "",
+    `Capture method: ${corpus.capture.method}. Raw retention: ${corpus.capture.rawRetention}.`,
+    `Snapshot policy: ${corpus.capture.snapshot}.`,
+    "",
+    "## Category recurrence and promotion",
+    "",
+    `Occurrence unit: ${corpus.promotionPolicy.occurrenceUnit}. Policy source: \`${corpus.promotionPolicy.source}\`.`,
+    "",
+    "| Category | Findings | Reviewed changes | Systemic P1 | Threshold | Action | Earned obligations |",
+    "| --- | ---: | ---: | --- | --- | --- | --- |",
+    ...[...aggregateCategories(corpus)].map(([category, aggregate]) => {
+      const occurrence = aggregate.pullRequests.size;
+      const earned = changeRiskEarnedObligations({
+        occurrence,
+        priority: aggregate.hasP1 ? "P1" : "P2",
+        systemic: aggregate.hasSystemicP1,
+        mechanicalGuardPractical: true,
+      });
+      return `| ${[
+        category,
+        aggregate.findingCount,
+        occurrence,
+        aggregate.hasSystemicP1 ? "yes" : "no",
+        earned.threshold,
+        earned.action,
+        renderEarnedObligations(earned, occurrence),
+      ]
+        .map(escapeMarkdownTableCell)
+        .join(" | ")} |`;
+    }),
+  ].join("\n")}\n`;
+}
+
+async function generate(repositoryRoot) {
+  const docsRoot = join(repositoryRoot, "docs", "review-learning");
+  const corpusPath = join(docsRoot, "historical-corpus.json");
+  const corpus = normalizeCorpus(
+    JSON.parse(await readFile(corpusPath, "utf8")),
+  );
+
+  await writeFile(corpusPath, `${JSON.stringify(corpus, null, 2)}\n`);
+  await Promise.all([
+    ...corpus.records.map((entry) =>
+      writeFile(
+        join(docsRoot, `pr-${entry.pullRequest}.md`),
+        renderRecord(entry),
+      ),
+    ),
+    writeFile(
+      join(docsRoot, "historical-corpus-summary.md"),
+      renderSummary(corpus),
+    ),
+  ]);
+}
+
+await generate(resolveRepositoryRoot(process.argv[2]));

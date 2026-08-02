@@ -107,6 +107,82 @@ export type ChangeRiskPromotionDecision =
       ruleRecord: ChangeRiskPromotedRuleRecord;
     }>;
 
+/** The obligations a category has EARNED at a given occurrence. */
+export type ChangeRiskEarnedObligations = Readonly<{
+  /** The exact approved action text from the shared policy source. */
+  action: string;
+  /** The threshold label naming why that action applies. */
+  threshold: string;
+  requiresRegressionTest: boolean;
+  requiresScopedRule: boolean;
+  requiresMechanicalGuard: boolean;
+  requiresRecordedImpracticality: boolean;
+}>;
+
+/**
+ * Project the earned obligations for one occurrence of one category.
+ *
+ * This is the single source of the threshold table. It is exported because
+ * every consumer that renders or asserts a promotion decision -- including the
+ * historical corpus generator and its tests -- previously kept a private copy
+ * of this ladder, and those copies drifted: they selected ONE threshold's
+ * action and dropped the protections earlier thresholds had already earned. A
+ * copy in a test cannot detect that, because the copy reproduces the defect.
+ *
+ * Thresholds escalate monotonically. A third occurrence keeps everything the
+ * second earned and adds the guard on top; it can never earn less than the
+ * second.
+ */
+export function changeRiskEarnedObligations(
+  input: Readonly<{
+    occurrence: number;
+    priority: ChangeRiskPriority;
+    systemic: boolean;
+    /** An existing equivalent guard, which supersedes a new prose rule. */
+    supersededByGuard?: string | undefined;
+    mechanicalGuardPractical: boolean;
+  }>,
+): ChangeRiskEarnedObligations {
+  const promotion = changeRiskPromotionProjection();
+  const { occurrence, priority } = input;
+  const systemicFirstP1 = occurrence === 1 && priority === "P1" && input.systemic;
+  const supersededByGuard = input.supersededByGuard?.trim() || undefined;
+  const earnsSecondOccurrenceProtection = occurrence >= 2;
+
+  const [threshold, action] =
+    occurrence >= 3
+      ? (["third occurrence", promotion.actions.thirdOccurrence] as const)
+      : occurrence === 2
+        ? (["second occurrence", promotion.actions.secondOccurrence] as const)
+        : systemicFirstP1
+          ? (["first systemic P1", promotion.actions.firstSystemicP1] as const)
+          : priority === "P1"
+            ? ([
+                "first non-systemic P1",
+                promotion.actions.firstNonSystemicP1,
+              ] as const)
+            : ([
+                "first ordinary P2/P3",
+                promotion.actions.firstOrdinaryP2OrP3,
+              ] as const);
+
+  return {
+    action,
+    threshold,
+    requiresScopedRule:
+      supersededByGuard === undefined &&
+      (systemicFirstP1 || earnsSecondOccurrenceProtection),
+    requiresRegressionTest:
+      systemicFirstP1 ||
+      (occurrence === 1 && priority === "P1") ||
+      (earnsSecondOccurrenceProtection && supersededByGuard === undefined),
+    requiresMechanicalGuard:
+      occurrence >= 3 && input.mechanicalGuardPractical,
+    requiresRecordedImpracticality:
+      occurrence >= 3 && !input.mechanicalGuardPractical,
+  };
+}
+
 /**
  * Whether a finding outcome is validated enough to count. An `open` finding is
  * a claim until the owner confirms it AND records why; either half alone would
@@ -209,39 +285,23 @@ export function decideChangeRiskPromotion(
     };
 
   const occurrence = priorOccurrences + 1;
-  const systemicFirstP1 =
-    occurrence === 1 && input.priority === "P1" && input.systemic;
   // Blank is absent. Treating an empty guard as present would cancel the
   // protection a second occurrence earns while citing no guard at all.
   const supersededByGuard = input.existingMechanicalGuard?.trim() || undefined;
 
-  const action =
-    occurrence >= 3
-      ? promotion.actions.thirdOccurrence
-      : occurrence === 2
-        ? promotion.actions.secondOccurrence
-        : systemicFirstP1
-          ? promotion.actions.firstSystemicP1
-          : input.priority === "P1"
-            ? promotion.actions.firstNonSystemicP1
-            : promotion.actions.firstOrdinaryP2OrP3;
-
-  // Thresholds escalate monotonically. A third occurrence keeps everything the
-  // second earned and adds the guard on top; it can never earn less than the
-  // second, which is what a non-monotonic reading produced when no guard was
-  // practical.
-  const earnsSecondOccurrenceProtection = occurrence >= 2;
-  const requiresScopedRule =
-    supersededByGuard === undefined &&
-    (systemicFirstP1 || earnsSecondOccurrenceProtection);
-  const requiresRegressionTest =
-    systemicFirstP1 ||
-    (occurrence === 1 && input.priority === "P1") ||
-    (earnsSecondOccurrenceProtection && supersededByGuard === undefined);
-  const requiresMechanicalGuard =
-    occurrence >= 3 && input.mechanicalGuardPractical;
-  const requiresRecordedImpracticality =
-    occurrence >= 3 && !input.mechanicalGuardPractical;
+  const {
+    action,
+    requiresScopedRule,
+    requiresRegressionTest,
+    requiresMechanicalGuard,
+    requiresRecordedImpracticality,
+  } = changeRiskEarnedObligations({
+    occurrence,
+    priority: input.priority,
+    systemic: input.systemic,
+    supersededByGuard,
+    mechanicalGuardPractical: input.mechanicalGuardPractical,
+  });
 
   const evidenceRecordReferences = [
     ...new Set(
