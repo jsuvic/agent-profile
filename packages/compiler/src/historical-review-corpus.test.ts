@@ -123,7 +123,10 @@ test("historical corpus generation is isolated, deterministic, and idempotent", 
       await readFile(projectionProbePath, "utf8"),
     );
     const probeEntry = projectionProbe.records[0];
-    probeEntry.currentThreadObservation.observedOn = "fixture-observation-date";
+    // Must be a real UTC calendar date: the observation envelope is now
+    // validated before writing, so an impossible date is refused rather than
+    // published as a thread-state disclosure.
+    probeEntry.currentThreadObservation.observedOn = "2026-01-02";
     probeEntry.record.reviewerSurfaceVersion = "fixture-reviewer-version";
     // The probe proves the renderer PROJECTS record values rather than
     // recomputing them, so it varies fields the renderer must pass through.
@@ -158,7 +161,7 @@ test("historical corpus generation is isolated, deterministic, and idempotent", 
     assert.ok(projectedMarkdown.includes("- Terminal status: `external-only`"));
     assert.ok(
       projectedMarkdown.includes(
-        "- Later observation (fixture-observation-date):",
+        "- Later observation (2026-01-02):",
       ),
     );
     const projectedCells = [
@@ -372,6 +375,112 @@ test("a secret-shaped safe path is refused before writing", async () => {
       await assert.rejects(readFile(join(tempDocsRoot, name)));
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("the whole envelope is gated, not an enumerated field list", async () => {
+  // The gate was widened three times -- evidence, findingId, safePath -- and
+  // each time the next unlisted string was still a leak path. These cases sit
+  // OUTSIDE the finding entirely, so they only pass if the scan walks the
+  // envelope rather than a list.
+  const cases = [
+    ["records.0.record.reviewerSurface", "reviewerSurface"],
+    ["records.0.record.baseId", "baseId"],
+    ["records.0.record.headId", "headId"],
+  ] as const;
+
+  for (const [label, field] of cases) {
+    const tempRoot = await mkdtemp(join(tmpdir(), "historical-corpus-meta-"));
+    const tempDocsRoot = join(tempRoot, "docs", "review-learning");
+    try {
+      await mkdir(tempDocsRoot, { recursive: true });
+      const corpus = JSON.parse(await readFile(corpusPath, "utf8"));
+      corpus.records[0].record[field] =
+        "token=abcdef1234567890abcdef1234567890";
+      await writeFile(
+        join(tempDocsRoot, "historical-corpus.json"),
+        `${JSON.stringify(corpus, null, 2)}\n`,
+      );
+
+      await assert.rejects(
+        execFileAsync(process.execPath, [
+          fileURLToPath(generatorPath),
+          tempRoot,
+        ]),
+        /secret-shaped/u,
+        `${label} reached the writes`,
+      );
+      for (const name of generatedArtifactNames.filter(
+        (entry) => entry !== "historical-corpus.json",
+      ))
+        await assert.rejects(readFile(join(tempDocsRoot, name)));
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("an unlocatable or impossible record is refused before writing", async () => {
+  const mutations: ReadonlyArray<
+    readonly [string, (corpus: any) => void, RegExp]
+  > = [
+    [
+      "empty location path",
+      (corpus) => {
+        corpus.records[0].record.findings[0].location.path = "";
+        corpus.records[0].record.findings[0].location.line = null;
+        corpus.records[0].record.findings[0].normalizedLocation = "";
+        // Recompute so the identity stays self-consistent: only a structural
+        // check catches this, not a derived-vs-stored comparison.
+        corpus.records[0].record.findings[0].fingerprint =
+          deriveChangeRiskFingerprint({
+            ...corpus.records[0].record.findings[0],
+            affectedContractId:
+              corpus.records[0].record.findings[0].affectedContract,
+          });
+      },
+      /has no location path/u,
+    ],
+    [
+      "impossible observation counts",
+      (corpus) => {
+        corpus.records[0].currentThreadObservation.outdatedThreadCount =
+          corpus.records[0].currentThreadObservation.threadCount + 5;
+      },
+      /observation counts are impossible/u,
+    ],
+    [
+      "malformed observation date",
+      (corpus) => {
+        corpus.records[0].currentThreadObservation.observedOn = "not-a-date";
+      },
+      /observation date is not a UTC calendar date/u,
+    ],
+  ];
+
+  for (const [label, mutate, expected] of mutations) {
+    const tempRoot = await mkdtemp(join(tmpdir(), "historical-corpus-struct-"));
+    const tempDocsRoot = join(tempRoot, "docs", "review-learning");
+    try {
+      await mkdir(tempDocsRoot, { recursive: true });
+      const corpus = JSON.parse(await readFile(corpusPath, "utf8"));
+      mutate(corpus);
+      await writeFile(
+        join(tempDocsRoot, "historical-corpus.json"),
+        `${JSON.stringify(corpus, null, 2)}\n`,
+      );
+
+      await assert.rejects(
+        execFileAsync(process.execPath, [
+          fileURLToPath(generatorPath),
+          tempRoot,
+        ]),
+        expected,
+        `${label} reached the writes`,
+      );
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   }
 });
 

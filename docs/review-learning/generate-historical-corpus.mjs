@@ -9,6 +9,7 @@ import {
   changeRiskEarnedObligations,
   isValidatedPromotionOutcome,
 } from "../../packages/compiler/dist/change-risk-promotion.js";
+import { containsSecretLikeLiteral } from "../../packages/core/dist/index.js";
 import {
   deriveChangeRiskFingerprint,
   normalizeChangeRiskFindingLocation,
@@ -109,6 +110,77 @@ function renderRecord(entry) {
   ]
     .join("\n")
     .trimEnd()}\n`;
+}
+
+// Gate the WHOLE corpus, not a list of fields.
+//
+// This gate has now been widened three times -- evidence, then findingId, then
+// safePath -- and each time the next unlisted string was still a leak path.
+// The enumeration was the defect: any field added later starts life ungated.
+// Walking every string in the envelope closes the class instead of the
+// instance, and covers record metadata, the observation envelope, and
+// anything a future schema adds.
+function scanForSecretShapedText(value, path = "corpus") {
+  if (typeof value === "string") {
+    if (containsSecretLikeLiteral(value))
+      throw new Error(`refusing to write: secret-shaped text at ${path}`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => scanForSecretShapedText(entry, `${path}[${index}]`));
+    return;
+  }
+  if (value && typeof value === "object")
+    for (const [key, entry] of Object.entries(value))
+      scanForSecretShapedText(entry, `${path}.${key}`);
+}
+
+const UTC_DATE = /^\d{4}-\d{2}-\d{2}$/u;
+
+function isNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
+// Historical-only fields the shared record validator does not see. Left
+// unchecked, a row could carry an empty path and still be self-consistent:
+// the normalizer and the deriver both reproduce the empty identity, so
+// comparing derived values against each other proves nothing about whether
+// the finding is locatable at all.
+function verifyHistoricalStructure(corpus) {
+  for (const entry of corpus.records) {
+    const observation = entry.currentThreadObservation;
+    if (!UTC_DATE.test(observation?.observedOn ?? ""))
+      throw new Error(
+        `refusing to write: PR #${entry.pullRequest} observation date is not a UTC calendar date`,
+      );
+    if (
+      !isNonNegativeInteger(observation.threadCount) ||
+      !isNonNegativeInteger(observation.outdatedThreadCount) ||
+      observation.outdatedThreadCount > observation.threadCount
+    )
+      throw new Error(
+        `refusing to write: PR #${entry.pullRequest} observation counts are impossible`,
+      );
+
+    for (const finding of entry.record.findings) {
+      if (!finding.location?.path?.trim())
+        throw new Error(
+          `refusing to write: ${finding.findingId} has no location path`,
+        );
+      if (!finding.normalizedLocation?.trim())
+        throw new Error(
+          `refusing to write: ${finding.findingId} has no normalized location`,
+        );
+      if (
+        finding.location.line !== null &&
+        finding.location.line !== undefined &&
+        !(Number.isInteger(finding.location.line) && finding.location.line > 0)
+      )
+        throw new Error(
+          `refusing to write: ${finding.findingId} has a non-positive line`,
+        );
+    }
+  }
 }
 
 function countBy(findings) {
@@ -314,7 +386,12 @@ async function generate(repositoryRoot) {
   // and each survivor still validates. Reconcile the declared envelope before
   // the first write so a corrupted snapshot never reaches disk.
   reconcileApprovedSnapshot(corpus);
+  // Structure before identity: an unlocatable finding is a more fundamental
+  // error than a mismatched fingerprint, and reporting it as an identity
+  // mismatch would send the reader after the wrong cause.
+  verifyHistoricalStructure(corpus);
   verifyDerivedIdentity(corpus);
+  scanForSecretShapedText(corpus);
 
   await writeFile(corpusPath, `${JSON.stringify(corpus, null, 2)}\n`);
   await Promise.all([

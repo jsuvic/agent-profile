@@ -33,9 +33,15 @@ export type ReviewLearningFindingV1 = Readonly<{
   /**
    * Optional per-finding identity, unique within a record. Distinct from
    * `fingerprint`, which is the STRUCTURAL identity and is deliberately shared
-   * by findings of the same mechanism at the same path. Supply it only when a
-   * record aggregates several reviewed changes; a single-change record wants
-   * fingerprint-keyed dedupe instead.
+   * by findings of the same mechanism at the same path.
+   *
+   * REQUIRED whenever structural duplicates must coexist -- which includes
+   * ordinary single-change records, not only records aggregating several
+   * changes. One review routinely raises several distinct defects of the same
+   * mechanism in one file, and the fingerprint omits `line` by design, so they
+   * collide. Omitting it there either collapses real findings or fails
+   * validation on duplicate fingerprints. Omit it only when no two findings in
+   * the record share a fingerprint.
    */
   findingId?: string;
   fingerprint: string;
@@ -155,17 +161,16 @@ function validateFinding(
   // Identity is `findingId` when the record supplies one, else the canonical
   // fingerprint.
   //
-  // For a single reviewed change, fingerprint-keyed dedupe is the CORRECT
-  // semantics: two reports of the same mechanism at the same path are one
-  // finding, and collapsing them is the point. A record that aggregates many
-  // reviewed changes is different -- there, distinct findings legitimately
-  // share a structural fingerprint, because the fingerprint omits `line` so
-  // identity survives code movement. Forcing uniqueness onto the fingerprint
-  // in that case made records smuggle reviewer wording into the identity to
-  // manufacture it, so rewording a comment moved the defect's identity.
+  // Fingerprint-keyed dedupe is correct ONLY when no two findings share a
+  // structural fingerprint. That is rarer than it sounds: the fingerprint
+  // omits `line`, so several distinct defects of one mechanism in one file
+  // collide, which happens routinely within a single reviewed change. Forcing
+  // uniqueness onto the fingerprint made records smuggle reviewer wording into
+  // the identity to manufacture it, so rewording a comment moved the defect's
+  // identity.
   //
-  // `findingId` is therefore optional: existing v1 records keep their exact
-  // meaning, and only a record that needs per-finding identity opts in.
+  // `findingId` stays optional so existing v1 records keep their exact
+  // meaning, not because single-change records are expected to omit it.
   // The mode is decided ONCE for the record, never per row. Selecting it per
   // finding let a mixed record slip through: one row with `findingId: "a"` and
   // another with only `fingerprint: "x"` compared `a` against `x` and passed,
@@ -444,7 +449,11 @@ export function renderReviewLearningRecordV1(
     "",
     "## Findings",
     "",
+    // The identity column is required, not decorative: in finding-id mode two
+    // structurally duplicate findings otherwise produce indistinguishable rows
+    // that cannot be tied back to their evidence blocks.
     row([
+      "Finding",
       "Priority",
       "Category",
       "Contract",
@@ -453,9 +462,10 @@ export function renderReviewLearningRecordV1(
       "Disposition",
       "Safe path",
     ]),
-    row(["---", "---", "---", "---", "---", "---", "---"]),
+    row(["---", "---", "---", "---", "---", "---", "---", "---"]),
     ...record.findings.map((finding) =>
       row([
+        finding.findingId ?? finding.fingerprint,
         finding.priority,
         finding.category,
         finding.affectedContract,
