@@ -92,6 +92,10 @@ import {
   changeRiskPromotionProjection,
   changeRiskReviewerProjection,
 } from "./change-risk-policy.js";
+import {
+  SPEC_CONFORMANCE_REVIEWER_PROJECTION,
+  type SpecConformanceFindingClass,
+} from "./spec-conformance-policy.js";
 
 type TemplateSource = {
   id: string;
@@ -548,7 +552,7 @@ function mergeTemplates(
 }
 
 export function getSubagentTemplates(profile: AiProfile): TemplateDescriptor[] {
-  const agents = getSubagentsForRiskReviewerTarget(profile);
+  const agents = getSubagentsForIndependentReviewTarget(profile);
 
   if (agents.length === 0) {
     return [];
@@ -1515,7 +1519,7 @@ description: Use when a scoped implementation can be delegated to an implementat
 
 Use this workflow only when the task has a clear spec, acceptance criteria, and file ownership. Keep tightly coupled or architectural decisions in the parent session unless the user explicitly asks for delegation.
 
-Required subagents: \`implementer\`, \`spec-reviewer\`, \`code-quality-reviewer\`, and \`change-risk-reviewer\`.
+Required subagents: \`implementer\`, \`spec-conformance-reviewer\`, \`code-quality-reviewer\`, and \`change-risk-reviewer\`.
 
 ## Fresh Context
 
@@ -1526,26 +1530,28 @@ Each subagent prompt must include the full task text, relevant spec excerpts, no
 1. Dispatch \`implementer\` with one bounded task and the complete context it needs.
 2. If \`implementer\` returns \`BLOCKED\` or \`NEEDS_CONTEXT\`, resolve that before continuing.
 3. If \`implementer\` returns \`DONE_WITH_CONCERNS\`, read the concerns before review and decide whether to fix, narrow scope, or continue.
-4. Dispatch \`spec-reviewer\` with the original task, relevant spec excerpts, changed files, and implementer report.
-5. Fix or escalate every spec-review issue before requesting code-quality review.
-6. Dispatch \`code-quality-reviewer\` only after spec review reports compliance.
-7. Fix Critical and Important code-quality issues before handoff, or document why a finding is intentionally deferred.
-8. This surface alone owns the \`${orchestration.policyVersion}\` state machine. Invoke \`change-risk-reviewer\` only after code-quality review, keep its closed \`ChangeRiskOrchestrationStateV1\` handoff snapshot-bound, and never let a nested surface invoke it again for an unchanged snapshot.
-9. Initial review is clean-room; remediation supplies prior fingerprints and searches the complete updated snapshot; required final confirmation is clean-room again. ${orchestration.transitions.invalidation.join(" ")}
-10. Apply these bounded owner rules and preserve counters, actual snapshot IDs, and completed-round fingerprint and remediated-cluster-key history across resume:
+4. Pin and resolve the one caller-supplied fixed point. Build the complete local snapshot using the canonical change-snapshot contract: fixed point/head/merge base and commit list; exact committed three-dot diff, staged patch, and unstaged patch bytes; the complete Git-reported untracked path list; exact bytes for every included untracked file; explicit path and reason for every excluded untracked file; and one deterministic identity over the metadata, classifications, and exact included bytes. A committed diff alone is never complete. Missing or invalid fixed points, patch components, identities, or untracked classifications produce \`NEEDS_CONTEXT\`, never \`COMPLIANT\`.
+5. Discover authoritative intent deterministically from the ledger-linked issue brief, its declared parent and approved amendments, plus every explicitly supplied spec path. Only when the ledger link is unavailable may commit or branch text locate a candidate. Supply exact local document bytes and the complete approved line ranges for every governing requirement. Missing or invalid authoritative intent produces \`NEEDS_CONTEXT\`, never \`COMPLIANT\`.
+6. Dispatch \`spec-conformance-reviewer\` with only the validated complete snapshot, authoritative document bytes/ranges, instruction precedence, and local read instructions. Do not supply the implementer report or claims, prior praise or Spec findings, code-quality findings, or change-risk findings and priorities.
+7. Keep the closed \`SpecConformanceResultV1\` and its remediation handoff independent. Fix or escalate every Spec issue before code-quality review; never convert, merge, rerank, or pass the Spec result or findings to a later reviewer.
+8. Dispatch \`code-quality-reviewer\` only after Spec review reports \`COMPLIANT\`; keep its existing maintainability objective unchanged.
+9. Fix Critical and Important code-quality issues before handoff, or document why a finding is intentionally deferred.
+10. This surface alone owns the \`${orchestration.policyVersion}\` state machine. Invoke \`change-risk-reviewer\` only after code-quality review, keep its closed \`ChangeRiskOrchestrationStateV1\` handoff snapshot-bound, and never let a nested surface invoke it again for an unchanged snapshot.
+11. Initial review is clean-room; remediation supplies prior fingerprints and searches the complete updated snapshot; required final confirmation is clean-room again. ${orchestration.transitions.invalidation.join(" ")}
+12. Apply these bounded owner rules and preserve counters, actual snapshot IDs, and completed-round fingerprint and remediated-cluster-key history across resume:
 
 ${ownerRules.map((rule) => `- ${rule}`).join("\n")}
 
-11. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
-12. When orchestration reaches any terminal status, persist exactly one normalized \`${learning.recordSchema.schemaVersion}\` record for this change under \`${learning.persistence.committedPathPrefix}\`, carrying \`sourcePolicy: ${learning.policyVersion}\` with its execution counters, per-round and per-finding \`source\` markers, cluster events, and the terminal status. Write the normalized record only: ${learning.redaction.join(" ")} Historical records feed promotion and evaluation only; never load them into initial or final clean-room reviewer context.
-13. Then apply the promotion table to each validated finding, keyed on its canonical category with alias normalization - never on raw wording, and never on a cluster key, which is mechanism-keyed and may span categories. The occurrence unit is ${promote.recurrenceClassification.occurrenceUnit}. A finding counts only when its recorded resolution is one of \`${promote.recurrenceClassification.countedResolutions.join(" | ")}\`, or when it is open and ${promote.recurrenceClassification.countedOpenRequires}. A finding resolved \`${promote.recurrenceClassification.excludedResolutions.join("\` or \`")}\` never counts, and a finding whose category is \`${promote.recurrenceClassification.excludedCategories.join("\`, \`")}\` is excluded from recurrence and earns no rule until a human assigns a canonical category. A P1 is systemic when: ${promote.recurrenceClassification.systemicPredicate.join(" ")} First systemic P1: ${promote.actions.firstSystemicP1} First non-systemic P1: ${promote.actions.firstNonSystemicP1} First ordinary P2/P3: ${promote.actions.firstOrdinaryP2OrP3} Second occurrence: ${promote.actions.secondOccurrence} Third occurrence: ${promote.actions.thirdOccurrence} ${promote.actions.guardPreference.join(" ")} Any promoted prose rule is: ${promote.actions.promotedRuleRequirements.join(" ")} ${promote.ownership.generatedRegions} ${promote.ownership.withinReviewedChange} ${promote.ownership.applyingProposal} ${promote.ownership.retirement}
-14. After change-risk orchestration reaches terminal \`CLEAN\` and the required tests complete, invoke \`final-review\` against the validated handoff and current snapshot. Fix or escalate its findings before handoff.
+13. Run the relevant tests, golden tests, and doctor/check commands required by the spec before final response.
+14. When orchestration reaches any terminal status, persist exactly one normalized \`${learning.recordSchema.schemaVersion}\` record for this change under \`${learning.persistence.committedPathPrefix}\`, carrying \`sourcePolicy: ${learning.policyVersion}\` with its execution counters, per-round and per-finding \`source\` markers, cluster events, and the terminal status. Write the normalized record only: ${learning.redaction.join(" ")} Historical records feed promotion and evaluation only; never load them into initial or final clean-room reviewer context.
+15. Then apply the promotion table to each validated finding, keyed on its canonical category with alias normalization - never on raw wording, and never on a cluster key, which is mechanism-keyed and may span categories. The occurrence unit is ${promote.recurrenceClassification.occurrenceUnit}. A finding counts only when its recorded resolution is one of \`${promote.recurrenceClassification.countedResolutions.join(" | ")}\`, or when it is open and ${promote.recurrenceClassification.countedOpenRequires}. A finding resolved \`${promote.recurrenceClassification.excludedResolutions.join("\` or \`")}\` never counts, and a finding whose category is \`${promote.recurrenceClassification.excludedCategories.join("\`, \`")}\` is excluded from recurrence and earns no rule until a human assigns a canonical category. A P1 is systemic when: ${promote.recurrenceClassification.systemicPredicate.join(" ")} First systemic P1: ${promote.actions.firstSystemicP1} First non-systemic P1: ${promote.actions.firstNonSystemicP1} First ordinary P2/P3: ${promote.actions.firstOrdinaryP2OrP3} Second occurrence: ${promote.actions.secondOccurrence} Third occurrence: ${promote.actions.thirdOccurrence} ${promote.actions.guardPreference.join(" ")} Any promoted prose rule is: ${promote.actions.promotedRuleRequirements.join(" ")} ${promote.ownership.generatedRegions} ${promote.ownership.withinReviewedChange} ${promote.ownership.applyingProposal} ${promote.ownership.retirement}
+16. After change-risk orchestration reaches terminal \`CLEAN\` and the required tests complete, invoke \`final-review\` against the validated handoff and current snapshot. Fix or escalate its findings before handoff.
 
 ## Status Values
 
 Implementation worker status values: \`DONE\`, \`DONE_WITH_CONCERNS\`, \`BLOCKED\`, \`NEEDS_CONTEXT\`.
 
-Spec reviewer status values: \`COMPLIANT\`, \`ISSUES_FOUND\`, \`NEEDS_CONTEXT\`.
+Spec-conformance reviewer status values: \`COMPLIANT\`, \`ISSUES_FOUND\`, \`NEEDS_CONTEXT\`.
 
 Code-quality reviewer status values: \`ACCEPTABLE\`, \`ISSUES_FOUND\`, \`NEEDS_CONTEXT\`.
 
@@ -2066,10 +2072,10 @@ function renderClaudeSubagentFiles(
   profile: AiProfile,
   previousModelPolicy?: LockModelPolicyV2,
 ): GeneratedFile[] {
-  const agents = getSubagentsForRiskReviewerTarget(profile);
+  const agents = getSubagentsForIndependentReviewTarget(profile);
   const effective = deriveEffectivePermissions(profile);
   const loggingOn = profile.workflow.loggingGuidance === true;
-  const reviewerModel = resolveChangeRiskReviewerModel(
+  const reviewerModel = resolveCriticalReviewerModel(
     profile,
     previousModelPolicy,
   );
@@ -2088,9 +2094,7 @@ function renderClaudeSubagentFiles(
           loggingOn,
         ),
         effective,
-        agent.name === "change-risk-reviewer"
-          ? reviewerModel?.claude
-          : undefined,
+        isCriticalReviewer(agent.name) ? reviewerModel?.claude : undefined,
       ),
     ),
   );
@@ -2111,10 +2115,10 @@ function renderCodexSubagentFiles(
   profile: AiProfile,
   previousModelPolicy?: LockModelPolicyV2,
 ): GeneratedFile[] {
-  const agents = getSubagentsForRiskReviewerTarget(profile);
+  const agents = getSubagentsForIndependentReviewTarget(profile);
   const effective = deriveEffectivePermissions(profile);
   const loggingOn = profile.workflow.loggingGuidance === true;
-  const reviewerModel = resolveChangeRiskReviewerModel(
+  const reviewerModel = resolveCriticalReviewerModel(
     profile,
     previousModelPolicy,
   );
@@ -2133,9 +2137,7 @@ function renderCodexSubagentFiles(
           loggingOn,
         ),
         effective,
-        agent.name === "change-risk-reviewer"
-          ? reviewerModel?.codex
-          : undefined,
+        isCriticalReviewer(agent.name) ? reviewerModel?.codex : undefined,
       ),
     ),
   );
@@ -2152,16 +2154,16 @@ function renderCodexSubagentFiles(
   return files;
 }
 
-type ChangeRiskReviewerTargetModel = Readonly<{
+type CriticalReviewerTargetModel = Readonly<{
   codex: Readonly<{ model: string; effort: string }>;
   claude: Readonly<{ model: string; effort: string }>;
 }>;
 
-/** Resolve the generated reviewer through the existing critical-reviewer role. */
-function resolveChangeRiskReviewerModel(
+/** Resolve independent generated reviewers through the critical-reviewer role. */
+function resolveCriticalReviewerModel(
   profile: AiProfile,
   previousModelPolicy?: LockModelPolicyV2,
-): ChangeRiskReviewerTargetModel | undefined {
+): CriticalReviewerTargetModel | undefined {
   const policy = profile.subagentPolicy;
   if (policy?.enabled !== true) return undefined;
 
@@ -2198,7 +2200,7 @@ function resolveChangeRiskReviewerModel(
   };
 }
 
-function getSubagentsForRiskReviewerTarget(
+function getSubagentsForIndependentReviewTarget(
   profile: AiProfile,
 ): AiProfileSubagent[] {
   const agents = getEnabledSubagents(profile);
@@ -2209,7 +2211,17 @@ function getSubagentsForRiskReviewerTarget(
     return agents;
   }
 
-  return [...agents, createChangeRiskReviewer()];
+  return [
+    ...agents,
+    createSpecConformanceReviewer(),
+    createChangeRiskReviewer(),
+  ];
+}
+
+function isCriticalReviewer(name: string): boolean {
+  return (
+    name === "spec-conformance-reviewer" || name === "change-risk-reviewer"
+  );
 }
 
 /**
@@ -2231,6 +2243,94 @@ const CHANGE_RISK_REVIEWER_MAX_TURNS = Math.max(
         : [],
   ),
 );
+
+function createSpecConformanceReviewer(): AiProfileSubagent {
+  const policy = SPEC_CONFORMANCE_REVIEWER_PROJECTION;
+  const bullets = (items: readonly string[]) =>
+    items.map((item) => `- ${item}`).join("\n");
+  const classes = policy.findingClasses
+    .map((findingClass: SpecConformanceFindingClass) => {
+      const descriptions: Record<SpecConformanceFindingClass, string> = {
+        "missing-or-partial":
+          "a requirement is absent or only partly implemented",
+        "unrequested-behavior":
+          "changed behavior is outside approved intent or contradicts a non-goal",
+        "implemented-wrongly":
+          "observable behavior, tests, comments, documentation, generated output, or reachable consumers do not match an apparently implemented requirement",
+      };
+      return `- \`${findingClass}\`: ${descriptions[findingClass]}.`;
+    })
+    .join("\n");
+
+  return {
+    name: "spec-conformance-reviewer",
+    description:
+      "Independently compare the complete accumulated change with authoritative documented intent.",
+    purpose:
+      "Perform the clean-room post-implementation Spec-axis conformance review using the critical-reviewer model-policy role.",
+    prompt: `# Spec-Conformance Review
+
+Policy version: \`${policy.policyVersion}\`. Your provider-neutral model-policy role is \`critical-reviewer\`; use its target-native model and effort resolution.
+
+## Objective
+
+Compare one complete accumulated local change with its authoritative documented intent. This is a read-only post-implementation conformance review. Do not write files, install dependencies, use network access, upload source, or reproduce secrets.
+
+## Required Invocation Inputs
+
+The caller resolves one fixed point before invoking you. A committed three-dot diff alone is incomplete. Require all of these snapshot components:
+
+${bullets([
+  "caller-supplied fixed point and its resolved Git object id, current head, merge base, and commit list",
+  "exact committed merge-base three-dot diff bytes",
+  "exact staged patch bytes and exact unstaged patch bytes, including explicit empty patches",
+  "the complete Git-reported untracked path list, with every path classified exactly once",
+  "exact bytes for every included untracked file; path plus a concrete reason for every excluded untracked file",
+  "a deterministic snapshot identity derived over the fixed point/head metadata, classifications, and every exact included byte",
+])}
+
+${policy.snapshotAccess.completeness} ${policy.snapshotAccess.inspectionRights.join(" ")} A missing or invalid fixed point, incomplete untracked classification, absent patch component, or mismatched snapshot identity requires \`NEEDS_CONTEXT\` and can never produce \`COMPLIANT\`.
+
+Discover governing intent in this order:
+
+${bullets(policy.specSourceOrder)}
+
+The governing set includes the issue brief, its parent spec and approved amendments, every applicable MUST, non-goal, acceptance criterion, error contract, documented behavior claim, and repository instruction precedence. Require the exact local bytes for every authoritative document plus the approved complete line ranges for its requirements. If authoritative intent is unavailable or its bytes/ranges cannot be supplied, return \`NEEDS_CONTEXT\`; absence of a spec is never \`COMPLIANT\`.
+
+## Clean-Room Boundary
+
+The caller must not supply:
+
+${bullets(policy.cleanRoomExcludedInputs)}
+
+Judge the change directly from the snapshot and governing documents. Updated tests do not redefine approved intent when their oracle conflicts with it.
+
+## Closed Finding Classes
+
+${classes}
+
+Use exactly one class per finding. Keep this result and every remediation handoff separate from change-risk results; do not add priorities, convert findings, merge queues, deduplicate across axes, or send this result to another reviewer. When remediation identifies a field, comment, assertion, renderer, or call site, require a class-level fix or a concrete explanation of why that is impractical.
+
+## Result Contract
+
+Return exactly one typed \`SpecConformanceResultV1\` and no approval prose.
+
+- \`policyVersion\` is \`${policy.policyVersion}\`; bind \`snapshotId\` to the trusted owner's deterministic identity over the exact complete accumulated snapshot.
+- \`status\` is exactly \`${policy.statuses.join(" | ")}\`.
+- Every finding has exactly \`class\`, \`governingRequirement\`, \`implementationEvidence\`, \`expectedBehavior\`, and \`concreteDrift\`.
+- \`governingRequirement\` has exactly \`path\`, \`startLine\`, \`endLine\`, and the exact non-empty \`quote\` from one caller-supplied authoritative document. The path and complete approved range must exist and the quote must match those exact local document bytes, including every selected line.
+- Every finding has at least one conflicting implementation-evidence entry with \`path\`, non-empty \`summary\`, and either both valid \`startLine\`/\`endLine\` values or neither.
+- \`COMPLIANT\` requires no findings, no missing inputs, and an explicit complete \`coverage\` summary with at least one requirement-to-implementation-evidence entry.
+- \`ISSUES_FOUND\` requires at least one fully evidenced finding and no missing inputs.
+- \`NEEDS_CONTEXT\` requires a non-empty \`missingInputs\` list and incomplete coverage.
+- Minimize quoted source and governing text to what locates and explains the drift.`,
+    toolScope: "read-only",
+    modelPreference: "capable",
+    maxTurns: CHANGE_RISK_REVIEWER_MAX_TURNS,
+    timeoutMinutes: 8,
+    mcpServers: [],
+  };
+}
 
 function createChangeRiskReviewer(): AiProfileSubagent {
   const policy = changeRiskReviewerProjection();
@@ -2398,10 +2498,7 @@ function renderClaudeSubagent(
 
   if (agent.toolScope === "read-only") {
     const tools = ["Read", "Glob", "Grep"];
-    if (
-      agent.name === "change-risk-reviewer" &&
-      effective.shell.run !== "deny"
-    ) {
+    if (isCriticalReviewer(agent.name) && effective.shell.run !== "deny") {
       tools.push("Bash");
     }
     lines.push(`tools: ${tools.join(", ")}`);
@@ -2952,10 +3049,10 @@ function getRequiredTemplateIds(
       );
     case "claude-subagents":
       return [
-        ...getSubagentsForRiskReviewerTarget(profile).map(
+        ...getSubagentsForIndependentReviewTarget(profile).map(
           (agent) => `targets/claude-subagents/${agent.name}@1`,
         ),
-        ...(getSubagentsForRiskReviewerTarget(profile).some(
+        ...(getSubagentsForIndependentReviewTarget(profile).some(
           (agent) => agent.name === "change-risk-reviewer",
         )
           ? ["targets/claude-subagents/change-risk-reviewer-reference@1"]
@@ -2963,10 +3060,10 @@ function getRequiredTemplateIds(
       ];
     case "codex-subagents":
       return [
-        ...getSubagentsForRiskReviewerTarget(profile).map(
+        ...getSubagentsForIndependentReviewTarget(profile).map(
           (agent) => `targets/codex-subagents/${agent.name}@1`,
         ),
-        ...(getSubagentsForRiskReviewerTarget(profile).some(
+        ...(getSubagentsForIndependentReviewTarget(profile).some(
           (agent) => agent.name === "change-risk-reviewer",
         )
           ? ["targets/codex-subagents/change-risk-reviewer-reference@1"]

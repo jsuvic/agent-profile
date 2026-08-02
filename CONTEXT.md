@@ -69,6 +69,17 @@ An independent adversarial pass that searches a complete change snapshot and
 its reachable consumers for correctness and contract gaps. _Avoid:_ "second
 spec review", "quality review".
 
+**Spec-conformance review**
+An independent post-implementation pass that compares a complete accumulated
+change with the authoritative ledger-linked issue brief, parent spec, approved
+amendments, and explicitly supplied intent. _Avoid:_ "spec-quality review",
+"change-risk finding", "style review".
+
+**Spec-conformance result**
+The closed `COMPLIANT`, `ISSUES_FOUND`, or `NEEDS_CONTEXT` outcome whose
+findings remain separate from code-quality and change-risk results. _Avoid:_
+"P1/P2/P3 finding", "combined review queue".
+
 **Clean-room review**
 A fresh review pass that does not receive implementer conclusions, prior
 praise, or prior finding lists. _Avoid:_ "rerun", "closure check".

@@ -5,6 +5,14 @@ independent full-change reviewer, bounded remediation and escalation,
 versioned review-learning records, recurring-finding promotion, and a
 provider-neutral external-review boundary.
 
+The generated post-implementation pipeline has three independent review
+purposes. `spec-conformance-reviewer` checks the complete accumulated change
+against authoritative documented intent; `code-quality-reviewer` checks
+maintainability; and `change-risk-reviewer` checks product-risk and reachable
+consumer gaps. Their results stay separate. I20 does not add a Standards axis;
+Phase 34 owns pre-implementation review of whether a specification itself is
+well designed.
+
 ## Specs
 
 - `001-change-risk-review-assurance.md` - approved 2026-07-24.
@@ -27,5 +35,6 @@ provider-neutral external-review boundary.
 - `issues/014-self-applied-artifact-drift-guard.md` (I14)
 - `issues/015-artifact-guard-local-exemption-derivation.md` (I15)
 - `issues/016-artifact-guard-mechanism-disclosure.md` (I16)
+- `issues/020-spec-conformance-reviewer.md` (I20)
 
 Task states are tracked in the root `TASKS.md` ledger.
