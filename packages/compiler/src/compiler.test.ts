@@ -4219,7 +4219,7 @@ test("phase-33 Claude reviewer has read-only diff access and YAML-safe exact mod
   assert.match(body, /read-only `git diff`/u);
 });
 
-test("phase-33 I20 emits the spec-conformance reviewer and invokes it before code quality", () => {
+test("phase-33 PR150 withholds spec-conformance reviewer until the trusted v2 seam exists", () => {
   const profile: AiProfile = {
     ...phase12Profile({ packs: [] }),
     clients: {
@@ -4255,10 +4255,7 @@ test("phase-33 I20 emits the spec-conformance reviewer and invokes it before cod
       .filter((file) => file.path.includes("/agents/spec-conformance-reviewer"))
       .map((file) => file.path)
       .sort(),
-    [
-      ".claude/agents/spec-conformance-reviewer.md",
-      ".codex/agents/spec-conformance-reviewer.toml",
-    ],
+    [],
   );
 
   const reviewerFiles = result.files.filter((file) =>
@@ -4325,12 +4322,12 @@ test("phase-33 I20 emits the spec-conformance reviewer and invokes it before cod
       Buffer.from(file.bytes).toString("utf8"),
       "## Flow",
     );
-    const specIndex = flow.indexOf("spec-conformance-reviewer");
+    const specIndex = flow.indexOf("`spec-reviewer`");
     const qualityIndex = flow.indexOf("code-quality-reviewer");
     const riskIndex = flow.indexOf("change-risk-reviewer");
     const finalIndex = flow.indexOf("final-review");
     assert.notEqual(specIndex, -1, file.path);
-    assert.equal(flow.includes("`spec-reviewer`"), false, file.path);
+    assert.equal(flow.includes("spec-conformance-reviewer"), false, file.path);
     assert.equal(
       specIndex < qualityIndex &&
         qualityIndex < riskIndex &&
@@ -4345,11 +4342,57 @@ test("phase-33 I20 emits the spec-conformance reviewer and invokes it before cod
       .filter((template) => template.id.includes("spec-conformance-reviewer"))
       .map((template) => template.id)
       .sort(),
-    [
-      "targets/claude-subagents/spec-conformance-reviewer@1",
-      "targets/codex-subagents/spec-conformance-reviewer@1",
-    ],
+    [],
   );
+});
+
+test("phase-33 PR150 user agent names cannot select the critical-reviewer model", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      subagentDrivenDevelopment: false,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            {
+              name: "spec-conformance-reviewer",
+              description: "Ordinary user agent using a future reserved name.",
+              purpose: "Prove names cannot grant critical privileges.",
+              prompt: "Review only the supplied task.",
+              toolScope: "read-only",
+            },
+          ],
+        },
+      },
+    },
+    subagentPolicy: {
+      enabled: true,
+      preset: "role-aware",
+      roles: {
+        "critical-reviewer": {
+          capability: "strongest",
+          effort: "high",
+          overrides: {
+            codex: { model: "critical-codex-canary", effort: "high" },
+            claude: { model: "critical-claude-canary", effort: "high" },
+          },
+        },
+      },
+    },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result.issues));
+  if (!result.ok) return;
+  for (const file of result.files.filter((candidate) =>
+    candidate.path.includes("/agents/spec-conformance-reviewer"),
+  )) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.doesNotMatch(body, /critical-(?:codex|claude)-canary/u, file.path);
+  }
 });
 
 test("phase-33 I1 Codex and Claude reviewer artifacts instruct a validator-compatible envelope", () => {
