@@ -9,6 +9,10 @@ import {
   changeRiskEarnedObligations,
   isValidatedPromotionOutcome,
 } from "../../packages/compiler/dist/change-risk-promotion.js";
+import {
+  deriveChangeRiskFingerprint,
+  normalizeChangeRiskFindingLocation,
+} from "../../packages/compiler/dist/change-risk-policy.js";
 import { validateReviewLearningRecordV1 } from "../../packages/compiler/dist/review-learning-record.js";
 
 function resolveRepositoryRoot(argument) {
@@ -122,6 +126,34 @@ function refuse(what, expected, actual) {
     );
 }
 
+// The shared record validator only checks that a fingerprint is nonempty and
+// unique, so a row whose category, contract, location or unsafe-condition
+// class was edited without recomputing its identity validates and reconciles
+// cleanly while carrying an identity that contradicts its own structural
+// fields. That corrupts deduplication and promotion evidence. Derive both
+// identity fields here and refuse any mismatch before the first write.
+function verifyDerivedIdentity(corpus) {
+  for (const entry of corpus.records)
+    for (const finding of entry.record.findings) {
+      const expectedFingerprint = deriveChangeRiskFingerprint({
+        category: finding.category,
+        affectedContractId: finding.affectedContract,
+        location: finding.location,
+        unsafeConditionClass: finding.unsafeConditionClass,
+      });
+      refuse(
+        `${finding.findingId} fingerprint`,
+        expectedFingerprint,
+        finding.fingerprint,
+      );
+      refuse(
+        `${finding.findingId} normalized location`,
+        normalizeChangeRiskFindingLocation(finding.location),
+        finding.normalizedLocation,
+      );
+    }
+}
+
 function reconcileApprovedSnapshot(corpus) {
   const approved = corpus.approvedSnapshot;
   if (!approved) throw new Error("refusing to write: no approved snapshot");
@@ -140,8 +172,17 @@ function reconcileApprovedSnapshot(corpus) {
         `refusing to write: PR #${entry.pullRequest} has no approved counts`,
       );
     const actual = countBy(entry.record.findings);
-    for (const field of ["findingCount", "p1Count", "p2Count"])
+    for (const field of ["findingCount", "p1Count", "p2Count"]) {
       refuse(`PR #${entry.pullRequest} ${field}`, declared[field], actual[field]);
+      // `renderRecord` publishes the ENTRY-level declaration, not this one.
+      // Reconciling only the envelope let an edited entry count print a false
+      // approved snapshot while the canonical totals still agreed.
+      refuse(
+        `PR #${entry.pullRequest} rendered ${field}`,
+        actual[field],
+        entry.approvedSnapshot[field],
+      );
+    }
   }
 
   const totals = countBy(corpus.records.flatMap((e) => e.record.findings));
@@ -180,16 +221,37 @@ function aggregateCategories(corpus) {
 // selected one threshold's action and dropped the protections earlier
 // thresholds had already earned, so a third-occurrence category silently lost
 // the regression test and scoped rule it was owed.
-function renderEarnedObligations(earned, occurrence) {
+// Practicality is UNKNOWN for historical data: the corpus records no guard
+// decision, and passing `true` would assert one the evidence does not support.
+// Both branches are projected instead, the obligations they agree on are
+// reported as earned, and the branch-dependent obligation is reported as the
+// unresolved disjunction it actually is.
+function earnedObligationsForHistory(occurrence, aggregate) {
+  const branches = [true, false].map((mechanicalGuardPractical) =>
+    changeRiskEarnedObligations({
+      occurrence,
+      priority: aggregate.hasP1 ? "P1" : "P2",
+      systemic: aggregate.hasSystemicP1,
+      mechanicalGuardPractical,
+    }),
+  );
+  const [ifPractical, ifNot] = branches;
+  // Only the guard obligation may vary with practicality. If anything else
+  // diverged, the summary would be reporting a decision it has not made.
+  for (const field of ["action", "threshold", "requiresRegressionTest", "requiresScopedRule"])
+    refuse(`${field} under unknown practicality`, ifPractical[field], ifNot[field]);
+
   const obligations = [
-    earned.requiresRegressionTest ? "regression test" : undefined,
-    earned.requiresScopedRule ? "scoped rule" : undefined,
-    // The corpus is historical and does not record whether a mechanical guard
-    // was practical, so the summary reports the disjunction the policy allows
-    // rather than inventing the answer.
-    occurrence >= 3 ? "mechanical guard or recorded impracticality" : undefined,
+    ifPractical.requiresRegressionTest ? "regression test" : undefined,
+    ifPractical.requiresScopedRule ? "scoped rule" : undefined,
+    ifPractical.requiresMechanicalGuard || ifNot.requiresRecordedImpracticality
+      ? "mechanical guard, or recorded impracticality -- undecided, the historical corpus records no practicality assessment"
+      : undefined,
   ].filter((entry) => entry !== undefined);
-  return obligations.length === 0 ? "none" : obligations.join(", ");
+  return {
+    earned: ifPractical,
+    obligations: obligations.length === 0 ? "none" : obligations.join(", "),
+  };
 }
 
 function renderSummary(corpus) {
@@ -207,12 +269,10 @@ function renderSummary(corpus) {
     "| --- | ---: | ---: | --- | --- | --- | --- |",
     ...[...aggregateCategories(corpus)].map(([category, aggregate]) => {
       const occurrence = aggregate.pullRequests.size;
-      const earned = changeRiskEarnedObligations({
+      const { earned, obligations } = earnedObligationsForHistory(
         occurrence,
-        priority: aggregate.hasP1 ? "P1" : "P2",
-        systemic: aggregate.hasSystemicP1,
-        mechanicalGuardPractical: true,
-      });
+        aggregate,
+      );
       return `| ${[
         category,
         aggregate.findingCount,
@@ -220,7 +280,7 @@ function renderSummary(corpus) {
         aggregate.hasSystemicP1 ? "yes" : "no",
         earned.threshold,
         earned.action,
-        renderEarnedObligations(earned, occurrence),
+        obligations,
       ]
         .map(escapeMarkdownTableCell)
         .join(" | ")} |`;
@@ -254,6 +314,7 @@ async function generate(repositoryRoot) {
   // and each survivor still validates. Reconcile the declared envelope before
   // the first write so a corrupted snapshot never reaches disk.
   reconcileApprovedSnapshot(corpus);
+  verifyDerivedIdentity(corpus);
 
   await writeFile(corpusPath, `${JSON.stringify(corpus, null, 2)}\n`);
   await Promise.all([

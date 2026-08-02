@@ -219,6 +219,23 @@ function validateFinding(
     return "missing finding evidence";
   if (carriesSecretShapedText(value.evidence as readonly string[]))
     return "secret-shaped evidence";
+  // Every free-form field that reaches committed Markdown is committed
+  // evidence and clears the same bar. Gating `evidence` alone left the other
+  // rendered strings as an open path for the exact literal the gate exists to
+  // stop: `safePath` and `provider` are rendered verbatim into finding tables,
+  // and `systemicReason` and the disposition evidence are persisted alongside
+  // them as promotion evidence.
+  if (
+    carriesSecretShapedText(
+      [
+        value.safePath,
+        value.provider,
+        value.systemicReason,
+        value[CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
+      ].filter((entry): entry is string => typeof entry === "string"),
+    )
+  )
+    return "secret-shaped finding field";
   if (value.priority === "P3") {
     if (!isClosedValue(value.disposition, CHANGE_RISK_DISPOSITIONS))
       return "P3 without exactly one allowed disposition";

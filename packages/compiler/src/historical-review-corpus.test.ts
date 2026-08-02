@@ -319,6 +319,62 @@ test("a secret-shaped or malformed finding id is refused", () => {
   }
 });
 
+test("a stale fingerprint is refused before writing", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "historical-corpus-identity-"));
+  const tempDocsRoot = join(tempRoot, "docs", "review-learning");
+  try {
+    await mkdir(tempDocsRoot, { recursive: true });
+    const corpus = JSON.parse(await readFile(corpusPath, "utf8"));
+    // Reclassify a row WITHOUT recomputing its identity. The record validator
+    // sees a nonempty unique fingerprint and the counts still reconcile, so
+    // only a derived-identity check can catch the contradiction.
+    corpus.records[0].record.findings[0].category = "runtime-proof";
+    await writeFile(
+      join(tempDocsRoot, "historical-corpus.json"),
+      `${JSON.stringify(corpus, null, 2)}\n`,
+    );
+
+    await assert.rejects(
+      execFileAsync(process.execPath, [fileURLToPath(generatorPath), tempRoot]),
+      /fingerprint is/u,
+    );
+    for (const name of generatedArtifactNames.filter(
+      (entry) => entry !== "historical-corpus.json",
+    ))
+      await assert.rejects(readFile(join(tempDocsRoot, name)));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("a secret-shaped safe path is refused before writing", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "historical-corpus-safepath-"));
+  const tempDocsRoot = join(tempRoot, "docs", "review-learning");
+  try {
+    await mkdir(tempDocsRoot, { recursive: true });
+    const corpus = JSON.parse(await readFile(corpusPath, "utf8"));
+    // `safePath` is rendered verbatim into the finding table, so it is
+    // committed evidence and must clear the redaction gate like `evidence`.
+    corpus.records[0].record.findings[0].safePath =
+      "token=abcdef1234567890abcdef1234567890";
+    await writeFile(
+      join(tempDocsRoot, "historical-corpus.json"),
+      `${JSON.stringify(corpus, null, 2)}\n`,
+    );
+
+    await assert.rejects(
+      execFileAsync(process.execPath, [fileURLToPath(generatorPath), tempRoot]),
+      /secret-shaped finding field/u,
+    );
+    for (const name of generatedArtifactNames.filter(
+      (entry) => entry !== "historical-corpus.json",
+    ))
+      await assert.rejects(readFile(join(tempDocsRoot, name)));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("canonical fingerprints are stable under review rewording", async () => {
   const corpus = JSON.parse(await readFile(corpusPath, "utf8")) as {
     records: ReadonlyArray<{
@@ -721,18 +777,30 @@ test("historical review corpus reconciles the approved thread-aware snapshot", a
   // catch and could never have failed on it.
   for (const [category, aggregate] of categories) {
     const occurrence = aggregate.pullRequests.size;
-    const earned = changeRiskEarnedObligations({
-      occurrence,
-      priority: aggregate.hasP1 ? "P1" : "P2",
-      systemic: aggregate.hasSystemicP1,
-      mechanicalGuardPractical: true,
-    });
+    // Practicality is unknown for historical data, so both branches are
+    // projected from the shared policy and the guard obligation is reported as
+    // the unresolved disjunction it is. Only the LABEL text is mirrored here;
+    // which obligations are earned still comes from the shared function.
+    const [ifPractical, ifNot] = [true, false].map((mechanicalGuardPractical) =>
+      changeRiskEarnedObligations({
+        occurrence,
+        priority: aggregate.hasP1 ? "P1" : "P2",
+        systemic: aggregate.hasSystemicP1,
+        mechanicalGuardPractical,
+      }),
+    );
+    const earned = ifPractical!;
+    assert.equal(
+      earned.requiresRegressionTest,
+      ifNot!.requiresRegressionTest,
+      `${category}: practicality changed a non-guard obligation`,
+    );
     const obligations =
       [
         earned.requiresRegressionTest ? "regression test" : undefined,
         earned.requiresScopedRule ? "scoped rule" : undefined,
-        occurrence >= 3
-          ? "mechanical guard or recorded impracticality"
+        earned.requiresMechanicalGuard || ifNot!.requiresRecordedImpracticality
+          ? "mechanical guard, or recorded impracticality -- undecided, the historical corpus records no practicality assessment"
           : undefined,
       ]
         .filter((entry) => entry !== undefined)
