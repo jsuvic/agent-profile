@@ -335,6 +335,124 @@ test("spec-conformance/v1 requires an exact complete local snapshot", () => {
   }
 });
 
+// Executable RED retained for proposed Phase 33 Amendment 004. Unskip only
+// after the approved CLI-owned trusted snapshot/evidence builder lands.
+test.skip("spec-conformance/v1 refuses caller-authored Git provenance", () => {
+  assert.throws(
+    () => deriveSpecConformanceSnapshotId(completeSnapshot),
+    /trusted repository snapshot/u,
+    "synthetic object IDs and caller-authored diffs cannot establish Git provenance",
+  );
+});
+
+test.skip("spec-conformance/v1 binds implementation evidence to reviewed repository bytes", () => {
+  const governingRequirement = {
+    path: authoritativeDocuments[0].path,
+    startLine: 2,
+    endLine: 3,
+    quote: "The renderer MUST include findingId\nin headings and table cells.",
+  };
+  const compliantWithNonexistentEvidence = {
+    policyVersion: "spec-conformance/v1",
+    snapshotId: deriveSpecConformanceSnapshotId(completeSnapshot),
+    status: "COMPLIANT",
+    coverage: {
+      complete: true,
+      requirements: [
+        {
+          governingRequirement,
+          implementationEvidence: [
+            {
+              path: "packages/compiler/src/does-not-exist.ts",
+              startLine: 999,
+              endLine: 1001,
+              summary:
+                "Caller-authored summary with no bound repository bytes.",
+            },
+          ],
+        },
+      ],
+    },
+    findings: [],
+    missingInputs: [],
+  };
+  assert.equal(
+    validateSpecConformanceResultV1(compliantWithNonexistentEvidence, {
+      snapshot: completeSnapshot,
+      authoritativeDocuments,
+    }).ok,
+    false,
+  );
+});
+
+test.skip("spec-conformance/v1 rejects every non-canonical repository path field", () => {
+  const aliases = [
+    "notes/../included.md",
+    "./notes/included.md",
+    "notes\\included.md",
+    "/notes/included.md",
+    "C:/notes/included.md",
+    "notes//included.md",
+  ] as const;
+  for (const alias of aliases) {
+    const snapshot = {
+      ...completeSnapshot,
+      allUntrackedPaths: [alias, completeSnapshot.allUntrackedPaths[1]],
+      untracked: [
+        { ...completeSnapshot.untracked[0], path: alias },
+        completeSnapshot.untracked[1],
+      ],
+    };
+    assert.throws(
+      () => deriveSpecConformanceSnapshotId(snapshot),
+      /invalid spec-conformance snapshot/u,
+      `snapshot path: ${alias}`,
+    );
+
+    const documents = [
+      {
+        ...authoritativeDocuments[0],
+        path: alias,
+      },
+    ];
+    const result = {
+      policyVersion: "spec-conformance/v1",
+      snapshotId: deriveSpecConformanceSnapshotId(completeSnapshot),
+      status: "COMPLIANT",
+      coverage: {
+        complete: true,
+        requirements: [
+          {
+            governingRequirement: {
+              path: alias,
+              startLine: 2,
+              endLine: 3,
+              quote:
+                "The renderer MUST include findingId\nin headings and table cells.",
+            },
+            implementationEvidence: [
+              {
+                ...implementationEvidence[0],
+                path: alias,
+              },
+            ],
+          },
+        ],
+      },
+      findings: [],
+      missingInputs: [],
+    };
+    assert.equal(
+      validateSpecConformanceResultV1(result, {
+        snapshot: completeSnapshot,
+        authoritativeDocuments: documents,
+      }).ok,
+      false,
+      `document/evidence path: ${alias}`,
+    );
+  }
+});
+
 test("spec-conformance/v1 bounds included untracked bytes per file and in aggregate", () => {
   const perFileLimit =
     SPEC_CONFORMANCE_INPUT_LIMITS.maxIncludedUntrackedFileBytes;
