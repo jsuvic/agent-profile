@@ -18,9 +18,13 @@ import {
   type ChangeRiskCategory,
   type ChangeRiskContractId,
   type ChangeRiskPriority,
+  type ChangeRiskResolution,
   type ChangeRiskUnsafeConditionClass,
 } from "./change-risk-policy.js";
-import { changeRiskEarnedObligations } from "./change-risk-promotion.js";
+import {
+  changeRiskEarnedObligations,
+  isValidatedPromotionOutcome,
+} from "./change-risk-promotion.js";
 import { validateReviewLearningRecordV1 } from "./review-learning-record.js";
 
 const corpusPath = new URL(
@@ -218,6 +222,100 @@ test("generation fails closed and writes nothing on an invalid record", async ()
     );
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("generation refuses a corrupted snapshot before writing", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "historical-corpus-snapshot-"));
+  const tempDocsRoot = join(tempRoot, "docs", "review-learning");
+  try {
+    await mkdir(tempDocsRoot, { recursive: true });
+    const corpus = JSON.parse(await readFile(corpusPath, "utf8"));
+    // Every surviving record still validates individually. Only the declared
+    // envelope catches the loss, which is why per-record validation alone left
+    // the snapshot unguarded.
+    corpus.records[0].record.findings.pop();
+    await writeFile(
+      join(tempDocsRoot, "historical-corpus.json"),
+      `${JSON.stringify(corpus, null, 2)}\n`,
+    );
+
+    await assert.rejects(
+      execFileAsync(process.execPath, [fileURLToPath(generatorPath), tempRoot]),
+      /refusing to write: PR #125 findingCount/u,
+    );
+    for (const name of generatedArtifactNames.filter(
+      (entry) => entry !== "historical-corpus.json",
+    ))
+      await assert.rejects(readFile(join(tempDocsRoot, name)));
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("dropping an entire reviewed change is refused", async () => {
+  const tempRoot = await mkdtemp(join(tmpdir(), "historical-corpus-dropped-"));
+  const tempDocsRoot = join(tempRoot, "docs", "review-learning");
+  try {
+    await mkdir(tempDocsRoot, { recursive: true });
+    const corpus = JSON.parse(await readFile(corpusPath, "utf8"));
+    corpus.records.pop();
+    await writeFile(
+      join(tempDocsRoot, "historical-corpus.json"),
+      `${JSON.stringify(corpus, null, 2)}\n`,
+    );
+
+    await assert.rejects(
+      execFileAsync(process.execPath, [fileURLToPath(generatorPath), tempRoot]),
+      /refusing to write: the reviewed-change set/u,
+    );
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("a secret-shaped or malformed finding id is refused", () => {
+  const base = JSON.parse(
+    JSON.stringify({
+      schemaVersion: "review-learning/v1",
+      date: "2026-08-02",
+      sourcePolicy: "legacy-external",
+      baseId: "a",
+      headId: "b",
+      reviewerSurface: "s",
+      terminalStatus: "external-only",
+      roundOutcomes: [{ round: 1, source: "external", blockerCount: 0 }],
+      findings: [
+        {
+          findingId: "pr-1#thread-1",
+          fingerprint: "fp",
+          source: "external",
+          provider: "p",
+          category: "ownership-atomicity",
+          categoryTaxonomyVersion: "change-risk-categories/v1",
+          priority: "P2",
+          affectedContract: "atomic-write-ownership",
+          evidence: ["A safe sanitized summary of the defect."],
+          safePath: "Do the safe thing.",
+          resolution: "fixed",
+        },
+      ],
+    }),
+  ) as { findings: Array<{ findingId: string }> };
+
+  assert.equal(validateReviewLearningRecordV1(base).ok, true);
+
+  for (const [id, reason] of [
+    ["token=abcdef1234567890abcdef1234567890", /finding id/u],
+    ["has spaces", /invalid finding id format/u],
+    ["quote\"injection", /invalid finding id format/u],
+    ["a".repeat(200), /invalid finding id format/u],
+  ] as const) {
+    const record = JSON.parse(JSON.stringify(base)) as typeof base;
+    record.findings[0]!.findingId = id;
+    const result = validateReviewLearningRecordV1(record);
+    assert.equal(result.ok, false, `accepted finding id: ${id.slice(0, 24)}`);
+    if (!result.ok) assert.match(result.reason, reason);
   }
 });
 
@@ -551,11 +649,11 @@ test("historical review corpus reconciles the approved thread-aware snapshot", a
   assert.deepEqual([total, p1, p2], [126, 23, 103]);
   assert.equal(sanitizedSummaries.size, 126);
   assert.equal(findingIds.size, 126);
-  // 44, not 126. Findings sharing category, contract, path and unsafe
+  // 45, not 126. Findings sharing category, contract, path and unsafe
   // condition SHARE a canonical fingerprint by design; `line` is nulled so
   // identity survives code movement. Asserting 126 here previously forced a
   // wording-derived symbol into the identity to manufacture uniqueness.
-  assert.equal(fingerprints.size, 44);
+  assert.equal(fingerprints.size, 45);
   const summary = await readFile(
     new URL("historical-corpus-summary.md", docsRoot),
     "utf8",
@@ -594,9 +692,15 @@ test("historical review corpus reconciles the approved thread-aware snapshot", a
           category: string;
           priority: ChangeRiskPriority;
           systemic?: boolean;
+          resolution: ChangeRiskResolution;
+          dispositionConfirmed?: boolean;
+          dispositionEvidence?: string;
         }>;
       }
     ).findings) {
+      // Same shared predicate the generator uses. An open, unconfirmed
+      // finding is not a validated occurrence and must not raise a threshold.
+      if (!isValidatedPromotionOutcome(finding)) continue;
       const aggregate = categories.get(finding.category) ?? {
         findingCount: 0,
         pullRequests: new Set<number>(),

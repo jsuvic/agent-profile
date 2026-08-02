@@ -133,6 +133,13 @@ function isUtcCalendarDate(value: unknown): value is string {
   );
 }
 
+/**
+ * Source-identity shape for `findingId`: alphanumerics and `-._#/` only, and
+ * bounded. Deliberately excludes `=`, whitespace and quotes, so an
+ * assignment-shaped or injected value cannot be an id at all.
+ */
+const SAFE_FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9._#/-]{0,127}$/u;
+
 /** Committed evidence references locations; it never reproduces a secret. */
 function carriesSecretShapedText(values: readonly string[]): boolean {
   return values.some((value) => containsSecretLikeLiteral(value));
@@ -168,6 +175,16 @@ function validateFinding(
   // malformed row, and treating it as absent would silently reopen the hole.
   if (usesFindingIds) {
     if (!nonEmptyString(value.findingId)) return "missing finding id";
+    // A finding id is rendered verbatim into committed Markdown headings and
+    // table cells, so it is committed evidence and must clear the same bar as
+    // evidence. It is source IDENTITY, not prose: constraining it to a safe
+    // shape rejects a secret-shaped or injected value outright, rather than
+    // relying on the detector to recognise every leak format. The detector is
+    // applied too, because the shape alone is not a redaction guarantee.
+    if (!SAFE_FINDING_ID.test(value.findingId))
+      return "invalid finding id format";
+    if (carriesSecretShapedText([value.findingId]))
+      return "secret-shaped finding id";
     if (seenFindingIds.has(value.findingId)) return "duplicate finding id";
     seenFindingIds.add(value.findingId);
   } else {

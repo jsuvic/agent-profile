@@ -5,7 +5,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { changeRiskEarnedObligations } from "../../packages/compiler/dist/change-risk-promotion.js";
+import {
+  changeRiskEarnedObligations,
+  isValidatedPromotionOutcome,
+} from "../../packages/compiler/dist/change-risk-promotion.js";
 import { validateReviewLearningRecordV1 } from "../../packages/compiler/dist/review-learning-record.js";
 
 function resolveRepositoryRoot(argument) {
@@ -104,10 +107,58 @@ function renderRecord(entry) {
     .trimEnd()}\n`;
 }
 
+function countBy(findings) {
+  return {
+    findingCount: findings.length,
+    p1Count: findings.filter((f) => f.priority === "P1").length,
+    p2Count: findings.filter((f) => f.priority === "P2").length,
+  };
+}
+
+function refuse(what, expected, actual) {
+  if (expected !== actual)
+    throw new Error(
+      `refusing to write: ${what} is ${actual}, approved snapshot declares ${expected}`,
+    );
+}
+
+function reconcileApprovedSnapshot(corpus) {
+  const approved = corpus.approvedSnapshot;
+  if (!approved) throw new Error("refusing to write: no approved snapshot");
+
+  const actualPrs = corpus.records.map((entry) => entry.pullRequest);
+  refuse(
+    "the reviewed-change set",
+    approved.pullRequests.join(","),
+    actualPrs.join(","),
+  );
+
+  for (const entry of corpus.records) {
+    const declared = approved.perPullRequest[String(entry.pullRequest)];
+    if (!declared)
+      throw new Error(
+        `refusing to write: PR #${entry.pullRequest} has no approved counts`,
+      );
+    const actual = countBy(entry.record.findings);
+    for (const field of ["findingCount", "p1Count", "p2Count"])
+      refuse(`PR #${entry.pullRequest} ${field}`, declared[field], actual[field]);
+  }
+
+  const totals = countBy(corpus.records.flatMap((e) => e.record.findings));
+  for (const field of ["findingCount", "p1Count", "p2Count"])
+    refuse(`total ${field}`, approved[field], totals[field]);
+}
+
 function aggregateCategories(corpus) {
   const aggregates = new Map();
   for (const entry of corpus.records) {
     for (const finding of entry.record.findings) {
+      // Only VALIDATED outcomes count toward recurrence. An open finding is a
+      // claim until the owner confirms it and records why; counting it would
+      // rest a promotion threshold on an unvalidated opinion, and would let a
+      // category made entirely of unconfirmed open findings be promoted on
+      // zero valid occurrences.
+      if (!isValidatedPromotionOutcome(finding)) continue;
       const aggregate = aggregates.get(finding.category) ?? {
         findingCount: 0,
         pullRequests: new Set(),
@@ -197,6 +248,12 @@ async function generate(repositoryRoot) {
         `refusing to write PR #${entry.pullRequest}: ${validated.reason}`,
       );
   }
+
+  // Per-record validation is not enough. Every record can be individually
+  // valid while the SNAPSHOT is wrong: drop a finding, or a whole PR record,
+  // and each survivor still validates. Reconcile the declared envelope before
+  // the first write so a corrupted snapshot never reaches disk.
+  reconcileApprovedSnapshot(corpus);
 
   await writeFile(corpusPath, `${JSON.stringify(corpus, null, 2)}\n`);
   await Promise.all([

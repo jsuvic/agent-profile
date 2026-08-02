@@ -317,13 +317,13 @@
             "findingId": "pr-125#thread-10"
           },
           {
-            "fingerprint": "[\"ownership-atomicity\",\"atomic-write-ownership\",{\"path\":\"apps/cli/src/index.ts\",\"symbol\":null,\"line\":null},\"unsafe-ordering\"]",
+            "fingerprint": "[\"preview-before-write-ordering\",\"contract-completeness\",{\"path\":\"apps/cli/src/index.ts\",\"symbol\":null,\"line\":null},\"unsafe-ordering\"]",
             "source": "external",
             "provider": "github",
-            "category": "ownership-atomicity",
+            "category": "preview-before-write-ordering",
             "categoryTaxonomyVersion": "change-risk-categories/v1",
             "priority": "P1",
-            "affectedContract": "atomic-write-ownership",
+            "affectedContract": "contract-completeness",
             "evidence": [
               "Precondition: When the command runs in a TTY. Unsafe behavior: This condition suppresses the only call that renders modelPolicyChanges and modelPolicyPlan. Consequence: The subsequent prompt flow only displays and selects capability-catalog offers. as a result even an explicit --model-policy-strategy adopt is silently absent from interactive output, and when no capabilities are offered the command returns after showOffered([]) without showing. Safe path: Render model-policy plans during interactive upgrades."
             ],
@@ -331,8 +331,8 @@
             "resolution": "fixed",
             "sourceThreadOrdinal": 11,
             "classificationProvenance": "thread-body-read-in-memory",
-            "systemic": true,
-            "systemicReason": "Predicate clause 1: 'atomic-write-ownership' is a hard ownership or safety boundary; the recorded unsafe condition is 'unsafe-ordering' at apps/cli/src/index.ts:771.",
+            "systemic": false,
+            "systemicReason": "Predicate clause 3: 'contract-completeness' is not a hard safety, permission, ownership, redaction, or no-upload contract, and the recorded evidence for 'unsafe-ordering' at apps/cli/src/index.ts:771 does not demonstrate reach beyond the reviewed path.",
             "sanitizedSummary": "Precondition: When the command runs in a TTY. Unsafe behavior: This condition suppresses the only call that renders modelPolicyChanges and modelPolicyPlan. Consequence: The subsequent prompt flow only displays and selects capability-catalog offers. as a result even an explicit --model-policy-strategy adopt is silently absent from interactive output, and when no capabilities are offered the command returns after showOffered([]) without showing. Safe path: Render model-policy plans during interactive upgrades.",
             "unsafeConditionClass": "unsafe-ordering",
             "location": {
@@ -3595,6 +3595,63 @@
       "firstOrdinaryP2OrP3": "Record and categorize the finding.",
       "secondOccurrence": "Add a reviewer regression case plus a scoped Code Review Rules rule, unless an existing mechanical guard already provides equivalent or stronger protection, in which case cite the guard instead.",
       "thirdOccurrence": "Add a test, lint, validator, or shared helper where practical; the prompt rule alone has proven insufficient."
+    }
+  },
+  "approvedSnapshot": {
+    "pullRequests": [
+      125,
+      127,
+      128,
+      129,
+      130,
+      131,
+      132,
+      133
+    ],
+    "findingCount": 126,
+    "p1Count": 23,
+    "p2Count": 103,
+    "perPullRequest": {
+      "125": {
+        "findingCount": 54,
+        "p1Count": 13,
+        "p2Count": 41
+      },
+      "127": {
+        "findingCount": 7,
+        "p1Count": 0,
+        "p2Count": 7
+      },
+      "128": {
+        "findingCount": 6,
+        "p1Count": 0,
+        "p2Count": 6
+      },
+      "129": {
+        "findingCount": 16,
+        "p1Count": 5,
+        "p2Count": 11
+      },
+      "130": {
+        "findingCount": 19,
+        "p1Count": 3,
+        "p2Count": 16
+      },
+      "131": {
+        "findingCount": 10,
+        "p1Count": 0,
+        "p2Count": 10
+      },
+      "132": {
+        "findingCount": 2,
+        "p1Count": 1,
+        "p2Count": 1
+      },
+      "133": {
+        "findingCount": 12,
+        "p1Count": 1,
+        "p2Count": 11
+      }
     }
   }
 }
