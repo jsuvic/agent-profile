@@ -42,9 +42,45 @@ silently weakening the backfill.
   `#125 54 (13/41)`, `#127 7 (0/7)`, `#128 6 (0/6)`,
   `#129 16 (5/11)`, `#130 19 (3/16)`, `#131 10 (0/10)`,
   `#132 2 (1/1)`, and `#133 12 (1/11)`.
-- Every normalized finding has a stable fingerprint, category, priority,
-  evidence summary, affected contract/safe path, and closed resolution; P3
-  also has its required disposition while P1/P2 omit disposition.
+- Every normalized finding has a stable fingerprint, a unique `findingId`,
+  category, priority, evidence summary, affected contract/safe path, and a
+  resolution drawn from the closed vocabulary; P3 also has its required
+  disposition while P1/P2 omit disposition.
+
+  AMENDED 2026-08-02. "Closed resolution" means a value from the CLOSED
+  VOCABULARY (`open`, `fixed`, `false-positive`, `obsolete`), not "a resolution
+  that is settled". A documented `open` outcome is permitted and expected: the
+  alternative is to record a finding as `fixed` when its safe path was never
+  implemented, which fabricates a corrected outcome in data whose only purpose
+  is promotion evidence. `pr-133#thread-1` is the case -- the test named by its
+  safe path still records the gap as accepted for a future cycle.
+
+  An `open` finding is deliberately NOT a counted occurrence: promotion applies
+  `isValidatedPromotionOutcome`, so the summary aggregates 125 validated
+  findings out of the 126 recorded. That gap is the contract working, not a
+  reconciliation error. The recorded total stays 126.
+
+  AMENDED 2026-08-02 (owner-approved, Option B). The fingerprint is the
+  STRUCTURAL identity and is deliberately SHARED by findings of the same
+  category, contract, path and unsafe-condition class; `deriveChangeRiskFingerprint`
+  nulls `line` so identity survives code movement. Per-finding identity is
+  `findingId` instead. The 126 findings therefore carry 126 distinct
+  `findingId` values over 45 distinct fingerprints.
+
+  The fingerprint total is derived, not approved: it follows from the
+  structural fields and moves whenever a row is legitimately reclassified. It
+  was 44 until `pr-125#thread-11` was corrected from `atomic-write-ownership`
+  to `contract-completeness` / `preview-before-write-ordering`. Treat a change
+  here as requiring a stated cause, not as a fixed acceptance number.
+
+  The original wording implied per-finding fingerprint uniqueness. That is
+  unsatisfiable together with a prose-free identity: the only finding-specific
+  material available to the four canonical fields was the reviewer's
+  remediation wording, so uniqueness was being manufactured by slugifying
+  review comments into `location.symbol`. Rewording a comment then changed the
+  identity of the defect it described. `location.symbol` is now null for every
+  historical finding, and the sanitized wording is retained outside the
+  identity as `defectDiscriminator`.
 - The records distinguish the approved historical snapshot from later GitHub
   state instead of rewriting history.
 - Recurring categories seed reviewer regression cases and promotion proposals.

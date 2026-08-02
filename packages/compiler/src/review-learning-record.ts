@@ -30,6 +30,20 @@ import {
  * external finding stays a local record and marks that row `external`.
  */
 export type ReviewLearningFindingV1 = Readonly<{
+  /**
+   * Optional per-finding identity, unique within a record. Distinct from
+   * `fingerprint`, which is the STRUCTURAL identity and is deliberately shared
+   * by findings of the same mechanism at the same path.
+   *
+   * REQUIRED whenever structural duplicates must coexist -- which includes
+   * ordinary single-change records, not only records aggregating several
+   * changes. One review routinely raises several distinct defects of the same
+   * mechanism in one file, and the fingerprint omits `line` by design, so they
+   * collide. Omitting it there either collapses real findings or fails
+   * validation on duplicate fingerprints. Omit it only when no two findings in
+   * the record share a fingerprint.
+   */
+  findingId?: string;
   fingerprint: string;
   source: "local" | "external";
   /** Required on an external-sourced finding; `unknown` when unidentifiable. */
@@ -115,7 +129,7 @@ function isNonNegativeInteger(value: unknown): value is number {
  * can differ from the UTC one around midnight, so the record pins the UTC
  * calendar date exactly and rejects timestamps and offsets outright.
  */
-function isUtcCalendarDate(value: unknown): value is string {
+export function isUtcCalendarDate(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value))
     return false;
   const parsed = new Date(`${value}T00:00:00Z`);
@@ -125,6 +139,13 @@ function isUtcCalendarDate(value: unknown): value is string {
   );
 }
 
+/**
+ * Source-identity shape for `findingId`: alphanumerics and `-._#/` only, and
+ * bounded. Deliberately excludes `=`, whitespace and quotes, so an
+ * assignment-shaped or injected value cannot be an id at all.
+ */
+const SAFE_FINDING_ID = /^[A-Za-z0-9][A-Za-z0-9._#/-]{0,127}$/u;
+
 /** Committed evidence references locations; it never reproduces a secret. */
 function carriesSecretShapedText(values: readonly string[]): boolean {
   return values.some((value) => containsSecretLikeLiteral(value));
@@ -132,13 +153,51 @@ function carriesSecretShapedText(values: readonly string[]): boolean {
 
 function validateFinding(
   value: unknown,
-  seenFingerprints: Set<string>,
+  seenFindingIds: Set<string>,
+  usesFindingIds: boolean,
 ): string | undefined {
   if (!isRecord(value)) return "malformed finding";
   if (!nonEmptyString(value.fingerprint)) return "missing finding fingerprint";
-  if (seenFingerprints.has(value.fingerprint))
-    return "duplicate finding fingerprint";
-  seenFingerprints.add(value.fingerprint);
+  // Identity is `findingId` when the record supplies one, else the canonical
+  // fingerprint.
+  //
+  // Fingerprint-keyed dedupe is correct ONLY when no two findings share a
+  // structural fingerprint. That is rarer than it sounds: the fingerprint
+  // omits `line`, so several distinct defects of one mechanism in one file
+  // collide, which happens routinely within a single reviewed change. Forcing
+  // uniqueness onto the fingerprint made records smuggle reviewer wording into
+  // the identity to manufacture it, so rewording a comment moved the defect's
+  // identity.
+  //
+  // `findingId` stays optional so existing v1 records keep their exact
+  // meaning, not because single-change records are expected to omit it.
+  // The mode is decided ONCE for the record, never per row. Selecting it per
+  // finding let a mixed record slip through: one row with `findingId: "a"` and
+  // another with only `fingerprint: "x"` compared `a` against `x` and passed,
+  // even though the second row carries no per-finding identity at all and so
+  // cannot be distinguished from a third row sharing its fingerprint. A blank
+  // or non-string `findingId` is likewise not "absent" -- in id mode it is a
+  // malformed row, and treating it as absent would silently reopen the hole.
+  if (usesFindingIds) {
+    if (!nonEmptyString(value.findingId)) return "missing finding id";
+    // A finding id is rendered verbatim into committed Markdown headings and
+    // table cells, so it is committed evidence and must clear the same bar as
+    // evidence. It is source IDENTITY, not prose: constraining it to a safe
+    // shape rejects a secret-shaped or injected value outright, rather than
+    // relying on the detector to recognise every leak format. The detector is
+    // applied too, because the shape alone is not a redaction guarantee.
+    if (!SAFE_FINDING_ID.test(value.findingId))
+      return "invalid finding id format";
+    if (carriesSecretShapedText([value.findingId]))
+      return "secret-shaped finding id";
+    if (seenFindingIds.has(value.findingId)) return "duplicate finding id";
+    seenFindingIds.add(value.findingId);
+  } else {
+    if (value.findingId !== undefined) return "inconsistent finding identity";
+    if (seenFindingIds.has(value.fingerprint))
+      return "duplicate finding fingerprint";
+    seenFindingIds.add(value.fingerprint);
+  }
   if (value.source !== "local" && value.source !== "external")
     return "missing finding provenance";
   // A local run may carry an external finding, but never anonymously.
@@ -165,6 +224,23 @@ function validateFinding(
     return "missing finding evidence";
   if (carriesSecretShapedText(value.evidence as readonly string[]))
     return "secret-shaped evidence";
+  // Every free-form field that reaches committed Markdown is committed
+  // evidence and clears the same bar. Gating `evidence` alone left the other
+  // rendered strings as an open path for the exact literal the gate exists to
+  // stop: `safePath` and `provider` are rendered verbatim into finding tables,
+  // and `systemicReason` and the disposition evidence are persisted alongside
+  // them as promotion evidence.
+  if (
+    carriesSecretShapedText(
+      [
+        value.safePath,
+        value.provider,
+        value.systemicReason,
+        value[CHANGE_RISK_DISPOSITION_EVIDENCE_FIELD],
+      ].filter((entry): entry is string => typeof entry === "string"),
+    )
+  )
+    return "secret-shaped finding field";
   if (value.priority === "P3") {
     if (!isClosedValue(value.disposition, CHANGE_RISK_DISPOSITIONS))
       return "P3 without exactly one allowed disposition";
@@ -304,9 +380,15 @@ export function validateReviewLearningRecordV1(
   }
   if (!Array.isArray(value.findings))
     return { ok: false, reason: "missing findings" };
-  const seenFingerprints = new Set<string>();
+  // Infer the record's identity mode from the first finding, then hold every
+  // row to it. A record either carries per-finding ids throughout or none at
+  // all; a partial record is rejected rather than half-checked.
+  const first = value.findings[0];
+  const usesFindingIds =
+    isRecord(first) && (first as Record<string, unknown>).findingId !== undefined;
+  const seenFindingIds = new Set<string>();
   for (const finding of value.findings) {
-    const reason = validateFinding(finding, seenFingerprints);
+    const reason = validateFinding(finding, seenFindingIds, usesFindingIds);
     if (reason) return { ok: false, reason };
   }
   return { ok: true, value: value as unknown as ReviewLearningRecordV1 };
@@ -367,7 +449,11 @@ export function renderReviewLearningRecordV1(
     "",
     "## Findings",
     "",
+    // The identity column is required, not decorative: in finding-id mode two
+    // structurally duplicate findings otherwise produce indistinguishable rows
+    // that cannot be tied back to their evidence blocks.
     row([
+      "Finding",
       "Priority",
       "Category",
       "Contract",
@@ -376,9 +462,10 @@ export function renderReviewLearningRecordV1(
       "Disposition",
       "Safe path",
     ]),
-    row(["---", "---", "---", "---", "---", "---", "---"]),
+    row(["---", "---", "---", "---", "---", "---", "---", "---"]),
     ...record.findings.map((finding) =>
       row([
+        finding.findingId ?? finding.fingerprint,
         finding.priority,
         finding.category,
         finding.affectedContract,
@@ -395,7 +482,14 @@ export function renderReviewLearningRecordV1(
     "",
   ];
   for (const finding of record.findings) {
-    lines.push(`### \`${finding.fingerprint}\``, "");
+    // Label by `findingId` when the record carries one. Headings keyed on the
+    // fingerprint would be duplicated and indistinguishable in exactly the
+    // records that need per-finding identity, and would omit the only handle
+    // that identifies each row. Legacy records fall back to the fingerprint,
+    // where it is still unique by construction.
+    lines.push(`### \`${finding.findingId ?? finding.fingerprint}\``, "");
+    if (finding.findingId !== undefined)
+      lines.push(`- Fingerprint: \`${finding.fingerprint}\``);
     for (const item of finding.evidence) lines.push(`- ${item}`);
     if (finding.systemic !== undefined)
       lines.push(
