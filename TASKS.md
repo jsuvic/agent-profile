@@ -2115,7 +2115,7 @@ finding promotion, and a provider-neutral external-review boundary.
 | I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)                                     |
 | I4  | Promote recurring findings into stronger guards | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)                             |
 | I5  | Backfill the recent PR review corpus            | done       | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)                               |
-| I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)                         |
+| I6  | Validate the published review workflow          | ready      | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)                         |
 | G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)                            |
 | I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                                       |
 | G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md)                        |
@@ -2134,7 +2134,7 @@ finding promotion, and a provider-neutral external-review boundary.
 | I20 | Add the independent spec-conformance reviewer   | blocked    | [020-spec-conformance-reviewer.md](docs/specs/phase-33/issues/020-spec-conformance-reviewer.md)                                 |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
-I1+I2+I3+I4+I5+I20 -> I6; I1+I14 -> I20; I17 -> I18. I3 is sequenced after I1 because it consumes the
+I1+I2+I3+I4+I5 -> I6; I1+I14 -> I20; I17 -> I18. I3 is sequenced after I1 because it consumes the
 shared policy source's closed values and learning-record projection. I5 is
 parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
 requires I5's accepted backfill evidence.
