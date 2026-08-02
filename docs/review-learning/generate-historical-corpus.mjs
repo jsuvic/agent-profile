@@ -14,7 +14,10 @@ import {
   deriveChangeRiskFingerprint,
   normalizeChangeRiskFindingLocation,
 } from "../../packages/compiler/dist/change-risk-policy.js";
-import { validateReviewLearningRecordV1 } from "../../packages/compiler/dist/review-learning-record.js";
+import {
+  isUtcCalendarDate,
+  validateReviewLearningRecordV1,
+} from "../../packages/compiler/dist/review-learning-record.js";
 
 function resolveRepositoryRoot(argument) {
   if (argument) return resolve(argument);
@@ -135,8 +138,6 @@ function scanForSecretShapedText(value, path = "corpus") {
       scanForSecretShapedText(entry, `${path}.${key}`);
 }
 
-const UTC_DATE = /^\d{4}-\d{2}-\d{2}$/u;
-
 function isNonNegativeInteger(value) {
   return Number.isInteger(value) && value >= 0;
 }
@@ -146,10 +147,19 @@ function isNonNegativeInteger(value) {
 // the normalizer and the deriver both reproduce the empty identity, so
 // comparing derived values against each other proves nothing about whether
 // the finding is locatable at all.
+const CORPUS_SCHEMA_VERSION = "historical-review-corpus/v1";
+
 function verifyHistoricalStructure(corpus) {
+  // The normalizer and every gate below encode v1 assumptions. Rewriting an
+  // envelope that declares another version would leave consumers unable to
+  // use the version field to select a compatible contract.
+  refuse("corpus schemaVersion", CORPUS_SCHEMA_VERSION, corpus.schemaVersion);
   for (const entry of corpus.records) {
     const observation = entry.currentThreadObservation;
-    if (!UTC_DATE.test(observation?.observedOn ?? ""))
+    // Shape alone accepts 2026-02-30. The shared validator round-trips the
+    // date, so it rejects impossible calendar days. Reimplementing it here as
+    // a regex was a weaker private copy of a check that already existed.
+    if (!isUtcCalendarDate(observation?.observedOn))
       throw new Error(
         `refusing to write: PR #${entry.pullRequest} observation date is not a UTC calendar date`,
       );
@@ -222,6 +232,22 @@ function verifyDerivedIdentity(corpus) {
         `${finding.findingId} normalized location`,
         normalizeChangeRiskFindingLocation(finding.location),
         finding.normalizedLocation,
+      );
+      // `findingId` is derived too. Verifying only the fingerprint and the
+      // location repeated the enumeration mistake one level down: an edited
+      // id or ordinal stayed safe and unique, so every gate passed while the
+      // committed heading pointed at the wrong historical thread.
+      if (
+        !Number.isInteger(finding.sourceThreadOrdinal) ||
+        finding.sourceThreadOrdinal < 1
+      )
+        throw new Error(
+          `refusing to write: ${finding.findingId} has a non-positive source thread ordinal`,
+        );
+      refuse(
+        `${finding.findingId} finding id`,
+        `pr-${entry.pullRequest}#thread-${finding.sourceThreadOrdinal}`,
+        finding.findingId,
       );
     }
 }

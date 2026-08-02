@@ -484,6 +484,73 @@ test("an unlocatable or impossible record is refused before writing", async () =
   }
 });
 
+test("every derived and declared field is verified before writing", async () => {
+  const mutations: ReadonlyArray<
+    readonly [string, (corpus: any) => void, RegExp]
+  > = [
+    [
+      // Shape-only validation accepted this; the shared validator round-trips.
+      "impossible calendar date",
+      (corpus) => {
+        corpus.records[0].currentThreadObservation.observedOn = "2026-02-30";
+      },
+      /observation date is not a UTC calendar date/u,
+    ],
+    [
+      // Safe and unique, so every earlier gate passed while the committed
+      // heading pointed at the wrong historical thread.
+      "finding id detached from its thread ordinal",
+      (corpus) => {
+        corpus.records[0].record.findings[0].findingId = "pr-125#thread-999";
+      },
+      /finding id is/u,
+    ],
+    [
+      "non-positive thread ordinal",
+      (corpus) => {
+        corpus.records[0].record.findings[0].sourceThreadOrdinal = 0;
+      },
+      /source thread ordinal/u,
+    ],
+    [
+      "unsupported envelope schema version",
+      (corpus) => {
+        corpus.schemaVersion = "historical-review-corpus/v2";
+      },
+      /corpus schemaVersion/u,
+    ],
+  ];
+
+  for (const [label, mutate, expected] of mutations) {
+    const tempRoot = await mkdtemp(join(tmpdir(), "historical-corpus-derived-"));
+    const tempDocsRoot = join(tempRoot, "docs", "review-learning");
+    try {
+      await mkdir(tempDocsRoot, { recursive: true });
+      const corpus = JSON.parse(await readFile(corpusPath, "utf8"));
+      mutate(corpus);
+      await writeFile(
+        join(tempDocsRoot, "historical-corpus.json"),
+        `${JSON.stringify(corpus, null, 2)}\n`,
+      );
+
+      await assert.rejects(
+        execFileAsync(process.execPath, [
+          fileURLToPath(generatorPath),
+          tempRoot,
+        ]),
+        expected,
+        `${label} reached the writes`,
+      );
+      for (const name of generatedArtifactNames.filter(
+        (entry) => entry !== "historical-corpus.json",
+      ))
+        await assert.rejects(readFile(join(tempDocsRoot, name)));
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  }
+});
+
 test("canonical fingerprints are stable under review rewording", async () => {
   const corpus = JSON.parse(await readFile(corpusPath, "utf8")) as {
     records: ReadonlyArray<{
