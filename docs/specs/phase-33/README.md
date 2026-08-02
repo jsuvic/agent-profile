@@ -16,6 +16,9 @@ well designed.
 ## Specs
 
 - `001-change-risk-review-assurance.md` - approved 2026-07-24.
+- `002-root-cause-clustering-amendment.md` - approved 2026-07-28.
+- `003-cluster-history-handoff-amendment.md` - approved 2026-07-29.
+- `004-cli-owned-review-provenance-amendment.md` - approved 2026-08-02.
 
 ## Issues
 
@@ -35,6 +38,13 @@ well designed.
 - `issues/014-self-applied-artifact-drift-guard.md` (I14)
 - `issues/015-artifact-guard-local-exemption-derivation.md` (I15)
 - `issues/016-artifact-guard-mechanism-disclosure.md` (I16)
+- `issues/017-shared-logic-reimplementation-guard.md` (I17)
+- `issues/018-class-level-remediation-rule.md` (I18)
+- `issues/019-secret-detector-provider-formats.md` (I19)
 - `issues/020-spec-conformance-reviewer.md` (I20)
+- `issues/021-review-snapshot-build.md` (I21)
+- `issues/022-review-snapshot-access-evidence.md` (I22)
+- `issues/023-change-risk-v3-snapshot-integration.md` (I23)
+- `issues/024-review-snapshot-published-validation.md` (I24)
 
 Task states are tracked in the root `TASKS.md` ledger.

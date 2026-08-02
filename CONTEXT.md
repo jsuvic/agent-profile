@@ -80,6 +80,20 @@ The closed `COMPLIANT`, `ISSUES_FOUND`, or `NEEDS_CONTEXT` outcome whose
 findings remain separate from code-quality and change-risk results. _Avoid:_
 "P1/P2/P3 finding", "combined review queue".
 
+**Review snapshot descriptor**
+The compiler-owned structural description of one immutable virtual repository
+view; validation proves shape and consistency only. _Avoid:_ "trusted
+snapshot", "proven snapshot".
+
+**Review snapshot handle**
+The CLI-issued local reference used to manifest, read, and bind evidence to a
+content-addressed review snapshot. _Avoid:_ "attestation token", "trust flag".
+
+**Construction-path guarantee**
+The local provenance property supplied by the CLI building and resolving a
+review snapshot from real Git and filesystem reads. _Avoid:_ "compiler
+verification", "cryptographic attestation".
+
 **Clean-room review**
 A fresh review pass that does not receive implementer conclusions, prior
 praise, or prior finding lists. _Avoid:_ "rerun", "closure check".
