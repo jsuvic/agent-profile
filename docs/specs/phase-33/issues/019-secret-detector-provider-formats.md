@@ -44,11 +44,41 @@ test.
 Extend the detector to recognise common bare provider credential formats in
 addition to assignment shapes. Cover at minimum the formats above: GitHub
 (`ghp_`, `gho_`, `ghs_`, `github_pat_`), AWS access key ids (`AKIA`, `ASIA`),
-and Anthropic/OpenAI-style (`sk-ant-`, `sk-`).
+and Anthropic (`sk-ant-`). Exact shapes are pinned below.
 
 Detection is by shape only. The detector MUST NOT validate a candidate against
 any provider, and MUST NOT log, echo, or transmit the matched value -- the
 existing contract of reporting locations rather than bytes stands.
+
+### Exact shapes, pinned
+
+Prefix alone is NOT sufficient and MUST NOT be implemented. This predicate
+already gates write-blocking callers -- `apps/web/src/lib/server/profileApiHelpers.ts`
+among them -- so a broad prefix would reject ordinary text. Each shape pins a
+prefix, a suffix alphabet, a length, and word boundaries:
+
+| Format        | Shape                                        |
+| ------------- | -------------------------------------------- |
+| GitHub PAT    | `gh[pousr]_` + exactly 36 `[A-Za-z0-9]`      |
+| GitHub fine   | `github_pat_` + 22 `[A-Za-z0-9]` + `_` + 59 `[A-Za-z0-9]` |
+| AWS key id    | `(AKIA|ASIA)` + exactly 16 `[A-Z0-9]`        |
+| Anthropic     | `sk-ant-` + `[A-Za-z0-9-]{24,}`              |
+
+A bare `sk-` prefix is explicitly OUT of scope: it is too short to carry
+meaning, and model identifiers and ordinary prose begin with it. Only the
+`sk-ant-` form is in scope for this slice.
+
+Every match MUST be bounded by a non-word character or string edge, so a
+longer identifier that merely contains one of these substrings does not match.
+
+### False positives are a first-class concern
+
+Documentation in this repository legitimately names token formats -- this
+brief does. The acceptance criteria therefore require the near-miss negatives
+to be real: a `ghp_` with 35 or 37 characters, an `AKIA` followed by
+lowercase, a `sk-ant-` with 23 characters, and a prose mention of the bare
+prefix with no payload. If any current repository content matches, that is a
+finding to resolve before the change lands, not a reason to weaken the shape.
 
 ## Non-goals
 
@@ -64,7 +94,11 @@ existing contract of reporting locations rather than bytes stands.
 - Assignment-shaped detection is unchanged; existing callers keep their exact
   current behaviour on inputs they already reject.
 - A table-driven test enumerates detected and non-detected inputs, including
-  near-miss negatives that must NOT match, so the rule is legible.
+  the near-miss negatives listed above, so the rule is legible and its
+  boundaries are pinned rather than implied.
+- Every existing caller is reviewed for newly-refused legitimate content, and
+  no current repository content matches. `profileApiHelpers.ts` is
+  write-blocking and must be checked explicitly.
 - No matched value is reproduced in any error, log, or test output.
 - The known false-positive risk is stated: documentation that legitimately
   names a token format is common, and the acceptance criteria must record how

@@ -2115,7 +2115,7 @@ finding promotion, and a provider-neutral external-review boundary.
 | I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)                                     |
 | I4  | Promote recurring findings into stronger guards | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)                             |
 | I5  | Backfill the recent PR review corpus            | done       | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)                               |
-| I6  | Validate the published review workflow          | sequenced  | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)                         |
+| I6  | Validate the published review workflow          | ready      | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)                         |
 | G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)                            |
 | I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                                       |
 | G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md)                        |
@@ -2129,11 +2129,11 @@ finding promotion, and a provider-neutral external-review boundary.
 | I16 | Disclose the guard's compile-and-compare seam   | ready      | [016-artifact-guard-mechanism-disclosure.md](docs/specs/phase-33/issues/016-artifact-guard-mechanism-disclosure.md)             |
 | I12 | Resolve the ledger-write snapshot conflict      | human-gate | [012-ledger-write-snapshot-conflict.md](docs/specs/phase-33/issues/012-ledger-write-snapshot-conflict.md)                       |
 | I17 | Guard against reimplementing shared logic        | ready      | [017-shared-logic-reimplementation-guard.md](docs/specs/phase-33/issues/017-shared-logic-reimplementation-guard.md)             |
-| I18 | Require class-level remediation of findings     | ready      | [018-class-level-remediation-rule.md](docs/specs/phase-33/issues/018-class-level-remediation-rule.md)                           |
+| I18 | Require class-level remediation of findings     | sequenced  | [018-class-level-remediation-rule.md](docs/specs/phase-33/issues/018-class-level-remediation-rule.md)                           |
 | I19 | Detect bare provider token formats              | ready      | [019-secret-detector-provider-formats.md](docs/specs/phase-33/issues/019-secret-detector-provider-formats.md)                   |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
-I1+I2+I3+I4+I5 -> I6. I3 is sequenced after I1 because it consumes the
+I1+I2+I3+I4+I5 -> I6; I17 -> I18. I3 is sequenced after I1 because it consumes the
 shared policy source's closed values and learning-record projection. I5 is
 parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
 requires I5's accepted backfill evidence.
@@ -2147,7 +2147,10 @@ resolved by a separately reviewed remediation. Five review rounds, 25 findings,
 reviewer precision 1.0. Two recurring mechanisms are recorded as issue briefs
 rather than left in review history: instance-level remediation of a class-level
 defect (5 occurrences) and reimplementation of shared logic (4 occurrences).
-Both are past the third-occurrence threshold. I6 is now unblocked.
+Both stand at ONE promotion occurrence, not three: the contract deduplicates
+repeated rounds within a single reviewed change, and I4 routes within-change
+recurrence to I2's guard requirement instead. They are filed on that basis.
+I6 is now unblocked and moves to ready.
 
 G2 completed 2026-07-28: amendment 002 (root-cause clustering) approved from
 its grill and synthesized. Motivated by PR #139's own review history - three

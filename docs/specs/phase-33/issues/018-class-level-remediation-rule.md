@@ -2,10 +2,14 @@
 
 ## Parent spec or request
 
-`docs/specs/phase-33/002-bounded-review-remediation.md`
+`docs/specs/phase-33/issues/002-bounded-review-remediation.md`
 
-Promoted from the I5 remediation (#148) at the fifth occurrence of one
-mechanism.
+Filed from the I5 remediation (#148) under the WITHIN-CHANGE recurrence rule,
+not the promotion threshold. All five instances occurred inside one reviewed
+change, which the promotion contract deduplicates to a single occurrence; I4
+routes within-change recurrence to I2's guard requirement instead. This brief
+is filed on that basis and on the legibility of the evidence, not on a
+third-occurrence claim.
 
 ## Intent summary
 
@@ -15,7 +19,7 @@ finding closed. The next review round then found the same defect in the next
 unlisted member of the same class. The enumeration itself was the defect: any
 member added later starts life ungated.
 
-## Observed occurrences
+## Observed instances (one promotion occurrence)
 
 The redaction gate on committed evidence, across four consecutive review
 rounds of #148:
@@ -84,7 +88,7 @@ brief it must not be.
 
 ## Likely file ownership
 
-- `docs/specs/phase-33/002-bounded-review-remediation.md`
+- `docs/specs/phase-33/issues/002-bounded-review-remediation.md`
 - The reviewer or orchestration surface that renders the fix-round contract
 - The learning-record shape, if a new persisted field is required
 

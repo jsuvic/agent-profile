@@ -4,10 +4,17 @@
 
 `docs/specs/phase-33/001-change-risk-review-assurance.md`
 
-Promoted from the I5 remediation (#148) at the fourth occurrence of one
-mechanism. The promotion contract's third-occurrence action applies: "Add a
-test, lint, validator, or shared helper where practical; the prompt rule alone
-has proven insufficient."
+Filed from the I5 remediation (#148) under the WITHIN-CHANGE recurrence rule,
+not the promotion threshold.
+
+All four instances occurred inside one reviewed change. The promotion contract
+is explicit that "repeated rounds, repeated fingerprints, and unresolved
+recurrences within the same change deduplicate to at most one occurrence per
+canonical category", and I4 adds that a within-change recurrence "is answered
+by I2's guard requirement, not by promotion". This mechanism therefore stands
+at ONE promotion occurrence. It is filed because I2's within-change guard
+requirement applies, and because the evidence is unusually legible -- four
+instances of one mechanism in a single change, each found by review.
 
 ## Intent summary
 
@@ -16,7 +23,7 @@ is a recurring defect mechanism in this repository, not an isolated slip. Each
 instance shipped a WEAKER copy than the original, and each copy reproduced or
 introduced the defect the original did not have.
 
-## Observed occurrences
+## Observed instances (one promotion occurrence)
 
 All four occurred inside a single pull request (#148), and each was found by
 review rather than by any gate:
