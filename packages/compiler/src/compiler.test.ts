@@ -2472,7 +2472,7 @@ test("phase-13 emits subagent-driven-change workflow skill for Codex and Claude"
     assert.equal(text.includes("## Fresh Context"), true, file.path);
 
     const flowSection = extractMarkdownSection(text, "## Flow");
-    const specReviewerIdx = flowSection.indexOf("spec-reviewer");
+    const specReviewerIdx = flowSection.indexOf("`spec-reviewer`");
     const codeQualityIdx = flowSection.indexOf("code-quality-reviewer");
     assert.notEqual(specReviewerIdx, -1, `${file.path}: spec-reviewer in Flow`);
     assert.notEqual(
@@ -4213,6 +4213,182 @@ test("phase-33 Claude reviewer has read-only diff access and YAML-safe exact mod
   assert.match(body, /tools: Read, Glob, Grep, Bash/u);
   assert.match(body, /model: "private-model #canary"/u);
   assert.match(body, /read-only `git diff`/u);
+});
+
+test("phase-33 PR150 withholds spec-conformance reviewer until the trusted v2 seam exists", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    clients: {
+      tabnine: { enabled: false },
+      codex: { enabled: true },
+      claude: { enabled: true },
+    },
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      sdd: true,
+      subagentDrivenDevelopment: true,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            { useTemplate: "implementer" },
+            { useTemplate: "spec-reviewer" },
+            { useTemplate: "code-quality-reviewer" },
+          ],
+        },
+      },
+    },
+  };
+
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result.issues));
+  if (!result.ok) return;
+
+  assert.deepEqual(
+    result.files
+      .filter((file) => file.path.includes("/agents/spec-conformance-reviewer"))
+      .map((file) => file.path)
+      .sort(),
+    [],
+  );
+
+  const reviewerFiles = result.files.filter((file) =>
+    file.path.includes("/agents/spec-conformance-reviewer"),
+  );
+  for (const file of reviewerFiles) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.match(
+      body,
+      /COMPLIANT \| ISSUES_FOUND \| NEEDS_CONTEXT/u,
+      file.path,
+    );
+    for (const findingClass of [
+      "missing-or-partial",
+      "unrequested-behavior",
+      "implemented-wrongly",
+    ]) {
+      assert.equal(body.includes(`\`${findingClass}\``), true, file.path);
+    }
+    assert.match(body, /path.*startLine.*endLine.*exact non-empty `quote`/u);
+    assert.match(body, /complete `coverage` summary/u);
+    assert.match(body, /implementer report or claims/u);
+    assert.match(body, /prior praise or spec findings/u);
+    assert.match(body, /code-quality findings/u);
+    assert.match(body, /change-risk findings or P1\/P2\/P3 priorities/u);
+    assert.match(body, /exact committed merge-base three-dot diff bytes/u);
+    assert.match(body, /exact staged patch bytes.*exact unstaged patch bytes/u);
+    assert.match(body, /complete Git-reported untracked path list/u);
+    assert.match(body, /exact bytes for every included untracked file/u);
+    assert.match(body, /reason for every excluded untracked file/u);
+    assert.match(body, /deterministic snapshot identity/u);
+    assert.match(body, /exact local bytes for every authoritative document/u);
+    assert.match(body, /approved complete line ranges/u);
+    assert.match(body, /committed three-dot diff alone is incomplete/u);
+    assert.doesNotMatch(body, /Standards|Fowler/u, file.path);
+  }
+
+  for (const file of result.files.filter((candidate) =>
+    candidate.path.includes("/agents/change-risk-reviewer"),
+  )) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.doesNotMatch(
+      body,
+      /SpecConformanceResultV1|missing-or-partial|unrequested-behavior|implemented-wrongly/u,
+      file.path,
+    );
+  }
+
+  for (const file of result.files.filter((candidate) =>
+    candidate.path.includes("/agents/code-quality-reviewer"),
+  )) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.doesNotMatch(
+      body,
+      /SpecConformanceResultV1|Standards|Fowler/u,
+      file.path,
+    );
+  }
+
+  for (const file of result.files.filter((candidate) =>
+    candidate.path.endsWith("/subagent-driven-change/SKILL.md"),
+  )) {
+    const flow = extractMarkdownSection(
+      Buffer.from(file.bytes).toString("utf8"),
+      "## Flow",
+    );
+    const specIndex = flow.indexOf("`spec-reviewer`");
+    const qualityIndex = flow.indexOf("code-quality-reviewer");
+    const riskIndex = flow.indexOf("change-risk-reviewer");
+    const finalIndex = flow.indexOf("final-review");
+    assert.notEqual(specIndex, -1, file.path);
+    assert.equal(flow.includes("spec-conformance-reviewer"), false, file.path);
+    assert.equal(
+      specIndex < qualityIndex &&
+        qualityIndex < riskIndex &&
+        riskIndex < finalIndex,
+      true,
+      file.path,
+    );
+  }
+
+  assert.deepEqual(
+    result.templates
+      .filter((template) => template.id.includes("spec-conformance-reviewer"))
+      .map((template) => template.id)
+      .sort(),
+    [],
+  );
+});
+
+test("phase-33 PR150 user agent names cannot select the critical-reviewer model", () => {
+  const profile: AiProfile = {
+    ...phase12Profile({ packs: [] }),
+    workflow: {
+      ...phase12Profile({ packs: [] }).workflow,
+      subagentDrivenDevelopment: false,
+    },
+    capabilities: {
+      delegation: {
+        subagents: {
+          enabled: true,
+          agents: [
+            {
+              name: "spec-conformance-reviewer",
+              description: "Ordinary user agent using a future reserved name.",
+              purpose: "Prove names cannot grant critical privileges.",
+              prompt: "Review only the supplied task.",
+              toolScope: "read-only",
+            },
+          ],
+        },
+      },
+    },
+    subagentPolicy: {
+      enabled: true,
+      preset: "role-aware",
+      roles: {
+        "critical-reviewer": {
+          capability: "strongest",
+          effort: "high",
+          overrides: {
+            codex: { model: "critical-codex-canary", effort: "high" },
+            claude: { model: "critical-claude-canary", effort: "high" },
+          },
+        },
+      },
+    },
+  };
+  const result = compileProfile({ profile });
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result.issues));
+  if (!result.ok) return;
+  for (const file of result.files.filter((candidate) =>
+    candidate.path.includes("/agents/spec-conformance-reviewer"),
+  )) {
+    const body = Buffer.from(file.bytes).toString("utf8");
+    assert.doesNotMatch(body, /critical-(?:codex|claude)-canary/u, file.path);
+  }
 });
 
 test("phase-33 I1 Codex and Claude reviewer artifacts instruct a validator-compatible envelope", () => {

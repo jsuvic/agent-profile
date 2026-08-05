@@ -1023,7 +1023,7 @@ function validateSubagentSemantics(
   const generatedNames =
     profile.workflow.subagentDrivenDevelopment === true &&
     (profile.clients.codex.enabled || profile.clients.claude.enabled)
-      ? new Set(["change-risk-reviewer"])
+      ? new Set(["change-risk-reviewer", "spec-conformance-reviewer"])
       : new Set<string>();
 
   entries.forEach((entry, index) => {
@@ -1034,8 +1034,8 @@ function validateSubagentSemantics(
         code: "schema_validation_error",
         path: `/capabilities/delegation/subagents/agents/${index}/name`,
         expected: "name distinct from generated workflow subagents",
-        actual: "collision with change-risk-reviewer",
-        message: `/capabilities/delegation/subagents/agents/${index}/name is reserved for the generated change-risk reviewer.`,
+        actual: "collision with generated workflow reviewer",
+        message: `/capabilities/delegation/subagents/agents/${index}/name is reserved for a generated workflow reviewer.`,
       });
     }
     if (packNames.has(normalizeSubagentName(name))) {

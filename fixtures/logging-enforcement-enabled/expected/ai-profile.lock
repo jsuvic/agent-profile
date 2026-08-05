@@ -232,7 +232,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/subagent-driven-change@1",
       "ownership": "generated-owned",
-      "sha256": "9521e183bc9a61926f16e4704ae7e65ea061a963766589c1933fc71b0896fa15"
+      "sha256": "bb499fd321e66db9be95ad88dfb8b7fbece596d37903f77a42dbd63bd71fae91"
     },
     {
       "path": ".agents/skills/tdd-change/SKILL.md",
@@ -323,7 +323,7 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/subagent-driven-change@1",
       "ownership": "generated-owned",
-      "sha256": "9521e183bc9a61926f16e4704ae7e65ea061a963766589c1933fc71b0896fa15"
+      "sha256": "bb499fd321e66db9be95ad88dfb8b7fbece596d37903f77a42dbd63bd71fae91"
     },
     {
       "path": ".claude/skills/tdd-change/SKILL.md",

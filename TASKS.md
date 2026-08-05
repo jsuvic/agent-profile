@@ -2108,35 +2108,46 @@ independent full-change reviewer after spec and code-quality review, bounded
 remediation and escalation, versioned review-learning records, recurring-
 finding promotion, and a provider-neutral external-review boundary.
 
-| Id  | Task                                            | State      | Brief                                                                                                                           |
-| --- | ----------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| I1  | Emit the independent change-risk reviewer       | done       | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                                           |
-| I2  | Orchestrate bounded review remediation          | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)                               |
-| I3  | Persist versioned review-learning records       | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)                                     |
-| I4  | Promote recurring findings into stronger guards | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)                             |
-| I5  | Backfill the recent PR review corpus            | done       | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)                               |
-| I6  | Validate the published review workflow          | ready      | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)                         |
-| G2  | Grill session: approve amendment 002            | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)                            |
-| I7  | Cluster vocabularies and cluster-key derivation | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                                       |
-| G3  | Grill session: approve amendment 003            | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md)                        |
-| I8  | Budget exhaustion degrades to NEEDS_CONTEXT     | done       | [008-reviewer-budget-exhaustion.md](docs/specs/phase-33/issues/008-reviewer-budget-exhaustion.md)                               |
-| I9  | Guard the reviewer envelope field shapes        | done       | [009-reviewer-field-shape-guard.md](docs/specs/phase-33/issues/009-reviewer-field-shape-guard.md)                               |
-| I10 | Make the reviewer's turn budget observable      | ready      | [010-reviewer-budget-observability.md](docs/specs/phase-33/issues/010-reviewer-budget-observability.md)                         |
-| I11 | State the locator interior value constraints    | ready      | [011-reviewer-locator-value-constraints.md](docs/specs/phase-33/issues/011-reviewer-locator-value-constraints.md)               |
-| I13 | Guard reviewer field-list completeness          | ready      | [013-reviewer-field-completeness-guard.md](docs/specs/phase-33/issues/013-reviewer-field-completeness-guard.md)                 |
-| I14 | Fail on self-applied generated-artifact drift   | done       | [014-self-applied-artifact-drift-guard.md](docs/specs/phase-33/issues/014-self-applied-artifact-drift-guard.md)                 |
-| I15 | Derive the guard's per-machine exemption        | ready      | [015-artifact-guard-local-exemption-derivation.md](docs/specs/phase-33/issues/015-artifact-guard-local-exemption-derivation.md) |
-| I16 | Disclose the guard's compile-and-compare seam   | ready      | [016-artifact-guard-mechanism-disclosure.md](docs/specs/phase-33/issues/016-artifact-guard-mechanism-disclosure.md)             |
-| I12 | Resolve the ledger-write snapshot conflict      | human-gate | [012-ledger-write-snapshot-conflict.md](docs/specs/phase-33/issues/012-ledger-write-snapshot-conflict.md)                       |
-| I17 | Guard against reimplementing shared logic        | ready      | [017-shared-logic-reimplementation-guard.md](docs/specs/phase-33/issues/017-shared-logic-reimplementation-guard.md)             |
-| I18 | Require class-level remediation of findings     | sequenced  | [018-class-level-remediation-rule.md](docs/specs/phase-33/issues/018-class-level-remediation-rule.md)                           |
-| I19 | Detect bare provider token formats              | ready      | [019-secret-detector-provider-formats.md](docs/specs/phase-33/issues/019-secret-detector-provider-formats.md)                   |
+| Id  | Task                                              | State      | Brief                                                                                                                           |
+| --- | ------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| I1  | Emit the independent change-risk reviewer         | done       | [001-change-risk-reviewer.md](docs/specs/phase-33/issues/001-change-risk-reviewer.md)                                           |
+| I2  | Orchestrate bounded review remediation            | done       | [002-bounded-review-remediation.md](docs/specs/phase-33/issues/002-bounded-review-remediation.md)                               |
+| I3  | Persist versioned review-learning records         | done       | [003-review-learning-records.md](docs/specs/phase-33/issues/003-review-learning-records.md)                                     |
+| I4  | Promote recurring findings into stronger guards   | done       | [004-recurring-finding-promotion.md](docs/specs/phase-33/issues/004-recurring-finding-promotion.md)                             |
+| I5  | Backfill the recent PR review corpus              | done       | [005-historical-review-backfill.md](docs/specs/phase-33/issues/005-historical-review-backfill.md)                               |
+| I6  | Validate the published review workflow            | ready      | [006-published-workflow-validation.md](docs/specs/phase-33/issues/006-published-workflow-validation.md)                         |
+| G2  | Grill session: approve amendment 002              | done       | [002-root-cause-clustering-amendment.md](docs/specs/phase-33/002-root-cause-clustering-amendment.md)                            |
+| I7  | Cluster vocabularies and cluster-key derivation   | done       | [007-cluster-key-derivation.md](docs/specs/phase-33/issues/007-cluster-key-derivation.md)                                       |
+| G3  | Grill session: approve amendment 003              | done       | [003-cluster-history-handoff-amendment.md](docs/specs/phase-33/003-cluster-history-handoff-amendment.md)                        |
+| I8  | Budget exhaustion degrades to NEEDS_CONTEXT       | done       | [008-reviewer-budget-exhaustion.md](docs/specs/phase-33/issues/008-reviewer-budget-exhaustion.md)                               |
+| I9  | Guard the reviewer envelope field shapes          | done       | [009-reviewer-field-shape-guard.md](docs/specs/phase-33/issues/009-reviewer-field-shape-guard.md)                               |
+| I10 | Make the reviewer's turn budget observable        | ready      | [010-reviewer-budget-observability.md](docs/specs/phase-33/issues/010-reviewer-budget-observability.md)                         |
+| I11 | State the locator interior value constraints      | ready      | [011-reviewer-locator-value-constraints.md](docs/specs/phase-33/issues/011-reviewer-locator-value-constraints.md)               |
+| I13 | Guard reviewer field-list completeness            | ready      | [013-reviewer-field-completeness-guard.md](docs/specs/phase-33/issues/013-reviewer-field-completeness-guard.md)                 |
+| I14 | Fail on self-applied generated-artifact drift     | done       | [014-self-applied-artifact-drift-guard.md](docs/specs/phase-33/issues/014-self-applied-artifact-drift-guard.md)                 |
+| I15 | Derive the guard's per-machine exemption          | ready      | [015-artifact-guard-local-exemption-derivation.md](docs/specs/phase-33/issues/015-artifact-guard-local-exemption-derivation.md) |
+| I16 | Disclose the guard's compile-and-compare seam     | ready      | [016-artifact-guard-mechanism-disclosure.md](docs/specs/phase-33/issues/016-artifact-guard-mechanism-disclosure.md)             |
+| I12 | Resolve the ledger-write snapshot conflict        | human-gate | [012-ledger-write-snapshot-conflict.md](docs/specs/phase-33/issues/012-ledger-write-snapshot-conflict.md)                       |
+| I17 | Guard against reimplementing shared logic         | ready      | [017-shared-logic-reimplementation-guard.md](docs/specs/phase-33/issues/017-shared-logic-reimplementation-guard.md)             |
+| I18 | Require class-level remediation of findings       | sequenced  | [018-class-level-remediation-rule.md](docs/specs/phase-33/issues/018-class-level-remediation-rule.md)                           |
+| I19 | Detect bare provider token formats                | ready      | [019-secret-detector-provider-formats.md](docs/specs/phase-33/issues/019-secret-detector-provider-formats.md)                   |
+| I20 | Add the independent spec-conformance reviewer     | blocked    | [020-spec-conformance-reviewer.md](docs/specs/phase-33/issues/020-spec-conformance-reviewer.md)                                 |
+| G4  | Grill session: approve amendment 004              | done       | [004-cli-owned-review-provenance-amendment.md](docs/specs/phase-33/004-cli-owned-review-provenance-amendment.md)                |
+| I21 | Build the CLI-owned immutable review snapshot     | ready      | [021-review-snapshot-build.md](docs/specs/phase-33/issues/021-review-snapshot-build.md)                                         |
+| I22 | Resolve snapshot access, evidence, and lifecycle  | sequenced  | [022-review-snapshot-access-evidence.md](docs/specs/phase-33/issues/022-review-snapshot-access-evidence.md)                     |
+| I23 | Bind change-risk/v3 to CLI review snapshots       | sequenced  | [023-change-risk-v3-snapshot-integration.md](docs/specs/phase-33/issues/023-change-risk-v3-snapshot-integration.md)             |
+| I24 | Validate the published two-axis snapshot workflow | sequenced  | [024-review-snapshot-published-validation.md](docs/specs/phase-33/issues/024-review-snapshot-published-validation.md)           |
 
 Dependency map: I1 -> I2; I1 -> I3; I1+I3 -> I4; I3 -> I5;
-I1+I2+I3+I4+I5 -> I6; I17 -> I18. I3 is sequenced after I1 because it consumes the
+I1+I2+I3+I4+I5 -> I6; G4 -> I21 -> I22; I1+I14+I22 -> I20;
+I22 -> I23; I20+I23 -> I24; I17 -> I18. I3 is sequenced after I1 because it consumes the
 shared policy source's closed values and learning-record projection. I5 is
 parallel-safe with I2 and I4 after I3 lands. I6 is final integration and
 requires I5's accepted backfill evidence.
+
+I20 blocked 2026-08-02: Amendment 004 is approved, but I20 cannot resume until
+I21 and I22 provide the CLI-owned `review-snapshot/v1` construction, access,
+and evidence path. I6 remains independently ready and dispatchable.
 
 I5 resumed 2026-08-01: the owner approved a checked-in, docs-only corpus
 normalizer that consumes sanitized structured input and deterministically

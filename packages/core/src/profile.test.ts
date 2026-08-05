@@ -696,16 +696,18 @@ describe("subagents schema", () => {
     assert.equal(result.ok, false);
   });
 
-  it("reserves the generated change-risk reviewer name", () => {
-    const profile = profileWithSubagents({
-      enabled: true,
-      agents: [{ ...validSubagent(), name: "change-risk-reviewer" }],
-    });
-    (profile["workflow"] as Record<string, unknown>)[
-      "subagentDrivenDevelopment"
-    ] = true;
-    const result = validateProfileValue(profile);
-    assert.equal(result.ok, false);
+  it("reserves generated and future trusted reviewer names", () => {
+    for (const name of ["change-risk-reviewer", "spec-conformance-reviewer"]) {
+      const profile = profileWithSubagents({
+        enabled: true,
+        agents: [{ ...validSubagent(), name }],
+      });
+      (profile["workflow"] as Record<string, unknown>)[
+        "subagentDrivenDevelopment"
+      ] = true;
+      const result = validateProfileValue(profile);
+      assert.equal(result.ok, false, name);
+    }
   });
 
   it("allows the change-risk reviewer name when generation does not qualify", () => {

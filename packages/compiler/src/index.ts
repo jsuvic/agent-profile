@@ -60,6 +60,30 @@ export {
   transitionChangeRiskOrchestration,
   validateChangeRiskOrchestrationStateV1,
 } from "./change-risk-orchestration.js";
+export {
+  SPEC_CONFORMANCE_FINDING_CLASSES,
+  SPEC_CONFORMANCE_INPUT_LIMITS,
+  SPEC_CONFORMANCE_POLICY_VERSION,
+  SPEC_CONFORMANCE_REVIEWER_PROJECTION,
+  SPEC_CONFORMANCE_STATUSES,
+  deriveSpecConformanceSnapshotId,
+  validateSpecConformanceResultV1,
+} from "./spec-conformance-policy.js";
+export type {
+  SpecConformanceCoverageEntryV1,
+  SpecConformanceAuthoritativeDocumentV1,
+  SpecConformanceExcludedUntrackedV1,
+  SpecConformanceFindingClass,
+  SpecConformanceFindingV1,
+  SpecConformanceIncludedUntrackedV1,
+  SpecConformanceResultV1,
+  SpecConformanceResultValidation,
+  SpecConformanceStatus,
+  SpecConformanceSnapshotV1,
+  SpecConformanceValidationOptions,
+  SpecDocumentLocatorV1,
+  SpecImplementationEvidenceV1,
+} from "./spec-conformance-policy.js";
 export type {
   ChangeRiskClusterFinding,
   ChangeRiskOrchestrationEvent,
