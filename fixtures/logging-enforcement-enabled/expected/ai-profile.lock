@@ -65,12 +65,6 @@
       "sha256": "42d995ad73b5629b27fff0d50ff735e484e5278ce3a57027a7653a171e1cb3cb"
     },
     {
-      "id": "targets/claude-subagents/spec-conformance-reviewer@1",
-      "target": "claude-subagents",
-      "version": "1",
-      "sha256": "1d1d092352bbc424c71e9036b37d387791c65e0d1868a353bde11ef0407dcde0"
-    },
-    {
       "id": "targets/claude-subagents/spec-reviewer@1",
       "target": "claude-subagents",
       "version": "1",
@@ -147,12 +141,6 @@
       "target": "codex-subagents",
       "version": "1",
       "sha256": "7fc2376e44af017fa291cfd6317de7bc37c511b5d68569cb419011ac166e1719"
-    },
-    {
-      "id": "targets/codex-subagents/spec-conformance-reviewer@1",
-      "target": "codex-subagents",
-      "version": "1",
-      "sha256": "7de3a2c4980afeee9ca6c3ada262e3a21e74db22e57c7d8b9b91c66c15a8ce88"
     },
     {
       "id": "targets/codex-subagents/spec-reviewer@1",
@@ -244,7 +232,7 @@
       "target": "codex-workflow-skills",
       "templateId": "targets/codex-workflow-skills/subagent-driven-change@1",
       "ownership": "generated-owned",
-      "sha256": "23861b1bc440b55d9712a1d12db029e8d85d892439cf3af9d1bce304416d5525"
+      "sha256": "bb499fd321e66db9be95ad88dfb8b7fbece596d37903f77a42dbd63bd71fae91"
     },
     {
       "path": ".agents/skills/tdd-change/SKILL.md",
@@ -273,13 +261,6 @@
       "templateId": "targets/claude-subagents/implementer@1",
       "ownership": "generated-owned",
       "sha256": "d5a55d8e0167d1bc23c6b1b1ba90152432a1714d413d3edcc26a580ea03848f0"
-    },
-    {
-      "path": ".claude/agents/spec-conformance-reviewer.md",
-      "target": "claude-subagents",
-      "templateId": "targets/claude-subagents/spec-conformance-reviewer@1",
-      "ownership": "generated-owned",
-      "sha256": "1d1d092352bbc424c71e9036b37d387791c65e0d1868a353bde11ef0407dcde0"
     },
     {
       "path": ".claude/agents/spec-reviewer.md",
@@ -342,7 +323,7 @@
       "target": "claude-workflow-skills",
       "templateId": "targets/claude-workflow-skills/subagent-driven-change@1",
       "ownership": "generated-owned",
-      "sha256": "23861b1bc440b55d9712a1d12db029e8d85d892439cf3af9d1bce304416d5525"
+      "sha256": "bb499fd321e66db9be95ad88dfb8b7fbece596d37903f77a42dbd63bd71fae91"
     },
     {
       "path": ".claude/skills/tdd-change/SKILL.md",
@@ -371,13 +352,6 @@
       "templateId": "targets/codex-subagents/implementer@1",
       "ownership": "generated-owned",
       "sha256": "47bc87424ce2d5cc8c8fd952f1841f76b933b9aa0e2dcb2bb600e5c363e9dded"
-    },
-    {
-      "path": ".codex/agents/spec-conformance-reviewer.toml",
-      "target": "codex-subagents",
-      "templateId": "targets/codex-subagents/spec-conformance-reviewer@1",
-      "ownership": "generated-owned",
-      "sha256": "7de3a2c4980afeee9ca6c3ada262e3a21e74db22e57c7d8b9b91c66c15a8ce88"
     },
     {
       "path": ".codex/agents/spec-reviewer.toml",

@@ -5,13 +5,19 @@ independent full-change reviewer, bounded remediation and escalation,
 versioned review-learning records, recurring-finding promotion, and a
 provider-neutral external-review boundary.
 
-The generated post-implementation pipeline has three independent review
-purposes. `spec-conformance-reviewer` checks the complete accumulated change
-against authoritative documented intent; `code-quality-reviewer` checks
-maintainability; and `change-risk-reviewer` checks product-risk and reachable
-consumer gaps. Their results stay separate. I20 does not add a Standards axis;
-Phase 34 owns pre-implementation review of whether a specification itself is
-well designed.
+The generated post-implementation pipeline currently has two independent
+review purposes: `code-quality-reviewer` checks maintainability, and
+`change-risk-reviewer` checks product-risk and reachable consumer gaps. Spec
+review runs through the generic `spec-reviewer`.
+
+A third purpose is planned but not yet emitted. `spec-conformance-reviewer`
+will check the complete accumulated change against authoritative documented
+intent as a separate axis whose result stays distinct from the other two. It
+is gated on I21 and I22 delivering the CLI-owned `review-snapshot/v1`
+construction path; until `spec-conformance/v2` is enabled the compiler
+deliberately emits neither the reviewer nor an invocation of it. I20 does not
+add a Standards axis; Phase 34 owns pre-implementation review of whether a
+specification itself is well designed.
 
 ## Specs
 

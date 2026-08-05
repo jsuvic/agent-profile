@@ -2472,13 +2472,9 @@ test("phase-13 emits subagent-driven-change workflow skill for Codex and Claude"
     assert.equal(text.includes("## Fresh Context"), true, file.path);
 
     const flowSection = extractMarkdownSection(text, "## Flow");
-    const specReviewerIdx = flowSection.indexOf("spec-conformance-reviewer");
+    const specReviewerIdx = flowSection.indexOf("`spec-reviewer`");
     const codeQualityIdx = flowSection.indexOf("code-quality-reviewer");
-    assert.notEqual(
-      specReviewerIdx,
-      -1,
-      `${file.path}: spec-conformance-reviewer in Flow`,
-    );
+    assert.notEqual(specReviewerIdx, -1, `${file.path}: spec-reviewer in Flow`);
     assert.notEqual(
       codeQualityIdx,
       -1,
@@ -2487,7 +2483,7 @@ test("phase-13 emits subagent-driven-change workflow skill for Codex and Claude"
     assert.equal(
       specReviewerIdx < codeQualityIdx,
       true,
-      `${file.path}: spec-conformance-reviewer must precede code-quality-reviewer in Flow`,
+      `${file.path}: spec-reviewer must precede code-quality-reviewer in Flow`,
     );
 
     assert.equal(
