@@ -23,6 +23,6 @@
   },
   "dependencies": {
     "@agent-profile/core": "0.2.0",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.1"
   }
 }
